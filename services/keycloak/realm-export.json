@@ -1,0 +1,180 @@
+{
+  "realm": "medanon",
+  "displayName": "MedAnon",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": false,
+  "editUsernameAllowed": false,
+  "bruteForceProtected": true,
+  "accessTokenLifespan": 300,
+  "ssoSessionIdleTimeout": 1800,
+  "ssoSessionMaxLifespan": 43200,
+  "roles": {
+    "realm": [
+      {
+        "name": "viewer",
+        "description": "Read-only access: health, ready, metrics, status dashboard",
+        "composite": false
+      },
+      {
+        "name": "analyst",
+        "description": "Can process resources, analyse risk, generate synthetic data",
+        "composite": true,
+        "composites": {
+          "realm": ["viewer"]
+        }
+      },
+      {
+        "name": "admin",
+        "description": "Full access including upload and round-trip endpoints",
+        "composite": true,
+        "composites": {
+          "realm": ["analyst", "viewer"]
+        }
+      }
+    ]
+  },
+  "defaultRoles": ["viewer"],
+  "clients": [
+    {
+      "clientId": "medanon-ui",
+      "name": "MedAnon Streamlit UI",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "implicitFlowEnabled": false,
+      "protocol": "openid-connect",
+      "redirectUris": [
+        "http://localhost:8501/*",
+        "http://medanon-ui:8501/*",
+        "http://10.168.192.22:8501/*"
+      ],
+      "webOrigins": ["+", "http://10.168.192.22:8501"],
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      },
+      "fullScopeAllowed": true
+    },
+    {
+      "clientId": "medanon-api",
+      "name": "MedAnon API (JWT introspection + service account)",
+      "enabled": true,
+      "publicClient": false,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": true,
+      "implicitFlowEnabled": false,
+      "protocol": "openid-connect",
+      "secret": "LBKc7QxMLslH7wPyYWX5gvgeYhGNzTU+",
+      "redirectUris": [],
+      "webOrigins": [],
+      "fullScopeAllowed": true
+    },
+    {
+      "clientId": "medanon-anonymizer",
+      "name": "MedAnon Anonymizer Service Account",
+      "enabled": true,
+      "publicClient": false,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "implicitFlowEnabled": false,
+      "protocol": "openid-connect",
+      "secret": "LBKc7QxMLslH7wPyYWX5gvgeYhGNzTU+",
+      "redirectUris": [],
+      "webOrigins": [],
+      "fullScopeAllowed": true
+    },
+    {
+      "clientId": "gpas-proxy-oauth",
+      "name": "gPAS Web UI OAuth2 Proxy",
+      "enabled": true,
+      "publicClient": false,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "implicitFlowEnabled": false,
+      "protocol": "openid-connect",
+      "secret": "fA48v5+n4dsVORV7MtNUiPg0xP29k53U",
+      "redirectUris": [
+        "http://localhost:8082/oauth2/callback",
+        "http://10.168.192.22:8082/oauth2/callback"
+      ],
+      "webOrigins": ["+"],
+      "fullScopeAllowed": true
+    },
+    {
+      "clientId": "fhir-proxy-oauth",
+      "name": "HAPI FHIR OAuth2 Proxy",
+      "enabled": true,
+      "publicClient": false,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "implicitFlowEnabled": false,
+      "protocol": "openid-connect",
+      "secret": "FoV1HzQZhkYRsHFGNLZGS4t+uVMEtXNm",
+      "redirectUris": [
+        "http://localhost:4180/oauth2/callback",
+        "http://10.168.192.22:4180/oauth2/callback"
+      ],
+      "webOrigins": ["+"],
+      "fullScopeAllowed": true
+    }
+  ],
+  "users": [
+    {
+      "username": "admin",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "admin@medanon.local",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "admin",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["admin"]
+    },
+    {
+      "username": "analyst",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "analyst@medanon.local",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "analyst",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["analyst"]
+    },
+    {
+      "username": "viewer",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "viewer@medanon.local",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "viewer",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["viewer"]
+    }
+  ],
+  "scopeMappings": [
+    {
+      "client": "medanon-anonymizer",
+      "roles": ["analyst"]
+    }
+  ]
+}

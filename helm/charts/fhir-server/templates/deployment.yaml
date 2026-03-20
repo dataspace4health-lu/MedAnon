@@ -19,6 +19,10 @@ spec:
         app.kubernetes.io/component: fhir-server
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        # Prometheus scraping (HAPI FHIR exposes metrics at /actuator/prometheus when enabled)
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "{{ .Values.port }}"
+        prometheus.io/path: "/actuator/prometheus"
     spec:
       serviceAccountName: {{ include "fhir-server.fullname" . }}
       securityContext:

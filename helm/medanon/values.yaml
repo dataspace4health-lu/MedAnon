@@ -85,3 +85,31 @@ ingress:
   tls:
     enabled: false
     secretName: "medanon-tls"
+
+# ─── Keycloak (optional) ────────────────────────────────────────────────────
+keycloak:
+  enabled: false
+  image: quay.io/keycloak/keycloak:24.0.5
+  adminUser: admin
+  realm: medanon
+  uiClientId: medanon-ui
+  apiClientId: medanon-api
+  port: 8080
+
+# ─── HAPI FHIR auth proxy (optional) ───────────────────────────────────────
+# oauth2-proxy sits in front of HAPI FHIR; unauthenticated browser requests
+# redirect to Keycloak login.
+fhirProxy:
+  enabled: false
+  image: quay.io/oauth2-proxy/oauth2-proxy:v7.6.0
+  port: 4180
+  clientId: fhir-proxy-oauth
+
+# ─── gPAS auth proxy (optional) ──────────────────────────────────────────
+# oauth2-proxy sits in front of gPAS web UI; unauthenticated browser requests
+# redirect to Keycloak login. TTP-FHIR API (/ttp-fhir/) stays open for service calls.
+gpasProxy:
+  enabled: false
+  image: quay.io/oauth2-proxy/oauth2-proxy:v7.6.0
+  port: 8082
+  clientId: gpas-proxy-oauth

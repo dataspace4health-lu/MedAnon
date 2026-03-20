@@ -1,8 +1,10 @@
+import logging
 import os
 import re
 
 import yaml
-from rich import print
+
+_config_log = logging.getLogger("medanon.config")
 
 
 class Settings():
@@ -45,19 +47,18 @@ class Settings():
                     self.rewrite_references = False
 
                 self._validate_rules()
-                print(f":thumbs_up: Settings loaded: {cfg}")
+                _config_log.info(
+                    "Settings loaded: %d rules from %s",
+                    len(getattr(self, 'rules', [])), filename,
+                )
         except IOError as e:
-            print(
-                f":sad_but_relieved_face: Settings file {filename} does not exist.")
-            print(e)
+            _config_log.error("Settings file %s does not exist.", filename)
             raise FileNotFoundError(f"Settings file not found: {filename}") from e
         except yaml.YAMLError as e:
-            print(
-                ":sad_but_relieved_face: Cannot parse settings yaml data.")
-            print(e)
+            _config_log.error("Cannot parse settings YAML data in %s.", filename)
             raise ValueError(f"Settings YAML parse error in {filename}: {e}") from e
         except ValueError:
-            print(":sad_but_relieved_face: Invalid settings configuration.")
+            _config_log.error("Invalid settings configuration in %s.", filename)
             raise
 
     def _expand_env(self, obj):
@@ -98,3 +99,43 @@ class Settings():
                 raise ValueError(f"rules[{idx}].action must be a non-empty string")
             if 'params' in rule and not isinstance(rule['params'], dict):
                 raise ValueError(f"rules[{idx}].params must be a mapping when provided")
+
+        # Warn about potentially conflicting rules (same match, different actions)
+        self._check_rule_conflicts(rules)
+
+    @staticmethod
+    def _check_rule_conflicts(rules):
+        """Warn when multiple rules target the same FHIRPath with different actions.
+
+        This catches misconfigurations like one rule hashing Patient.id and
+        another redacting it — only the first (by YAML order) will take effect
+        due to duplicate-path prevention.
+        """
+        # Mutually exclusive action groups — applying two from the same group
+        # to the same path is almost certainly a misconfiguration.
+        _CONFLICTING_GROUPS = [
+            frozenset({"redact", "cryptohash", "encrypt", "substitute",
+                        "generalize", "gpas_pseudonymize", "perturb"}),
+        ]
+        seen = {}  # match_expr -> (action, rule_name, index)
+        for idx, rule in enumerate(rules, start=1):
+            match_expr = rule.get("match", "")
+            action = rule.get("action", "")
+            name = rule.get("name", f"rules[{idx}]")
+
+            if match_expr in seen:
+                prev_action, prev_name, prev_idx = seen[match_expr]
+                if prev_action == action:
+                    continue  # same action on same path is harmless (idempotent)
+                for group in _CONFLICTING_GROUPS:
+                    if action in group and prev_action in group:
+                        _config_log.warning(
+                            "Potentially conflicting rules on '%s': "
+                            "%s (action=%s, #%d) vs %s (action=%s, #%d). "
+                            "Only the first rule will apply due to duplicate-path prevention.",
+                            match_expr, prev_name, prev_action, prev_idx,
+                            name, action, idx,
+                        )
+                        break
+            else:
+                seen[match_expr] = (action, name, idx)

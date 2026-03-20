@@ -6,9 +6,16 @@ import requests
 MEDANON_URL = os.environ.get("MEDANON_URL", "http://localhost:8000").rstrip("/")
 TIMEOUT = 60
 
-# Forward API key when the server requires one
-_API_KEY = os.environ.get("MEDANON_API_KEY", "").strip()
-_AUTH_HEADERS: dict = {"X-API-Key": _API_KEY} if _API_KEY else {}
+
+def _get_auth_headers() -> dict:
+    """Return dynamic auth headers (JWT or API key) from the auth module."""
+    try:
+        from utils.auth import get_auth_headers
+        return get_auth_headers()
+    except Exception:
+        # Fallback: use static API key if auth module not available
+        api_key = os.environ.get("MEDANON_API_KEY", "").strip()
+        return {"X-API-Key": api_key} if api_key else {}
 
 
 def health():
@@ -37,7 +44,7 @@ def process_raw(content: str, output_format: str = "json") -> tuple[bool, str]:
             f"{MEDANON_URL}/process/raw",
             data=content.encode(),
             params={"output_format": output_format},
-            headers={"Content-Type": "application/json", **_AUTH_HEADERS},
+            headers={"Content-Type": "application/json", **_get_auth_headers()},
             timeout=TIMEOUT,
         )
         if r.status_code == 200:
@@ -53,7 +60,7 @@ def process_ndjson(content: bytes, timeout: int = TIMEOUT):
         with requests.post(
             f"{MEDANON_URL}/process/ndjson",
             data=content,
-            headers={"Content-Type": "application/x-ndjson", **_AUTH_HEADERS},
+            headers={"Content-Type": "application/x-ndjson", **_get_auth_headers()},
             stream=True,
             timeout=timeout,
         ) as r:
@@ -73,7 +80,7 @@ def process_batch(content: bytes, content_type: str = "application/x-ndjson", ti
         with requests.post(
             f"{MEDANON_URL}/process/batch",
             data=content,
-            headers={"Content-Type": content_type, **_AUTH_HEADERS},
+            headers={"Content-Type": content_type, **_get_auth_headers()},
             stream=True,
             timeout=timeout,
         ) as r:
@@ -98,7 +105,7 @@ def process_everything(server_url: str, resource_type: str, resource_id: str, ti
         with requests.post(
             f"{MEDANON_URL}/process/everything",
             json=payload,
-            headers=_AUTH_HEADERS,
+            headers=_get_auth_headers(),
             stream=True,
             timeout=timeout,
         ) as r:
@@ -137,7 +144,7 @@ def generate_synthetic(
             f"{MEDANON_URL}/generate/synthetic",
             data=content,
             params=params,
-            headers={"Content-Type": content_type, **_AUTH_HEADERS},
+            headers={"Content-Type": content_type, **_get_auth_headers()},
             timeout=timeout,
         )
         if r.status_code == 200:
@@ -161,7 +168,7 @@ def analyse_risk(content: bytes | str, content_type: str = "application/x-ndjson
         r = requests.post(
             f"{MEDANON_URL}/analyse/risk",
             data=data,
-            headers={"Content-Type": content_type, **_AUTH_HEADERS},
+            headers={"Content-Type": content_type, **_get_auth_headers()},
             timeout=timeout,
         )
         if r.status_code == 200:

@@ -25,6 +25,16 @@ spec:
     - host: {{ .Values.ingress.host | quote }}
       http:
         paths:
+          # Keycloak authentication
+          {{- if .Values.keycloak.enabled }}
+          - path: /auth
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ printf "%s-keycloak" .Release.Name | trunc 63 | trimSuffix "-" }}
+                port:
+                  number: {{ .Values.keycloak.port | default 8080 }}
+          {{- end }}
           # MedAnon anonymizer API — root path
           - path: /
             pathType: Prefix
@@ -33,23 +43,35 @@ spec:
                 name: {{ printf "%s-anonymizer" .Release.Name | trunc 63 | trimSuffix "-" }}
                 port:
                   name: http
-          # HAPI FHIR server
+          # HAPI FHIR server — routed via fhir-proxy when enabled (login required)
           - path: /fhir
             pathType: Prefix
             backend:
               service:
+                {{- if .Values.fhirProxy.enabled }}
+                name: {{ printf "%s-fhir-proxy" .Release.Name | trunc 63 | trimSuffix "-" }}
+                port:
+                  number: {{ .Values.fhirProxy.port | default 4180 }}
+                {{- else }}
                 name: {{ printf "%s-fhir-server" .Release.Name | trunc 63 | trimSuffix "-" }}
                 port:
                   name: http
-          # gPAS web UI
+                {{- end }}
+          # gPAS web UI — routed via gpas-proxy when enabled (login required)
           - path: /gpas-web
             pathType: Prefix
             backend:
               service:
+                {{- if .Values.gpasProxy.enabled }}
+                name: {{ printf "%s-gpas-proxy" .Release.Name | trunc 63 | trimSuffix "-" }}
+                port:
+                  number: {{ .Values.gpasProxy.port | default 8082 }}
+                {{- else }}
                 name: {{ printf "%s-gpas" .Release.Name | trunc 63 | trimSuffix "-" }}
                 port:
                   name: http
-          # gPAS TTP-FHIR gateway
+                {{- end }}
+          # gPAS TTP-FHIR gateway (always direct — internal service API)
           - path: /ttp-fhir
             pathType: Prefix
             backend:

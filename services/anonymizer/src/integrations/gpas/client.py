@@ -21,6 +21,74 @@ from urllib.parse import urlsplit, urlunsplit
 gpas_log = logging.getLogger("medanon.gpas")
 
 # ---------------------------------------------------------------------------
+# Circuit breaker — prevents cascade failures when gPAS is down.
+#
+# States:
+#   CLOSED  — normal operation; failures are counted
+#   OPEN    — all requests fail-fast without hitting gPAS
+#   HALF_OPEN — a single probe request is allowed through
+#
+# Transitions:
+#   CLOSED -> OPEN: when failure_count >= threshold within the window
+#   OPEN -> HALF_OPEN: after recovery_timeout seconds
+#   HALF_OPEN -> CLOSED: on success of the probe request
+#   HALF_OPEN -> OPEN: on failure of the probe request
+# ---------------------------------------------------------------------------
+
+class _CircuitBreaker:
+    CLOSED = "closed"
+    OPEN = "open"
+    HALF_OPEN = "half_open"
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._state = self.CLOSED
+        self._failure_count = 0
+        self._last_failure_time = 0.0
+        self._threshold = int(os.environ.get("GPAS_CB_FAILURE_THRESHOLD", 5))
+        self._recovery_timeout = float(os.environ.get("GPAS_CB_RECOVERY_TIMEOUT_SEC", 30))
+        self._window = float(os.environ.get("GPAS_CB_WINDOW_SEC", 60))
+        self._window_start = 0.0
+
+    @property
+    def state(self):
+        with self._lock:
+            if self._state == self.OPEN:
+                if time.time() - self._last_failure_time >= self._recovery_timeout:
+                    self._state = self.HALF_OPEN
+                    gpas_log.info("circuit_breaker state=half_open (recovery probe allowed)")
+            return self._state
+
+    def allow_request(self):
+        """Return True if the request should proceed."""
+        return self.state != self.OPEN
+
+    def record_success(self):
+        with self._lock:
+            self._failure_count = 0
+            if self._state == self.HALF_OPEN:
+                gpas_log.info("circuit_breaker state=closed (probe succeeded)")
+            self._state = self.CLOSED
+
+    def record_failure(self):
+        with self._lock:
+            now = time.time()
+            if now - self._window_start > self._window:
+                self._failure_count = 0
+                self._window_start = now
+            self._failure_count += 1
+            self._last_failure_time = now
+            if self._state == self.HALF_OPEN or self._failure_count >= self._threshold:
+                self._state = self.OPEN
+                gpas_log.warning(
+                    "circuit_breaker state=open failures=%d threshold=%d",
+                    self._failure_count, self._threshold,
+                )
+
+
+_gpas_circuit_breaker = _CircuitBreaker()
+
+# ---------------------------------------------------------------------------
 # gPAS TTP-FHIR Gateway client
 #
 # Implements the real gPAS FHIR Operations API:
@@ -268,6 +336,13 @@ def _call_gpas_operation(base_url, operation, fhir_params, params):
     Returns:
         Parsed JSON response (dict)
     """
+    if not _gpas_circuit_breaker.allow_request():
+        GPAS_CALL_COUNT.labels(operation=operation, status='error').inc()
+        raise ValueError(
+            f'gPAS circuit breaker is OPEN — requests to ${operation} are '
+            f'temporarily blocked. Service will retry automatically.'
+        )
+
     url = f"{base_url}/${operation}"
     timeout_sec = float(params.get('gpas_timeout_sec', 30))
     payload = json.dumps(fhir_params).encode('utf-8')
@@ -292,6 +367,7 @@ def _call_gpas_operation(base_url, operation, fhir_params, params):
                 body = resp.read().decode(charset)
                 GPAS_LATENCY.labels(operation=operation).observe(time.perf_counter() - t0)
                 GPAS_CALL_COUNT.labels(operation=operation, status='ok').inc()
+                _gpas_circuit_breaker.record_success()
                 return json.loads(body)
         except urlerror.HTTPError as exc:
             should_retry = exc.code in (429, 500, 502, 503, 504)
@@ -299,35 +375,38 @@ def _call_gpas_operation(base_url, operation, fhir_params, params):
                 time.sleep(retry_backoff * (2 ** attempt))
                 continue
 
-            detail = exc.read().decode('utf-8', errors='replace') if exc.fp else str(exc)
+            detail = exc.read().decode('utf-8', errors='replace')[:500] if exc.fp else ""
             try:
                 diagnostics = []
                 outcome = json.loads(detail)
                 for issue in outcome.get('issue', []):
                     if issue.get('diagnostics'):
-                        diagnostics.append(issue['diagnostics'])
-                detail_message = '; '.join(diagnostics) if diagnostics else detail
+                        diagnostics.append(issue['diagnostics'][:100])
+                detail_message = '; '.join(diagnostics)[:200] if diagnostics else ""
             except Exception:
-                detail_message = detail
+                detail_message = ""
 
             if 'Unknown domain' in detail_message:
                 try:
                     domains = list_gpas_domains(params)
                     if domains:
                         detail_message = (
-                            f"{detail_message} Available domains: {', '.join(domains)}"
+                            f"Unknown domain. Available domains: {', '.join(domains)}"
                         )
                 except Exception:
                     pass
             GPAS_LATENCY.labels(operation=operation).observe(time.perf_counter() - t0)
             GPAS_CALL_COUNT.labels(operation=operation, status='error').inc()
-            raise ValueError(f'gPAS HTTP {exc.code} on ${operation}: {detail_message}') from exc
+            if should_retry:
+                _gpas_circuit_breaker.record_failure()
+            raise ValueError(f'gPAS HTTP {exc.code} on ${operation}: {detail_message[:200]}') from exc
         except urlerror.URLError as exc:
             if attempt < retry_count:
                 time.sleep(retry_backoff * (2 ** attempt))
                 continue
             GPAS_LATENCY.labels(operation=operation).observe(time.perf_counter() - t0)
             GPAS_CALL_COUNT.labels(operation=operation, status='error').inc()
+            _gpas_circuit_breaker.record_failure()
             raise ValueError(f'gPAS connection error on ${operation}: {exc.reason}') from exc
 
     raise ValueError(f'gPAS request failed on ${operation}')

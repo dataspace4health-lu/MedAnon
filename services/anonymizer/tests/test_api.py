@@ -30,6 +30,9 @@ if "typing.io" not in sys.modules:
 # Point config dir at the real config directory so Settings resolves correctly
 _CONFIG_DIR = os.path.join(os.path.dirname(__file__), "..", "config")
 
+# Set test environment variables globally
+os.environ["MEDANON_HASH_ALLOW_PLAIN"] = "true"
+
 
 def _get_client(**env_overrides):
     """Import the app with a clean env and return a TestClient."""
@@ -38,6 +41,7 @@ def _get_client(**env_overrides):
         "MEDANON_API_KEY": "",
         "MEDANON_RATE_LIMIT_ENABLED": "false",
         "MEDANON_CORS_ORIGINS": "",
+        "MEDANON_HASH_ALLOW_PLAIN": "true",
         "GPAS_URL": "",
         "FHIR_SOURCE_URL": "",
         "LOG_LEVEL": "WARNING",
@@ -45,8 +49,9 @@ def _get_client(**env_overrides):
     env.update(env_overrides)
     with patch.dict(os.environ, env, clear=False):
         # Force re-import so env vars are picked up fresh
-        if "api.main" in sys.modules:
-            del sys.modules["api.main"]
+        for mod in ("api.auth", "api.main"):
+            if mod in sys.modules:
+                del sys.modules[mod]
         from api.main import app, get_settings
         # Clear the lru_cache on get_settings so it reads from the test config dir
         get_settings.cache_clear()

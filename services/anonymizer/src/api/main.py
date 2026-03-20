@@ -1,7 +1,9 @@
+import asyncio
 import ipaddress
 import json
 import logging
 import os
+import socket
 import time
 import urllib.parse
 import uuid
@@ -12,10 +14,29 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse, Response
 from functools import lru_cache
 
-from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
-from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.errors import RateLimitExceeded
-from slowapi.util import get_remote_address
+try:
+    from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+except ImportError:
+    CONTENT_TYPE_LATEST = "text/plain"
+    def generate_latest():
+        return b""
+
+try:
+    from slowapi import Limiter, _rate_limit_exceeded_handler
+    from slowapi.errors import RateLimitExceeded
+    from slowapi.util import get_remote_address
+except ImportError:
+    # slowapi is optional — provide a no-op fallback so tests and
+    # lightweight deployments work without the dependency.
+    class _NoOpLimiter:
+        def __init__(self, **kw): pass
+        def limit(self, *a, **kw):
+            def decorator(fn): return fn
+            return decorator
+    Limiter = _NoOpLimiter
+    RateLimitExceeded = None
+    get_remote_address = lambda r: "127.0.0.1"
+    _rate_limit_exceeded_handler = None
 
 import pipeline.config as config
 from pipeline.io_formats import parse_payload_bytes, serialize_payload
@@ -38,10 +59,8 @@ logger = logging.getLogger("medanon")
 # Maximum accepted request body size (10 MB) to prevent memory exhaustion.
 MAX_BODY_BYTES = int(os.environ.get("MEDANON_MAX_BODY_BYTES", 10 * 1024 * 1024))
 
-# Optional API key auth. If MEDANON_API_KEY is set (non-empty), all endpoints
-# except health/ready/metrics/docs require the X-API-Key header to match.
-_API_KEY = os.environ.get("MEDANON_API_KEY", "").strip()
-_OPEN_PATHS = frozenset({"/health", "/ready", "/metrics", "/docs", "/openapi.json", "/redoc"})
+# Auth module — Keycloak OIDC + legacy API-key dual auth
+from api.auth import get_auth_context, log_audit, OPEN_PATHS, ENDPOINT_ROLES, AuthContext
 
 # Directory where config YAML files are located.
 # Defaults to /code/config (set in Dockerfile); override for local dev.
@@ -74,7 +93,7 @@ _PRIVATE_NETS = [
 ]
 
 
-def _validate_server_url(url: str) -> str:
+async def _validate_server_url(url: str) -> str:
     """Raise HTTP 422 if *url* is not a safe http(s) URL.
 
     Blocks:
@@ -104,7 +123,24 @@ def _validate_server_url(url: str) -> str:
                 detail="server_url must not target private or loopback addresses",
             )
     except ValueError:
-        pass  # hostname is a DNS name — permitted
+        # hostname is a DNS name — resolve and check each IP
+        try:
+            addrinfos = await asyncio.to_thread(
+                socket.getaddrinfo, hostname, None, type=socket.SOCK_STREAM
+            )
+            for family, _type, _proto, _canonname, sockaddr in addrinfos:
+                ip_str = sockaddr[0]
+                addr = ipaddress.ip_address(ip_str)
+                if any(addr in net for net in _PRIVATE_NETS):
+                    raise HTTPException(
+                        status_code=422,
+                        detail="server_url must not resolve to private or loopback addresses",
+                    )
+        except socket.gaierror:
+            raise HTTPException(
+                status_code=422,
+                detail="server_url hostname could not be resolved",
+            )
     return url
 
 
@@ -120,7 +156,7 @@ _ALLOWED_DYNAMIC_SETTINGS = frozenset({
 _DYNAMIC_URL_KEYS = frozenset({'gpas_url'})
 
 
-def _validate_dynamic_settings(dynamic_settings: dict) -> None:
+async def _validate_dynamic_settings(dynamic_settings: dict) -> None:
     """Raise HTTP 422 for unknown or unsafe URL-valued dynamic settings."""
     if not dynamic_settings:
         return
@@ -133,7 +169,7 @@ def _validate_dynamic_settings(dynamic_settings: dict) -> None:
     for key in _DYNAMIC_URL_KEYS:
         val = dynamic_settings.get(key)
         if val:
-            _validate_server_url(str(val))
+            await _validate_server_url(str(val))
 
 
 @lru_cache()
@@ -260,23 +296,43 @@ app.add_middleware(
     allow_origins=_ALLOWED_ORIGINS,
     allow_credentials=False,
     allow_methods=["POST", "GET"],
-    allow_headers=["Content-Type", "Authorization"],
+    allow_headers=["Content-Type", "Authorization", "X-API-Key"],
 )
 
 
 @app.middleware("http")
-async def api_key_auth(request: Request, call_next):
-    """Enforce X-API-Key header when MEDANON_API_KEY env var is set."""
-    if _API_KEY and request.url.path not in _OPEN_PATHS:
-        provided = request.headers.get("X-API-Key", "")
-        if provided != _API_KEY:
-            return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+async def auth_middleware(request: Request, call_next):
+    """Enforce Keycloak JWT or API key auth + RBAC on protected endpoints."""
+    if request.url.path in OPEN_PATHS:
+        return await call_next(request)
+    try:
+        auth_ctx = get_auth_context(request)
+    except HTTPException as exc:
+        return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+    request.state.auth = auth_ctx
+    required = ENDPOINT_ROLES.get(request.url.path)
+    if required and not auth_ctx.has_role(required):
+        return JSONResponse({"detail": "Forbidden"}, status_code=403)
     return await call_next(request)
 
 
 @app.middleware("http")
+async def audit_middleware(request: Request, call_next):
+    """Log every request to the structured audit log."""
+    response = await call_next(request)
+    auth = getattr(request.state, "auth", None)
+    log_audit(request, response.status_code, auth)
+    return response
+
+
+@app.middleware("http")
 async def enforce_body_size(request: Request, call_next):
-    """Reject requests whose Content-Length exceeds MAX_BODY_BYTES."""
+    """Reject requests whose body exceeds MAX_BODY_BYTES.
+
+    Checks Content-Length when present (fast path) and also streams
+    chunked/unknown-length bodies to enforce the limit before the full
+    payload is buffered into memory.
+    """
     content_length = request.headers.get("content-length")
     if content_length:
         try:
@@ -288,6 +344,25 @@ async def enforce_body_size(request: Request, call_next):
                 status_code=413,
                 detail=f"Request body exceeds the {MAX_BODY_BYTES // (1024*1024)} MB limit",
             )
+    elif request.method in ("POST", "PUT", "PATCH"):
+        # No Content-Length header (chunked transfer) — read incrementally
+        received = 0
+        chunks = []
+        async for chunk in request.stream():
+            received += len(chunk)
+            if received > MAX_BODY_BYTES:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"Request body exceeds the {MAX_BODY_BYTES // (1024*1024)} MB limit",
+                )
+            chunks.append(chunk)
+        # Reassemble and stash so downstream `await request.body()` still works
+        body = b"".join(chunks)
+
+        async def receive():
+            return {"type": "http.request", "body": body}
+
+        request._receive = receive
     return await call_next(request)
 
 
@@ -368,12 +443,21 @@ def readiness(request: Request):
             logger.debug("readiness: fhir unreachable: %s", exc)
             checks["fhir"] = "error"
 
+    # NLP engine readiness (when Presidio/spaCy is expected)
+    nlp_model = os.environ.get("MEDANON_NLP_MODEL", "")
+    if nlp_model:
+        try:
+            from integrations.nlp.detector import _get_analyzer
+            _get_analyzer()
+            checks["nlp"] = "ok"
+        except Exception as exc:
+            logger.debug("readiness: nlp engine not ready: %s", exc)
+            checks["nlp"] = "error"
+
     ready = all(v == "ok" for v in checks.values())
 
     # Unauthenticated callers only get the binary ready status — no topology details
-    caller_authenticated = (
-        not _API_KEY or request.headers.get("X-API-Key", "") == _API_KEY
-    )
+    caller_authenticated = getattr(request.state, "auth", None) is not None
     body = {"ready": ready}
     if caller_authenticated:
         body["checks"] = checks
@@ -393,7 +477,7 @@ def metrics():
 
 @app.post("/process")
 @limiter.limit("60/minute")
-def process(request: Request, resource: Any = Body(...), settings: config.Settings = Depends(get_settings)):
+async def process(request: Request, resource: Any = Body(...), settings: config.Settings = Depends(get_settings)):
     """Process a single FHIR resource or a FHIR Bundle.
 
     Accepts any valid FHIR JSON object or a JSON array of resources.
@@ -404,14 +488,14 @@ def process(request: Request, resource: Any = Body(...), settings: config.Settin
 
     resource, dynamic_settings = _unwrap_parameters_payload(resource)
     if dynamic_settings:
-        _validate_dynamic_settings(dynamic_settings)
+        await _validate_dynamic_settings(dynamic_settings)
     runtime_settings = _runtime_settings(settings, dynamic_settings)
 
     resource_type = resource.get("resourceType", "unknown") if isinstance(resource, dict) else "array"
     logger.info("Processing request: resourceType=%s", resource_type)
 
     try:
-        result = process_data(resource, runtime_settings)
+        result = await asyncio.to_thread(process_data, resource, runtime_settings)
         logger.info("Processing complete: resourceType=%s", resource_type)
         return result
     except ValueError as exc:
@@ -459,7 +543,7 @@ async def process_ndjson(request: Request, settings: config.Settings = Depends(g
                 yield json.dumps({"error": f"line {lineno}: invalid JSON — {exc}"}) + "\n"
                 continue
             try:
-                result = process_data(resource, runtime_settings)
+                result = await asyncio.to_thread(process_data, resource, runtime_settings)
                 yield json.dumps(result) + "\n"
             except Exception as exc:
                 # Do not log exception — traceback may contain PHI
@@ -503,13 +587,13 @@ async def process_raw(
     try:
         payload, dynamic_settings = _unwrap_parameters_payload(payload)
         if dynamic_settings:
-            _validate_dynamic_settings(dynamic_settings)
+            await _validate_dynamic_settings(dynamic_settings)
         runtime_settings = _runtime_settings(settings, dynamic_settings)
 
         if isinstance(payload, list):
-            result = [process_data(item, runtime_settings) for item in payload]
+            result = [await asyncio.to_thread(process_data, item, runtime_settings) for item in payload]
         else:
-            result = process_data(payload, runtime_settings)
+            result = await asyncio.to_thread(process_data, payload, runtime_settings)
         text, media_type = serialize_payload(result, out_format=output_format)
         return Response(content=text, media_type=media_type)
     except ValueError as exc:
@@ -546,7 +630,7 @@ async def process_from_server(
     server_url = req_data.get("server_url")
     if not server_url:
         raise HTTPException(status_code=422, detail="server_url is required")
-    _validate_server_url(server_url)
+    await _validate_server_url(server_url)
 
     extra_params = req_data.get("params") or {}
     token = req_data.get("token") or os.environ.get("FHIR_SOURCE_TOKEN")
@@ -562,7 +646,7 @@ async def process_from_server(
                 logger.info("from-server: client disconnected, stopping stream")
                 break
             try:
-                result = process_data(resource, runtime_settings)
+                result = await asyncio.to_thread(process_data, resource, runtime_settings)
                 yield json.dumps(result) + "\n"
             except Exception as exc:
                 # Do not log exception — traceback may contain PHI
@@ -601,7 +685,7 @@ async def process_everything(
     server_url = req_data.get("server_url") or os.environ.get("FHIR_SOURCE_URL")
     if not server_url:
         raise HTTPException(status_code=422, detail="server_url is required")
-    _validate_server_url(server_url)
+    await _validate_server_url(server_url)
 
     resource_type = req_data.get("resource_type")
     if not resource_type:
@@ -625,7 +709,7 @@ async def process_everything(
                 logger.info("everything: client disconnected, stopping stream")
                 break
             try:
-                result = process_data(resource, runtime_settings)
+                result = await asyncio.to_thread(process_data, resource, runtime_settings)
                 yield json.dumps(result) + "\n"
             except Exception as exc:
                 # Do not log exception — traceback may contain PHI
@@ -670,7 +754,7 @@ async def process_and_upload(
     target_url = req_data.get("target_server_url") or os.environ.get("FHIR_TARGET_URL")
     if not target_url:
         raise HTTPException(status_code=422, detail="target_server_url is required")
-    _validate_server_url(target_url)
+    await _validate_server_url(target_url)
 
     resource = req_data.get("resource")
     if not resource or not isinstance(resource, dict):
@@ -681,11 +765,11 @@ async def process_and_upload(
 
     resource, dynamic_settings = _unwrap_parameters_payload(resource)
     if dynamic_settings:
-        _validate_dynamic_settings(dynamic_settings)
+        await _validate_dynamic_settings(dynamic_settings)
     runtime_settings = _runtime_settings(settings, dynamic_settings)
 
     try:
-        deidentified = process_data(resource, runtime_settings)
+        deidentified = await asyncio.to_thread(process_data, resource, runtime_settings)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
@@ -705,7 +789,9 @@ async def process_and_upload(
     else:
         resources_to_upload = [deidentified]
 
-    results = list(upload_resources(target_url, resources_to_upload, token=target_token, timeout=timeout))
+    results = list(await asyncio.to_thread(
+        lambda: list(upload_resources(target_url, resources_to_upload, token=target_token, timeout=timeout))
+    ))
     uploaded = sum(1 for r in results if r["success"])
     errors = sum(1 for r in results if not r["success"])
 
@@ -751,8 +837,8 @@ async def process_round_trip(
         raise HTTPException(status_code=422, detail="source_server_url is required")
     if not target_url:
         raise HTTPException(status_code=422, detail="target_server_url is required")
-    _validate_server_url(source_url)
-    _validate_server_url(target_url)
+    await _validate_server_url(source_url)
+    await _validate_server_url(target_url)
 
     extra_params = req_data.get("params") or {}
     source_token = req_data.get("source_token") or os.environ.get("FHIR_SOURCE_TOKEN")
@@ -770,8 +856,8 @@ async def process_round_trip(
                 break
             source_id = resource.get("id")
             try:
-                deidentified = process_data(resource, runtime_settings)
-                resp = post_resource(target_url, deidentified, token=target_token, timeout=timeout)
+                deidentified = await asyncio.to_thread(process_data, resource, runtime_settings)
+                resp = await asyncio.to_thread(post_resource, target_url, deidentified, token=target_token, timeout=timeout)
                 yield json.dumps({
                     "resourceType": _rt,
                     "target_id": resp.get("id"),
@@ -867,7 +953,7 @@ async def process_batch(request: Request, settings: config.Settings = Depends(ge
                 logger.info("process_batch: client disconnected at resource %d", idx)
                 break
             try:
-                result = process_data(resource, runtime_settings)
+                result = await asyncio.to_thread(process_data, resource, runtime_settings)
                 yield json.dumps(result) + "\n"
             except Exception as exc:
                 logger.error("process_batch resource %d: %s", idx, type(exc).__name__, exc_info=False)
