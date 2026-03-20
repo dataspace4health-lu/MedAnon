@@ -1,0 +1,309 @@
+# =============================================================================
+# Default config — local de-identification profile
+# (no gPAS dependency; uses cryptographic hashing and regex text scrubbing)
+#
+# For production pseudonymization with a gPAS server, use config_gpas.yaml.
+# For a pure GDPR HMAC profile, use config_gdpr_eu.yaml.
+# =============================================================================
+
+general:
+  appname: SPE-FHIR-BlackBox
+  hash_type: sha3_256
+
+rules:
+
+  # ===========================================================================
+  # 1. HASH ALL RESOURCE IDS
+  # ===========================================================================
+
+  - match: "*.id"
+    action: cryptohash
+
+  # ===========================================================================
+  # 2. PATIENT DIRECT IDENTIFIERS
+  # ===========================================================================
+
+  - match: Patient.name
+    action: redact
+
+  - match: Patient.telecom
+    action: redact
+
+  - match: Patient.address
+    action: redact
+
+  - match: Patient.photo
+    action: redact
+
+  - match: Patient.identifier.value
+    action: cryptohash
+
+  - match: Patient.extension
+    action: redact
+
+  - match: Patient.gender
+    action: redact
+
+  - match: Patient.maritalStatus
+    action: redact
+
+  - match: Patient.communication
+    action: redact
+
+  - match: Patient.link
+    action: redact
+
+  - match: Patient.contact.name
+    action: redact
+
+  - match: Patient.contact.telecom
+    action: redact
+
+  - match: Patient.contact.address
+    action: redact
+
+  # ===========================================================================
+  # 3. PRACTITIONER / PROVIDER PHI
+  # ===========================================================================
+
+  - match: Practitioner.name
+    action: redact
+
+  - match: Practitioner.telecom
+    action: redact
+
+  - match: Practitioner.address
+    action: redact
+
+  - match: Practitioner.photo
+    action: redact
+
+  - match: Practitioner.identifier.value
+    action: cryptohash
+
+  - match: Practitioner.gender
+    action: redact
+
+  - match: Practitioner.qualification
+    action: redact
+
+  - match: Practitioner.birthDate
+    action: redact
+
+  - match: PractitionerRole.code
+    action: redact
+
+  - match: PractitionerRole.organization
+    action: redact
+
+  # ===========================================================================
+  # 4. ORGANIZATION / LOCATION PHI
+  # ===========================================================================
+
+  - match: Organization.name
+    action: redact
+
+  - match: Organization.telecom
+    action: redact
+
+  - match: Organization.address
+    action: redact
+
+  - match: Organization.identifier.value
+    action: cryptohash
+
+  - match: Location.name
+    action: redact
+
+  - match: Location.address
+    action: redact
+
+  # ===========================================================================
+  # 5. RELATED PERSON
+  # ===========================================================================
+
+  - match: RelatedPerson.name
+    action: redact
+
+  - match: RelatedPerson.telecom
+    action: redact
+
+  - match: RelatedPerson.address
+    action: redact
+
+  - match: RelatedPerson.photo
+    action: redact
+
+  - match: RelatedPerson.identifier.value
+    action: cryptohash
+
+  - match: RelatedPerson.birthDate
+    action: redact
+
+  # ===========================================================================
+  # 6. GENERALIZE DATE FIELDS
+  # ===========================================================================
+
+  - match: Patient.birthDate
+    action: generalize
+    params:
+      strategy: date_year
+
+  - match: Patient.deceasedDateTime
+    action: generalize
+    params:
+      strategy: date_year
+
+  - match: "*.effectiveDateTime"
+    action: generalize
+    params:
+      strategy: date_year
+
+  - match: "*.issued"
+    action: generalize
+    params:
+      strategy: date_year
+
+  - match: "*.authoredOn"
+    action: generalize
+    params:
+      strategy: date_year
+
+  - match: "*.recordedDate"
+    action: generalize
+    params:
+      strategy: date_year
+
+  # ===========================================================================
+  # 7. SERVER METADATA
+  # ===========================================================================
+
+  - match: "*.meta.lastUpdated"
+    action: redact
+
+  - match: "*.meta.versionId"
+    action: redact
+
+  # ===========================================================================
+  # 8. CLINICAL ACTOR REFERENCES
+  # ===========================================================================
+
+  - match: "*.performer"
+    action: redact
+
+  - match: "*.author"
+    action: redact
+
+  - match: "*.requester"
+    action: redact
+
+  - match: "*.recorder"
+    action: redact
+
+  - match: "*.participant.individual"
+    action: redact
+
+  - match: CareTeam.participant.individual
+    action: redact
+
+  - match: Encounter.participant.individual
+    action: redact
+
+  # ===========================================================================
+  # 9. DISPLAY FIELDS (HUMAN READABLE NAMES)
+  # ===========================================================================
+
+  - match: "*.display"
+    action: redact
+
+  - match: "*.subject.display"
+    action: redact
+
+  # ===========================================================================
+  # 10. DOCUMENTS / ATTACHMENTS
+  # ===========================================================================
+
+  - match: "*.attachment"
+    action: redact
+
+  - match: DocumentReference.content
+    action: redact
+
+  - match: Binary.data
+    action: redact
+
+  # ===========================================================================
+  # 11. TEXT SCRUBBING
+  # ===========================================================================
+
+  # Regex-based text scrubbing (first pass)
+  - match: "*.text"
+    action: scrub_text
+    params:
+      mode: html_tokenize
+      patterns: all
+
+  # NLP-based text scrubbing (second pass — catches names/locations regex misses)
+  - match: "*.text"
+    action: nlp_detect
+    params:
+      mode: tokenize
+      html: true
+      threshold: 0.4
+
+  - match: "*.note.text"
+    action: scrub_text
+    params:
+      mode: text
+      patterns: all
+
+  - match: "*.note.text"
+    action: nlp_detect
+    params:
+      mode: tokenize
+      threshold: 0.4
+
+  # ===========================================================================
+  # 12. COMMUNICATION / MESSAGES
+  # ===========================================================================
+
+  - match: Communication.sender
+    action: redact
+
+  - match: Communication.recipient
+    action: redact
+
+  - match: Communication.payload.contentString
+    action: scrub_text
+    params:
+      mode: text
+      patterns: all
+
+  # ===========================================================================
+  # 13. PROVENANCE / AUDIT
+  # ===========================================================================
+
+  - match: Provenance.agent
+    action: redact
+
+  - match: AuditEvent.agent
+    action: redact
+
+  - match: AuditEvent.source
+    action: redact
+
+  # ===========================================================================
+  # 14. GLOBAL CATCH-ALL RULES
+  # ===========================================================================
+
+  - match: "*.identifier.value"
+    action: cryptohash
+
+  - match: "*.name"
+    action: redact
+
+  - match: "*.telecom"
+    action: redact
+
+  - match: "*.address"
+    action: redact

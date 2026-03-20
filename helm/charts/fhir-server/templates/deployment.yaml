@@ -1,0 +1,83 @@
+{{- $registry := coalesce .Values.registry .Values.global.registry "" -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "fhir-server.fullname" . }}
+  labels:
+    {{- include "fhir-server.labels" . | nindent 4 }}
+    app.kubernetes.io/component: fhir-server
+spec:
+  replicas: {{ .Values.replicas }}
+  selector:
+    matchLabels:
+      {{- include "fhir-server.selectorLabels" (dict "Release" .Release "component" "fhir-server") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "fhir-server.selectorLabels" (dict "Release" .Release "component" "fhir-server") | nindent 8 }}
+        {{- include "fhir-server.labels" . | nindent 8 }}
+        app.kubernetes.io/component: fhir-server
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "fhir-server.fullname" . }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      {{- with (coalesce .Values.imagePullSecrets .Values.global.imagePullSecrets) }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: fhir-server
+          image: {{ include "fhir-server.image" (dict "registry" $registry "image" .Values.image "tag" .Values.tag) }}
+          imagePullPolicy: {{ coalesce .Values.imagePullPolicy .Values.global.imagePullPolicy "IfNotPresent" }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - name: http
+              containerPort: {{ .Values.port }}
+              protocol: TCP
+          env:
+            - name: hapi.fhir.fhir_version
+              value: {{ .Values.fhirVersion | quote }}
+            {{- if .Values.serverAddress }}
+            - name: HAPI_SERVER_ADDRESS
+              value: {{ .Values.serverAddress | quote }}
+            {{- end }}
+          volumeMounts:
+            - name: config
+              mountPath: /app/config/application.yaml
+              subPath: application.yaml
+              readOnly: true
+            # JVM needs writable /tmp (readOnlyRootFilesystem=true)
+            - name: tmp
+              mountPath: /tmp
+          livenessProbe:
+            httpGet:
+              path: /fhir/metadata
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 15
+            failureThreshold: 5
+          readinessProbe:
+            httpGet:
+              path: /fhir/metadata
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 10
+            failureThreshold: 5
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "fhir-server.fullname" . }}-config
+        - name: tmp
+          emptyDir: {}

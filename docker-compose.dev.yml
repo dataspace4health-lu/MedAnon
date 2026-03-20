@@ -1,0 +1,31 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Development overrides — apply with: docker compose -f docker-compose.yml \
+#                                                   -f docker-compose.dev.yml up
+# Hot-reloads source code and exposes extra debug ports.
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  anonymizer:
+    build:
+      # Rebuild on every up in dev
+      target: dev
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
+    volumes:
+      # Mount source live — edits are reflected immediately without rebuild
+      - ./services/anonymizer/src:/code/src
+      - ./services/anonymizer/config:/code/config
+      - ./output:/output
+
+  fhir-server:
+    # Use in-memory H2 in dev (data resets on restart)
+    environment:
+      - spring.datasource.url=jdbc:h2:mem:test_mem
+
+  gpas:
+    # Expose WildFly management console for manual testing.
+    # Management port is bound to 127.0.0.1 only — do not expose on 0.0.0.0
+    # as the console can perform privileged WildFly operations.
+    ports:
+      - "${GPAS_PORT:-8080}:8080"
+      - "127.0.0.1:9990:9990"

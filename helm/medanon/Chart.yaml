@@ -1,0 +1,25 @@
+apiVersion: v2
+name: medanon
+description: >
+  Full FHIR de-identification and pseudonymization stack — anonymizer,
+  HAPI FHIR R4 server, and gPAS TTP service.
+  Umbrella chart that composes the three standalone sub-charts.
+type: application
+version: 0.1.0
+appVersion: "2025.2.0"
+keywords:
+  - fhir
+  - de-identification
+  - pseudonymization
+  - gpas
+  - healthcare
+dependencies:
+  - name: anonymizer
+    version: "0.1.0"
+    repository: "file://../charts/anonymizer"
+  - name: fhir-server
+    version: "0.1.0"
+    repository: "file://../charts/fhir-server"
+  - name: gpas
+    version: "0.1.0"
+    repository: "file://../charts/gpas"

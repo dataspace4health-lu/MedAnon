@@ -1,0 +1,273 @@
+# =============================================================================
+# Research-Grade Pseudonymous De-identification Profile for MedAnon
+# =============================================================================
+#
+# Use case: Internal secondary analysis and clinical research datasets
+#
+# This profile is designed for datasets shared within a research environment
+# under an Institutional Review Board (IRB) approval or equivalent ethical
+# governance framework. It preserves more clinical detail than the HIPAA Safe
+# Harbor profile to support temporal analysis, cohort studies, and
+# epidemiological research.
+#
+# Key differences from HIPAA Safe Harbor (config_hipaa_safe_harbor.yaml):
+#   - Dates generalized to YEAR-MONTH (not year-only) for temporal analysis
+#   - Postal code retained as 3-digit prefix (not fully redacted)
+#   - Patient IDs pseudonymized via cryptohash (not redacted), preserving
+#     referential integrity across datasets for longitudinal studies
+#   - Clinical notes scrubbed but not entirely removed; code-level data intact
+#
+# Strategy used:
+#   cryptohash      → SHA3-256 hash for all resource IDs (reversible with key)
+#   redact          → permanent deletion for names, contact details, photos
+#   generalize      → date_year_month for all date fields; zip_prefix for
+#                     postal codes
+#
+# WARNING — This profile is NOT suitable for:
+#   - External data sharing or publication without further review
+#   - Compliance with HIPAA Safe Harbor (dates retain month; use
+#     config_hipaa_safe_harbor.yaml for that)
+#   - EU/EEA data sharing under GDPR (use config_gdpr_eu.yaml)
+#
+# Governance requirements:
+#   - Obtain IRB / ethics committee approval before use
+#   - Document the legal basis for processing (e.g. Art. 89 GDPR for research)
+#   - Restrict output access to named research personnel
+#   - Log operator name and config hash in the evidence report
+#     (use: python3 tools/analyze_results.py --operator NAME --config THIS_FILE)
+#
+# Covered resource types:
+#   Patient, Practitioner, RelatedPerson, Organization, plus cross-resource
+#   wildcards for IDs, date fields, references, and clinical text.
+# =============================================================================
+
+general:
+  appname: MedAnon-Research
+  hash_type: sha3_256
+  rewrite_references: true
+  rewrite_text_ids: true
+
+rules:
+
+  # ===========================================================================
+  # 1. PATIENT — DIRECT IDENTIFIERS (redact completely)
+  # ===========================================================================
+
+  # Names — always redact (direct identifier)
+  - match: Patient.name
+    action: redact
+
+  - match: Patient.contact.name
+    action: redact
+
+  # Contact details — redact (phone, fax, email, URL)
+  - match: Patient.telecom
+    action: redact
+
+  - match: Patient.contact.telecom
+    action: redact
+
+  # Administrative identifiers (MRN, SSN, insurance, account numbers)
+  - match: Patient.identifier
+    action: redact
+
+  # Photo / biometric data
+  - match: Patient.photo
+    action: redact
+
+  # Patient merge links
+  - match: Patient.link
+    action: redact
+
+  # Extensions (may contain custom identifiers)
+  - match: Patient.extension
+    action: redact
+
+  # ===========================================================================
+  # 2. PATIENT — QUASI-IDENTIFIERS (generalize, not redact)
+  # Preserves statistical utility for cohort and temporal analysis.
+  # ===========================================================================
+
+  # Date of birth — year + month only (finer than Safe Harbor for temporal work)
+  - match: Patient.birthDate
+    action: generalize
+    params:
+      strategy: date_year_month
+
+  - match: Patient.deceasedDateTime
+    action: generalize
+    params:
+      strategy: date_year_month
+
+  # Postal code — 3-digit prefix (safe quasi-identifier for geographic analysis)
+  - match: Patient.address.postalCode
+    action: generalize
+    params:
+      strategy: zip_prefix
+      prefix_length: 3
+
+  # Remove street-level address lines but keep state and country
+  - match: Patient.address.line
+    action: redact
+
+  - match: Patient.address.city
+    action: redact
+
+  - match: Patient.address.district
+    action: redact
+
+  - match: Patient.contact.address
+    action: redact
+
+  # ===========================================================================
+  # 3. PRACTITIONER / RELATED PERSON / ORGANIZATION
+  # ===========================================================================
+
+  - match: Practitioner.name
+    action: redact
+
+  - match: Practitioner.identifier
+    action: redact
+
+  - match: Practitioner.birthDate
+    action: generalize
+    params:
+      strategy: date_year_month
+
+  - match: Practitioner.telecom
+    action: redact
+
+  - match: Practitioner.address
+    action: redact
+
+  - match: Practitioner.photo
+    action: redact
+
+  - match: RelatedPerson.name
+    action: redact
+
+  - match: RelatedPerson.identifier
+    action: redact
+
+  - match: RelatedPerson.birthDate
+    action: generalize
+    params:
+      strategy: date_year_month
+
+  - match: RelatedPerson.telecom
+    action: redact
+
+  - match: RelatedPerson.address
+    action: redact
+
+  - match: RelatedPerson.photo
+    action: redact
+
+  - match: Organization.name
+    action: redact
+
+  - match: Organization.identifier
+    action: redact
+
+  - match: Organization.telecom
+    action: redact
+
+  - match: Organization.address
+    action: redact
+
+  # ===========================================================================
+  # 4. CROSS-RESOURCE WILDCARDS
+  # Pseudonymize all resource IDs with cryptohash — preserves referential
+  # integrity across resources in longitudinal / multi-resource datasets.
+  # ===========================================================================
+
+  - match: "*.id"
+    action: cryptohash
+
+  # Generalize all clinical date/time fields to year-month
+  - match: "*.effectiveDateTime"
+    action: generalize
+    params:
+      strategy: date_year_month
+
+  - match: "*.effectivePeriod.start"
+    action: generalize
+    params:
+      strategy: date_year_month
+
+  - match: "*.effectivePeriod.end"
+    action: generalize
+    params:
+      strategy: date_year_month
+
+  - match: "*.issued"
+    action: generalize
+    params:
+      strategy: date_year_month
+
+  - match: "*.authoredOn"
+    action: generalize
+    params:
+      strategy: date_year_month
+
+  - match: "*.recordedDate"
+    action: generalize
+    params:
+      strategy: date_year_month
+
+  - match: "*.occurrenceDateTime"
+    action: generalize
+    params:
+      strategy: date_year_month
+
+  - match: "*.performedDateTime"
+    action: generalize
+    params:
+      strategy: date_year_month
+
+  # Redact display strings in references (may contain patient name)
+  - match: "*.subject.display"
+    action: redact
+
+  - match: "*.patient.display"
+    action: redact
+
+  - match: "*.display"
+    action: redact
+
+  # ===========================================================================
+  # 5. CLINICAL TEXT SCRUBBING
+  # Preserve structured clinical codes (Condition, Observation, Medication).
+  # Scrub free-text narrative and notes where names/addresses may appear.
+  # ===========================================================================
+
+  - match: "*.text.div"
+    action: scrub_text
+    params:
+      mode: html_tokenize
+      patterns: all
+
+  - match: "*.text.div"
+    action: nlp_detect
+    params:
+      mode: tokenize
+      html: true
+      threshold: 0.4
+
+  - match: "*.note.text"
+    action: scrub_text
+    params:
+      mode: text
+      patterns: all
+
+  - match: "*.note.text"
+    action: nlp_detect
+    params:
+      mode: tokenize
+      threshold: 0.4
+
+  - match: "*.comment"
+    action: scrub_text
+    params:
+      mode: text
+      patterns: all

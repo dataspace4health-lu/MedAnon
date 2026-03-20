@@ -1,0 +1,110 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# gPAS Helm Chart — default values
+#
+# Includes the MySQL database backend (db.*) since it has no lifecycle
+# independent of gPAS itself.
+#
+# Customise with --set / -f my-values.yaml.
+# When deployed via the fhir-diet umbrella chart, prefix keys with "gpas."
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Helm global values — automatically populated by a parent (umbrella) chart.
+# These defaults are only active when the chart is installed standalone.
+global:
+  registry: ""
+  imagePullPolicy: ""
+  imagePullSecrets: []
+
+# Container registry prefix for the gPAS image.
+# Sub-chart: overridden by global.registry from the parent if set.
+registry: ""
+
+# Default pull policy. Sub-chart: overridden by global.imagePullPolicy if set.
+imagePullPolicy: IfNotPresent
+
+# Optional image pull secrets.
+# imagePullSecrets:
+#   - name: my-registry-secret
+imagePullSecrets: []
+
+# Use the custom image built from services/gpas/Dockerfile
+# (bundles WAR/EAR deployments and WildFly CLI scripts)
+image: medanon-gpas
+# Pin to a specific release tag in production — never use "latest" in production.
+tag: latest
+replicas: 1
+port: 8080
+
+# ─── Environment — non-secret config ─────────────────────────────────────────
+env:
+  # gRAS form-based auth for the gPAS web UI (/gpas-web/).
+  # Options: gras | keycloak | keycloak-json | (anything else = no auth)
+  TTP_GPAS_WEB_AUTH_MODE: "gras"
+
+  # MySQL hostname — leave empty to use the DB Service name computed from
+  # this chart's fullname (recommended). Override only when pointing at an
+  # external database.
+  TTP_DB_HOST: ""
+  TTP_GRAS_DB_HOST: ""
+
+  # Wait for MySQL before starting WildFly (host:port:timeout_seconds).
+  # Leave empty to use the computed DB service name and db.port.
+  MOS_WAIT_FOR_PORTS: ""
+
+  TZ: "Europe/Berlin"
+  WF_NO_ADMIN: "true"
+  WF_HEALTHCHECK_URLS: "http://localhost:8080/"
+
+# ─── Secrets ──────────────────────────────────────────────────────────────────
+secrets:
+  # WildFly management console credentials.
+  # WF_NO_ADMIN=true disables the console, but credentials are still required internally.
+  # REQUIRED: set via --set or a sealed secret for any non-local deployment.
+  # Generate with: openssl rand -base64 24
+  WF_ADMIN_PASS: ""
+  WF_ADMIN_USER: ""
+
+resources:
+  requests:
+    memory: "1Gi"
+    cpu: "500m"
+  limits:
+    memory: "6Gi"
+    cpu: "2000m"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MySQL database backend (exclusively for gPAS)
+# ─────────────────────────────────────────────────────────────────────────────
+db:
+  # MySQL uses the official Docker Hub image; registry is intentionally not
+  # prefixed by default so it always pulls from Docker Hub.
+  # Set db.registry to override (e.g. for air-gapped clusters with a mirror).
+  registry: ""
+  image: mysql
+  tag: "8"
+  port: 3306
+
+  # Persistent volume size for the MySQL data directory.
+  storage: "10Gi"
+  storageClass: ""   # leave empty to use the cluster default StorageClass
+
+  # MySQL command-line flags
+  args:
+    - "--max_allowed_packet=20M"
+    - "--default-time-zone=Europe/Berlin"
+    - "--innodb_buffer_pool_size=2G"
+
+  env:
+    TZ: "Europe/Berlin"
+
+  secrets:
+    # REQUIRED: set via --set or a sealed secret. Generate: openssl rand -base64 24
+    rootPassword: ""
+
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "250m"
+    limits:
+      memory: "4Gi"
+      cpu: "1000m"

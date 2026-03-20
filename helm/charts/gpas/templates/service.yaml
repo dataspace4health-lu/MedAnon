@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "gpas.fullname" . }}
+  labels:
+    {{- include "gpas.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gpas
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "gpas.selectorLabels" (dict "Release" .Release "component" "gpas") | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.port }}
+      targetPort: http
+      protocol: TCP

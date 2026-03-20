@@ -1,0 +1,9 @@
+# Encrypt patient name with a given asymmetric encryption algorithm
+general:
+  appname: SPE-FHIR-BlackBox
+rules:
+  - match: Patient.name
+    action: decrypt
+    params:
+      algorithm: RSA
+      private_key: test/keys/id_rsa

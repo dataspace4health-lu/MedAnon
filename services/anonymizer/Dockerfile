@@ -1,0 +1,39 @@
+# ── Base stage ────────────────────────────────────────────────────────────────
+FROM python:3.12-slim AS base
+
+WORKDIR /code
+
+# Install deps first (layer-cached unless requirements change)
+COPY requirements.txt /code/requirements.txt
+RUN pip install --no-cache-dir --upgrade -r /code/requirements.txt
+
+# Download spaCy model
+RUN python -m spacy download en_core_web_lg --quiet
+
+COPY src/ /code/src/
+COPY config/ /code/config/
+# NOTE: RSA keys are NOT baked into the image.
+# Mount them at runtime via Docker volume or Kubernetes Secret:
+#   docker run -v /path/to/keys:/code/keys ...
+#   Kubernetes: secretRef → volumeMount at /code/keys
+
+# Create a non-root user for production security
+RUN addgroup --system appgroup && adduser --system --ingroup appgroup appuser
+
+# Pre-create /output with correct ownership so the CLI batch mode can write there
+# when the host directory is mounted at runtime.
+RUN mkdir -p /output && chown appuser:appgroup /output
+
+EXPOSE 8000
+
+# ── Production stage (default) ────────────────────────────────────────────────
+FROM base AS prod
+WORKDIR /code/src
+USER appuser
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+# ── Development stage — used by docker-compose.dev.yml ───────────────────────
+FROM base AS dev
+RUN pip install --no-cache-dir watchfiles
+WORKDIR /code/src
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]

@@ -1,0 +1,183 @@
+# =============================================================================
+# EU GDPR Pseudonymization Profile for MedAnon
+# =============================================================================
+#
+# Legal basis: GDPR (EU) 2016/679
+#   - Art. 4(1)  — Personal data definition (name, ID, location, online ID,
+#                  physical/physiological/genetic/economic/cultural identifiers)
+#   - Art. 4(5)  — Pseudonymisation (replacing identifiers with a pseudonym)
+#   - Art. 5(1)  — Data minimisation & storage limitation
+#   - Art. 25    — Data protection by design and by default
+#   - Art. 32    — Security of processing (cryptographic measures)
+#   - Art. 89    — Safeguards for health / research data processing
+#
+# Strategy used:
+#   cryptohash  → SHA3-256 HMAC (reversible with key; satisfies Art. 4(5))
+#   redact      → permanent deletion (satisfies Art. 17 right to erasure,
+#                 and Art. 5(1)(e) storage limitation)
+#
+# Key management (GDPR Art. 32):
+#   Do NOT set secret_key here in production. Instead set the environment
+#   variable MEDANON_HASH_KEY. The inline secret_key below is for local
+#   development / testing ONLY.
+#
+# Covered resource types:
+#   Patient, Practitioner, PractitionerRole, RelatedPerson, Organization,
+#   Person, Group (with wildcards for common cross-resource identifiers)
+# =============================================================================
+
+general:
+  appname: MedAnon
+  hash_type: sha3_256
+
+# To enable HMAC keyed pseudonymization add:
+#   params: &hmac_params
+#     hash_type: sha3_256
+#     secret_key_env: MEDANON_HASH_KEY   # read key from env (recommended)
+# Then reference with:  params: *hmac_params
+
+rules:
+
+  # ---------------------------------------------------------------------------
+  # PATIENT  (most common PHI carrier in FHIR)
+  # ---------------------------------------------------------------------------
+
+  # Direct identifier: legal name(s)
+  - match: Patient.name
+    action: cryptohash
+
+  # Contact names (guarantors, next-of-kin)
+  - match: Patient.contact.name
+    action: cryptohash
+
+  # Administrative identifiers: MRN, SSN, health card, insurance number, etc.
+  - match: Patient.identifier
+    action: cryptohash
+
+  # Date of birth — high re-identification risk (quasi-identifier)
+  - match: Patient.birthDate
+    action: redact
+
+  # Deceased date/boolean — retained as boolean structure, exact date redacted
+  - match: Patient.deceasedDateTime
+    action: redact
+
+  # Contact details: phone, mobile, fax, email, URL
+  - match: Patient.telecom
+    action: redact
+
+  - match: Patient.contact.telecom
+    action: redact
+
+  # Full postal address (street, city, district, postal code)
+  - match: Patient.address
+    action: redact
+
+  - match: Patient.contact.address
+    action: redact
+
+  # Photo / biometric data (Art. 9 special category)
+  - match: Patient.photo
+    action: redact
+
+  # Patient links to other Patient records (re-identification via merge chains)
+  - match: Patient.link
+    action: redact
+
+  # ---------------------------------------------------------------------------
+  # PRACTITIONER  (indirect identifier when combined with clinical data)
+  # ---------------------------------------------------------------------------
+
+  - match: Practitioner.name
+    action: cryptohash
+
+  - match: Practitioner.identifier
+    action: cryptohash
+
+  - match: Practitioner.birthDate
+    action: redact
+
+  - match: Practitioner.telecom
+    action: redact
+
+  - match: Practitioner.address
+    action: redact
+
+  - match: Practitioner.photo
+    action: redact
+
+  # ---------------------------------------------------------------------------
+  # RELATED PERSON  (family member / designee data)
+  # ---------------------------------------------------------------------------
+
+  - match: RelatedPerson.name
+    action: cryptohash
+
+  - match: RelatedPerson.identifier
+    action: cryptohash
+
+  - match: RelatedPerson.birthDate
+    action: redact
+
+  - match: RelatedPerson.telecom
+    action: redact
+
+  - match: RelatedPerson.address
+    action: redact
+
+  - match: RelatedPerson.photo
+    action: redact
+
+  # ---------------------------------------------------------------------------
+  # ORGANIZATION  (named entity that may identify a patient indirectly by
+  #                association, e.g. specialist clinic)
+  # ---------------------------------------------------------------------------
+
+  - match: Organization.name
+    action: cryptohash
+
+  - match: Organization.identifier
+    action: cryptohash
+
+  - match: Organization.telecom
+    action: redact
+
+  - match: Organization.address
+    action: redact
+
+  # ---------------------------------------------------------------------------
+  # PERSON  (base demographic record)
+  # ---------------------------------------------------------------------------
+
+  - match: Person.name
+    action: cryptohash
+
+  - match: Person.identifier
+    action: cryptohash
+
+  - match: Person.birthDate
+    action: redact
+
+  - match: Person.telecom
+    action: redact
+
+  - match: Person.address
+    action: redact
+
+  - match: Person.photo
+    action: redact
+
+  # ---------------------------------------------------------------------------
+  # CROSS-RESOURCE WILDCARDS
+  # Applied to any resource type not explicitly listed above.
+  # ---------------------------------------------------------------------------
+
+  # Pseudonymize all resource-level logical IDs (prevents patient linkage
+  # across datasets through stable resource IDs).
+  - match: "*.id"
+    action: cryptohash
+
+  # Pseudonymize human names wherever they appear (e.g. in extensions or
+  # custom profiles derived from HumanName)
+  - match: "*.name"
+    action: cryptohash

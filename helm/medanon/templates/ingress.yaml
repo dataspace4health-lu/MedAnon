@@ -1,0 +1,60 @@
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "medanon.fullname" . }}
+  labels:
+    {{- include "medanon.labels" . | nindent 4 }}
+  annotations:
+    {{- if .Values.ingress.className }}
+    kubernetes.io/ingress.class: {{ .Values.ingress.className | quote }}
+    {{- end }}
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className | quote }}
+  {{- end }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.host | quote }}
+      secretName: {{ .Values.ingress.tls.secretName | quote }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          # MedAnon anonymizer API — root path
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ printf "%s-anonymizer" .Release.Name | trunc 63 | trimSuffix "-" }}
+                port:
+                  name: http
+          # HAPI FHIR server
+          - path: /fhir
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ printf "%s-fhir-server" .Release.Name | trunc 63 | trimSuffix "-" }}
+                port:
+                  name: http
+          # gPAS web UI
+          - path: /gpas-web
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ printf "%s-gpas" .Release.Name | trunc 63 | trimSuffix "-" }}
+                port:
+                  name: http
+          # gPAS TTP-FHIR gateway
+          - path: /ttp-fhir
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ printf "%s-gpas" .Release.Name | trunc 63 | trimSuffix "-" }}
+                port:
+                  name: http
+{{- end }}

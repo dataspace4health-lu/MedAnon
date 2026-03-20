@@ -1,0 +1,219 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# MedAnon — full stack
+# Usage:
+#   docker compose up              # start all services
+#   docker compose up anonymizer   # start only the anonymizer
+#   docker compose down -v         # tear down + remove volumes
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Networks ──────────────────────────────────────────────────────────────────
+networks:
+  fhir-net:
+    driver: bridge
+
+# ── Named volumes ─────────────────────────────────────────────────────────────
+volumes:
+  gpas-db-data:
+  hapi-data:
+
+# ── Services ──────────────────────────────────────────────────────────────────
+services:
+
+  # ── 1. FHIR de-identification / anonymiser ──────────────────────────────────
+  anonymizer:
+    build:
+      context: services/anonymizer
+      dockerfile: Dockerfile
+      target: prod
+    image: medanon:latest
+    container_name: medanon
+    restart: unless-stopped
+    ports:
+      - "${ANONYMIZER_PORT:-8000}:8000"
+    env_file:
+      - .env
+    environment:
+      - GPAS_URL=${GPAS_URL}
+      - GPAS_DOMAIN=${GPAS_DOMAIN}
+      - GPAS_OPERATION=${GPAS_OPERATION}
+      - GPAS_TIMEOUT_SEC=${GPAS_TIMEOUT_SEC}
+      - GPAS_ADMIN_URL=${GPAS_ADMIN_URL:-}
+      - GPAS_TOKEN=${GPAS_TOKEN:-}
+      - GPAS_BASIC_USER=${GPAS_BASIC_USER:-}
+      - GPAS_BASIC_PASS=${GPAS_BASIC_PASS:-}
+      - GPAS_CACHE_ENABLED=${GPAS_CACHE_ENABLED:-true}
+      - GPAS_RETRY_COUNT=${GPAS_RETRY_COUNT:-2}
+      - GPAS_RETRY_BACKOFF_SEC=${GPAS_RETRY_BACKOFF_SEC:-0.2}
+      - MEDANON_CORS_ORIGINS=${MEDANON_CORS_ORIGINS}
+      - MEDANON_MAX_BODY_BYTES=${MEDANON_MAX_BODY_BYTES}
+      - MEDANON_HASH_KEY=${MEDANON_HASH_KEY:-}
+      - FHIR_SOURCE_URL=${FHIR_SOURCE_URL:-}
+      - FHIR_SOURCE_TOKEN=${FHIR_SOURCE_TOKEN:-}
+      - FHIR_TARGET_URL=${FHIR_TARGET_URL:-}
+      - FHIR_TARGET_TOKEN=${FHIR_TARGET_TOKEN:-}
+    volumes:
+      - ./data:/data:ro
+      - ./output:/output
+    networks:
+      - fhir-net
+    depends_on:
+      gpas:
+        condition: service_healthy
+      fhir-server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/ready')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+
+  # ── 2. HAPI FHIR server (embedded H2 database) ────────────────────────────
+  fhir-server:
+    image: hapiproject/hapi:latest
+    container_name: hapi-fhir
+    restart: unless-stopped
+    ports:
+      - "${HAPI_PORT:-8081}:8080"
+    environment:
+      - hapi.fhir.fhir_version=${HAPI_FHIR_VERSION:-R4}
+      - HAPI_SERVER_ADDRESS=${HAPI_SERVER_ADDRESS:-http://localhost:8080/fhir}
+      - JAVA_TOOL_OPTIONS=-Xmx2g
+    volumes:
+      - ./services/fhir-server/config/application.yaml:/app/config/application.yaml:ro
+      - ./services/fhir-server/healthcheck:/healthcheck:ro
+      - hapi-data:/data/h2
+    networks:
+      - fhir-net
+    healthcheck:
+      # hapiproject/hapi:latest is a distroless JRE image (no shell, no curl, no wget).
+      # Use a pre-compiled Java class to probe Spring Boot Actuator via java.net.http.
+      test: ["CMD", "java", "-cp", "/healthcheck", "HealthCheck"]
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 3G
+        reservations:
+          cpus: "0.5"
+          memory: 512M
+
+  # ── 3. gPAS MySQL database ────────────────────────────────────────────────
+  gpas-db:
+    # Pin to 8.0 (LTS). mysql_native_password flag ensures WildFly's JDBC connector
+    # can authenticate without needing caching_sha2_password support (which hangs
+    # on login when the Connector/J version bundled in WildFly doesn't support it).
+    image: mysql:8.0
+    container_name: gpas-mysql
+    restart: unless-stopped
+    environment:
+      # Always set GPAS_MYSQL_ROOT_PASSWORD in your .env or environment. Never commit real secrets.
+      MYSQL_ROOT_PASSWORD: ${GPAS_MYSQL_ROOT_PASSWORD}
+      TZ: Europe/Berlin
+    volumes:
+      - ./services/gpas/sqls:/docker-entrypoint-initdb.d
+      - gpas-db-data:/var/lib/mysql
+    networks:
+      - fhir-net
+    command: --max_allowed_packet=20M --default-time-zone=Europe/Berlin --innodb_buffer_pool_size=2G --default-authentication-plugin=mysql_native_password
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 4G
+        reservations:
+          cpus: "0.25"
+          memory: 512M
+
+  # ── 5. Streamlit UI ───────────────────────────────────────────────────────
+  ui:
+    build:
+      context: client
+      dockerfile: Dockerfile
+    image: medanon-ui:latest
+    container_name: medanon-ui
+    restart: unless-stopped
+    ports:
+      - "${UI_PORT:-8501}:8501"
+    environment:
+      - MEDANON_URL=http://medanon:8000
+      - FHIR_URL=http://hapi-fhir:8080/fhir
+      - GPAS_DOMAIN=${GPAS_DOMAIN:-}
+      - MEDANON_API_KEY=${MEDANON_API_KEY:-}
+    networks:
+      - fhir-net
+    depends_on:
+      anonymizer:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
+        reservations:
+          cpus: "0.1"
+          memory: 128M
+
+  # ── 4. gPAS TTP pseudonymisation service (official mosaicgreifswald) ───────
+  gpas:
+    image: mosaicgreifswald/wildfly:38
+    container_name: gpas-wildfly
+    restart: unless-stopped
+    ports:
+      - "${GPAS_PORT:-8080}:8080"
+    env_file:
+      - ./services/gpas/envs/ttp_commons.env
+      - ./services/gpas/envs/ttp_fhir.env
+      - ./services/gpas/envs/ttp_gpas.env
+      - ./services/gpas/envs/ttp_gras.env
+      - ./services/gpas/envs/ttp_noti.env
+      - ./services/gpas/envs/wf_commons.env
+    environment:
+      MOS_WAIT_FOR_PORTS: gpas-db:3306:120
+      TZ: Europe/Berlin
+    depends_on:
+      gpas-db:
+        condition: service_healthy
+    volumes:
+      - ./services/gpas/jboss:/entrypoint-wildfly-cli
+      - ./services/gpas/deployments:/entrypoint-wildfly-deployments
+      - ./services/gpas/addins:/entrypoint-wildfly-addins
+    networks:
+      - fhir-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 6G
+        reservations:
+          cpus: "0.5"
+          memory: 1G

@@ -1,0 +1,87 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# MedAnon Umbrella Chart — default values
+#
+# Usage:
+#   helm dependency update helm/medanon
+#   helm upgrade --install medanon helm/medanon -f my-values.yaml
+#
+# Keys under anonymizer.*, fhir-server.*, and gpas.* override the defaults
+# in each sub-chart's own values.yaml.  Only list values that differ from
+# the sub-chart defaults.
+#
+# global.* values are automatically propagated to all sub-charts.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ─── Helm global values ───────────────────────────────────────────────────────
+# These flow down into every sub-chart automatically.
+global:
+  # Container registry prefix for all images (leave empty for Docker Hub).
+  # Example: "ghcr.io/your-org"
+  registry: ""
+  imagePullPolicy: IfNotPresent
+  # imagePullSecrets:
+  #   - name: my-registry-secret
+  imagePullSecrets: []
+
+# ─── Anonymizer overrides ─────────────────────────────────────────────────────
+anonymizer:
+  # When using the umbrella, set this to "<release>-gpas" so the anonymizer
+  # waits for gPAS before starting.  Example: "medanon-gpas"
+  gpasServiceName: ""
+
+  env:
+    # In-cluster gPAS URL — set to http://<release>-gpas:8080/ttp-fhir/fhir/gpas
+    GPAS_URL: ""
+    # In-cluster FHIR source URL — set to http://<release>-fhir-server:8080/fhir
+    FHIR_SOURCE_URL: ""
+    FHIR_SOURCE_TOKEN: ""
+    FHIR_TARGET_URL: ""
+    FHIR_TARGET_TOKEN: ""
+
+  secrets:
+    MEDANON_HASH_KEY: ""
+    # REQUIRED: set via --set or a sealed secret for any non-local deployment.
+    GPAS_BASIC_USER: ""
+    GPAS_BASIC_PASS: ""
+    GPAS_TOKEN: ""
+    rsaPublicKey: ""
+    rsaPrivateKey: ""
+
+# ─── FHIR Server overrides ────────────────────────────────────────────────────
+fhir-server:
+  # Public base URL for Bundle fullUrl and pagination links.
+  serverAddress: ""
+
+# ─── gPAS overrides ───────────────────────────────────────────────────────────
+gpas:
+  secrets:
+    # REQUIRED: set via --set or a sealed secret. Generate: openssl rand -base64 24
+    WF_ADMIN_PASS: ""
+    WF_ADMIN_USER: ""
+  db:
+    secrets:
+      # REQUIRED: set via --set or a sealed secret. Generate: openssl rand -base64 24
+      rootPassword: ""
+
+# ─── Ingress (optional) ───────────────────────────────────────────────────────
+# Routes external traffic to the correct sub-chart service.
+# Service names are computed as: <release>-<chart-name>
+#   /           → <release>-anonymizer   :8000
+#   /fhir       → <release>-fhir-server  :8080
+#   /gpas-web   → <release>-gpas         :8080
+#   /ttp-fhir   → <release>-gpas         :8080
+#
+# NOTE: fullnameOverride is not supported for sub-charts when ingress is enabled,
+# as service names are derived from the release name.
+ingress:
+  enabled: false
+
+  # Ingress class name (e.g. "nginx", "traefik")
+  className: ""
+
+  # Single host for all services.
+  host: ""
+
+  tls:
+    enabled: false
+    secretName: "medanon-tls"

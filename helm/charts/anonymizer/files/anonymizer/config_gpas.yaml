@@ -1,0 +1,293 @@
+general:
+  appname: SPE-FHIR-BlackBox
+  rewrite_references: true
+
+rules:
+
+# ==========================================================
+# 1. PSEUDONYMIZE ALL RESOURCE IDS
+# ==========================================================
+
+- match: "*.id"
+  action: gpas_pseudonymize
+  params: &gpas
+    gpas_url: ${GPAS_URL}
+    gpas_domain: ${GPAS_DOMAIN}
+    gpas_operation: ${GPAS_OPERATION:-pseudonymizeAllowCreate}
+    gpas_timeout_sec: ${GPAS_TIMEOUT_SEC:-30}
+
+# ==========================================================
+# 2. PATIENT DIRECT IDENTIFIERS
+# ==========================================================
+
+- match: Patient.name
+  action: redact
+
+- match: Patient.telecom
+  action: redact
+
+- match: Patient.address
+  action: redact
+
+- match: Patient.photo
+  action: redact
+
+- match: Patient.identifier.value
+  action: gpas_pseudonymize
+  params: *gpas
+
+- match: Patient.gender
+  action: redact
+
+- match: Patient.maritalStatus
+  action: redact
+
+- match: Patient.communication
+  action: redact
+
+- match: Patient.extension
+  action: redact
+
+# ==========================================================
+# 3. GENERALIZE DATE FIELDS
+# ==========================================================
+
+- match: Patient.birthDate
+  action: generalize
+  params:
+    strategy: date_year
+
+- match: "*.effectiveDateTime"
+  action: generalize
+  params:
+    strategy: date_year
+
+- match: "*.issued"
+  action: generalize
+  params:
+    strategy: date_year
+
+- match: "*.authoredOn"
+  action: generalize
+  params:
+    strategy: date_year
+
+- match: "*.recordedDate"
+  action: generalize
+  params:
+    strategy: date_year
+
+# ==========================================================
+# 4. SERVER METADATA
+# ==========================================================
+
+- match: "*.meta.lastUpdated"
+  action: redact
+
+- match: "*.meta.versionId"
+  action: redact
+
+# ==========================================================
+# 5. PROVIDER / DOCTOR PHI
+# ==========================================================
+
+- match: Practitioner.name
+  action: redact
+
+- match: Practitioner.telecom
+  action: redact
+
+- match: Practitioner.address
+  action: redact
+
+- match: Practitioner.photo
+  action: redact
+
+- match: Practitioner.identifier.value
+  action: gpas_pseudonymize
+  params: *gpas
+
+- match: Practitioner.gender
+  action: redact
+
+- match: Practitioner.birthDate
+  action: redact
+
+- match: Practitioner.qualification
+  action: redact
+
+# PractitionerRole
+
+- match: PractitionerRole.code
+  action: redact
+
+- match: PractitionerRole.organization
+  action: redact
+
+# ==========================================================
+# 6. ORGANIZATION / LOCATION PHI
+# ==========================================================
+
+- match: Organization.name
+  action: redact
+
+- match: Organization.telecom
+  action: redact
+
+- match: Organization.address
+  action: redact
+
+- match: Organization.identifier.value
+  action: gpas_pseudonymize
+  params: *gpas
+
+- match: Location.name
+  action: redact
+
+- match: Location.address
+  action: redact
+
+# ==========================================================
+# 7. CLINICAL ACTOR REFERENCES (DOCTORS / STAFF)
+# ==========================================================
+
+- match: "*.performer"
+  action: redact
+
+- match: "*.author"
+  action: redact
+
+- match: "*.requester"
+  action: redact
+
+- match: "*.recorder"
+  action: redact
+
+- match: "*.participant.individual"
+  action: redact
+
+- match: CareTeam.participant.individual
+  action: redact
+
+- match: Encounter.participant.individual
+  action: redact
+
+# ==========================================================
+# 8. DISPLAY FIELDS (HUMAN READABLE NAMES)
+# ==========================================================
+
+- match: "*.display"
+  action: redact
+
+- match: "*.subject.display"
+  action: redact
+
+# ==========================================================
+# 9. DOCUMENTS / ATTACHMENTS
+# ==========================================================
+
+- match: "*.attachment"
+  action: redact
+
+- match: DocumentReference.content
+  action: redact
+
+- match: Binary.data
+  action: redact
+
+# ==========================================================
+# 10. TEXT SCRUBBING
+# ==========================================================
+
+- match: "*.text"
+  action: scrub_text
+  params:
+    mode: html_tokenize
+    patterns: all
+    extract_names: true
+
+- match: "*.text"
+  action: nlp_detect
+  params:
+    mode: tokenize
+    html: true
+    threshold: 0.4
+
+- match: "*.note.text"
+  action: scrub_text
+  params:
+    mode: text
+    patterns: all
+
+- match: "*.note.text"
+  action: nlp_detect
+  params:
+    mode: tokenize
+    threshold: 0.4
+
+# ==========================================================
+# 11. COMMUNICATION / MESSAGES
+# ==========================================================
+
+- match: Communication.sender
+  action: redact
+
+- match: Communication.recipient
+  action: redact
+
+- match: Communication.payload.contentString
+  action: scrub_text
+  params:
+    mode: text
+    patterns: all
+
+# ==========================================================
+# 12. TASK / REQUEST WORKFLOW
+# ==========================================================
+
+- match: Task.requester
+  action: redact
+
+- match: Task.owner
+  action: redact
+
+- match: ServiceRequest.requester
+  action: redact
+
+# ==========================================================
+# 13. DEVICE / TECHNICAL IDENTIFIERS
+# ==========================================================
+
+- match: Device.identifier.value
+  action: gpas_pseudonymize
+  params: *gpas
+
+# ==========================================================
+# 14. PROVENANCE / AUDIT
+# ==========================================================
+
+- match: Provenance.agent
+  action: redact
+
+- match: AuditEvent.agent
+  action: redact
+
+- match: AuditEvent.source
+  action: redact
+
+# ==========================================================
+# 15. GLOBAL CATCH-ALL RULES
+# ==========================================================
+
+- match: "*.identifier.value"
+  action: gpas_pseudonymize
+  params: *gpas
+
+- match: "*.name"
+  action: redact
+
+- match: "*.telecom"
+  action: redact
+
+- match: "*.address"
+  action: redact

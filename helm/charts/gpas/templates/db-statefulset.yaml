@@ -1,0 +1,91 @@
+{{- $dbRegistry := coalesce .Values.db.registry .Values.global.registry "" -}}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "gpas.fullname" . }}-db
+  labels:
+    {{- include "gpas.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gpas-db
+spec:
+  serviceName: {{ include "gpas.fullname" . }}-db
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "gpas.selectorLabels" (dict "Release" .Release "component" "gpas-db") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "gpas.selectorLabels" (dict "Release" .Release "component" "gpas-db") | nindent 8 }}
+        {{- include "gpas.labels" . | nindent 8 }}
+        app.kubernetes.io/component: gpas-db
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999   # mysql system user UID in the official MySQL image
+        fsGroup: 999
+      {{- with (coalesce .Values.imagePullSecrets .Values.global.imagePullSecrets) }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: mysql
+          image: {{ include "gpas.image" (dict "registry" $dbRegistry "image" .Values.db.image "tag" .Values.db.tag) }}
+          imagePullPolicy: {{ coalesce .Values.imagePullPolicy .Values.global.imagePullPolicy "IfNotPresent" }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          args:
+            {{- toYaml .Values.db.args | nindent 12 }}
+          ports:
+            - name: mysql
+              containerPort: {{ .Values.db.port }}
+              protocol: TCP
+          env:
+            {{- range $k, $v := .Values.db.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+          envFrom:
+            - secretRef:
+                name: {{ include "gpas.fullname" . }}-db-secret
+          volumeMounts:
+            # Persistent MySQL data directory
+            - name: data
+              mountPath: /var/lib/mysql
+            # Init SQL scripts — run once on first boot when data dir is empty
+            - name: init-scripts
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+          livenessProbe:
+            exec:
+              command: ["mysqladmin", "ping", "-h", "localhost"]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 10
+          readinessProbe:
+            exec:
+              command: ["mysqladmin", "ping", "-h", "localhost"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 10
+          resources:
+            {{- toYaml .Values.db.resources | nindent 12 }}
+      volumes:
+        - name: init-scripts
+          configMap:
+            name: {{ include "gpas.fullname" . }}-db-init
+  # Persistent volume for MySQL data — survives pod restarts and rescheduling
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.db.storageClass }}
+        storageClassName: {{ .Values.db.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.db.storage }}

@@ -1,0 +1,102 @@
+{{- $registry := coalesce .Values.registry .Values.global.registry "" -}}
+{{- $dbHost := coalesce .Values.env.TTP_DB_HOST (include "gpas.dbHost" .) -}}
+{{- $dbPort := .Values.db.port -}}
+{{- $mosWaitFor := coalesce .Values.env.MOS_WAIT_FOR_PORTS (printf "%s:%v:120" $dbHost $dbPort) -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "gpas.fullname" . }}
+  labels:
+    {{- include "gpas.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gpas
+spec:
+  replicas: {{ .Values.replicas }}
+  selector:
+    matchLabels:
+      {{- include "gpas.selectorLabels" (dict "Release" .Release "component" "gpas") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "gpas.selectorLabels" (dict "Release" .Release "component" "gpas") | nindent 8 }}
+        {{- include "gpas.labels" . | nindent 8 }}
+        app.kubernetes.io/component: gpas
+      annotations:
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "gpas.fullname" . }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      {{- with (coalesce .Values.imagePullSecrets .Values.global.imagePullSecrets) }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      # Wait for MySQL to be accepting TCP connections before WildFly starts.
+      # Mirrors docker-compose depends_on: gpas-db: condition: service_healthy
+      # and the MOS_WAIT_FOR_PORTS mechanism in the WildFly entrypoint.
+      initContainers:
+        - name: wait-for-db
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              echo "Waiting for MySQL at {{ $dbHost }}:{{ $dbPort }} ..."
+              until nc -z {{ $dbHost }} {{ $dbPort }}; do
+                sleep 2
+              done
+              echo "MySQL is reachable."
+      containers:
+        - name: gpas
+          image: {{ include "gpas.image" (dict "registry" $registry "image" .Values.image "tag" .Values.tag) }}
+          imagePullPolicy: {{ coalesce .Values.imagePullPolicy .Values.global.imagePullPolicy "IfNotPresent" }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            # readOnlyRootFilesystem is intentionally omitted for gPAS/WildFly.
+            # WildFly writes to multiple paths (standalone/log, standalone/tmp,
+            # standalone/work, /tmp) and the exact set varies by vendor image.
+            # Enabling readOnlyRootFilesystem requires per-image testing to avoid
+            # breaking the application server at runtime.
+          ports:
+            - name: http
+              containerPort: {{ .Values.port }}
+              protocol: TCP
+          env:
+            # DB hostname — computed from chart fullname unless overridden in values
+            - name: TTP_DB_HOST
+              value: {{ $dbHost | quote }}
+            - name: TTP_GRAS_DB_HOST
+              value: {{ coalesce .Values.env.TTP_GRAS_DB_HOST $dbHost | quote }}
+            - name: MOS_WAIT_FOR_PORTS
+              value: {{ $mosWaitFor | quote }}
+            # Remaining env vars from values (DB host vars already set above)
+            {{- range $k, $v := .Values.env }}
+            {{- if and (ne $k "TTP_DB_HOST") (ne $k "TTP_GRAS_DB_HOST") (ne $k "MOS_WAIT_FOR_PORTS") }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+            {{- end }}
+          envFrom:
+            - secretRef:
+                name: {{ include "gpas.fullname" . }}-secret
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 120
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 5
+          readinessProbe:
+            httpGet:
+              path: /ttp-fhir/fhir/gpas/metadata
+              port: http
+            initialDelaySeconds: 90
+            periodSeconds: 20
+            timeoutSeconds: 10
+            failureThreshold: 10
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}

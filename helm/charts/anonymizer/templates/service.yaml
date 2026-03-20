@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "anonymizer.fullname" . }}
+  labels:
+    {{- include "anonymizer.labels" . | nindent 4 }}
+    app.kubernetes.io/component: anonymizer
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "anonymizer.selectorLabels" (dict "Release" .Release "component" "anonymizer") | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.port }}
+      targetPort: http
+      protocol: TCP

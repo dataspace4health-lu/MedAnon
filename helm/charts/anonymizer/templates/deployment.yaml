@@ -1,0 +1,141 @@
+{{- $registry := coalesce .Values.registry .Values.global.registry "" -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "anonymizer.fullname" . }}
+  labels:
+    {{- include "anonymizer.labels" . | nindent 4 }}
+    app.kubernetes.io/component: anonymizer
+spec:
+  replicas: {{ .Values.replicas }}
+  selector:
+    matchLabels:
+      {{- include "anonymizer.selectorLabels" (dict "Release" .Release "component" "anonymizer") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "anonymizer.selectorLabels" (dict "Release" .Release "component" "anonymizer") | nindent 8 }}
+        {{- include "anonymizer.labels" . | nindent 8 }}
+        app.kubernetes.io/component: anonymizer
+      annotations:
+        # Force pod restart when config or secret changes
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        # Prometheus scraping
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "{{ .Values.port }}"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: {{ include "anonymizer.fullname" . }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      {{- with (coalesce .Values.imagePullSecrets .Values.global.imagePullSecrets) }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.gpasServiceName }}
+      # Wait for gPAS to be accepting TCP connections before the anonymizer starts.
+      # Mirrors docker-compose depends_on: gpas: condition: service_started.
+      initContainers:
+        - name: wait-for-gpas
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              echo "Waiting for gPAS at {{ .Values.gpasServiceName }}:{{ .Values.gpasPort }} ..."
+              until nc -z {{ .Values.gpasServiceName }} {{ .Values.gpasPort }}; do
+                sleep 2
+              done
+              echo "gPAS is reachable."
+      {{- end }}
+      containers:
+        - name: anonymizer
+          image: {{ include "anonymizer.image" (dict "registry" $registry "image" .Values.image "tag" .Values.tag) }}
+          imagePullPolicy: {{ coalesce .Values.imagePullPolicy .Values.global.imagePullPolicy "IfNotPresent" }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - name: http
+              containerPort: {{ .Values.port }}
+              protocol: TCP
+          # ── Environment — non-secret config ──────────────────────────────────
+          env:
+            {{- range $k, $v := .Values.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+            # RSA key file paths (absolute — WORKDIR is /code/src, keys are at /code/keys)
+            - name: MEDANON_RSA_PUBLIC_KEY
+              value: "/code/keys/id_rsa.pub"
+            - name: MEDANON_RSA_PRIVATE_KEY
+              value: "/code/keys/id_rsa"
+          # ── Environment — secrets ─────────────────────────────────────────────
+          envFrom:
+            - secretRef:
+                name: {{ include "anonymizer.fullname" . }}-secret
+          # ── Volume mounts ─────────────────────────────────────────────────────
+          volumeMounts:
+            # Config profiles mounted at /code/config — override the image-baked copies
+            - name: config
+              mountPath: /code/config/config.yaml
+              subPath: config.yaml
+              readOnly: true
+            - name: config
+              mountPath: /code/config/config_gpas.yaml
+              subPath: config_gpas.yaml
+              readOnly: true
+            - name: config
+              mountPath: /code/config/config_gdpr_eu.yaml
+              subPath: config_gdpr_eu.yaml
+              readOnly: true
+            {{- if and .Values.secrets.rsaPublicKey .Values.secrets.rsaPrivateKey }}
+            # RSA keys mounted at /code/keys/
+            - name: rsa-keys
+              mountPath: /code/keys
+              readOnly: true
+            {{- end }}
+            # Writable /tmp required by Python and spaCy (readOnlyRootFilesystem=true)
+            - name: tmp
+              mountPath: /tmp
+          # ── Health checks ─────────────────────────────────────────────────────
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 30
+            timeoutSeconds: 8
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "anonymizer.fullname" . }}-config
+        {{- if and .Values.secrets.rsaPublicKey .Values.secrets.rsaPrivateKey }}
+        - name: rsa-keys
+          secret:
+            secretName: {{ include "anonymizer.fullname" . }}-secret
+            items:
+              - key: id_rsa.pub
+                path: id_rsa.pub
+              - key: id_rsa
+                path: id_rsa
+                mode: 0600
+        {{- end }}
+        - name: tmp
+          emptyDir: {}

@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "gpas.fullname" . }}-db-init
+  labels:
+    {{- include "gpas.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gpas-db
+data:
+  # MySQL runs these scripts alphabetically on first boot (empty data directory).
+  # 01_* scripts create schemas; 02_* seeds gRAS auth users.
+  01_create_database_gpas.sql: |-
+{{ .Files.Get "files/gpas-sqls/01_create_database_gpas.sql" | indent 4 }}
+  01_create_database_gras.sql: |-
+{{ .Files.Get "files/gpas-sqls/01_create_database_gras.sql" | indent 4 }}
+  01_create_database_noti.sql: |-
+{{ .Files.Get "files/gpas-sqls/01_create_database_noti.sql" | indent 4 }}
+  02_init_database_gras_for_gpas.sql: |-
+{{ .Files.Get "files/gpas-sqls/02_init_database_gras_for_gpas.sql" | indent 4 }}

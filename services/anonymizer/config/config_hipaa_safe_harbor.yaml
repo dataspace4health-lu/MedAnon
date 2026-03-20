@@ -1,0 +1,312 @@
+# =============================================================================
+# HIPAA Safe Harbor De-identification Profile for MedAnon
+# =============================================================================
+#
+# Legal basis: Health Insurance Portability and Accountability Act (HIPAA)
+#   45 CFR § 164.514(b) — Safe Harbor method for de-identification
+#
+# The Safe Harbor method requires removal (or generalization) of all 18
+# categories of protected health information (PHI) listed in the regulation:
+#
+#   1.  Names
+#   2.  Geographic data finer than state (street, city, zip — except 3-digit
+#       zip prefix where the area population is ≥ 20,000)
+#   3.  Dates (except year) for ages under 90; full date for ages ≥ 90
+#   4.  Telephone numbers
+#   5.  Fax numbers
+#   6.  Electronic mail addresses
+#   7.  Social Security numbers
+#   8.  Medical record numbers
+#   9.  Health plan beneficiary numbers
+#  10.  Account numbers
+#  11.  Certificate and license numbers
+#  12.  Vehicle identifiers and serial numbers, including license plate numbers
+#  13.  Device identifiers and serial numbers
+#  14.  Web Universal Resource Locators (URLs)
+#  15.  Internet Protocol (IP) addresses
+#  16.  Biometric identifiers (finger / voice prints)
+#  17.  Full-face photographs and any comparable images
+#  18.  Any other unique identifying number, characteristic, or code
+#
+# Strategy used:
+#   redact      → permanent deletion (identifiers 1, 4-18 above)
+#   generalize  → date_year for dates (identifier 3); zip_prefix for
+#                 postal code (identifier 2)
+#
+# Clinical data preserved:
+#   Condition codes, Observation values, Procedure codes, Medication codes,
+#   DiagnosticReport results — all retained unmodified.
+#
+# Not suitable for:
+#   - Research datasets requiring date-level precision (use config_research_pseudonymous.yaml)
+#   - EU/EEA data (use config_gdpr_eu.yaml)
+#   - Any use case where re-identification via gPAS pseudonymization is required
+#
+# Covered resource types:
+#   Patient (primary PHI carrier), Practitioner, PractitionerRole,
+#   RelatedPerson, Organization, plus cross-resource wildcards for IDs
+#   and narrative text.
+# =============================================================================
+
+general:
+  appname: MedAnon-HIPAA
+  hash_type: sha3_256
+  rewrite_references: true
+  rewrite_text_ids: true
+
+rules:
+
+  # ===========================================================================
+  # 1. PATIENT — PRIMARY PHI CARRIER
+  # ===========================================================================
+
+  # Identifier 1: Names (legal, maiden, nickname)
+  - match: Patient.name
+    action: redact
+
+  - match: Patient.contact.name
+    action: redact
+
+  # Identifier 2: Geographic data below state level
+  # Keep state (Patient.address.state) — Safe Harbor allows state-level data.
+  # Generalize postal code to first 3 digits (zip_prefix strategy).
+  # Redact street address lines and city.
+  - match: Patient.address.line
+    action: redact
+
+  - match: Patient.address.city
+    action: redact
+
+  - match: Patient.address.district
+    action: redact
+
+  - match: Patient.address.postalCode
+    action: generalize
+    params:
+      strategy: zip_prefix
+      prefix_length: 3
+
+  # Identifier 3: Dates — generalize to year only
+  # Ages 90+ are at higher re-identification risk; this profile truncates to year
+  # for all ages. Organisations with patients ≥ 90 should additionally redact
+  # birthDate entirely (or use the age_bracket strategy).
+  - match: Patient.birthDate
+    action: generalize
+    params:
+      strategy: date_year
+
+  - match: Patient.deceasedDateTime
+    action: generalize
+    params:
+      strategy: date_year
+
+  # Identifier 4+5+6: Telephone, fax, email, URL (all in Patient.telecom)
+  - match: Patient.telecom
+    action: redact
+
+  - match: Patient.contact.telecom
+    action: redact
+
+  # Identifier 7: SSN — typically in Patient.identifier; redact all identifiers
+  # (covers MRN, SSN, health plan beneficiary, account, certificate, license —
+  # identifiers 7–11)
+  - match: Patient.identifier
+    action: redact
+
+  # Identifier 12+13: Vehicle / device identifiers (usually in extensions)
+  - match: Patient.extension
+    action: redact
+
+  # Identifier 16+17: Biometric data and photographs
+  - match: Patient.photo
+    action: redact
+
+  # Remove patient merge/link records (prevents re-identification via linkage)
+  - match: Patient.link
+    action: redact
+
+  # Patient notes — dual-pass scrub for PHI in free text
+  - match: Patient.text
+    action: scrub_text
+    params:
+      mode: html_tokenize
+      patterns: all
+
+  - match: Patient.text
+    action: nlp_detect
+    params:
+      mode: tokenize
+      html: true
+      threshold: 0.4
+
+  # ===========================================================================
+  # 2. PRACTITIONER  (indirect identifier)
+  # ===========================================================================
+
+  - match: Practitioner.name
+    action: redact
+
+  - match: Practitioner.identifier
+    action: redact
+
+  - match: Practitioner.birthDate
+    action: generalize
+    params:
+      strategy: date_year
+
+  - match: Practitioner.telecom
+    action: redact
+
+  - match: Practitioner.address
+    action: redact
+
+  - match: Practitioner.photo
+    action: redact
+
+  # ===========================================================================
+  # 3. RELATED PERSON  (family member / designee)
+  # ===========================================================================
+
+  - match: RelatedPerson.name
+    action: redact
+
+  - match: RelatedPerson.identifier
+    action: redact
+
+  - match: RelatedPerson.birthDate
+    action: generalize
+    params:
+      strategy: date_year
+
+  - match: RelatedPerson.telecom
+    action: redact
+
+  - match: RelatedPerson.address
+    action: redact
+
+  - match: RelatedPerson.photo
+    action: redact
+
+  # ===========================================================================
+  # 4. ORGANIZATION
+  # ===========================================================================
+
+  - match: Organization.name
+    action: redact
+
+  - match: Organization.identifier
+    action: redact
+
+  - match: Organization.telecom
+    action: redact
+
+  - match: Organization.address
+    action: redact
+
+  # ===========================================================================
+  # 5. CROSS-RESOURCE WILDCARDS
+  # Pseudonymize all resource IDs so output records are not linkable across
+  # datasets via stable FHIR resource identifiers.
+  # ===========================================================================
+
+  - match: "*.id"
+    action: cryptohash
+
+  # Generalize all date fields in clinical resources to year only
+  - match: "*.effectiveDateTime"
+    action: generalize
+    params:
+      strategy: date_year
+
+  - match: "*.effectivePeriod.start"
+    action: generalize
+    params:
+      strategy: date_year
+
+  - match: "*.effectivePeriod.end"
+    action: generalize
+    params:
+      strategy: date_year
+
+  - match: "*.issued"
+    action: generalize
+    params:
+      strategy: date_year
+
+  - match: "*.authoredOn"
+    action: generalize
+    params:
+      strategy: date_year
+
+  - match: "*.recordedDate"
+    action: generalize
+    params:
+      strategy: date_year
+
+  - match: "*.occurrenceDateTime"
+    action: generalize
+    params:
+      strategy: date_year
+
+  - match: "*.performedDateTime"
+    action: generalize
+    params:
+      strategy: date_year
+
+  - match: "*.onset[x]"
+    action: generalize
+    params:
+      strategy: date_year
+
+  # Redact display strings in references (may contain patient name)
+  - match: "*.subject.display"
+    action: redact
+
+  - match: "*.patient.display"
+    action: redact
+
+  - match: "*.display"
+    action: redact
+
+  # ===========================================================================
+  # 6. TEXT SCRUBBING (HIPAA Identifier 18 — any unique identifying content)
+  # Dual-pass: regex catches structured PHI (dates, phones, SSN patterns);
+  # NLP catches unstructured names and locations in clinical notes.
+  # ===========================================================================
+
+  - match: "*.text.div"
+    action: scrub_text
+    params:
+      mode: html_tokenize
+      patterns: all
+
+  - match: "*.text.div"
+    action: nlp_detect
+    params:
+      mode: tokenize
+      html: true
+      threshold: 0.4
+
+  - match: "*.note.text"
+    action: scrub_text
+    params:
+      mode: text
+      patterns: all
+
+  - match: "*.note.text"
+    action: nlp_detect
+    params:
+      mode: tokenize
+      threshold: 0.4
+
+  - match: "*.comment"
+    action: scrub_text
+    params:
+      mode: text
+      patterns: all
+
+  - match: "*.description"
+    action: scrub_text
+    params:
+      mode: text
+      patterns: all

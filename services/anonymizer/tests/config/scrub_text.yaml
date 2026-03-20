@@ -1,0 +1,8 @@
+general:
+  appname: SPE-FHIR-BlackBox
+rules:
+  - match: Observation.note.text
+    action: scrub_text
+    params:
+      mode: text
+      patterns: all

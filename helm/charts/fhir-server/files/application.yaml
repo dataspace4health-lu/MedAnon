@@ -1,0 +1,55 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# HAPI FHIR server configuration
+# Mounted at /app/config/application.yaml inside the container.
+# See https://github.com/hapifhir/hapi-fhir-jpaserver-starter for all options.
+# ─────────────────────────────────────────────────────────────────────────────
+
+spring:
+  main:
+    allow-circular-references: true
+
+  datasource:
+    url: jdbc:h2:mem:fhir;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
+    username: sa
+    password: ""
+    driver-class-name: org.h2.Driver
+    hikari:
+      maximum-pool-size: 10
+
+  jpa:
+    properties:
+      hibernate:
+        dialect: ca.uhn.fhir.jpa.model.dialect.HapiFhirH2Dialect
+        hbm2ddl:
+          auto: update
+
+hapi:
+  fhir:
+    fhir_version: R4
+    # Public base URL for Bundle fullUrl and pagination links.
+    # HAPI_SERVER_ADDRESS must be set explicitly — no hardcoded fallback.
+    # Docker Compose: set HAPI_SERVER_ADDRESS=http://localhost:8081/fhir in .env
+    # Kubernetes:     set via Helm --set fhir-server.serverAddress=...
+    server_address: ${HAPI_SERVER_ADDRESS}
+
+    # Validation
+    validation:
+      enabled: false       # set to true if you want profile validation
+
+    # CORS — restrict to in-cluster service names and configured origins.
+    # Do NOT use raw IP addresses here; use DNS names or env-var-driven origins.
+    cors:
+      allow_Credentials: true
+      allowed_origin:
+        - http://medanon:8000
+        - ${MEDANON_CORS_ORIGINS:}
+
+    # Bulk data / $export support
+    bulk_export_enabled: false
+
+    # Narrative generation (disable for de-identified data)
+    narrative_enabled: false
+
+    # Default page size for search results
+    default_page_size: 20
+    max_page_size: 200

@@ -1,0 +1,11 @@
+apiVersion: v2
+name: anonymizer
+description: "MedAnon anonymizer — FastAPI FHIR de-identification and pseudonymization service."
+type: application
+version: 0.1.0
+appVersion: "2025.2.0"
+keywords:
+  - fhir
+  - de-identification
+  - pseudonymization
+  - healthcare

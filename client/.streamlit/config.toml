@@ -1,0 +1,18 @@
+[server]
+headless = true
+port = 8501
+
+[theme]
+primaryColor = "#0D6EFD"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F8F9FA"
+textColor = "#1A1A2E"
+font = "sans serif"
+
+[browser]
+# Set your custom favicon and logo here (add files to client/.streamlit/ or public/)
+gatherUsageStats = false
+serverAddress = "0.0.0.0"
+serverPort = 8501
+# favicon = "logo.ico"
+# logo = "logo.png"
