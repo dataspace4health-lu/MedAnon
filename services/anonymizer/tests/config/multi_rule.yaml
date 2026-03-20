@@ -15,12 +15,12 @@ rules:
     action: encrypt
     params:
       algorithm: RSA
-      public_key: test/keys/id_rsa.pub
+      public_key: tests/keys/id_rsa.pub
   - match: Patient.address
     action: decrypt
     params:
       algorithm: RSA
-      private_key: test/keys/id_rsa
+      private_key: tests/keys/id_rsa
   - match: Patient.id
     action: substitute
     params:

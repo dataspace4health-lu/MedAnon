@@ -6,4 +6,4 @@ rules:
     action: decrypt
     params:
       algorithm: RSA
-      private_key: test/keys/id_rsa
+      private_key: tests/keys/id_rsa

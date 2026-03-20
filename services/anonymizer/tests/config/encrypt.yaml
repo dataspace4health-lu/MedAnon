@@ -6,4 +6,4 @@ rules:
     action: encrypt
     params:
       algorithm: RSA
-      public_key: test/keys/id_rsa.pub
+      public_key: tests/keys/id_rsa.pub
