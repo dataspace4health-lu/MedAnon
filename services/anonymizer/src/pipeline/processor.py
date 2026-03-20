@@ -1,7 +1,9 @@
 import json
 import logging
+import os
 import re
 from copy import deepcopy
+from functools import lru_cache
 
 from utils.fhirpath import not_implemented, find_nodes
 from actions.substitute import _substitute_nodes
@@ -26,6 +28,46 @@ DEIDENT_ACTIONS = frozenset(deident_actions)
 PSEUDO_ACTIONS = frozenset(pseudo_actions)
 DEPSEUDO_ACTIONS = frozenset(depseudo_actions)
 GPAS_PSEUDO_ACTIONS = frozenset({'gpas_pseudonymize'})
+
+# Transformation manifest: when enabled, each processed resource's meta.tag
+# receives a summary of which rules fired (no PHI values, only paths and action names).
+_MANIFEST_ENABLED = os.environ.get(
+    "MEDANON_MANIFEST_ENABLED", "false"
+).strip().lower() in ("1", "true", "yes")
+
+MANIFEST_SYSTEM = "https://medanon.local/transformation-manifest"
+
+# -- FHIRPath expression cache (parse once, reuse) ----------------------------
+# fhirpathpy.compile() parses the expression into a callable; caching avoids
+# re-parsing the same expression (e.g. "Patient.id.log()") on every resource.
+_fhirpath_cache = {}
+
+
+def _evaluate_fhirpath_cached(resource, expression):
+    """Evaluate a FHIRPath expression against a resource, caching the compiled form."""
+    compiled = _fhirpath_cache.get(expression)
+    if compiled is None:
+        compiled = fhirpathpy.compile(expression)
+        _fhirpath_cache[expression] = compiled
+    return compiled(resource, [])
+
+
+def _build_manifest_tag(manifest_entries):
+    """Build a FHIR meta.tag entry summarizing applied transformations."""
+    return {
+        "system": MANIFEST_SYSTEM,
+        "code": "transformation-manifest",
+        "display": json.dumps(manifest_entries, separators=(",", ":")),
+    }
+
+
+def _attach_manifest(resource, manifest_entries):
+    """Attach the transformation manifest to a resource's meta.tag."""
+    if not manifest_entries or not isinstance(resource, dict):
+        return
+    meta = resource.setdefault("meta", {})
+    tags = meta.setdefault("tag", [])
+    tags.append(_build_manifest_tag(manifest_entries))
 
 
 def _processing_errors_mode(settings):
@@ -150,6 +192,7 @@ def _process_single_resource(resource, settings):
     # For non-gPAS actions, apply immediately.
     gpas_work = []  # list of (rule, el, params) for gPAS actions
     processed_paths = set()  # (path, category) for double-processing prevention (Step 5)
+    manifest_entries = []  # transformation manifest (rule, path, action)
 
     for rule in applicable_rules:
         action = rule['action']
@@ -158,7 +201,7 @@ def _process_single_resource(resource, settings):
         matched_elements = []
         for candidate in _build_match_candidates(rule['match'], resource):
             try:
-                matched = fhirpathpy.evaluate(resource, candidate + '.log()', [])
+                matched = _evaluate_fhirpath_cached(resource, candidate + '.log()')
                 matched_elements.extend(matched)
             except Exception:
                 audit_log.warning(
@@ -212,6 +255,13 @@ def _process_single_resource(resource, settings):
                 resource.get('resourceType', 'unknown') if isinstance(resource, dict) else 'unknown',
             )
 
+            if _MANIFEST_ENABLED:
+                manifest_entries.append({
+                    "rule": rule.get('name', rule['match']),
+                    "action": action,
+                    "path": el_path,
+                })
+
             if action in GPAS_PSEUDO_ACTIONS:
                 gpas_work.append((rule, el, params))
                 continue
@@ -225,11 +275,12 @@ def _process_single_resource(resource, settings):
                     result = perform_depseudonymization(action, resource, el, params)
                 else:
                     not_implemented(f'Method {action} is not implemented')
-            except Exception:
+            except Exception as exc:
                 if processing_mode == 'skip':
-                    audit_log.exception(
-                        "rule_failed_skip action=%s match=%s path=%s",
-                        action, rule.get('match'), el_path,
+                    audit_log.warning(
+                        "rule_failed_skip action=%s match=%s path=%s error_type=%s",
+                        action, rule.get('match'), el_path, type(exc).__name__,
+                        exc_info=False,
                     )
                     # Redact the field to prevent PHI leakage (Step 4)
                     try:
@@ -255,16 +306,23 @@ def _process_single_resource(resource, settings):
 
         try:
             batch_mapping = gpas_pseudonymize_batch(values_to_pseudonymize, gpas_params)
-        except Exception:
+        except Exception as exc:
             if processing_mode == 'skip':
-                audit_log.exception("gpas_batch_failed count=%d", len(values_to_pseudonymize))
+                audit_log.warning(
+                    "gpas_batch_failed count=%d error_type=%s",
+                    len(values_to_pseudonymize), type(exc).__name__,
+                    exc_info=False,
+                )
                 # Redact all gPAS fields to prevent PHI leakage (Step 4)
                 for _rule, el, _params in gpas_work:
                     try:
                         perform_deidentification('redact', resource, el, {})
-                    except Exception:
-                        audit_log.exception("fallback_redact_failed path=%s", el.get('path', '?'))
-                batch_mapping = {}
+                    except Exception as exc2:
+                        audit_log.warning(
+                            "fallback_redact_failed path=%s error_type=%s",
+                            el.get('path', '?'), type(exc2).__name__,
+                            exc_info=False,
+                        )
             else:
                 raise
 
@@ -277,9 +335,12 @@ def _process_single_resource(resource, settings):
                     audit_log.warning("gpas_no_pseudonym path=%s", el.get('path', '?'))
                     try:
                         perform_deidentification('redact', resource, el, {})
-                    except Exception:
-                        audit_log.exception("fallback_redact_failed path=%s", el.get('path', '?'))
-                    continue
+                    except Exception as exc2:
+                        audit_log.warning(
+                            "fallback_redact_failed path=%s error_type=%s",
+                            el.get('path', '?'), type(exc2).__name__,
+                            exc_info=False,
+                        )
                 raise ValueError(f'gPAS did not return a pseudonym for value (path={el["path"]})')
 
             path = el['path'].split('.')[1:]
@@ -305,6 +366,10 @@ def _process_single_resource(resource, settings):
             audit_log.info("rewriting_text_ids count=%d", len(id_text_map))
             _rewrite_text_ids(result, id_text_map)
 
+    # ---- Attach transformation manifest (when enabled) ----
+    if _MANIFEST_ENABLED and manifest_entries:
+        _attach_manifest(result, manifest_entries)
+
     return result
 
 
@@ -320,9 +385,9 @@ def _rewrite_references(obj, ref_map, _depth=0):
     if isinstance(obj, dict):
         for key, value in obj.items():
             if isinstance(value, str) and value in ref_map and key in ('reference', 'url'):
-                audit_log.info(
-                    "reference_rewritten field=%s old=%s new=%s",
-                    key, value, ref_map[value],
+                audit_log.debug(
+                    "reference_rewritten field=%s",
+                    key,
                 )
                 obj[key] = ref_map[value]
             else:
@@ -448,8 +513,8 @@ def _apply_reference_pseudonyms(obj, ref_mapping):
         if isinstance(ref, str):
             new_ref = _pseudonymize_reference_string(ref, ref_mapping)
             if new_ref != ref:
-                audit_log.info(
-                    "reference_pseudonymized old=%s new=%s", ref, new_ref,
+                audit_log.debug(
+                    "reference_pseudonymized field=reference",
                 )
                 obj['reference'] = new_ref
             if 'display' in obj:

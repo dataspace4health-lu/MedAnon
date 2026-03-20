@@ -51,6 +51,7 @@ services:
       - FHIR_SOURCE_TOKEN=${FHIR_SOURCE_TOKEN:-}
       - FHIR_TARGET_URL=${FHIR_TARGET_URL:-}
       - FHIR_TARGET_TOKEN=${FHIR_TARGET_TOKEN:-}
+      - MEDANON_AUDIT_LOG_FILE=/output/audit.log
     volumes:
       - ./data:/data:ro
       - ./output:/output
@@ -71,14 +72,21 @@ services:
       resources:
         limits:
           cpus: "1.0"
-          memory: 1G
+          memory: 2G
         reservations:
           cpus: "0.25"
-          memory: 256M
+          memory: 512M
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:size=100M
 
   # ── 2. HAPI FHIR server (embedded H2 database) ────────────────────────────
   fhir-server:
-    image: hapiproject/hapi:latest
+    image: hapiproject/hapi:v7.6.0
     container_name: hapi-fhir
     restart: unless-stopped
     ports:
@@ -127,7 +135,7 @@ services:
       - gpas-db-data:/var/lib/mysql
     networks:
       - fhir-net
-    command: --max_allowed_packet=20M --default-time-zone=Europe/Berlin --innodb_buffer_pool_size=2G --default-authentication-plugin=mysql_native_password
+    command: --max_allowed_packet=20M --default-time-zone=Europe/Berlin --innodb_buffer_pool_size=512M --default-authentication-plugin=mysql_native_password
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
       interval: 10s
@@ -141,41 +149,6 @@ services:
         reservations:
           cpus: "0.25"
           memory: 512M
-
-  # ── 5. Streamlit UI ───────────────────────────────────────────────────────
-  ui:
-    build:
-      context: client
-      dockerfile: Dockerfile
-    image: medanon-ui:latest
-    container_name: medanon-ui
-    restart: unless-stopped
-    ports:
-      - "${UI_PORT:-8501}:8501"
-    environment:
-      - MEDANON_URL=http://medanon:8000
-      - FHIR_URL=http://hapi-fhir:8080/fhir
-      - GPAS_DOMAIN=${GPAS_DOMAIN:-}
-      - MEDANON_API_KEY=${MEDANON_API_KEY:-}
-    networks:
-      - fhir-net
-    depends_on:
-      anonymizer:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health')"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 20s
-    deploy:
-      resources:
-        limits:
-          cpus: "0.5"
-          memory: 512M
-        reservations:
-          cpus: "0.1"
-          memory: 128M
 
   # ── 4. gPAS TTP pseudonymisation service (official mosaicgreifswald) ───────
   gpas:
@@ -217,3 +190,42 @@ services:
         reservations:
           cpus: "0.5"
           memory: 1G
+
+  # ── 5. Streamlit UI ───────────────────────────────────────────────────────
+  ui:
+    build:
+      context: client
+      dockerfile: Dockerfile
+    image: medanon-ui:latest
+    container_name: medanon-ui
+    restart: unless-stopped
+    ports:
+      - "${UI_PORT:-8501}:8501"
+    environment:
+      - MEDANON_URL=http://medanon:8000
+      - FHIR_URL=http://hapi-fhir:8080/fhir
+      - GPAS_DOMAIN=${GPAS_DOMAIN:-}
+      - MEDANON_API_KEY=${MEDANON_API_KEY:-}
+    networks:
+      - fhir-net
+    depends_on:
+      anonymizer:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
+        reservations:
+          cpus: "0.1"
+          memory: 128M
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL

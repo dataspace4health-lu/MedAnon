@@ -1,20 +1,62 @@
 """FHIR server client — paginated resource fetch + write via FHIR REST API.
 
-Uses only stdlib urllib (no new dependencies), consistent with gpas/service.py.
+Uses urllib3 PoolManager for HTTP connection reuse (persistent connections),
+avoiding the cost of a new TCP/TLS handshake on every request.
 Auth: optional Bearer token via env FHIR_SOURCE_TOKEN or explicit token param.
 """
 
 import json
 import logging
 import os
+import re
 import time
-from urllib import request, error as urlerror
+import urllib3
 from urllib.parse import urlencode, urlparse
 
 from utils.logging import REQUEST_ID
 from utils.metrics import FHIR_CALL_COUNT, FHIR_LATENCY
 
 log = logging.getLogger("medanon.fhir_server")
+
+# ---------------------------------------------------------------------------
+# Connection pool (reuses TCP/TLS connections across requests)
+# ---------------------------------------------------------------------------
+
+_pool = urllib3.PoolManager(
+    num_pools=4,       # distinct host:port combos to keep pools for
+    maxsize=10,        # connections per pool
+    retries=False,     # we handle retries ourselves
+)
+
+log = logging.getLogger("medanon.fhir_server")
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+
+_FHIR_MAX_PAGES = int(os.environ.get("FHIR_MAX_PAGES", "1000"))
+_RESOURCE_TYPE_RE = re.compile(r'^[A-Z][a-zA-Z]+$')
+_RESOURCE_ID_RE = re.compile(r'^[A-Za-z0-9._\-]+$')
+
+
+def _validate_resource_type(resource_type: str) -> str:
+    """Validate that resource_type is a valid FHIR resource type name."""
+    if not _RESOURCE_TYPE_RE.match(resource_type):
+        raise ValueError(
+            f"Invalid FHIR resource type: {resource_type!r}. "
+            f"Must match [A-Z][a-zA-Z]+"
+        )
+    return resource_type
+
+
+def _validate_resource_id(resource_id: str) -> str:
+    """Validate that resource_id contains only safe characters."""
+    if not _RESOURCE_ID_RE.match(resource_id):
+        raise ValueError(
+            f"Invalid FHIR resource ID format. "
+            f"Must match [A-Za-z0-9._-]+"
+        )
+    return resource_id
 
 
 # ---------------------------------------------------------------------------
@@ -27,6 +69,10 @@ def _make_headers(token=None):
         "X-Request-ID": REQUEST_ID.get("-"),
     }
     tok = token or os.environ.get("FHIR_SOURCE_TOKEN")
+    if not tok and os.environ.get("KEYCLOAK_URL"):
+        # Lazy import to avoid circular dependency at module load
+        from api.auth import get_service_token
+        tok = get_service_token()
     if tok:
         headers["Authorization"] = f"Bearer {tok}"
     return headers
@@ -39,29 +85,51 @@ def _make_post_headers(token=None):
     return h
 
 
-def _do_request(req, url, timeout, operation="request"):
-    """Execute a urllib Request and return the parsed JSON response.
+def _do_request(method, url, headers, timeout, body=None, operation="request"):
+    """Execute an HTTP request via the connection pool and return parsed JSON.
+
+    Retries on transient server errors (429, 500, 502, 503, 504) and
+    connection errors with exponential backoff.
 
     Raises ``ValueError`` on HTTP or connection errors (consistent with
     the rest of the module so callers only need to catch one exception type).
     """
+    retry_count = int(os.environ.get("FHIR_RETRY_COUNT", 2))
+    retry_backoff = float(os.environ.get("FHIR_RETRY_BACKOFF_SEC", 0.3))
+
     t0 = time.perf_counter()
-    try:
-        with request.urlopen(req, timeout=timeout) as resp:
-            charset = resp.headers.get_content_charset("utf-8")
-            result = json.loads(resp.read().decode(charset))
-        FHIR_LATENCY.labels(operation=operation).observe(time.perf_counter() - t0)
-        FHIR_CALL_COUNT.labels(operation=operation, status="ok").inc()
-        return result
-    except urlerror.HTTPError as exc:
-        FHIR_LATENCY.labels(operation=operation).observe(time.perf_counter() - t0)
-        FHIR_CALL_COUNT.labels(operation=operation, status="error").inc()
-        detail = exc.read().decode("utf-8", errors="replace") if exc.fp else str(exc)
-        raise ValueError(f"FHIR server HTTP {exc.code} for {url}: {detail}") from exc
-    except urlerror.URLError as exc:
-        FHIR_LATENCY.labels(operation=operation).observe(time.perf_counter() - t0)
-        FHIR_CALL_COUNT.labels(operation=operation, status="error").inc()
-        raise ValueError(f"FHIR server connection error for {url}: {exc.reason}") from exc
+    for attempt in range(retry_count + 1):
+        try:
+            resp = _pool.request(
+                method, url, headers=headers, body=body, timeout=timeout,
+            )
+            if resp.status >= 400:
+                should_retry = resp.status in (429, 500, 502, 503, 504)
+                if should_retry and attempt < retry_count:
+                    log.warning(
+                        "FHIR request %s HTTP %d — retrying (%d/%d)",
+                        url, resp.status, attempt + 1, retry_count,
+                    )
+                    time.sleep(retry_backoff * (2 ** attempt))
+                    continue
+                FHIR_LATENCY.labels(operation=operation).observe(time.perf_counter() - t0)
+                FHIR_CALL_COUNT.labels(operation=operation, status="error").inc()
+                raise ValueError(f"FHIR server HTTP {resp.status} for {url}")
+            result = json.loads(resp.data.decode("utf-8"))
+            FHIR_LATENCY.labels(operation=operation).observe(time.perf_counter() - t0)
+            FHIR_CALL_COUNT.labels(operation=operation, status="ok").inc()
+            return result
+        except (urllib3.exceptions.HTTPError, OSError) as exc:
+            if attempt < retry_count:
+                log.warning(
+                    "FHIR request %s connection error — retrying (%d/%d)",
+                    url, attempt + 1, retry_count,
+                )
+                time.sleep(retry_backoff * (2 ** attempt))
+                continue
+            FHIR_LATENCY.labels(operation=operation).observe(time.perf_counter() - t0)
+            FHIR_CALL_COUNT.labels(operation=operation, status="error").inc()
+            raise ValueError(f"FHIR server connection error for {url}: {exc}") from exc
 
 
 def _safe_next_url(next_url: str, base_url: str) -> str:
@@ -80,15 +148,15 @@ def _safe_next_url(next_url: str, base_url: str) -> str:
 
 
 def _get_json(url, token=None, timeout=30, operation="get"):
-    req = request.Request(url=url, headers=_make_headers(token), method="GET")
-    return _do_request(req, url, timeout, operation=operation)
+    headers = _make_headers(token)
+    return _do_request("GET", url, headers, timeout, operation=operation)
 
 
 def _write_json(url, payload, method, token=None, timeout=30, operation="write"):
     """POST or PUT JSON payload to a FHIR server URL; returns parsed response dict."""
     body = json.dumps(payload).encode("utf-8")
-    req = request.Request(url=url, data=body, headers=_make_post_headers(token), method=method)
-    return _do_request(req, url, timeout, operation=operation)
+    headers = _make_post_headers(token)
+    return _do_request(method, url, headers, timeout, body=body, operation=operation)
 
 
 # ---------------------------------------------------------------------------
@@ -125,11 +193,18 @@ def fetch_resource_type(base_url, resource_type, params=None, token=None, timeou
     if params:
         query.update(params)
 
+    _validate_resource_type(resource_type)
     url = base_url.rstrip("/") + "/" + resource_type + "?" + urlencode(query)
     page = 0
 
     while url:
         page += 1
+        if page > _FHIR_MAX_PAGES:
+            log.warning(
+                "fetch_resource_type %s: reached page limit (%d), stopping pagination",
+                resource_type, _FHIR_MAX_PAGES,
+            )
+            break
         log.info("fetching %s page %d: %s", resource_type, page, url)
         bundle = _get_json(url, token=token, timeout=timeout, operation="search")
 
@@ -170,6 +245,8 @@ def fetch_everything(base_url, resource_type, resource_id, params=None, token=No
     Yields individual FHIR resource dicts (unwrapped from Bundle entries).
     """
     base = base_url.rstrip("/")
+    _validate_resource_type(resource_type)
+    _validate_resource_id(resource_id)
     url = f"{base}/{resource_type}/{resource_id}/$everything"
     if params:
         url += "?" + urlencode(params)
@@ -177,6 +254,12 @@ def fetch_everything(base_url, resource_type, resource_id, params=None, token=No
     page = 0
     while url:
         page += 1
+        if page > _FHIR_MAX_PAGES:
+            log.warning(
+                "$everything %s/%s: reached page limit (%d), stopping pagination",
+                resource_type, resource_id, _FHIR_MAX_PAGES,
+            )
+            break
         log.info("$everything %s/%s page %d: %s", resource_type, resource_id, page, url)
         bundle = _get_json(url, token=token, timeout=timeout, operation="everything")
 
@@ -226,10 +309,13 @@ def post_resource(base_url, resource, token=None, timeout=30):
 
     rid = resource.get("id")
     if rid:
+        _validate_resource_type(rt)
+        _validate_resource_id(rid)
         url = f"{base_url.rstrip('/')}/{rt}/{rid}"
         method = "PUT"
-        log.info("PUT %s/%s", rt, rid)
+        log.info("PUT %s (resource)", rt)
     else:
+        _validate_resource_type(rt)
         url = f"{base_url.rstrip('/')}/{rt}"
         method = "POST"
         log.info("POST %s (no id)", rt)
@@ -277,9 +363,9 @@ def upload_resources(base_url, resources, token=None, timeout=30):
             yield {"resourceType": rt, "source_id": source_id, "server_id": server_id,
                    "success": True, "error": None}
         except ValueError as exc:
-            log.warning("upload_resources error type=%s id=%s: %s", rt, source_id, exc)
+            log.warning("upload_resources error type=%s error_type=%s", rt, type(exc).__name__)
             yield {"resourceType": rt, "source_id": source_id, "server_id": None,
-                   "success": False, "error": str(exc)}
+                   "success": False, "error": f"FHIR server error ({type(exc).__name__})"}
 
         count += 1
         if count % 100 == 0:
