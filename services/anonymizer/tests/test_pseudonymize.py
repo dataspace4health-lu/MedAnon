@@ -8,17 +8,17 @@ from rich import print
 
 class TestPseudonymize(unittest.TestCase):
     global infile
-    infile = '../../../data/sample_fhir_data/simple_patient.json'
+    infile = 'tests/data/sample_fhir_data/simple_patient.json'
 
     def test_pseudonymize_encrypt_decrypt(self):
         print(f"=== TEST PSEUDONYMIZE/DEPSEUDONYMIZE ENCRYPT/DECRYPT ===")
-        config_filename = 'test/config/encrypt.yaml'
-        resource_filename = '../../../data/sample_fhir_data/simple_patient.json'
+        config_filename = 'tests/config/encrypt.yaml'
+        resource_filename = 'tests/data/sample_fhir_data/simple_patient.json'
         resource = read_resource_from_file(resource_filename)
         settings = Settings(config_filename)
         original_resource = copy.deepcopy(resource)
         ret = process_data(resource, settings)
-        config_filename = 'test/config/decrypt.yaml'
+        config_filename = 'tests/config/decrypt.yaml'
         settings = Settings(config_filename)
         ret2 = process_data(ret, settings)
         print(f"Checking encryption and decryption...\t", end="", flush=True)
@@ -30,8 +30,8 @@ class TestPseudonymize(unittest.TestCase):
 
     def test_safe_harbor_redact(self):
         print(f"=== TEST SAFE HARBOR REDACT ===")
-        config_filename = 'test/config/safe_harbor_redact.yaml'
-        resource_filename = '../../../data/sample_fhir_data/patient_R5DB.json'
+        config_filename = 'tests/config/safe_harbor_redact.yaml'
+        resource_filename = 'tests/data/sample_fhir_data/patient_R5DB.json'
         resource = read_resource_from_file(resource_filename)
         settings = Settings(config_filename)
         ret = process_data(resource, settings)
