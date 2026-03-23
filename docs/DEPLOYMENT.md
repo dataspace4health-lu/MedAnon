@@ -60,7 +60,7 @@ Builds two local images:
 - `medanon:latest` — FastAPI anonymizer (from `services/anonymizer/Dockerfile`)
 - `medanon-ui:latest` — Streamlit UI (from `client/Dockerfile`)
 
-gPAS, HAPI FHIR, Keycloak, and oauth2-proxy use upstream images pulled automatically.
+gPAS and HAPI FHIR use upstream images pulled automatically.
 
 ### Step 3: Start the Stack
 
@@ -68,18 +68,15 @@ gPAS, HAPI FHIR, Keycloak, and oauth2-proxy use upstream images pulled automatic
 make up
 ```
 
-Eight containers start in dependency order:
+Five containers start in dependency order:
 
 | # | Container | Image | Host Port | Startup Time |
 |---|---|---|---|---|
 | 1 | `gpas-db` | `mysql:8.0` | (internal) | ~15 s |
-| 2 | `keycloak` | `quay.io/keycloak/keycloak:24.0.5` | 8180 | ~30 s |
-| 3 | `fhir-server` | `hapiproject/hapi:v7.6.0` | (internal) | ~30 s |
-| 4 | `gpas` | `mosaicgreifswald/wildfly:38` | (internal) | ~90 s |
-| 5 | `fhir-proxy` | `oauth2-proxy:v7.6.0` | 4180 | ~5 s |
-| 6 | `gpas-proxy` | `oauth2-proxy:v7.6.0` | 8082 | ~5 s |
-| 7 | `anonymizer` | `medanon:latest` | 8000 | ~10 s |
-| 8 | `ui` | `medanon-ui:latest` | 8501 | ~10 s |
+| 2 | `fhir-server` | `hapiproject/hapi:v7.6.0` | 8081 | ~30 s |
+| 3 | `gpas` | `mosaicgreifswald/wildfly:38` | 8080 | ~90 s |
+| 4 | `anonymizer` | `medanon:latest` | 8000 | ~10 s |
+| 5 | `ui` | `medanon-ui:latest` | 8501 | ~10 s |
 
 ### Step 4: Initialize gPAS Domain
 
@@ -87,7 +84,7 @@ Eight containers start in dependency order:
 make init-domains
 ```
 
-Or manually via `http://localhost:8082/gpas-web/` (login: `admin@ths`):
+Or manually via `http://localhost:8080/gpas-web/` (login: `admin@ths`):
 1. Navigate to **gPAS -> Domains -> New**
 2. Name: value of `GPAS_DOMAIN` in `.env` (e.g., `TESTING`)
 3. Generator: `ReedSolomonLagrange`, Alphabet: `Symbol31`
@@ -100,8 +97,7 @@ Or manually via `http://localhost:8082/gpas-web/` (login: `admin@ths`):
 ```bash
 curl http://localhost:8000/health         # {"status":"ok"}
 curl http://localhost:8000/ready          # {"ready": true}
-curl http://localhost:4180/fhir/metadata  # HAPI FHIR CapabilityStatement (through proxy)
-curl http://localhost:8180/health/ready   # Keycloak health
+curl http://localhost:8081/fhir/metadata  # HAPI FHIR CapabilityStatement
 open http://localhost:8501                # Streamlit UI
 ```
 
@@ -195,33 +191,6 @@ Applies `docker-compose.dev.yml` overrides:
 | `GPAS_CB_RECOVERY_TIMEOUT_SEC` | no | `30` | Recovery probe timeout |
 | `GPAS_CB_WINDOW_SEC` | no | `60` | Failure counting window |
 
-### Keycloak OIDC
-
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `KEYCLOAK_URL` | no | — | Keycloak server URL. Blank = auth disabled |
-| `KEYCLOAK_REALM` | no | `medanon` | Keycloak realm name |
-| `KEYCLOAK_PORT` | no | `8180` | Host port |
-| `KEYCLOAK_ADMIN` | no | `admin` | Admin console username |
-| `KEYCLOAK_ADMIN_PASSWORD` | yes | — | Admin console password |
-| `KEYCLOAK_CLIENT_ID` | no | `medanon-api` | Confidential client for JWT introspection |
-| `KEYCLOAK_CLIENT_SECRET` | yes | — | Client secret |
-| `KEYCLOAK_UI_CLIENT_ID` | no | `medanon-ui` | Public PKCE client for Streamlit |
-| `EXTERNAL_HOST` | no | `localhost` | Browser-facing hostname for OIDC redirects |
-
-### OAuth2 Proxies
-
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `FHIR_PROXY_CLIENT_ID` | no | `fhir-proxy-oauth` | FHIR proxy OIDC client |
-| `FHIR_PROXY_CLIENT_SECRET` | yes | — | FHIR proxy client secret |
-| `FHIR_PROXY_COOKIE_SECRET` | yes | — | 32-byte base64 cookie encryption key |
-| `FHIR_PROXY_PORT` | no | `4180` | Host port |
-| `GPAS_PROXY_CLIENT_ID` | no | `gpas-proxy-oauth` | gPAS proxy OIDC client |
-| `GPAS_PROXY_CLIENT_SECRET` | yes | — | gPAS proxy client secret |
-| `GPAS_PROXY_COOKIE_SECRET` | yes | — | 32-byte base64 cookie encryption key |
-| `GPAS_PROXY_PORT` | no | `8082` | Host port |
-
 ### UI
 
 | Variable | Required | Default | Description |
@@ -264,13 +233,12 @@ The `.gitignore` already excludes:
 | `MEDANON_RSA_PRIVATE_KEY` | Old encrypted values become unreadable. Keep old key for historical data. |
 | `GPAS_BASIC_PASS` | Update `.env` + MySQL: `CALL changePassword('user','new-pass');` |
 | `GPAS_MYSQL_ROOT_PASSWORD` | Requires `docker compose down -v` (destroys data). Back up first. |
-| `KEYCLOAK_CLIENT_SECRET` | Update in Keycloak admin + `.env`. Restart anonymizer. |
 
 ---
 
 ## 5. Kubernetes (Helm) Deployment
 
-The umbrella chart at `helm/medanon/` deploys the anonymizer, HAPI FHIR, and gPAS. Keycloak and proxies are optional sub-charts.
+The umbrella chart at `helm/medanon/` deploys the anonymizer, HAPI FHIR, and gPAS.
 
 ### Step 1: Build and Push Images
 
@@ -331,7 +299,7 @@ curl http://localhost:8000/health
 helm/
 ├── medanon/                     Umbrella chart
 │   ├── Chart.yaml
-│   ├── values.yaml              Global defaults (registry, ingress, keycloak, proxies)
+│   ├── values.yaml              Global defaults (registry, ingress)
 │   └── templates/
 │       └── ingress.yaml         Optional ingress (set ingress.enabled: true)
 └── charts/
@@ -355,15 +323,6 @@ helm/
 Enable in `values.yaml`:
 
 ```yaml
-keycloak:
-  enabled: true
-
-fhirProxy:
-  enabled: true
-
-gpasProxy:
-  enabled: true
-
 ingress:
   enabled: true
   host: medanon.example.com
@@ -385,10 +344,7 @@ Measured at idle after full startup:
 | `fhir-server` | ~1.2 GB | 3 GB | ~0.1 | 2.0 |
 | `gpas` | ~1.5 GB | 6 GB | ~0.1 | 2.0 |
 | `gpas-db` | ~500 MB | 4 GB | ~0.1 | 1.0 |
-| `keycloak` | ~400 MB | 1 GB | ~0.05 | 1.0 |
-| `fhir-proxy` | ~30 MB | 128 MB | ~0.01 | 0.25 |
-| `gpas-proxy` | ~30 MB | 128 MB | ~0.01 | 0.25 |
-| **Total** | **~4.1 GB** | **~16.8 GB** | **~0.5** | **8.0** |
+| **Total** | **~3.65 GB** | **~15.5 GB** | **~0.4** | **6.5** |
 
 **Minimum host RAM:** 8 GB. **Recommended:** 12 GB+.
 
@@ -425,11 +381,6 @@ server {
         proxy_pass http://127.0.0.1:8000/;
         proxy_set_header X-Request-ID $request_id;
     }
-
-    # Keycloak
-    location /auth/ {
-        proxy_pass http://127.0.0.1:8180/;
-    }
 }
 ```
 
@@ -439,16 +390,13 @@ Expose only ports 8501 (UI) and 8000 (API) through the proxy. Never expose 8080 
 
 | Layer | Mechanism |
 |---|---|
-| Streamlit UI | Keycloak OIDC with PKCE (S256) |
-| Anonymizer API | Keycloak JWT (RS256) or legacy `X-API-Key` |
-| HAPI FHIR (browser) | oauth2-proxy (`fhir-proxy`) |
-| gPAS (browser) | oauth2-proxy (`gpas-proxy`) |
+| API | Optional API key (`X-API-Key`) | Configurable |
+| UI | Inherits API key from env | Automatic |
 | gPAS API | gRAS basic auth |
 
 For production:
-1. Set `KEYCLOAK_URL` to enable OIDC
-2. Change all default passwords (Keycloak users, gRAS, MySQL)
-3. Set `MEDANON_API_KEY` for any CI/CD scripts
+1. Set `MEDANON_API_KEY` for authenticated access
+2. Change all default passwords (gPAS, MySQL)
 
 ### GDPR Compliance Features
 
@@ -524,14 +472,11 @@ docker compose ps    # health status for all containers
 curl -s http://localhost:8000/health | python3 -m json.tool
 curl -s http://localhost:8000/ready | python3 -m json.tool
 
-# HAPI FHIR (through proxy)
-curl -s http://localhost:4180/fhir/metadata | head -5
+# HAPI FHIR
+curl -s http://localhost:8081/fhir/metadata | head -5
 
-# gPAS (through proxy)
-curl -s http://localhost:8082/ttp-fhir/fhir/gpas/metadata | head -5
-
-# Keycloak
-curl -s http://localhost:8180/health/ready
+# gPAS
+curl -s http://localhost:8080/ttp-fhir/fhir/gpas/metadata | head -5
 
 # Streamlit UI
 curl -s http://localhost:8501/_stcore/health
@@ -562,7 +507,7 @@ make down    # stops containers; Docker volumes preserved
 ### Docker Compose: Remove Everything
 
 ```bash
-docker compose down -v    # removes containers AND named volumes (gpas-db-data, hapi-data, keycloak-data)
+docker compose down -v    # removes containers AND named volumes (gpas-db-data, hapi-data)
 ```
 
 ### Helm (Kubernetes)

@@ -24,7 +24,7 @@
 ```bash
 cp .env.example .env      # fill in your secrets (see DEPLOYMENT.md)
 make build                 # build anonymizer + UI images
-make up                    # start all eight services
+make up                    # start all five services
 ```
 
 Wait approximately 90 seconds for all services to become healthy, then verify:
@@ -41,9 +41,8 @@ curl http://localhost:8000/ready     # {"ready": true}
 | Streamlit UI | `http://localhost:8501` | Browser-based interface |
 | Anonymizer API | `http://localhost:8000` | REST API |
 | Swagger UI | `http://localhost:8000/docs` | Interactive API explorer |
-| FHIR Server | `http://localhost:4180/fhir` | HAPI FHIR (through auth proxy) |
-| gPAS Web UI | `http://localhost:8082/gpas-web/` | Pseudonym management (through auth proxy) |
-| Keycloak Admin | `http://localhost:8180` | Identity provider admin console |
+| FHIR Server | `http://localhost:8081/fhir` | HAPI FHIR server |
+| gPAS Web UI | `http://localhost:8080/gpas-web/` | Pseudonym management |
 
 ### Local Development (no Docker)
 
@@ -59,7 +58,7 @@ This uses `config.yaml` (cryptohash mode, no gPAS or FHIR server required).
 
 ## 2. Streamlit UI Guide
 
-Open `http://localhost:8501` in your browser. When Keycloak is configured, you will be prompted to log in. The sidebar shows the current anonymizer health status and navigation links.
+Open `http://localhost:8501` in your browser. When `MEDANON_API_KEY` is configured, the UI automatically authenticates API requests. The sidebar shows the current anonymizer health status and navigation links.
 
 ### 2.1 Patient Browser
 
@@ -150,14 +149,13 @@ All endpoints accept and return `application/json` by default. Streaming endpoin
 
 ### Authentication
 
-When Keycloak is configured (`KEYCLOAK_URL` set), all endpoints except health/metrics/docs require a JWT Bearer token or legacy API key.
+When `MEDANON_API_KEY` is set, all endpoints except health/metrics/docs require an API key header.
 
 ```bash
-# JWT Bearer token (Keycloak)
-curl -H "Authorization: Bearer <jwt>" http://localhost:8000/process ...
-
-# Legacy API key
-curl -H "X-API-Key: <key>" http://localhost:8000/process ...
+# API key authentication
+curl -H "X-API-Key: <key>" http://localhost:8000/process \
+  -H "Content-Type: application/json" \
+  -d '{"resourceType":"Patient","id":"p-001","name":[{"family":"Smith"}],"birthDate":"1980-05-12"}'
 ```
 
 ### Health and Readiness
@@ -247,7 +245,7 @@ Fetch resources from a FHIR server, de-identify, return NDJSON.
 curl -X POST http://localhost:8000/process/from-server \
   -H "Content-Type: application/json" \
   -d '{
-    "server_url": "http://localhost:4180/fhir",
+    "server_url": "http://localhost:8081/fhir",
     "resource_types": ["Patient", "Observation", "Condition"],
     "params": {"_count": 200},
     "token": "optional-bearer-token"
@@ -263,7 +261,7 @@ Fetch all resources for a subject via FHIR `$everything`, then de-identify.
 ```bash
 curl -X POST http://localhost:8000/process/everything \
   -H "Content-Type: application/json" \
-  -d '{"server_url":"http://localhost:4180/fhir","resource_type":"Patient","resource_id":"p-001"}'
+  -d '{"server_url":"http://localhost:8081/fhir","resource_type":"Patient","resource_id":"p-001"}'
 ```
 
 #### `POST /process/and-upload`
@@ -424,7 +422,7 @@ python3 -m cli.main process patient.xml output.xml --config config/config.yaml
 
 ```bash
 python3 -m cli.main fetch \
-  --server http://localhost:4180/fhir \
+  --server http://localhost:8081/fhir \
   --resource-type Patient,Observation \
   --output output/patients.ndjson \
   --config config/config_gpas.yaml
@@ -445,7 +443,7 @@ python3 -m cli.main fetch \
 
 ```bash
 python3 -m cli.main everything \
-  --server http://localhost:4180/fhir \
+  --server http://localhost:8081/fhir \
   --resource-type Patient --id p-001 \
   --output output/patient-p001.ndjson \
   --config config/config_gpas.yaml
@@ -455,7 +453,7 @@ python3 -m cli.main everything \
 
 ```bash
 python3 -m cli.main push \
-  --server http://localhost:4180/fhir \
+  --server http://localhost:8081/fhir \
   --input output/patients.ndjson
 ```
 
@@ -463,7 +461,7 @@ python3 -m cli.main push \
 
 ```bash
 # Fetch all resources from HAPI FHIR, de-identify, write NDJSON
-HAPI_URL=http://localhost:4180/fhir bash scripts/batch_fetch.sh
+HAPI_URL=http://localhost:8081/fhir bash scripts/batch_fetch.sh
 
 # Process local NDJSON + generate analytics report
 bash scripts/batch_process.sh
@@ -736,10 +734,9 @@ See [DEPLOYMENT.md](DEPLOYMENT.md#3-environment-variables-reference) for the com
 | Variable | Purpose |
 |---|---|
 | `MEDANON_HASH_KEY` | HMAC key for cryptohash (generate: `openssl rand -hex 32`) |
-| `MEDANON_API_KEY` | Legacy API key for backward-compatible auth |
+| `MEDANON_API_KEY` | API key for authenticated access (`X-API-Key` header) |
 | `GPAS_URL` | gPAS server URL (triggers auto-selection of `config_gpas.yaml`) |
 | `GPAS_DOMAIN` | gPAS pseudonymization domain name |
-| `KEYCLOAK_URL` | Keycloak server URL (enables OIDC authentication) |
 | `MEDANON_MANIFEST_ENABLED` | Include transformation manifest in output (`true`/`false`) |
 | `LOG_LEVEL` | Logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
 
@@ -751,7 +748,7 @@ Before using `gpas_pseudonymize`, a domain must exist in gPAS.
 
 ### Via Web UI
 
-1. Open `http://localhost:8082/gpas-web/` (through the gPAS proxy).
+1. Open `http://localhost:8080/gpas-web/` (gPAS web UI).
 2. Log in as `admin@ths` with your configured password.
 3. Navigate to **gPAS -> Domains -> New**.
 4. Configure: Name = your `GPAS_DOMAIN` value (e.g., `TESTING`), Generator = `ReedSolomonLagrange`, Alphabet = `Symbol31`.
@@ -825,15 +822,19 @@ curl -X POST "http://localhost:8000/process/raw?output_format=xml" \
 
 ## 11. Authentication
 
-### Keycloak OIDC (Primary)
+### API Key
 
-When `KEYCLOAK_URL` is configured, all API and UI access requires Keycloak authentication.
+When `MEDANON_API_KEY` is set, all endpoints except `/health`, `/ready`, `/metrics`, `/docs`, `/openapi.json`, and `/redoc` require an `X-API-Key` header.
 
-**UI (Streamlit):** Uses OIDC Authorization Code flow with PKCE (S256) via the `medanon-ui` public client. Users are redirected to the Keycloak login page.
+```bash
+curl -H "X-API-Key: <key>" http://localhost:8000/process \
+  -H "Content-Type: application/json" \
+  -d '{"resourceType":"Patient","id":"p-001","name":[{"family":"Smith"}]}'
+```
 
-**API:** Accepts `Authorization: Bearer <jwt>` with RS256-signed tokens from Keycloak. Roles are extracted from the `realm_access.roles` claim.
+The UI automatically sends the API key when configured in the environment.
 
-**Role hierarchy:**
+### Role-Based Access Control
 
 | Role | Access |
 |---|---|
@@ -841,23 +842,11 @@ When `KEYCLOAK_URL` is configured, all API and UI access requires Keycloak authe
 | `analyst` | All processing endpoints, risk analysis, synthetic generation |
 | `admin` | Upload and round-trip endpoints (includes analyst + viewer) |
 
-**Pre-seeded test users:**
-
-| Username | Password | Role |
-|---|---|---|
-| `admin` | `admin` | admin |
-| `analyst` | `analyst` | analyst |
-| `viewer` | `viewer` | viewer |
-
-Change these passwords before any non-local deployment.
-
-### Legacy API Key (Fallback)
-
-When `MEDANON_API_KEY` is set, requests with `X-API-Key: <key>` are granted admin access. This is intended for CI/CD pipelines and scripts that cannot perform OIDC flows.
+When using API key authentication, requests are granted `admin` role.
 
 ### Open Mode
 
-When neither `KEYCLOAK_URL` nor `MEDANON_API_KEY` is configured, the system runs in open mode with no authentication (backward compatibility).
+When `MEDANON_API_KEY` is not set, the system runs in open mode with no authentication (all endpoints accessible without credentials).
 
 ---
 
@@ -870,7 +859,7 @@ docker compose logs anonymizer
 ```
 
 Common causes:
-- `config_gpas.yaml` active but gPAS unreachable. Test: `curl http://localhost:8082/ttp-fhir/fhir/gpas/metadata`
+- `config_gpas.yaml` active but gPAS unreachable. Test: `curl http://localhost:8080/ttp-fhir/fhir/gpas/metadata`
 - Missing RSA key files. Verify: `docker compose exec anonymizer ls -la /code/keys/`
 - `MEDANON_HASH_KEY` unset. A warning is logged; cryptohash still works with plain SHA3-256.
 
@@ -881,7 +870,7 @@ Common causes:
 **Cause:** gPAS has failed repeatedly (default: 5 failures in 60 seconds)
 
 **Fix:**
-1. Check gPAS health: `curl http://localhost:8082/ttp-fhir/fhir/gpas/metadata`
+1. Check gPAS health: `curl http://localhost:8080/ttp-fhir/fhir/gpas/metadata`
 2. Review logs: `docker compose logs gpas`
 3. Wait for automatic recovery (default: 30 seconds) or restart gPAS
 4. Adjust thresholds via `GPAS_CB_*` environment variables

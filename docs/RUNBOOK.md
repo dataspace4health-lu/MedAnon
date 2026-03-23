@@ -45,15 +45,14 @@ Edit `.env` and replace every `REPLACE_WITH_...` placeholder:
 ```bash
 # Generate secrets
 openssl rand -hex 32       # for MEDANON_HASH_KEY
-openssl rand -base64 24    # for GPAS_BASIC_PASS, GPAS_MYSQL_ROOT_PASSWORD, KEYCLOAK_ADMIN_PASSWORD
-openssl rand -base64 24    # for KEYCLOAK_CLIENT_SECRET, FHIR_PROXY/GPAS_PROXY secrets
+openssl rand -base64 24    # for GPAS_BASIC_PASS, GPAS_MYSQL_ROOT_PASSWORD
 ```
 
 ### Step 2: Build and Start
 
 ```bash
 make build       # build anonymizer + UI images
-make up          # start all eight services
+make up          # start all five services
 ```
 
 ### Step 3: Wait for Healthy Status
@@ -74,14 +73,11 @@ curl -s http://localhost:8000/health | python3 -m json.tool
 curl -s http://localhost:8000/ready | python3 -m json.tool
 # {"ready": true}
 
-# HAPI FHIR (through proxy)
-curl -s http://localhost:4180/fhir/metadata | head -5
+# HAPI FHIR
+curl -s http://localhost:8081/fhir/metadata | head -5
 
 # gPAS
-curl -s http://localhost:8082/ttp-fhir/fhir/gpas/metadata | head -5
-
-# Keycloak
-curl -s http://localhost:8180/health/ready
+curl -s http://localhost:8080/ttp-fhir/fhir/gpas/metadata | head -5
 
 # Streamlit UI
 curl -s http://localhost:8501/_stcore/health
@@ -93,7 +89,7 @@ curl -s http://localhost:8501/_stcore/health
 make init-domains
 ```
 
-Or manually at `http://localhost:8082/gpas-web/` (login: `admin@ths`).
+Or manually at `http://localhost:8080/gpas-web/` (login: `admin@ths`).
 
 ### Development Mode
 
@@ -135,7 +131,7 @@ Override in CLI: `--config config/<profile>.yaml`
 ### Option A: Streamlit UI (Recommended for Interactive Use)
 
 1. Open `http://localhost:8501`
-2. Log in with Keycloak credentials (if configured)
+2. The UI uses API key authentication automatically when configured
 3. Navigate to the appropriate page:
 
 | Task | Page |
@@ -171,7 +167,7 @@ curl -s -X POST http://localhost:8000/process/batch \
 # Fetch from FHIR server, de-identify, stream back
 curl -s -X POST http://localhost:8000/process/from-server \
   -H "Content-Type: application/json" \
-  -d '{"server_url":"http://localhost:4180/fhir","resource_types":["Patient","Observation"]}'
+  -d '{"server_url":"http://localhost:8081/fhir","resource_types":["Patient","Observation"]}'
 
 # Risk assessment
 curl -s -X POST http://localhost:8000/analyse/risk \
@@ -188,7 +184,7 @@ cd services/anonymizer
 python3 -m cli.main process input.ndjson output.ndjson --config config/config_hipaa_safe_harbor.yaml
 
 # Fetch from server and de-identify
-python3 -m cli.main fetch --server http://localhost:4180/fhir \
+python3 -m cli.main fetch --server http://localhost:8081/fhir \
   --resource-type Patient,Observation --output output/all.ndjson \
   --config config/config_gpas.yaml
 
@@ -287,7 +283,6 @@ docker inspect --format='{{.State.Health.Status}}' anonymizer
 docker inspect --format='{{.State.Health.Status}}' fhir-server
 docker inspect --format='{{.State.Health.Status}}' gpas
 docker inspect --format='{{.State.Health.Status}}' gpas-db
-docker inspect --format='{{.State.Health.Status}}' keycloak
 ```
 
 ### Audit Log
@@ -339,15 +334,6 @@ With the default H2 in-memory database, data is lost on every container restart.
 1. Switch to PostgreSQL (see DEPLOYMENT.md)
 2. Back up the PostgreSQL database using standard `pg_dump` tools
 
-### Keycloak Data
-
-```bash
-docker run --rm \
-  -v keycloak-data:/data \
-  -v $(pwd)/backup:/backup \
-  busybox tar czf /backup/keycloak-$(date +%Y%m%d).tar.gz -C /data .
-```
-
 ### Config and Keys
 
 ```bash
@@ -368,8 +354,6 @@ cp services/anonymizer/keys/id_rsa* backup/keys-$(date +%Y%m%d)/
 | `MEDANON_RSA_PRIVATE_KEY` | Generate new keypair, update paths in `.env` | Old encrypted values become unreadable. Keep old key for historical data. |
 | `GPAS_BASIC_PASS` | Update in `.env` + run SQL `CALL changePassword('user','new-pass');` in gRAS, restart anonymizer | Existing gPAS sessions invalidated. |
 | `GPAS_MYSQL_ROOT_PASSWORD` | Requires `docker compose down -v` to recreate MySQL volume | Destroys all pseudonym mappings. Back up first. |
-| `KEYCLOAK_ADMIN_PASSWORD` | Update in `.env`, restart keycloak | Admin console password changes. |
-| `KEYCLOAK_CLIENT_SECRET` | Update in Keycloak admin console + `.env`, restart anonymizer | Service account tokens invalidated. |
 | `MEDANON_API_KEY` | Update in `.env`, restart anonymizer | All existing API key users must update their key. |
 
 ---
@@ -382,7 +366,7 @@ cp services/anonymizer/keys/id_rsa* backup/keys-$(date +%Y%m%d)/
 
 1. Check container health: `docker compose ps gpas`
 2. Verify env vars: `GPAS_URL`, `GPAS_BASIC_USER`, `GPAS_BASIC_PASS`
-3. Test connectivity: `curl -v http://localhost:8082/ttp-fhir/fhir/gpas/metadata`
+3. Test connectivity: `curl -v http://localhost:8080/ttp-fhir/fhir/gpas/metadata`
 4. Check domain exists: log into gPAS web UI and verify
 5. Review logs: `docker compose logs gpas`
 
@@ -426,7 +410,7 @@ docker compose exec anonymizer python3 -m spacy download en_core_web_lg
 lsof -i :8000    # find conflicting process
 ```
 
-Edit `.env` to change port mappings (`ANONYMIZER_PORT`, `UI_PORT`, `KEYCLOAK_PORT`, etc.).
+Edit `.env` to change port mappings (`ANONYMIZER_PORT`, `UI_PORT`, etc.).
 
 ### Body Size Limit (413 Error)
 
@@ -436,13 +420,6 @@ Split large files or increase the limit:
 # .env
 MEDANON_MAX_BODY_BYTES=20971520    # 20 MB
 ```
-
-### Keycloak Login Failures
-
-1. Verify Keycloak is running: `curl http://localhost:8180/health/ready`
-2. Check realm exists: `http://localhost:8180/admin/` -> Realms -> `medanon`
-3. Verify client secrets match between `.env` and Keycloak admin console
-4. For proxy issues, check: `docker compose logs fhir-proxy` / `docker compose logs gpas-proxy`
 
 ### Out of Memory (OOM) Kills
 
@@ -461,9 +438,7 @@ Current memory limits:
 | HAPI FHIR | 3 GB |
 | gPAS | 6 GB (JVM: -Xmx4G) |
 | MySQL | 4 GB (InnoDB: 512 MB) |
-| Keycloak | 1 GB (JVM: -Xmx512m) |
 | UI | 512 MB |
-| Proxies | 128 MB each |
 
 If a service is consistently OOM-killed, increase its memory limit in `docker-compose.yml`.
 
@@ -473,7 +448,7 @@ If a service is consistently OOM-killed, increase its memory limit in `docker-co
 
 | Command | Description |
 |---|---|
-| `make up` | Start full Docker stack (8 services) |
+| `make up` | Start full Docker stack (5 services) |
 | `make dev` | Start with hot-reload (source mounted into container) |
 | `make down` | Stop and remove containers (volumes preserved) |
 | `make build` | Rebuild Docker images (anonymizer + UI) |
@@ -506,10 +481,8 @@ python3 -m pytest tests/test_api.py::test_health -q
 Before any non-local deployment:
 
 - [ ] Set a strong `MEDANON_HASH_KEY` (`openssl rand -hex 32`)
-- [ ] Set `MEDANON_API_KEY` or configure Keycloak (`KEYCLOAK_URL`)
-- [ ] Set strong passwords for `GPAS_BASIC_PASS`, `GPAS_MYSQL_ROOT_PASSWORD`, `KEYCLOAK_ADMIN_PASSWORD`
-- [ ] Replace all `KEYCLOAK_CLIENT_SECRET` and proxy cookie secrets
-- [ ] Change default Keycloak user passwords (admin/analyst/viewer)
+- [ ] Set `MEDANON_API_KEY` for authenticated access
+- [ ] Set strong passwords for `GPAS_BASIC_PASS`, `GPAS_MYSQL_ROOT_PASSWORD`
 - [ ] Enable TLS termination in front of the stack (nginx / Caddy / Traefik)
 - [ ] Restrict network access: only expose ports 8501 (UI) and 8000 (API) through the proxy
 - [ ] Set `LOG_LEVEL=INFO` (DEBUG logs may expose PHI)

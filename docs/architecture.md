@@ -1,769 +1,652 @@
-# MedAnon Architecture
+# SPE FHIR BlackBox — Architecture
 
 ## Table of Contents
 
-1. [System Overview](#1-system-overview)
-2. [Services](#2-services)
-3. [End-to-End Data Flow](#3-end-to-end-data-flow)
-4. [Processing Flows](#4-processing-flows)
-5. [Authentication and Authorization](#5-authentication-and-authorization)
-6. [Rule Engine](#6-rule-engine)
-7. [Text Scrubbing Pipeline](#7-text-scrubbing-pipeline)
-8. [Config Profile Selection](#8-config-profile-selection)
-9. [Re-identification Risk Model](#9-re-identification-risk-model)
-10. [Network Topology](#10-network-topology)
-11. [Security Model](#11-security-model)
-12. [Source Layout](#12-source-layout)
-13. [Technology Stack](#13-technology-stack)
-14. [Deployment Modes](#14-deployment-modes)
+1. [Overview](#1-overview)
+2. [Components](#2-components)
+   - 2.1 [Common Components](#21-common-components)
+   - 2.2 [Governance Authority — gPAS (Trusted Third Party)](#22-governance-authority--gpas-trusted-third-party)
+   - 2.3 [De-identification Service — Anonymizer](#23-de-identification-service--anonymizer)
+   - 2.4 [FHIR Data Layer — HAPI FHIR Server](#24-fhir-data-layer--hapi-fhir-server)
+   - 2.5 [User Interface — Streamlit Dashboard](#25-user-interface--streamlit-dashboard)
+3. [Data Flows](#3-data-flows)
+   - 3.1 [Core Processing Pipeline](#31-core-processing-pipeline)
+   - 3.2 [Inline De-identification](#32-inline-de-identification)
+   - 3.3 [Server-to-Server Round-Trip](#33-server-to-server-round-trip)
+   - 3.4 [Risk Assessment Chain](#34-risk-assessment-chain)
+   - 3.5 [Synthetic Data Generation](#35-synthetic-data-generation)
+4. [Security Architecture](#4-security-architecture)
+5. [Deployment Architecture](#5-deployment-architecture)
+   - 5.1 [Docker Compose (Single-Node)](#51-docker-compose-single-node)
+   - 5.2 [Kubernetes / Helm (Multi-Node)](#52-kubernetes--helm-multi-node)
+6. [Configuration Profiles](#6-configuration-profiles)
+7. [API Surface](#7-api-surface)
 
 ---
 
-## 1. System Overview
+## 1. Overview
 
-MedAnon is a rule-driven FHIR de-identification and pseudonymization engine. It accepts FHIR resources (JSON, NDJSON, XML), applies match-action rules from a YAML configuration, and outputs transformed data. The system runs as an eight-service Docker stack with three user-facing interfaces: a Streamlit web UI, a FastAPI REST API, and a CLI for bulk processing.
+**SPE FHIR BlackBox** (also referred to as *MedAnon*) is a rule-driven FHIR de-identification and pseudonymization engine for healthcare data. It accepts HL7 FHIR R4 resources in JSON, NDJSON, or XML format, applies configurable match-action rules from YAML profiles, and outputs transformed data in the same or a different format.
+
+### Purpose
+
+The system enables healthcare organisations and researchers to:
+
+- **De-identify** patient records for regulatory compliance (GDPR, HIPAA Safe Harbor)
+- **Pseudonymize** identifiers via a Trusted Third Party (gPAS) for reversible, longitudinal studies
+- **Assess re-identification risk** using k-anonymity and l-diversity metrics
+- **Generate synthetic data** that preserves statistical distributions without copying real records
+- **Exchange data** through privacy-preserving dataspace connectors (EDC, FIWARE/NGSI-LD)
+
+### Key Properties
+
+| Property | Value |
+|---|---|
+| Input formats | JSON, NDJSON, FHIR Bundle, XML |
+| Output formats | JSON, NDJSON, XML |
+| FHIR version | R4 |
+| Rule language | FHIRPath expressions in YAML |
+| Interfaces | REST API, Web UI, CLI |
+| Auth | API key + RBAC (optional) |
+| Deployment | Docker Compose, Kubernetes (Helm) |
+
+### High-Level Architecture Diagram
 
 ```
-                           ┌──────────────────────────────────────────────────┐
-                           │                  Browser                        │
-                           │                                                 │
-                           │  ┌──────────┐  ┌──────────────┐  ┌──────────┐  │
-                           │  │ Streamlit│  │  FHIR Proxy  │  │gPAS Proxy│  │
-                           │  │  :8501   │  │   :4180      │  │  :8082   │  │
-                           │  └────┬─────┘  └──────┬───────┘  └────┬─────┘  │
-                           └───────┼───────────────┼───────────────┼────────┘
-                                   │               │               │
-                        ┌──────────┘     ┌─────────┘     ┌────────┘
-      ┌─────────────────▼─────┐  ┌───────▼──────┐  ┌─────▼──────────┐
-      │   Anonymizer API      │  │  HAPI FHIR   │  │  gPAS WildFly  │
-      │   :8000 (FastAPI)     │  │  :8080       │  │  :8080         │
-      │                       │  │  (internal)  │  │  (internal)    │
-      │  ┌─────────────────┐  │  └──────────────┘  └───────┬────────┘
-      │  │  Rule Engine    │  │                            │
-      │  │  FHIRPath match │  │                    ┌───────▼────────┐
-      │  │  → dispatch     │──┼───FHIR REST───────►│  gPAS MySQL    │
-      │  │    action       │  │                    │  :3306         │
-      │  └─────────────────┘  │                    │  (internal)    │
-      └───────────┬───────────┘                    └────────────────┘
-                  │
-          ┌───────▼────────┐
-          │   Keycloak     │
-          │   :8180        │
-          │   (OIDC IdP)   │
-          └────────────────┘
-```
-
-All services communicate over the `fhir-net` Docker bridge network. HAPI FHIR and gPAS have no host ports in production; they are only reachable through their respective OAuth2 proxies or via the anonymizer service internally.
-
----
-
-## 2. Services
-
-### 2.1 Anonymizer (`anonymizer`)
-
-The core engine. Receives FHIR resources, evaluates a YAML rule set against each resource using FHIRPath expressions, dispatches matching rules to action handlers, and returns transformed data.
-
-| Attribute | Value |
-|---|---|
-| Runtime | Python 3.12, FastAPI, uvicorn |
-| Port | 8000 |
-| Image | `medanon:latest` (multi-stage: `base` -> `prod` / `dev`) |
-| Container user | Non-root `appuser` (UID 1000) |
-| Security | `read_only: true`, `no-new-privileges`, all capabilities dropped |
-| Memory | Up to 2 GB (required when spaCy NLP model is loaded) |
-
-Provides 14 REST endpoints, a CLI interface, and Prometheus metrics at `/metrics`.
-
-### 2.2 Streamlit UI (`ui`)
-
-Browser-based front-end built with Python Streamlit. Seven pages cover patient browsing, inline de-identification, batch processing, risk assessment, synthetic data generation, and a health dashboard.
-
-| Attribute | Value |
-|---|---|
-| Runtime | Python 3.12, Streamlit |
-| Port | 8501 |
-| Image | `medanon-ui:latest` |
-| Memory | Up to 512 MB |
-| Auth | Keycloak OIDC with PKCE (S256) via `streamlit-keycloak` |
-
-### 2.3 HAPI FHIR Server (`fhir-server`)
-
-HL7 FHIR R4 server used as both the source of patient data and the target for uploading de-identified resources.
-
-| Attribute | Value |
-|---|---|
-| Runtime | Java, Spring Boot, HAPI FHIR JPA Server |
-| Image | `hapiproject/hapi:v7.6.0` |
-| Port | Internal only (no host binding in production) |
-| Database | H2 in-memory by default (switch to PostgreSQL for persistence) |
-| Memory | Up to 3 GB |
-| Access | Through `fhir-proxy` (OAuth2-proxy) for browser access; direct internal calls from the anonymizer |
-
-### 2.4 gPAS (`gpas`)
-
-Trusted Third Party (TTP) pseudonymization service. Manages bidirectional mapping between original identifiers and pseudonyms. The anonymizer calls the TTP-FHIR gateway at `/ttp-fhir/fhir/gpas` to create and resolve pseudonyms.
-
-| Attribute | Value |
-|---|---|
-| Runtime | Java, WildFly 38, gPAS 2025.2.0 |
-| Image | `mosaicgreifswald/wildfly:38` |
-| Port | Internal only (no host binding in production) |
-| Auth | gRAS basic auth for the FHIR API; form-based auth for the web UI |
-| Memory | Up to 6 GB (JVM: `-Xms512M -Xmx4G`) |
-| Access | Through `gpas-proxy` for browser access; internal `/ttp-fhir/` API is open for anonymizer service calls |
-
-### 2.5 gPAS MySQL (`gpas-db`)
-
-MySQL 8.0 backend for gPAS. Stores three schemas: `gpas` (pseudonym mappings), `gras` (users, roles, permissions), and `notification_service` (event logs).
-
-| Attribute | Value |
-|---|---|
-| Image | `mysql:8.0` |
-| Port | Internal only |
-| Persistence | Docker named volume `gpas-db-data` |
-| Memory | Up to 4 GB (InnoDB buffer pool: 512 MB) |
-
-### 2.6 Keycloak (`keycloak`)
-
-Central identity provider for the entire stack. Manages user authentication (OIDC), role-based access control, and service-account token issuance.
-
-| Attribute | Value |
-|---|---|
-| Image | `quay.io/keycloak/keycloak:24.0.5` |
-| Port | 8180 (host) -> 8080 (container) |
-| Realm | `medanon` |
-| JVM heap | 256 MB min, 512 MB max |
-| Persistence | Docker named volume `keycloak-data` |
-
-Pre-configured with three realm roles (`viewer`, `analyst`, `admin`), five clients, and three seed users.
-
-### 2.7 FHIR Proxy (`fhir-proxy`)
-
-OAuth2 reverse proxy that gates browser access to HAPI FHIR behind Keycloak login.
-
-| Attribute | Value |
-|---|---|
-| Image | `quay.io/oauth2-proxy/oauth2-proxy:v7.6.0` |
-| Port | 4180 |
-| Open path | `/fhir/metadata` (FHIR capability statement) |
-
-### 2.8 gPAS Proxy (`gpas-proxy`)
-
-OAuth2 reverse proxy that gates browser access to gPAS behind Keycloak login.
-
-| Attribute | Value |
-|---|---|
-| Image | `quay.io/oauth2-proxy/oauth2-proxy:v7.6.0` |
-| Port | 8082 |
-| Open path | `/ttp-fhir/` (internal API for anonymizer service calls) |
-
----
-
-## 3. End-to-End Data Flow
-
-This is the complete path data takes from input to output through the system.
-
-```
-              ┌───────────────────────────────────────────────────────────────────┐
-              │                        INPUT                                     │
-              │   JSON    NDJSON    XML    FHIR Server fetch    Pasted in UI     │
-              └──────────────────────────┬────────────────────────────────────────┘
-                                         │
-                                         ▼
-              ┌──────────────────────────────────────────────────────────────────┐
-              │  1. PARSE                                                        │
-              │     io_formats.py: parse_payload_bytes() + _unwrap_to_resources()│
-              │     Detects format (JSON / NDJSON / XML via defusedxml)          │
-              │     Returns a list of individual FHIR resource dicts             │
-              └──────────────────────────┬───────────────────────────────────────┘
-                                         │
-                                         ▼
-              ┌──────────────────────────────────────────────────────────────────┐
-              │  2. LOAD CONFIG                                                  │
-              │     config.py: Settings()                                        │
-              │     Reads YAML rule file, interpolates ${VAR:-default} env vars  │
-              │     Validates rules for conflicts (same path, different actions) │
-              └──────────────────────────┬───────────────────────────────────────┘
-                                         │
-                                         ▼
-              ┌──────────────────────────────────────────────────────────────────┐
-              │  3. PROCESS (per resource)                                       │
-              │     processor.py: process_resource()                             │
-              │                                                                  │
-              │     For each rule in config:                                     │
-              │       a. Evaluate FHIRPath match expression against resource     │
-              │          (cached compiled expressions via _fhirpath_cache)       │
-              │       b. If matched → dispatch to action handler:                │
-              │                                                                  │
-              │          ┌────────────────────────────────────────────────┐      │
-              │          │ De-identification actions:                     │      │
-              │          │   redact      → delete field or set fixed val  │      │
-              │          │   cryptohash  → HMAC-SHA3-256 (keyed) or      │      │
-              │          │                 SHA3-256 (plain)               │      │
-              │          │   generalize  → reduce precision (dates,      │      │
-              │          │                 zips, numbers, ages)           │      │
-              │          │   perturb     → CSPRNG random offset          │      │
-              │          │   substitute  → replace with literal          │      │
-              │          │   scrub_text  → regex PHI tokenization        │      │
-              │          │   nlp_detect  → Presidio NER tokenization     │      │
-              │          │   encrypt     → RSA-OAEP encrypt              │      │
-              │          │   decrypt     → RSA-OAEP decrypt              │      │
-              │          ├────────────────────────────────────────────────┤      │
-              │          │ Pseudonymization actions (via gPAS):          │      │
-              │          │   gpas_pseudonymize   → create/lookup pseudonym│      │
-              │          │   gpas_depseudonymize → reverse to original   │      │
-              │          └──────────────┬─────────────────────────────────┘      │
-              │                         │                                        │
-              │       c. If rewrite_references: true →                           │
-              │          Update FHIR References in Bundle to use new IDs         │
-              │       d. If rewrite_text_ids: true →                             │
-              │          Replace original IDs in free-text fields                │
-              │       e. If MEDANON_MANIFEST_ENABLED →                           │
-              │          Attach transformation manifest to meta.tag              │
-              └──────────────────────────┬───────────────────────────────────────┘
-                                         │
-                                         ▼
-              ┌──────────────────────────────────────────────────────────────────┐
-              │  4. SERIALIZE                                                     │
-              │     io_formats.py: serialize to requested format                  │
-              │     JSON / NDJSON (streaming) / XML                               │
-              └──────────────────────────┬───────────────────────────────────────┘
-                                         │
-                                         ▼
-              ┌──────────────────────────────────────────────────────────────────┐
-              │                         OUTPUT                                   │
-              │   JSON response    NDJSON stream    XML response    File download │
-              └──────────────────────────────────────────────────────────────────┘
+                         ┌─────────────────────────────────────────┐
+                         │          OPERATOR / RESEARCHER           │
+                         └───────┬──────────────────┬──────────────┘
+                                 │ Browser / CLI     │ REST API
+                                 ▼                   ▼
+                    ┌────────────────────┐  ┌────────────────────┐
+                    │  Streamlit UI      │  │  MedAnon API       │
+                    │  (port 8501)       │  │  (port 8000)       │
+                    └────────┬───────────┘  └────────┬───────────┘
+                             │                       │
+                             └──────────┬────────────┘
+                                        │
+                            ┌───────────▼───────────┐
+                            │   Rule Engine          │
+                            │   (FHIRPath + Actions) │
+                            └───────────┬───────────┘
+                            ┌──────────┤├──────────┐
+                            │          │           │
+                   ┌────────▼─────┐    │   ┌───────▼──────────┐
+                   │  gPAS (TTP)  │    │   │  HAPI FHIR       │
+                   │  (port 8080) │    │   │  (port 8081)     │
+                   └────────┬─────┘    │   └──────────────────┘
+                            │          │
+                   ┌────────▼─────┐    │   ┌──────────────────┐
+                   │  MySQL       │    └──▶│  External FHIR   │
+                   │  (internal)  │        │  Servers         │
+                   └─────────────-┘        └──────────────────┘
 ```
 
 ---
 
-## 4. Processing Flows
+## 2. Components
 
-### Flow 1: Inline De-identification (UI or API)
+### 2.1 Common Components
 
-A user pastes a FHIR resource or sends it via `POST /process`.
+These cross-cutting elements are shared across all services or form the foundation on which each component is built.
 
-```
-Browser / curl
-  │  FHIR JSON/NDJSON/XML
-  ▼
-Anonymizer API (/process, /process/raw)
-  ├─ Parse input → list of resources
-  ├─ For each resource:
-  │   ├─ FHIRPath: "*.id"             → cryptohash or gpas_pseudonymize
-  │   ├─ FHIRPath: "Patient.name"     → redact
-  │   ├─ FHIRPath: "Patient.birthDate"→ generalize ("1980-05-12" → "1980")
-  │   ├─ FHIRPath: "*.text.div"       → scrub_text (regex) + nlp_detect (NER)
-  │   └─ rewrite references + text IDs
-  └─ Return transformed resource(s)
-```
+#### Rule Engine
 
-### Flow 2: Patient Browser ($everything)
-
-A user searches for a patient in the UI, then de-identifies all linked resources.
-
-```
-Browser
-  │  Patient name search
-  ▼
-Streamlit UI (Patient Browser page)
-  ├─ GET hapi-fhir:8080/fhir/Patient?name=<query>   (direct FHIR call)
-  │    → display patient cards
-  │
-  │  User clicks "De-identify $everything"
-  ├─ POST /process/everything   (anonymizer API)
-  │    → anonymizer fetches Patient/$everything from HAPI FHIR
-  │    → applies all rules to every resource in the Bundle
-  │    → streams NDJSON back to the UI
-  └─ UI displays + offers download of de-identified NDJSON
-```
-
-### Flow 3: Batch Processing (NDJSON stream)
-
-```
-Browser → Upload .ndjson file (one FHIR resource per line)
-  │
-  ▼
-Streamlit UI (Batch page) or curl POST /process/ndjson
-  │
-  ▼
-Anonymizer
-  ├─ Parse NDJSON line by line
-  ├─ For each resource: apply all rules
-  ├─ Stream de-identified NDJSON back (one line per resource)
-  └─ Client receives streamed results with progress updates
-```
-
-### Flow 4: Risk Assessment
-
-```
-Browser → Upload de-identified NDJSON (Patient + optional Condition resources)
-  │
-  ▼
-Streamlit UI (Risk Assessment page) or curl POST /analyse/risk
-  │
-  ▼
-Anonymizer (analytics/risk.py)
-  ├─ Parse NDJSON
-  ├─ Extract quasi-identifiers from Patient resources:
-  │     gender, birth_year (first 4 chars), zip_prefix (first 3 chars)
-  ├─ Build Condition code map (correlate by subject.reference)
-  ├─ Compute k-anonymity:
-  │     Group patients by QI tuple → Counter
-  │     min_k = smallest group size
-  │     prosecutor_risk = 1 / min_k
-  │     journalist_risk = max(1/k_i) across all groups
-  │     marketer_risk = num_groups / total_records
-  │     risk_level: low (k>=5) / medium (k>=3) / high (k>=2) / critical (k=1)
-  ├─ Compute l-diversity: distinct Condition codes per group
-  └─ Return risk report JSON
-  │
-  ▼
-UI: metric cards, bar chart, per-group table, recommendations, JSON download
-```
-
-### Flow 5: Round-Trip (fetch -> de-identify -> upload)
-
-```
-Source FHIR Server              Anonymizer                  Target FHIR Server
-       │                            │                              │
-       │◄── GET /Patient?_count=200─┤                              │
-       │─── Bundle ────────────────►│                              │
-       │                            │─── apply all rules ─────────►│
-       │                            │                      POST /Patient
-       │◄── GET /Observation ... ───│                              │
-       │─── Bundle ────────────────►│─── apply all rules ─────────►│
-       │                            │                      POST /Observation
-       │                        stream status lines to client
-```
-
-### Flow 6: Synthetic Data Generation
-
-```
-POST /generate/synthetic?count=200
-  │  De-identified NDJSON as input
-  ▼
-Anonymizer (analytics/synthetic.py)
-  ├─ Sample statistical distributions from input:
-  │     gender ratio, birth year spread (±2-year jitter), 3-digit zip distribution
-  ├─ Generate synthetic Patient resources
-  ├─ Tag each with meta.tag[code=SYN]
-  └─ Stream NDJSON output
-```
-
----
-
-## 5. Authentication and Authorization
-
-### Identity Provider: Keycloak
-
-Keycloak is the central OIDC provider. All authenticated access flows through Keycloak.
-
-```
-                         ┌────────────────────────┐
-                         │       Keycloak          │
-                         │   Realm: medanon        │
-                         │                         │
-                         │  Roles:                 │
-                         │    viewer < analyst     │
-                         │      < admin            │
-                         │                         │
-                         │  Clients:               │
-                         │    medanon-ui (PKCE)    │
-                         │    medanon-api (confid.) │
-                         │    medanon-anonymizer    │
-                         │    fhir-proxy-oauth      │
-                         │    gpas-proxy-oauth      │
-                         └───────────┬────────────┘
-                ┌───────────────┬────┴────┬───────────────┐
-                ▼               ▼         ▼               ▼
-          Streamlit UI    Anonymizer  FHIR Proxy    gPAS Proxy
-          (PKCE S256)     (JWT RS256) (oauth2-proxy) (oauth2-proxy)
-```
-
-### Auth Resolution Chain (Anonymizer API)
-
-The anonymizer resolves authentication in this order:
-
-1. **JWT (Keycloak):** If `KEYCLOAK_URL` is configured and `Authorization: Bearer <token>` is present, validate the JWT via RS256 JWKS. Extract roles from `realm_access.roles`.
-2. **Legacy API key:** If `MEDANON_API_KEY` is configured and `X-API-Key` header matches, grant `admin` role.
-3. **No credentials but Keycloak required:** Return HTTP 401.
-4. **No auth configured:** Grant anonymous admin access (backward compatibility).
-
-### Role-Based Access Control
-
-Roles are hierarchical: `admin` inherits `analyst` which inherits `viewer`.
-
-| Role | Endpoints |
-|---|---|
-| `viewer` | `/health`, `/ready`, `/metrics`, `/docs` |
-| `analyst` | All processing endpoints, `/analyse/risk`, `/generate/synthetic` |
-| `admin` | `/process/and-upload`, `/process/round-trip` |
-
-Open paths (no auth): `/health`, `/ready`, `/metrics`, `/docs`, `/openapi.json`, `/redoc`.
-
-### Audit Logging
-
-Every authenticated request is logged to `/output/audit.log` as structured JSON:
-
-```json
-{"ts":"2026-03-20T10:15:00Z","method":"POST","path":"/process","status":200,"request_id":"abc-123","subject":"analyst@medanon.local","auth_method":"jwt"}
-```
-
-Rotation: 10 MB per file, 5 backups (50 MB total cap). PHI and raw tokens are never logged.
-
----
-
-## 6. Rule Engine
-
-Rules are defined in YAML and evaluated in order. All matching rules apply to a resource.
+The rule engine is the heart of the system. Each de-identification profile is a YAML file containing an ordered list of rules:
 
 ```yaml
 rules:
-  - name: "redact patient name"
-    match: "Patient.name"           # FHIRPath expression
-    action: "redact"
-    params: {}                      # action-specific parameters
-
-  - name: "hash all IDs"
-    match: "*.id"                   # wildcard matches all resource types
-    action: "cryptohash"
-    params:
-      hash_type: sha3_256
-      secret_key_env: MEDANON_HASH_KEY
+  - name: "descriptive rule name"
+    match: "FHIRPath expression"   # e.g. Patient.name.family, *.id
+    action: "action_name"           # redact | cryptohash | substitute | generalize | ...
+    params:                         # action-specific parameters (optional)
+      key: value
 ```
 
-### Evaluation Process
+**FHIRPath evaluation** is performed by `fhirpathpy`; compiled expressions are cached in a module-level dict. Wildcards (`*.id`) match the field across all resource types.
 
-```
-For each resource:
-  processed_paths = {}
-  For each rule in config (ordered):
-    candidates = expand FHIRPath wildcards (*.id → Patient.id, Observation.id, ...)
-    For each candidate:
-      matched_elements = evaluate FHIRPath against resource (cached compilation)
-      For each matched element:
-        if (path, action_category) not in processed_paths:
-          dispatch to action handler
-          processed_paths.add((path, action_category))
-```
+**Actions available:**
 
-### Reference Rewriting
+| Action | Effect | Example use |
+|---|---|---|
+| `redact` | Delete field or set fixed blank value | Patient.photo |
+| `cryptohash` | HMAC-SHA3-256 or SHA3-256 (one-way) | IDs in minimal/HIPAA profiles |
+| `generalize` | Reduce precision — `date_year`, `date_year_month`, `zip_prefix` | birthDate, postalCode |
+| `perturb` | CSPRNG random offset on dates/numbers | Lab values for research |
+| `substitute` | Replace with a literal value | Name → `[REDACTED]` |
+| `scrub_text` | Regex-based PHI tokenization in text/XHTML | Narrative fields |
+| `nlp_detect` | Presidio NER entity detection and tokenization | Clinical notes |
+| `encrypt` | RSA-OAEP encryption | Cross-study linkage |
+| `decrypt` | RSA-OAEP decryption | Reverse encryption |
+| `gpas_pseudonymize` | Reversible pseudonym via gPAS TTP | IDs in gPAS profile |
+| `gpas_depseudonymize` | Reverse gPAS pseudonym to original | Recontact workflows |
 
-When `rewrite_references: true` is set in the config:
+#### Reference Rewriting
 
-1. After all rules have been applied, collect the mapping of `{old_id: new_id}` for every resource in the Bundle.
-2. Walk all `reference` fields in the Bundle and replace any `ResourceType/old_id` with `ResourceType/new_id`.
-3. If `rewrite_text_ids: true`, also scan free-text fields for old IDs and replace them.
+When `rewrite_references: true` is set in the config profile, the engine performs a post-processing pass over the entire Bundle:
 
-This preserves referential integrity across Bundles after pseudonymization.
+1. Collect `{old_id → new_id}` for every resource processed.
+2. Rewrite all `reference` fields (e.g. `"Patient/PAT-001"` → `"Patient/PSEUDO-f25c9686"`).
+3. If `rewrite_text_ids: true`, replace literal ID strings in free-text fields.
+
+This preserves FHIR referential integrity without adding explicit rules for every reference type.
+
+#### Transformation Manifest
+
+When `MEDANON_MANIFEST_ENABLED=true`, each processed resource carries a `meta.tag` entry that records which rules fired, which actions were applied, and which FHIRPath paths were matched. PHI values are never included. This supports GDPR Art. 30 accountability.
+
+#### Shared Libraries
+
+| Module | Role |
+|---|---|
+| `pipeline/io_formats.py` | Parse JSON / NDJSON / XML; serialize output; XXE-safe via `defusedxml` |
+| `pipeline/config.py` | YAML loader; `${VAR:-default}` env-var interpolation; rule conflict detection |
+| `utils/crypto.py` | RSA key management; `bounded_random()` (CSPRNG via `secrets.randbelow`) |
+| `utils/fhirpath.py` | FHIRPath tree traversal helpers |
+| `utils/metrics.py` | Prometheus counters + histograms |
+| `utils/logging.py` | Request-ID context-var propagation |
+
+#### Networking
+
+All services communicate over an internal Docker bridge network (`fhir-net`). External ports are bound to `127.0.0.1` only. A reverse proxy (nginx, Caddy, or Traefik) is required for remote access and TLS termination.
 
 ---
 
-## 7. Text Scrubbing Pipeline
+### 2.2 Governance Authority — gPAS (Trusted Third Party)
 
-Free-text fields (clinical notes, narrative divs, comments) undergo a dual-pass scrubbing pipeline:
+gPAS is the **Trusted Third Party** (TTP) that holds the authoritative mapping between real identifiers and their pseudonyms. It is the governance layer of the system: no one else possesses the mapping table.
+
+#### Role
+
+- Stores and manages pseudonym domains (e.g., `TESTING`, `STUDY-42`)
+- Accepts a real identifier; returns a consistent, opaque pseudonym
+- Supports reversal (`dePseudonymize`) for authorised re-contact workflows
+- Provides a web UI for domain administration
+
+#### Architecture
 
 ```
-Raw text node (*.text.div, *.note.text, *.comment)
-  │
-  ▼
-Pass 1: scrub_text (regex-based, ReDoS-safe patterns)
-  ├─ SSN patterns     → [[SSN_1]]
-  ├─ Phone numbers    → [[PHONE_1]]
-  ├─ Email addresses  → [[EMAIL_1]]
-  ├─ Date patterns    → [[DATE_1]]
-  ├─ MRN patterns     → [[MRN_1]]
-  └─ Name extraction  → [[NAME_1]] (resource-specific names)
-  │
-  ▼
-Pass 2: nlp_detect (Microsoft Presidio + spaCy en_core_web_lg)
-  ├─ PERSON entities  → [[PERSON_2]]
-  ├─ LOCATION         → [[LOCATION_3]]
-  ├─ AGE              → [[AGE_4]]
-  └─ GDPR Art. 9      → [[MEDICAL_5]], etc.
-  │
-  ▼
-Tokenized output (no PHI remains)
+MedAnon Anonymizer
+  └─ integrations/gpas/dispatcher.py   ← adapter (pipeline calls)
+       └─ integrations/gpas/client.py  ← HTTP client
+            │  Retry (exp. backoff, default 2× @ 0.2 s)
+            │  LRU cache (thread-safe, reduces TTP load)
+            │  Circuit breaker (CLOSED → OPEN → HALF_OPEN)
+            ▼
+     gPAS WildFly container  (port 8080)
+       └─ /ttp-fhir/fhir/gpas/$pseudonymizeAllowCreate
+     gPAS MySQL container    (port 3306, internal only)
+       └─ schemas: gpas (mappings), gras (users/roles)
 ```
 
-Token numbering is controlled by `mapping_scope`:
-- `resource` (default): tokens reset per resource
-- `bundle`: consistent numbering across a Bundle
-- `global_run`: tokens persist for the entire processing run
+#### Operations
+
+| Operation | Behaviour | Config value |
+|---|---|---|
+| `pseudonymizeAllowCreate` | Create domain entry if missing (recommended) | Default |
+| `pseudonymize` | Fail if identifier unknown to gPAS | Strict mode |
+| `dePseudonymize` | Reverse pseudonym → original identifier | Re-contact |
+
+#### Circuit Breaker States
+
+```
+CLOSED ──(threshold failures)──▶ OPEN ──(recovery timeout)──▶ HALF_OPEN
+  ▲                                                                │
+  └──────────────────(probe success)──────────────────────────────┘
+```
+
+Configurable via `GPAS_CB_FAILURE_THRESHOLD`, `GPAS_CB_RECOVERY_TIMEOUT_SEC`, `GPAS_CB_WINDOW_SEC`.
+
+#### Authentication to gPAS
+
+- **Bearer token (preferred):** `GPAS_TOKEN`
+- **HTTP Basic (fallback):** `GPAS_BASIC_USER` + `GPAS_BASIC_PASS` (gRAS format: `user@ths`)
 
 ---
 
-## 8. Config Profile Selection
+### 2.3 De-identification Service — Anonymizer
 
-The system auto-selects a config profile based on environment variables:
+The Anonymizer is the core service of the stack. It exposes a FastAPI REST API, implements the rule engine, and orchestrates all de-identification, pseudonymization, risk assessment, and synthetic data workflows.
+
+#### Internal Architecture
 
 ```
-Is GPAS_URL set in environment?
+services/anonymizer/src/
+├── api/
+│   ├── main.py           ← FastAPI app; middleware stack; router registration
+│   ├── auth.py           ← API-key auth; RBAC; structured audit log
+│   ├── deps.py           ← Rate limiter; SSRF protection; config loader; shared helpers
+│   └── routers/
+│       ├── process.py    ← /process, /process/raw, /process/ndjson, /process/batch,
+│       │                    /process/from-server, /process/everything,
+│       │                    /process/and-upload, /process/round-trip
+│       ├── analytics.py  ← /analyse/risk
+│       ├── synthetic.py  ← /generate/synthetic
+│       └── fhir_server.py
+├── pipeline/
+│   ├── config.py         ← YAML loader + env interpolation
+│   ├── processor.py      ← Rule engine: FHIRPath match → action dispatch
+│   └── io_formats.py     ← Multi-format parse + serialize
+├── actions/              ← One file per action type
+├── integrations/
+│   ├── gpas/             ← gPAS client (dispatcher + HTTP client)
+│   ├── fhir/             ← FHIR server client (fetch, upload, pagination)
+│   └── nlp/              ← Presidio NER detector
+└── analytics/
+    ├── risk.py           ← k-anonymity / l-diversity metrics
+    └── synthetic.py      ← Synthetic FHIR Patient generation
+```
+
+#### Middleware Stack (applied to every request)
+
+```
+Request → [auth_middleware]
+        → [audit_middleware]
+        → [enforce_body_size]    ← rejects bodies > MEDANON_MAX_BODY_BYTES (10 MB)
+        → [request_id_middleware] ← propagates X-Request-ID
+        → [metrics_middleware]   ← Prometheus counters + latency
+        → Route handler
+```
+
+#### Processing Pipeline (per request)
+
+```
+HTTP body
+  │
+  ▼ parse_payload_bytes()         ← detect JSON / NDJSON / XML
+  │
+  ▼ _unwrap_to_resources()        ← flatten Bundle, list, or single resource
+  │
+  ▼ get_settings(profile)         ← load & cache YAML config (lru_cache, 8 slots)
+  │
+  ▼ asyncio.to_thread(process_data, ...) ← off event loop for CPU work
+  │  └─ For each resource:
+  │       For each rule:
+  │         • Evaluate FHIRPath match
+  │         • Dispatch matched nodes to action handler
+  │         • Track processed paths (dedup)
+  │  └─ Post-pass: rewrite_references (if enabled)
+  │  └─ Post-pass: manifest tagging (if enabled)
+  │
+  ▼ Serialize (JSON / NDJSON / XML)
+  │
+  ▼ HTTP response (sync) or StreamingResponse (async NDJSON)
+```
+
+#### SSRF Protection
+
+User-supplied `server_url` values are validated before any HTTP call:
+
+- Non-`http(s)` schemes rejected (file://, gopher://, etc.)
+- Raw IP addresses in private/loopback ranges rejected (10/8, 172.16/12, 192.168/16, 127/8, 169.254/16, ::1, fc00::/7)
+- DNS names allowed — Docker service names (e.g., `hapi-fhir`) work correctly
+
+Environment-variable URLs (set by administrators) bypass SSRF checks.
+
+---
+
+### 2.4 FHIR Data Layer — HAPI FHIR Server
+
+HAPI FHIR acts as the primary data store and reference implementation for FHIR R4 in this stack. It serves as both the source of real patient data and (optionally) the target for de-identified output.
+
+#### Role
+
+- Store and serve HL7 FHIR R4 Patient, Observation, Condition, and other resources
+- Support paginated search (`GET /fhir/Patient?_count=200`)
+- Support `$everything` operations (`GET /fhir/Patient/{id}/$everything`)
+- Provide CORS access to the Streamlit UI and Anonymizer
+
+#### FHIR Client (in Anonymizer)
+
+```
+integrations/fhir/client.py
+  • Paginated fetch (auto-follows Bundle.link[rel=next])
+  • $everything operation
+  • Resource upload (POST per resource type)
+  • Exponential backoff retry (default 2× @ 0.3 s)
+  • Configurable timeout per request
+```
+
+#### Configuration
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `FHIR_SOURCE_URL` | `http://hapi-fhir:8080/fhir` | Source server base URL |
+| `FHIR_SOURCE_TOKEN` | — | Bearer token for source server |
+| `FHIR_TARGET_URL` | — | Target server base URL |
+| `FHIR_TARGET_TOKEN` | — | Bearer token for target server |
+| `HAPI_SERVER_ADDRESS` | `http://localhost:8081/fhir` | Public HAPI URL (returned in responses) |
+
+---
+
+### 2.5 User Interface — Streamlit Dashboard
+
+The Streamlit UI provides a browser-based operator interface for exploring patient data, triggering de-identification, and reviewing results. It wraps the MedAnon REST API.
+
+#### Pages
+
+| Page | Purpose |
+|---|---|
+| **Patient Browser** | Search patients in HAPI FHIR; de-identify complete `$everything` bundles |
+| **Condition Browser** | Find patients by diagnosis (SNOMED/ICD codes); bulk de-identify |
+| **Process Resource** | Paste or upload a single resource; view original vs. de-identified side-by-side |
+| **Batch Processing** | Upload NDJSON/JSON/XML; stream de-identified output with progress bar |
+| **Risk Assessment** | Upload de-identified resources; view k-anonymity, l-diversity, risk scores |
+| **Synthetic Data** | Generate synthetic FHIR Patients preserving statistical distributions |
+| **Status Dashboard** | Live health check for all backend services (30-second refresh) |
+
+---
+
+## 3. Data Flows
+
+### 3.1 Core Processing Pipeline
+
+```
+INPUT
+  │  JSON (single resource or Bundle)
+  │  NDJSON (one resource per line)
+  │  XML (defusedxml, XXE-safe)
+  │
+  ▼ io_formats.py — parse_payload_bytes()
+  │
+  ▼ io_formats.py — _unwrap_to_resources()  →  List[Dict]
+  │
+  ▼ pipeline/config.py — Settings(config_path)
+  │  • Load YAML rules
+  │  • Expand ${VAR:-default} environment variables
+  │  • Check for rule conflicts
+  │
+  ▼ pipeline/processor.py — process_resource(resource, settings)
+  │  For each rule (ordered):
+  │    1. Compile / cache FHIRPath expression
+  │    2. Evaluate match → list of matched nodes
+  │    3. For each node: dispatch to action module
+  │    4. Record (path, action_category) for dedup
+  │  Post-pass:
+  │    • rewrite_references (bundle cross-references)
+  │    • rewrite_text_ids (literal IDs in free text)
+  │    • Attach transformation manifest (if enabled)
+  │
+  ▼ io_formats.py — serialize(resources, format)
+  │
+OUTPUT
+     Synchronous JSON response   OR   Streaming NDJSON
+```
+
+### 3.2 Inline De-identification
+
+```
+Client / UI
+  │  POST /process   (Content-Type: application/json)
+  ▼
+  Anonymizer — parse → apply rules → serialize
+  ▼
+  HTTP 200 JSON (synchronous)
+```
+
+Best for single resources or small bundles. Config profile selected via `?config_profile=` query parameter.
+
+### 3.3 Server-to-Server Round-Trip
+
+```
+POST /process/round-trip
+  { source_server_url, target_server_url, resource_types, ... }
           │
-    ┌─────┴──────┐
-   YES            NO
-    │              │
-    ▼              ▼
-config_gpas.yaml  config.yaml
-    │                    │
-    ▼                    ▼
-gpas_pseudonymize    cryptohash
-    │                    │
-    ▼                    ▼
-gPAS stores mapping  HMAC-SHA3-256(value, key)
-→ reversible         → one-way
+          ├── FHIR client fetches paginated resources from source
+          │     GET /fhir/Patient?_count=200
+          │     GET /fhir/Patient?_page_token=...  (follows next links)
+          │
+          ├── Per resource: apply rules (asyncio.to_thread)
+          │     → gPAS TTP called for gpas_pseudonymize rules
+          │
+          └── FHIR client uploads to target
+                POST /fhir/Patient
+                POST /fhir/Observation
+                ...
+          │
+          ▼ Streaming NDJSON status lines
+            {"status":"ok","resource":"Patient/PSEUDO-xxx"}
+            {"status":"error","resource":"...","detail":"..."}
 ```
 
-Five bundled profiles:
+Requires **admin** role. Returns streaming NDJSON so the caller can monitor progress.
 
-| Profile | Use Case | ID Strategy | Date Strategy |
+### 3.4 Risk Assessment Chain
+
+```
+POST /analyse/risk   (Content-Type: application/x-ndjson)
+          │
+          ├── Extract Patient quasi-identifiers:
+          │     gender, birth_year (from birthDate), zip_3 (postalCode[:3])
+          │
+          ├── Group records by (gender, birth_year, zip_3) tuples
+          │
+          ├── Compute k-anonymity:
+          │     min_k = smallest group size
+          │
+          ├── Compute risk scores:
+          │     prosecutor_risk = 1 / min_k
+          │     journalist_risk = max(1/k_i for each group)
+          │     marketer_risk = num_groups / total_records
+          │
+          └── If Condition resources present:
+                Correlate via subject.reference
+                Compute l-diversity per equivalence class
+          │
+          ▼ JSON risk report
+            { "summary": { "min_k": 5, "risk_level": "low", ... },
+              "groups": [...] }
+```
+
+### 3.5 Synthetic Data Generation
+
+```
+POST /generate/synthetic?count=200&engine=auto
+  (body: de-identified NDJSON of Patient resources)
+          │
+          ├── Extract distributions from de-identified Patients:
+          │     gender_distribution, birth_year_distribution, zip_prefix_distribution
+          │
+          ├── Engine selection:
+          │     auto  → SDV (GaussianCopulaSynthesizer) if installed, else stdlib
+          │     sdv   → GaussianCopulaSynthesizer (multivariate correlations)
+          │     stdlib → Weighted per-attribute sampling (zero dependencies)
+          │
+          ├── Generate `count` synthetic Patients
+          │     • New UUIDs as IDs
+          │     • Sampled attributes with ±2-year jitter on birth year
+          │     • meta.tag[code=SYN] added to every synthetic resource
+          │
+          └── Optional: generate linked Conditions (include_conditions=true)
+          │
+          ▼ Streaming NDJSON
+```
+
+---
+
+## 4. Security Architecture
+
+### Authentication & Authorization
+
+API key authentication is optional and toggled by the `MEDANON_API_KEY` environment variable:
+
+| `MEDANON_API_KEY` set? | Behaviour |
+|---|---|
+| No | Open access — all callers receive `admin` role |
+| Yes | `X-API-Key` header required on all endpoints except open paths |
+
+Role hierarchy (each role includes all roles below it):
+
+```
+admin
+  └─ analyst
+       └─ viewer
+```
+
+| Role | Permitted endpoints |
+|---|---|
+| `viewer` | `/health`, `/ready`, `/metrics`, `/docs`, `/openapi.json` |
+| `analyst` | All `/process/*`, `/analyse/risk`, `/generate/synthetic` |
+| `admin` | `/process/and-upload`, `/process/round-trip` |
+
+### Security Layers
+
+| Layer | Mechanism |
+|---|---|
+| **API auth** | `X-API-Key` header; configurable |
+| **RBAC** | Three-tier role system enforced per endpoint |
+| **Audit log** | Structured JSON, `/output/audit.log`; rotating (10 MB × 5 backups) |
+| **Body size limit** | `MEDANON_MAX_BODY_BYTES` (default 10 MB); both Content-Length and chunked |
+| **SSRF protection** | Private IP blocklist + scheme whitelist (http/https only) |
+| **XML safety** | `defusedxml` — prevents XXE injection |
+| **Container hardening** | Non-root `appuser` (UID 1000); read-only filesystem; no-new-privileges; capabilities dropped; `/tmp` tmpfs |
+| **Rate limiting** | `slowapi` (30 req/min per IP on most endpoints); optional via env var |
+| **CORS** | Configured allowlist via `MEDANON_CORS_ORIGINS`; credentials: false |
+| **Cryptographic RNG** | `secrets.randbelow()` (CSPRNG) for all random offsets |
+| **Path traversal** | `_validate_key_path()` restricts RSA key access to allowlisted directories |
+| **PHI in logs** | Processing errors logged without resource content; raw keys never logged |
+| **Hash key warning** | Startup warning if `MEDANON_HASH_KEY` unset (SHA3-256 without HMAC is rainbow-table vulnerable) |
+| **Network isolation** | All ports bind to `127.0.0.1`; only reverse proxy port exposed externally |
+
+---
+
+## 5. Deployment Architecture
+
+### 5.1 Docker Compose (Single-Node)
+
+```yaml
+Services (fhir-net bridge network):
+
+  gpas-db        port 3306  INTERNAL ONLY   MySQL 8.0
+  fhir-server    port 8081  → 127.0.0.1     HAPI FHIR JPA
+  gpas           port 8080  → 127.0.0.1     WildFly + gPAS
+  anonymizer     port 8000  → 127.0.0.1     FastAPI (MedAnon)
+  ui             port 8501  → 127.0.0.1     Streamlit
+```
+
+**Startup sequence** (health-check driven):
+1. `gpas-db` — MySQL ready (~15 s)
+2. `fhir-server` — HAPI ready (~30 s)
+3. `gpas` — WildFly + gPAS ready (~90 s; depends on MySQL)
+4. `anonymizer` — FastAPI ready (~10 s; depends on gPAS + FHIR)
+5. `ui` — Streamlit ready (~10 s; depends on anonymizer)
+
+**Resource requirements:**
+
+| Service | RAM limit | RAM floor |
+|---|---|---|
+| anonymizer | 2 GB | 512 MB |
+| fhir-server | 3 GB | 512 MB |
+| gpas | 6 GB | 1 GB |
+| gpas-db | 4 GB | 512 MB |
+| ui | 512 MB | 128 MB |
+| **Total** | **15.5 GB** | **~2.7 GB** |
+
+Add ~800 MB to anonymizer if NLP model (`en_core_web_lg`) is loaded.
+
+### 5.2 Kubernetes / Helm (Multi-Node)
+
+**Chart layout:**
+
+```
+helm/
+├── medanon/            ← umbrella chart
+│   ├── Chart.yaml
+│   ├── values.yaml     ← global overrides
+│   └── templates/
+│       └── ingress.yaml
+└── charts/
+    ├── anonymizer/     ← Deployment, Service, ConfigMap, Secret
+    ├── fhir-server/    ← Deployment, Service, ConfigMap
+    └── gpas/           ← Deployment + StatefulSet (MySQL), Services, Secrets
+```
+
+**Ingress path routing:**
+
+| Path | Target service |
+|---|---|
+| `/` | `anonymizer` (port 8000) |
+| `/fhir` | `fhir-server` (port 8080) |
+| `/gpas-web` | `gpas` web UI (port 8080) |
+| `/ttp-fhir` | `gpas` TTP-FHIR API (port 8080) |
+
+**Security posture:**
+- Secret checksums: Pods roll automatically when Secrets change
+- Network policies: Each sub-chart restricts ingress to expected callers
+- Non-root: Anonymizer UID 1000; `runAsNonRoot: true` on all pods
+- Persistence: MySQL StatefulSet with PVC (survives pod restarts and upgrades)
+- Monitoring: All pods annotated for Prometheus scraping (`/metrics` on anonymizer and gPAS; `/actuator/prometheus` on HAPI FHIR)
+
+---
+
+## 6. Configuration Profiles
+
+Each profile is a YAML file under `services/anonymizer/config/`. The active profile is selected via the `?config_profile=` query parameter (API) or `--config` flag (CLI). If not specified, auto-selection applies: use `config_gpas.yaml` when `GPAS_URL` is set, else `config.yaml`.
+
+| Profile key | File | Use case | ID strategy | Date strategy | gPAS required |
+|---|---|---|---|---|---|
+| `auto` | (auto-selected) | Default; selects based on env | — | — | — |
+| `minimal` | `config.yaml` | Dev/test; no external services | cryptohash | regex scrub | No |
+| `gpas` | `config_gpas.yaml` | Production; reversible pseudonyms | gpas_pseudonymize | year-only | **Yes** |
+| `gdpr` | `config_gdpr_eu.yaml` | GDPR Art. 4(5) compliance | HMAC-SHA3-256 | year-only | No |
+| `hipaa` | `config_hipaa_safe_harbor.yaml` | HIPAA Safe Harbor (45 CFR §164.514) | cryptohash | year-only; ZIP→3-digit | No |
+| `research` | `config_research_pseudonymous.yaml` | IRB-grade longitudinal research | cryptohash | year-month | No |
+| `structural` | `config_structure_preserving.yaml` | Preserve full FHIR structure; mask PII | gpas_pseudonymize | year-only | **Yes** |
+
+### Structural Profile — Key Properties
+
+The `structural` profile is designed for downstream consumers that require a complete FHIR structure:
+
+- **Fields are never removed** — `action: substitute` replaces PII text with `[REDACTED]`; the field and its array structure remain
+- **IDs are pseudonymized** via gPAS; cross-references are rewritten by `rewrite_references: true`
+- **Clinical data is untouched** — no rules target codes, values, observations, conditions, or non-birthDate dates
+- **birthDate** generalised to year only (`generalize: date_year`)
+- **Binary blobs** (photo, attachment) are redacted (no meaningful text substitute)
+- **Free text** (narrative, notes, comments) scrubbed inline via `scrub_text` + `nlp_detect`
+
+---
+
+## 7. API Surface
+
+### Open Paths (no authentication required)
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/health` | Liveness probe — always 200 |
+| GET | `/ready` | Readiness probe — checks gPAS, FHIR, NLP |
+| GET | `/metrics` | Prometheus metrics |
+| GET | `/docs` | Swagger UI |
+| GET | `/openapi.json` | OpenAPI 3.0 schema |
+
+### Processing Endpoints (analyst role minimum)
+
+| Method | Path | Input | Output | Notes |
+|---|---|---|---|---|
+| POST | `/process` | JSON | JSON | Synchronous; single resource or Bundle |
+| POST | `/process/raw` | Any format | Specified format | `input_format` + `output_format` query params |
+| POST | `/process/ndjson` | NDJSON | NDJSON | Streaming; one resource per line |
+| POST | `/process/batch` | JSON/NDJSON/XML | NDJSON | Unified batch endpoint |
+| POST | `/process/from-server` | JSON params | NDJSON | Fetch from FHIR server; stream de-identified output |
+| POST | `/process/everything` | JSON params | NDJSON | `$everything` for a single patient |
+
+### Upload Endpoints (admin role required)
+
+| Method | Path | Input | Output |
 |---|---|---|---|
-| `config.yaml` | Local dev, no external services | cryptohash (SHA3-256) | regex scrubbing |
-| `config_gpas.yaml` | Production with gPAS | gpas_pseudonymize (reversible) | generalize + NLP |
-| `config_gdpr_eu.yaml` | GDPR Art. 4(5) compliance | HMAC pseudonymization | year-only |
-| `config_hipaa_safe_harbor.yaml` | HIPAA 45 CFR SS 164.514(b) | cryptohash | year-only, all 18 PHI categories |
-| `config_research_pseudonymous.yaml` | IRB-grade research | cryptohash (longitudinal) | year-month (finer granularity) |
+| POST | `/process/and-upload` | JSON (resource + target params) | JSON status |
+| POST | `/process/round-trip` | JSON (source + target params) | NDJSON status stream |
 
-If gPAS is configured but unreachable, the engine raises an error. There is no silent fallback.
+### Analytics Endpoints (analyst role minimum)
 
----
+| Method | Path | Input | Output |
+|---|---|---|---|
+| POST | `/analyse/risk` | NDJSON (de-identified resources) | JSON risk report |
+| POST | `/generate/synthetic` | NDJSON (de-identified Patients) | NDJSON synthetic Patients |
 
-## 9. Re-identification Risk Model
+### Common Query Parameters
 
-Two complementary mechanisms protect against re-identification:
-
-| Attack Vector | Mitigation | Mechanism |
-|---|---|---|
-| Lookup by known Patient ID or MRN | gPAS pseudonymization or cryptohash | Replaces direct identifiers |
-| Demographic linkage (age + zip + gender + external data) | k-anonymity on quasi-identifiers | Groups records; measures group sizes |
-| Disease fingerprinting (rare diagnosis + birth year = unique person) | l-diversity on Condition codes | Measures diversity of sensitive attributes per group |
-
-### k-anonymity Computation
-
-1. Extract quasi-identifiers from Patient resources: `gender`, `birth_year` (first 4 chars of birthDate), `zip_prefix` (first 3 chars of postalCode).
-2. Group patients by their QI tuple.
-3. Compute:
-   - `min_k` = smallest group size
-   - `prosecutor_risk` = 1 / min_k (targeted attack against a known individual)
-   - `journalist_risk` = max(1/k_i) across groups (easiest-to-identify person)
-   - `marketer_risk` = num_groups / total_records (random draw success rate)
-
-### Risk Levels
-
-| Level | Condition | Meaning |
-|---|---|---|
-| `low` | k >= 5 | Meets basic k-anonymity standards |
-| `medium` | k = 3 or 4 | Consider further generalization |
-| `high` | k = 2 | Significant re-identification risk |
-| `critical` | k = 1 | Unique records exist; immediate action required |
-
----
-
-## 10. Network Topology
-
-### Docker Compose (Production)
-
-```
-Host machine
-├── 127.0.0.1:8000  → anonymizer      (FastAPI REST API)
-├── 127.0.0.1:8501  → ui              (Streamlit browser UI)
-├── 127.0.0.1:8180  → keycloak        (OIDC identity provider)
-├── 127.0.0.1:4180  → fhir-proxy      (OAuth2-proxy → HAPI FHIR)
-├── 127.0.0.1:8082  → gpas-proxy      (OAuth2-proxy → gPAS)
-│
-Docker bridge: fhir-net (internal)
-├── anonymizer:8000
-├── ui:8501
-├── fhir-server:8080     (no host port)
-├── gpas:8080            (no host port)
-├── gpas-db:3306         (no host port)
-├── keycloak:8080
-├── fhir-proxy:4180
-└── gpas-proxy:4180
-```
-
-HAPI FHIR and gPAS are intentionally not exposed on host ports. Browser users access them through the OAuth2 proxies which enforce Keycloak authentication.
-
-For remote access, place a reverse proxy (nginx, Caddy, Traefik) in front and terminate TLS there.
-
-### Kubernetes (Helm)
-
-```
-Ingress Controller
-├── /           → anonymizer Service (ClusterIP :8000)
-├── /fhir       → fhir-server Service (ClusterIP :8080)
-├── /gpas-web   → gpas Service (ClusterIP :8080)
-└── /ttp-fhir   → gpas Service (ClusterIP :8080)
-```
-
----
-
-## 11. Security Model
-
-| Layer | Mechanism | Default Status |
-|---|---|---|
-| API authentication | Keycloak OIDC JWT (RS256) + legacy API key fallback | Configurable |
-| Role-based access | Three-tier RBAC via Keycloak realm roles | Enabled when Keycloak configured |
-| Audit logging | Structured JSON with rotation (`/output/audit.log`) | Enabled |
-| Browser auth for FHIR | oauth2-proxy (`fhir-proxy`) gating HAPI FHIR | Enabled |
-| Browser auth for gPAS | oauth2-proxy (`gpas-proxy`) gating gPAS | Enabled |
-| gPAS FHIR API | gRAS basic auth | Enabled |
-| Network isolation | All ports bound to `127.0.0.1`; gpas-db internal only | Enabled |
-| XML parsing | defusedxml for XXE protection | Enabled |
-| Body size limit | Middleware enforces `MEDANON_MAX_BODY_BYTES` (both Content-Length and chunked) | Enabled (10 MB default) |
-| Container hardening | Non-root user, `no-new-privileges`, all capabilities dropped, read-only filesystem | Enabled |
-| CSPRNG | `secrets.randbelow()` for all perturbation offsets | Enabled |
-| Path traversal guard | `_validate_key_path()` restricts RSA key access to allowlisted directories | Enabled |
-| SSRF protection | Private IP blocklist + same-origin check on FHIR pagination | Enabled |
-| Regex patterns | ReDoS-safe (no nested quantifiers, bounded lengths) | Enabled |
-| PHI in logs | Processing errors logged without resource content (`exc_info=False`) | Enabled |
-| Cryptohash key | WARNING logged when `MEDANON_HASH_KEY` is unset (plain SHA3-256, rainbow-table vulnerable) | Enabled |
-| gPAS circuit breaker | Fail-fast when gPAS is unhealthy; auto-recovery probe | Configurable |
-
----
-
-## 12. Source Layout
-
-### Anonymizer (`services/anonymizer/src/`)
-
-```
-api/
-  main.py              FastAPI entry point: 14 endpoints, middleware, body-size guard,
-                       SSRF validation, async processing via asyncio.to_thread()
-  auth.py              Keycloak OIDC + legacy API-key dual-auth; JWKS cache,
-                       RS256 JWT validation, RBAC, service-account token, audit logging
-
-cli/
-  main.py              CLI: process / fetch / everything / push subcommands
-
-pipeline/
-  config.py            YAML loader with ${VAR:-default} env interpolation, rule validation
-  processor.py         Rule engine: FHIRPath match → action dispatch, reference rewriting,
-                       FHIRPath expression caching, transformation manifest
-  io_formats.py        Parse JSON / NDJSON / XML (defusedxml); serialize output
-  deidentify.py        Action dispatcher for de-identification flows
-
-actions/
-  redact.py            Delete matched fields or set to fixed value
-  cryptohash.py        HMAC-SHA3-256 (keyed) or plain SHA3-256
-  encrypt.py           RSA-OAEP encrypt
-  decrypt.py           RSA-OAEP decrypt
-  perturb.py           CSPRNG date/number perturbation
-  substitute.py        Replace with fixed literal
-  generalize.py        Reduce precision (dates, zips, numbers, ages)
-  scrub_text.py        Regex PHI tokenization in free text and XHTML
-
-analytics/
-  risk.py              k-anonymity, l-diversity, prosecutor/journalist/marketer risk
-  synthetic.py         Synthetic FHIR Patient generation from statistical distributions
-
-integrations/
-  gpas/
-    client.py          gPAS HTTP client: retry, circuit breaker, thread-safe LRU cache
-    dispatcher.py      Adapter bridge: routes pipeline calls to client
-  nlp/
-    detector.py        Presidio NER: names, locations, GDPR Art. 9 entities
-  fhir/
-    client.py          FHIR REST client: urllib3 connection pooling, paginated fetch,
-                       $everything, upload; with retry and exponential backoff
-
-utils/
-  crypto.py            RSA key caching (mtime-invalidated), bounded_random (CSPRNG),
-                       path traversal guard
-  fhirpath.py          FHIRPath node traversal helpers
-  logging.py           Request ID propagation
-  metrics.py           Prometheus counters + histograms
-```
-
-### UI Client (`client/`)
-
-```
-app.py                           Home page + sidebar
-pages/
-  1_Patient_Browser.py           Patient search + $everything de-identification
-  2_Process_Resource.py          Inline de-identification, side-by-side diff
-  3_Batch.py                     Bulk NDJSON/JSON/XML upload and download
-  4_Status.py                    Health monitoring dashboard
-  5_Condition_Browser.py         Condition/diagnosis search
-  6_Risk_Assessment.py           k-anonymity + l-diversity + risk metrics
-  7_Synthetic_Data.py            Synthetic patient generation
-utils/
-  api.py                         HTTP client → anonymizer API
-  auth.py                        Keycloak OIDC with PKCE (streamlit-keycloak)
-  fhir.py                        HTTP client → HAPI FHIR
-  sidebar.py                     Shared sidebar component
-```
-
-### Config Profiles (`services/anonymizer/config/`)
-
-```
-config.yaml                      Minimal: cryptohash + regex/NLP scrubbing, no gPAS
-config_gpas.yaml                 Production: gPAS pseudonymization + generalization + NLP
-config_gdpr_eu.yaml              GDPR Art. 4/5/25/32/89 HMAC profile
-config_hipaa_safe_harbor.yaml    HIPAA Safe Harbor: all 18 PHI categories
-config_research_pseudonymous.yaml IRB-grade research: year-month dates, longitudinal linkage
-```
-
----
-
-## 13. Technology Stack
-
-| Layer | Technology | Version |
-|---|---|---|
-| UI framework | Streamlit | >= 1.35 |
-| UI auth | streamlit-keycloak | latest |
-| Anonymizer runtime | Python | 3.12 |
-| Web framework | FastAPI + uvicorn | pinned in requirements.txt |
-| FHIRPath engine | fhirpathpy | 0.1.0 |
-| NLP entity detection | Microsoft Presidio + spaCy | >= 2.2 / >= 3.8 |
-| spaCy model | en_core_web_lg | latest (~560 MB) |
-| XML parsing | defusedxml | 0.7.1 |
-| Crypto | pycryptodome | 3.23.0 |
-| HTTP connection pooling | urllib3 | 2.3.0 |
-| FHIR server | HAPI FHIR JPA Server | v7.6.0 |
-| TTP service | gPAS | 2025.2.0 |
-| TTP app server | WildFly | 38 |
-| TTP database | MySQL | 8.0 |
-| Identity provider | Keycloak | 24.0.5 |
-| Auth proxies | oauth2-proxy | v7.6.0 |
-| Container runtime | Docker + Docker Compose | v2 |
-| Kubernetes packaging | Helm | v3 |
-| Linting / formatting | ruff | latest |
-| Testing | pytest | latest |
-
----
-
-## 14. Deployment Modes
-
-### Docker Compose (local / single-node)
-
-All eight containers on one host. Hot-reload dev mode via `make dev`.
-
-| Service | Host Port | Container Port |
-|---|---|---|
-| Anonymizer API | 8000 | 8000 |
-| Streamlit UI | 8501 | 8501 |
-| Keycloak | 8180 | 8080 |
-| FHIR Proxy | 4180 | 4180 |
-| gPAS Proxy | 8082 | 4180 |
-| HAPI FHIR | (internal) | 8080 |
-| gPAS | (internal) | 8080 |
-| MySQL | (internal) | 3306 |
-
-### Kubernetes (Helm)
-
-Umbrella chart at `helm/medanon/` with sub-charts for anonymizer, HAPI FHIR, and gPAS. Optional Keycloak and proxy sub-charts.
-
-| Aspect | Docker Compose | Helm / Kubernetes |
-|---|---|---|
-| Images | Built locally | Pushed to a container registry |
-| Config | `.env` file | `values.yaml` + Kubernetes Secrets |
-| Persistence | Named Docker volumes | PersistentVolumeClaim (StatefulSet) |
-| Health checks | Docker healthcheck | liveness + readiness probes |
-| Startup order | `depends_on` | initContainers (TCP check) |
-| Scaling | Single instance | HPA-ready |
-| Monitoring | Prometheus scrape on `/metrics` | Prometheus annotations on all services |
-
-See [DEPLOYMENT.md](DEPLOYMENT.md) for step-by-step instructions.
+- `config_profile` — Profile key (`auto`, `minimal`, `gpas`, `gdpr`, `hipaa`, `research`, `structural`)
+- `/generate/synthetic?count=N` — Number of synthetic patients (1–10 000, default 100)
+- `/generate/synthetic?engine=auto|sdv|stdlib` — Synthesis engine selection
+- `/generate/synthetic?seed=N` — Random seed for reproducibility
+- `/generate/synthetic?include_conditions=true` — Also generate linked Condition resources
