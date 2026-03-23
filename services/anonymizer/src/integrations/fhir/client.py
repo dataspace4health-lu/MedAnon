@@ -16,8 +16,6 @@ from urllib.parse import urlencode, urlparse
 from utils.logging import REQUEST_ID
 from utils.metrics import FHIR_CALL_COUNT, FHIR_LATENCY
 
-log = logging.getLogger("medanon.fhir_server")
-
 # ---------------------------------------------------------------------------
 # Connection pool (reuses TCP/TLS connections across requests)
 # ---------------------------------------------------------------------------
@@ -69,10 +67,6 @@ def _make_headers(token=None):
         "X-Request-ID": REQUEST_ID.get("-"),
     }
     tok = token or os.environ.get("FHIR_SOURCE_TOKEN")
-    if not tok and os.environ.get("KEYCLOAK_URL"):
-        # Lazy import to avoid circular dependency at module load
-        from api.auth import get_service_token
-        tok = get_service_token()
     if tok:
         headers["Authorization"] = f"Bearer {tok}"
     return headers

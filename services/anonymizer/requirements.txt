@@ -11,8 +11,7 @@ python-dateutil==2.9.0.post0
 defusedxml==0.7.1           # Security XML parser — always pin exactly
 prometheus-client==0.24.1
 slowapi==0.1.9
-PyJWT[crypto]==2.9.0       # Keycloak JWT validation (RS256 via cryptography)
-httpx==0.28.1              # Keycloak service-account token requests
+httpx==0.28.1              # FHIR client HTTP requests
 urllib3==2.3.0             # FHIR client connection pooling
 
 # NLP-based PHI/PII detection

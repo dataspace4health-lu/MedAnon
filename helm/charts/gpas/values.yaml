@@ -38,7 +38,7 @@ port: 8080
 # ─── Environment — non-secret config ─────────────────────────────────────────
 env:
   # gRAS form-based auth for the gPAS web UI (/gpas-web/).
-  # Options: gras | keycloak | keycloak-json | (anything else = no auth)
+  # Options: gras | (anything else = no auth)
   TTP_GPAS_WEB_AUTH_MODE: "gras"
 
   # MySQL hostname — leave empty to use the DB Service name computed from
