@@ -63,7 +63,7 @@ with col_left:
 if run and content.strip():
     st.session_state.pop("proc_result", None)   # clear stale result first
     with st.spinner("Processing…"):
-        ok, result = process_raw(content.strip(), output_format=output_format)
+        ok, result = process_raw(content.strip(), output_format=output_format, config_profile=st.session_state.get("config_profile", "auto"))
 
     if ok:
         if output_format == "json":

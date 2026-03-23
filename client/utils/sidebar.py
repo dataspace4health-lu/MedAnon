@@ -46,6 +46,21 @@ def render_sidebar() -> None:
 
         st.divider()
 
+        st.selectbox(
+            "Config profile",
+            ["auto", "minimal", "gpas", "gdpr", "hipaa", "research", "structural"],
+            key="config_profile",
+            help=(
+                "**auto** — gpas if GPAS_URL is set, else minimal  \n"
+                "**minimal** — crypto hash + regex scrubbing  \n"
+                "**gpas** — gPAS pseudonymization + generalization  \n"
+                "**gdpr** — GDPR Art. 4(5) HMAC pseudonymization  \n"
+                "**hipaa** — HIPAA Safe Harbor (45 CFR §164.514)  \n"
+                "**research** — IRB-grade research profile  \n"
+                "**structural** — structure-preserving de-identification"
+            ),
+        )
+
         with st.expander("Connection"):
             medanon_url = os.environ.get("MEDANON_URL", "http://localhost:8000")
             fhir_url = os.environ.get("FHIR_URL", "http://localhost:8081/fhir")

@@ -195,17 +195,19 @@ rules:
 # 8. DISPLAY FIELDS AND SUBJECT/PATIENT REFERENCES
 # ==========================================================
 
-- match: "*.display"
-  action: redact
+#- match: "*.display"
+# action: redact
 
-- match: "*.subject.display"
-  action: redact
+#- match: "*.subject.display"
+#  action: redact
 
 - match: "*.subject.reference"
-  action: redact
+  action: gpas_pseudonymize
+  params: *gpas
 
 - match: "*.patient.reference"
-  action: redact
+  action: gpas_pseudonymize
+  params: *gpas
 
 # ==========================================================
 # 9. DOCUMENTS / ATTACHMENTS

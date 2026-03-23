@@ -37,13 +37,13 @@ def ready():
         return False, {"error": str(e)}
 
 
-def process_raw(content: str, output_format: str = "json") -> tuple[bool, str]:
+def process_raw(content: str, output_format: str = "json", config_profile: str = "auto") -> tuple[bool, str]:
     """POST to /process/raw. Returns (ok, result_text)."""
     try:
         r = requests.post(
             f"{MEDANON_URL}/process/raw",
             data=content.encode(),
-            params={"output_format": output_format},
+            params={"output_format": output_format, "config_profile": config_profile},
             headers={"Content-Type": "application/json", **_get_auth_headers()},
             timeout=TIMEOUT,
         )
@@ -54,12 +54,13 @@ def process_raw(content: str, output_format: str = "json") -> tuple[bool, str]:
         return False, str(e)
 
 
-def process_ndjson(content: bytes, timeout: int = TIMEOUT):
+def process_ndjson(content: bytes, timeout: int = TIMEOUT, config_profile: str = "auto"):
     """POST to /process/ndjson, streaming. Yields (ok: bool, line: str) tuples."""
     try:
         with requests.post(
             f"{MEDANON_URL}/process/ndjson",
             data=content,
+            params={"config_profile": config_profile},
             headers={"Content-Type": "application/x-ndjson", **_get_auth_headers()},
             stream=True,
             timeout=timeout,
@@ -74,12 +75,13 @@ def process_ndjson(content: bytes, timeout: int = TIMEOUT):
         yield False, str(e)
 
 
-def process_batch(content: bytes, content_type: str = "application/x-ndjson", timeout: int = TIMEOUT):
+def process_batch(content: bytes, content_type: str = "application/x-ndjson", timeout: int = TIMEOUT, config_profile: str = "auto"):
     """POST to /process/batch (JSON, NDJSON, or XML). Yields (ok: bool, line: str) tuples."""
     try:
         with requests.post(
             f"{MEDANON_URL}/process/batch",
             data=content,
+            params={"config_profile": config_profile},
             headers={"Content-Type": content_type, **_get_auth_headers()},
             stream=True,
             timeout=timeout,
@@ -94,7 +96,7 @@ def process_batch(content: bytes, content_type: str = "application/x-ndjson", ti
         yield False, str(e)
 
 
-def process_everything(server_url: str, resource_type: str, resource_id: str, timeout: int = TIMEOUT):
+def process_everything(server_url: str, resource_type: str, resource_id: str, timeout: int = TIMEOUT, config_profile: str = "auto"):
     """POST to /process/everything, streaming. Yields (ok: bool, line: str) tuples."""
     payload = {
         "server_url": server_url,
@@ -105,6 +107,7 @@ def process_everything(server_url: str, resource_type: str, resource_id: str, ti
         with requests.post(
             f"{MEDANON_URL}/process/everything",
             json=payload,
+            params={"config_profile": config_profile},
             headers=_get_auth_headers(),
             stream=True,
             timeout=timeout,

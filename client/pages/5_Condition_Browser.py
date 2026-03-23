@@ -142,6 +142,7 @@ if run_deid:
         server_url=FHIR_URL,
         resource_type="Patient",
         resource_id=patient_id,
+        config_profile=st.session_state.get("config_profile", "auto"),
     ):
         received += 1
         if ok:

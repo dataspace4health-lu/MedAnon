@@ -271,5 +271,123 @@ class TestProfileComparison(unittest.TestCase):
             self.assertEqual(rule["action"], "redact")
 
 
+# ---------------------------------------------------------------------------
+# TestStructuralProfile — structure-preserving de-identification
+# ---------------------------------------------------------------------------
+
+class TestStructuralProfile(unittest.TestCase):
+    """Validates config_structure_preserving.yaml rule structure."""
+
+    def setUp(self):
+        self.cfg = _load_config("config_structure_preserving.yaml")
+        self.rules = _rules(self.cfg)
+
+    def test_loads_without_error(self):
+        self.assertIsInstance(self.cfg, dict)
+
+    def test_rewrite_references_enabled(self):
+        """rewrite_references must be true so bundle cross-references stay consistent."""
+        self.assertTrue(
+            self.cfg.get("general", {}).get("rewrite_references"),
+            "structural profile must set rewrite_references: true",
+        )
+
+    def test_has_rules(self):
+        self.assertGreater(len(self.rules), 0)
+
+    # ── IDs pseudonymized via gPAS ────────────────────────────────────────
+
+    def test_all_ids_use_gpas_pseudonymize(self):
+        rule = _rule_for_match(self.rules, '"*.id"') or \
+               _rule_for_match(self.rules, "*.id")
+        self.assertIsNotNone(rule, '"*.id" rule must exist')
+        self.assertEqual(rule["action"], "gpas_pseudonymize")
+
+    def test_identifier_values_use_gpas_pseudonymize(self):
+        rule = _rule_for_match(self.rules, '"*.identifier.value"') or \
+               _rule_for_match(self.rules, "*.identifier.value")
+        self.assertIsNotNone(rule, '"*.identifier.value" rule must exist')
+        self.assertEqual(rule["action"], "gpas_pseudonymize")
+
+    # ── Name sub-fields substituted (NOT redacted) ────────────────────────
+
+    def test_patient_name_family_substituted(self):
+        rule = _rule_for_match(self.rules, "Patient.name.family")
+        self.assertIsNotNone(rule, "Patient.name.family rule must exist")
+        self.assertEqual(rule["action"], "substitute",
+                         "structural profile keeps fields present — must use substitute, not redact")
+        self.assertEqual(rule["params"]["substitute_with"], "[REDACTED]")
+
+    def test_patient_name_given_substituted(self):
+        rule = _rule_for_match(self.rules, "Patient.name.given")
+        self.assertIsNotNone(rule)
+        self.assertEqual(rule["action"], "substitute")
+
+    def test_no_rule_removes_patient_name_entirely(self):
+        """Must NOT have a rule that redacts the whole Patient.name array."""
+        rule = _rule_for_match(self.rules, "Patient.name")
+        if rule:
+            self.assertNotEqual(rule["action"], "redact",
+                                "structural profile must not delete Patient.name — use substitute on sub-fields")
+
+    # ── PII text substituted, not redacted ────────────────────────────────
+
+    def test_telecom_value_substituted(self):
+        rule = _rule_for_match(self.rules, "Patient.telecom.value")
+        self.assertIsNotNone(rule, "Patient.telecom.value rule must exist")
+        self.assertEqual(rule["action"], "substitute")
+
+    def test_address_line_substituted(self):
+        rule = _rule_for_match(self.rules, "Patient.address.line")
+        self.assertIsNotNone(rule)
+        self.assertEqual(rule["action"], "substitute",
+                         "structural profile must substitute address.line, not redact it")
+
+    # ── birthDate generalised to year only ────────────────────────────────
+
+    def test_birth_date_uses_date_year(self):
+        rule = _rule_for_match(self.rules, "Patient.birthDate")
+        self.assertIsNotNone(rule, "Patient.birthDate rule must exist")
+        self.assertEqual(rule["action"], "generalize")
+        self.assertEqual(rule["params"]["strategy"], "date_year")
+
+    # ── Binary blobs redacted (no text substitute available) ──────────────
+
+    def test_patient_photo_redacted(self):
+        rule = _rule_for_match(self.rules, "Patient.photo")
+        self.assertIsNotNone(rule, "Patient.photo rule must exist")
+        self.assertEqual(rule["action"], "redact")
+
+    # ── No explicit reference pseudonymization rules ──────────────────────
+
+    def test_no_subject_reference_pseudonymize_rule(self):
+        """References must be handled by rewrite_references, not an explicit gpas rule.
+
+        An explicit gpas_pseudonymize on *.subject.reference pseudonymizes the
+        full string 'Patient/ID' and loses the resource type prefix.
+        """
+        rule = _rule_for_match(self.rules, '"*.subject.reference"') or \
+               _rule_for_match(self.rules, "*.subject.reference")
+        if rule:
+            self.assertNotEqual(rule["action"], "gpas_pseudonymize",
+                                "Do not pseudonymize *.subject.reference directly — use rewrite_references: true")
+
+    # ── Key difference from HIPAA: fields stay present ────────────────────
+
+    def test_differs_from_hipaa_on_name(self):
+        """HIPAA redacts Patient.name entirely; structural profile substitutes sub-fields."""
+        hipaa = _load_config("config_hipaa_safe_harbor.yaml")
+        hipaa_rule = _rule_for_match(_rules(hipaa), "Patient.name")
+        self.assertIsNotNone(hipaa_rule)
+        self.assertEqual(hipaa_rule["action"], "redact")
+
+        # Structural has no whole-name redact rule
+        structural_whole = _rule_for_match(self.rules, "Patient.name")
+        self.assertTrue(
+            structural_whole is None or structural_whole["action"] != "redact",
+            "structural profile must not redact Patient.name (HIPAA does that; structural substitutes sub-fields)",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

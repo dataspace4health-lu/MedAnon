@@ -1,0 +1,382 @@
+# =============================================================================
+# MedAnon Structure-Preserving De-identification Profile
+# =============================================================================
+# Version: 1.0
+# Use case: De-identification that keeps the full FHIR structure intact.
+#           Fields are never removed — PII text is replaced with [REDACTED],
+#           IDs are pseudonymized via gPAS, and clinical data is untouched.
+#
+# Key properties:
+#   - Same fields, same layout as original resource
+#   - IDs and cross-references: gPAS pseudonymization (deterministic, reversible)
+#   - PII text (names, addresses, telecom): replaced with [REDACTED]
+#   - birthDate: generalised to year only
+#   - Clinical data (codes, values, measurements, clinical dates): unchanged
+#   - Binary blobs (photo, attachment): redacted (no meaningful text substitute)
+#
+# Required env vars:
+#   GPAS_URL        — gPAS server base URL (e.g. http://gpas:8080/ttp-fhir/fhir)
+#   GPAS_DOMAIN     — pseudonym domain name configured in gPAS
+#   GPAS_BASIC_USER — HTTP Basic Auth username
+#   GPAS_BASIC_PASS — HTTP Basic Auth password
+#
+# Usage:
+#   POST /process?config_profile=structural
+#   POST /process/raw?config_profile=structural
+# =============================================================================
+
+general:
+  appname: SPE-FHIR-BlackBox
+  rewrite_references: true
+  rewrite_text_ids: true
+
+rules:
+
+# ==========================================================
+# 1. PSEUDONYMIZE ALL RESOURCE IDS
+# ==========================================================
+
+- name: pseudonymize resource ids
+  match: "*.id"
+  action: gpas_pseudonymize
+  params: &gpas
+    gpas_url: ${GPAS_URL}
+    gpas_domain: ${GPAS_DOMAIN}
+    gpas_operation: ${GPAS_OPERATION:-pseudonymizeAllowCreate}
+    gpas_timeout_sec: ${GPAS_TIMEOUT_SEC:-30}
+
+# ==========================================================
+# 2. SUBJECT / PATIENT REFERENCE DISPLAY NAMES
+#    References themselves are rewritten by rewrite_references: true
+#    after IDs are pseudonymized — no explicit rule needed here.
+# ==========================================================
+
+- name: redact subject display
+  match: "*.subject.display"
+  action: substitute
+  params: &redacted
+    substitute_with: "[REDACTED]"
+
+- name: redact patient display
+  match: "*.patient.display"
+  action: substitute
+  params: *redacted
+
+# ==========================================================
+# 3. PATIENT DIRECT IDENTIFIERS
+#    Fields stay present — text content is replaced
+# ==========================================================
+
+- name: redact patient name family
+  match: Patient.name.family
+  action: substitute
+  params: *redacted
+
+- name: redact patient name given
+  match: Patient.name.given
+  action: substitute
+  params: *redacted
+
+- name: redact patient name text
+  match: Patient.name.text
+  action: substitute
+  params: *redacted
+
+- name: redact patient name prefix
+  match: Patient.name.prefix
+  action: substitute
+  params: *redacted
+
+- name: redact patient name suffix
+  match: Patient.name.suffix
+  action: substitute
+  params: *redacted
+
+- name: redact patient telecom value
+  match: Patient.telecom.value
+  action: substitute
+  params: *redacted
+
+- name: redact patient address line
+  match: Patient.address.line
+  action: substitute
+  params: *redacted
+
+- name: redact patient address city
+  match: Patient.address.city
+  action: substitute
+  params: *redacted
+
+- name: redact patient address district
+  match: Patient.address.district
+  action: substitute
+  params: *redacted
+
+- name: redact patient address postal code
+  match: Patient.address.postalCode
+  action: substitute
+  params: *redacted
+
+- name: redact patient address text
+  match: Patient.address.text
+  action: substitute
+  params: *redacted
+
+- name: pseudonymize patient identifier value
+  match: Patient.identifier.value
+  action: gpas_pseudonymize
+  params: *gpas
+
+- name: redact patient photo
+  match: Patient.photo
+  action: redact
+
+- name: redact patient contact name family
+  match: Patient.contact.name.family
+  action: substitute
+  params: *redacted
+
+- name: redact patient contact name given
+  match: Patient.contact.name.given
+  action: substitute
+  params: *redacted
+
+- name: redact patient contact name text
+  match: Patient.contact.name.text
+  action: substitute
+  params: *redacted
+
+- name: redact patient contact telecom value
+  match: Patient.contact.telecom.value
+  action: substitute
+  params: *redacted
+
+# ==========================================================
+# 4. BIRTH DATE — year only
+# ==========================================================
+
+- name: generalise birth date to year
+  match: Patient.birthDate
+  action: generalize
+  params:
+    strategy: date_year
+
+- name: generalise birth time extension to year
+  match: Patient.extension.valueDateTime
+  action: generalize
+  params:
+    strategy: date_year
+
+# ==========================================================
+# 5. PRACTITIONER IDENTIFIERS
+# ==========================================================
+
+- name: redact practitioner name family
+  match: Practitioner.name.family
+  action: substitute
+  params: *redacted
+
+- name: redact practitioner name given
+  match: Practitioner.name.given
+  action: substitute
+  params: *redacted
+
+- name: redact practitioner name text
+  match: Practitioner.name.text
+  action: substitute
+  params: *redacted
+
+- name: redact practitioner telecom value
+  match: Practitioner.telecom.value
+  action: substitute
+  params: *redacted
+
+- name: redact practitioner address line
+  match: Practitioner.address.line
+  action: substitute
+  params: *redacted
+
+- name: redact practitioner address city
+  match: Practitioner.address.city
+  action: substitute
+  params: *redacted
+
+- name: redact practitioner address postal code
+  match: Practitioner.address.postalCode
+  action: substitute
+  params: *redacted
+
+- name: pseudonymize practitioner identifier value
+  match: Practitioner.identifier.value
+  action: gpas_pseudonymize
+  params: *gpas
+
+- name: redact practitioner photo
+  match: Practitioner.photo
+  action: redact
+
+# ==========================================================
+# 6. RELATED PERSON
+# ==========================================================
+
+- name: redact related person name family
+  match: RelatedPerson.name.family
+  action: substitute
+  params: *redacted
+
+- name: redact related person name given
+  match: RelatedPerson.name.given
+  action: substitute
+  params: *redacted
+
+- name: redact related person name text
+  match: RelatedPerson.name.text
+  action: substitute
+  params: *redacted
+
+- name: redact related person telecom value
+  match: RelatedPerson.telecom.value
+  action: substitute
+  params: *redacted
+
+# ==========================================================
+# 7. ORGANIZATION / LOCATION
+# ==========================================================
+
+- name: redact organization name
+  match: Organization.name
+  action: substitute
+  params: *redacted
+
+- name: redact organization telecom value
+  match: Organization.telecom.value
+  action: substitute
+  params: *redacted
+
+- name: redact organization address line
+  match: Organization.address.line
+  action: substitute
+  params: *redacted
+
+- name: redact organization address city
+  match: Organization.address.city
+  action: substitute
+  params: *redacted
+
+- name: pseudonymize organization identifier value
+  match: Organization.identifier.value
+  action: gpas_pseudonymize
+  params: *gpas
+
+- name: redact location name
+  match: Location.name
+  action: substitute
+  params: *redacted
+
+- name: redact location address line
+  match: Location.address.line
+  action: substitute
+  params: *redacted
+
+- name: redact location address city
+  match: Location.address.city
+  action: substitute
+  params: *redacted
+
+# ==========================================================
+# 8. CLINICAL ACTOR DISPLAY NAMES
+#    References stay; only the human-readable display is masked
+# ==========================================================
+
+- name: redact performer display
+  match: "*.performer.display"
+  action: substitute
+  params: *redacted
+
+- name: redact author display
+  match: "*.author.display"
+  action: substitute
+  params: *redacted
+
+- name: redact requester display
+  match: "*.requester.display"
+  action: substitute
+  params: *redacted
+
+- name: redact recorder display
+  match: "*.recorder.display"
+  action: substitute
+  params: *redacted
+
+- name: redact participant display
+  match: "*.participant.individual.display"
+  action: substitute
+  params: *redacted
+
+# ==========================================================
+# 9. BINARY / DOCUMENT BLOBS
+#    No meaningful text substitute — removed entirely
+# ==========================================================
+
+- name: redact attachments
+  match: "*.attachment"
+  action: redact
+
+- name: redact document reference content
+  match: DocumentReference.content
+  action: redact
+
+- name: redact binary data
+  match: Binary.data
+  action: redact
+
+# ==========================================================
+# 10. FREE-TEXT NARRATIVE — scrub PII tokens in place
+#     scrub_text/nlp_detect replace PII inline; field stays present
+# ==========================================================
+
+- name: scrub narrative text
+  match: "*.text"
+  action: scrub_text
+  params:
+    mode: html_tokenize
+    patterns: all
+    extract_names: true
+
+- name: nlp scrub narrative text
+  match: "*.text"
+  action: nlp_detect
+  params:
+    mode: tokenize
+    html: true
+    threshold: 0.4
+
+- name: scrub note text
+  match: "*.note.text"
+  action: scrub_text
+  params:
+    mode: text
+    patterns: all
+
+- name: nlp scrub note text
+  match: "*.note.text"
+  action: nlp_detect
+  params:
+    mode: tokenize
+    threshold: 0.4
+
+- name: scrub comment fields
+  match: "*.comment"
+  action: scrub_text
+  params:
+    mode: text
+    patterns: all
+
+# ==========================================================
+# 11. GLOBAL CATCH-ALL: identifier values across all types
+# ==========================================================
+
+- name: pseudonymize all identifier values
+  match: "*.identifier.value"
+  action: gpas_pseudonymize
+  params: *gpas

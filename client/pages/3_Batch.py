@@ -119,7 +119,7 @@ progress = st.progress(0, text="Starting…")
 error_container = st.container()
 received = 0
 
-for ok, line in process_batch(raw_bytes, content_type=content_type):
+for ok, line in process_batch(raw_bytes, content_type=content_type, config_profile=st.session_state.get("config_profile", "auto")):
     received += 1
     if ok:
         out_lines.append(line)
