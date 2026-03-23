@@ -79,7 +79,6 @@ def _hash_nodes(node, key, value, params):
         for idx in range(len(node)):
             _hash_nodes(node[idx], key, value, params)
     elif isinstance(node, dict) and (key in list(node.keys())):
-        #print(f'Found {key} in {node}')
         if isinstance(node[key], list):
             for idx, data in enumerate(node[key]):
                 if data == value:

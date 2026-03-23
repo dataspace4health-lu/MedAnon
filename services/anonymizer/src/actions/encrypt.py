@@ -17,7 +17,6 @@ def _encrypt_nodes(node, key, value, enc_params):
         for idx in range(len(node)):
             _encrypt_nodes(node[idx], key, value, enc_params)
     elif isinstance(node, dict) and (key in list(node.keys())):
-        #print(f'Found {key} in {node}')
         if isinstance(node[key], list):
             for idx, data in enumerate(node[key]):
                 if data == value:
