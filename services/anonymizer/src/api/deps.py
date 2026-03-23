@@ -1,0 +1,272 @@
+"""Shared FastAPI dependencies — rate limiter, settings loader, SSRF protection, helpers.
+
+Imported by main.py and all router modules. No imports from api.main or api.routers
+to keep the dependency graph acyclic.
+"""
+
+import ipaddress
+import os
+import urllib.parse
+from functools import lru_cache
+from typing import Any
+
+from fastapi import HTTPException, Query
+
+import pipeline.config as config
+
+# ---------------------------------------------------------------------------
+# Rate limiting (slowapi dependency)
+# ---------------------------------------------------------------------------
+try:
+    from slowapi import Limiter, _rate_limit_exceeded_handler
+    from slowapi.errors import RateLimitExceeded
+    from slowapi.util import get_remote_address
+except ImportError:
+    # slowapi is optional — no-op fallback for tests and lightweight deployments.
+    class _NoOpLimiter:
+        def __init__(self, **kw): pass
+        def limit(self, *a, **kw):
+            def decorator(fn): return fn
+            return decorator
+    Limiter = _NoOpLimiter
+    RateLimitExceeded = None
+    get_remote_address = lambda r: "127.0.0.1"
+    _rate_limit_exceeded_handler = None
+
+_RATE_LIMIT_ENABLED = os.environ.get("MEDANON_RATE_LIMIT_ENABLED", "true").lower() in (
+    "1", "true", "yes"
+)
+limiter = Limiter(key_func=get_remote_address, enabled=_RATE_LIMIT_ENABLED)
+
+# Maximum accepted request body size (10 MB default).
+MAX_BODY_BYTES = int(os.environ.get("MEDANON_MAX_BODY_BYTES", 10 * 1024 * 1024))
+
+# Directory where config YAML files are located.
+_CONFIG_DIR = os.environ.get("MEDANON_CONFIG_DIR", "/code/config")
+
+# ---------------------------------------------------------------------------
+# SSRF protection — reject server_url values targeting private/loopback space
+# ---------------------------------------------------------------------------
+_PRIVATE_NETS = [
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("169.254.0.0/16"),   # link-local / AWS metadata
+    ipaddress.ip_network("0.0.0.0/8"),
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("fc00::/7"),
+]
+
+
+async def _validate_server_url(url: str) -> str:
+    """Raise HTTP 422 if *url* is not a safe http(s) URL.
+
+    Blocks:
+    - Non-http(s) schemes (file://, gopher://, etc.)
+    - Raw IP addresses in private / loopback ranges
+
+    DNS names are allowed at this layer; tighten further with
+    ALLOWED_FHIR_HOSTS env-var allowlist if needed.
+    """
+    try:
+        parsed = urllib.parse.urlparse(url)
+    except Exception:
+        raise HTTPException(status_code=422, detail="Invalid server_url")
+    if parsed.scheme not in ("http", "https"):
+        raise HTTPException(
+            status_code=422,
+            detail="server_url must use http or https scheme",
+        )
+    hostname = parsed.hostname or ""
+    if not hostname:
+        raise HTTPException(status_code=422, detail="server_url must contain a hostname")
+    try:
+        addr = ipaddress.ip_address(hostname)
+        if any(addr in net for net in _PRIVATE_NETS):
+            raise HTTPException(
+                status_code=422,
+                detail="server_url must not target private or loopback addresses",
+            )
+    except ValueError:
+        # hostname is a DNS name — allowed at this layer
+        pass
+    return url
+
+
+async def _get_url_from_request_or_env(
+    req_data: dict,
+    req_key: str,
+    env_var: str,
+) -> str:
+    """Get URL from request body or environment variable, validating only user input.
+
+    SSRF protection applies ONLY to user-provided URLs (untrusted input).
+    Environment variables are trusted configuration set by administrators.
+    """
+    user_url = req_data.get(req_key)
+    env_url = os.environ.get(env_var)
+
+    if user_url:
+        await _validate_server_url(user_url)
+        return user_url.rstrip("/")
+    elif env_url:
+        return env_url.rstrip("/")
+    else:
+        raise HTTPException(
+            status_code=422,
+            detail=f"{req_key} required (provide in request body or set {env_var} env var)"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Dynamic settings validation — prevents SSRF via FHIR Parameters wrapper
+# ---------------------------------------------------------------------------
+_ALLOWED_DYNAMIC_SETTINGS = frozenset({
+    'gpas_url', 'gpas_domain', 'gpas_operation', 'gpas_token',
+    'gpas_basic_user', 'gpas_basic_pass', 'gpas_timeout_sec',
+    'gpas_retry_count', 'processing_errors', 'rewrite_references',
+    'rewrite_text_ids',
+})
+_DYNAMIC_URL_KEYS = frozenset({'gpas_url'})
+
+
+async def _validate_dynamic_settings(dynamic_settings: dict) -> None:
+    """Raise HTTP 422 for unknown or unsafe URL-valued dynamic settings."""
+    if not dynamic_settings:
+        return
+    for key in dynamic_settings:
+        if key not in _ALLOWED_DYNAMIC_SETTINGS:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Unsupported dynamic setting: {key!r}",
+            )
+    for key in _DYNAMIC_URL_KEYS:
+        val = dynamic_settings.get(key)
+        if val:
+            await _validate_server_url(str(val))
+
+
+# ---------------------------------------------------------------------------
+# Config profile mapping + settings loader
+# ---------------------------------------------------------------------------
+_PROFILE_MAP = {
+    'auto': None,  # triggers auto-selection logic
+    'minimal': 'config.yaml',
+    'gpas': 'config_gpas.yaml',
+    'gdpr': 'config_gdpr_eu.yaml',
+    'hipaa': 'config_hipaa_safe_harbor.yaml',
+    'research': 'config_research_pseudonymous.yaml',
+    'structural': 'config_structure_preserving.yaml',
+}
+
+
+@lru_cache(maxsize=8)
+def get_settings(profile: str = 'auto') -> config.Settings:
+    """Load Settings for the specified config profile.
+
+    Args:
+        profile: One of: auto, minimal, gpas, gdpr, hipaa, research.
+                 Default 'auto' selects based on GPAS_URL environment.
+
+    Returns:
+        Loaded Settings instance (cached up to 8 profiles).
+
+    Raises:
+        ValueError: If profile is unknown.
+        FileNotFoundError: If config file doesn't exist.
+    """
+    if profile not in _PROFILE_MAP:
+        valid = ', '.join(_PROFILE_MAP.keys())
+        raise ValueError(f"Unknown profile '{profile}'. Valid: {valid}")
+
+    config_file = _PROFILE_MAP[profile]
+
+    if config_file is None:
+        if os.environ.get('GPAS_URL'):
+            config_file = 'config_gpas.yaml'
+        else:
+            config_file = 'config.yaml'
+
+    config_path = os.path.join(_CONFIG_DIR, config_file)
+    return config.Settings(config_path)
+
+
+def get_settings_dep(
+    config_profile: str = Query(
+        'auto',
+        description="Config profile: auto, minimal, gpas, gdpr, hipaa, research, structural"
+    ),
+) -> config.Settings:
+    """FastAPI dependency that reads config_profile from the query string."""
+    return get_settings(config_profile)
+
+
+# ---------------------------------------------------------------------------
+# Shared processing helpers
+# ---------------------------------------------------------------------------
+
+def _runtime_settings(base_settings, dynamic_settings=None):
+    """Build a lightweight runtime settings object merging base config + dynamic overrides."""
+    return type('RuntimeSettings', (), {
+        'rules': getattr(base_settings, 'rules', []),
+        'processing_errors': getattr(base_settings, 'processing_errors', 'raise'),
+        'rewrite_references': getattr(base_settings, 'rewrite_references', False),
+        'dynamic_rule_settings': dynamic_settings or {},
+    })()
+
+
+def _unwrap_to_resources(payload: Any) -> list[dict]:
+    """Normalize any parsed FHIR payload to a flat list of resource dicts.
+
+    Handles:
+    - list (from NDJSON parse) → returned as-is
+    - Bundle dict → extracts entry[].resource
+    - single resource dict → wrapped in a list
+    """
+    if isinstance(payload, list):
+        return [r for r in payload if isinstance(r, dict)]
+    if isinstance(payload, dict):
+        if payload.get("resourceType") == "Bundle":
+            return [
+                entry["resource"]
+                for entry in payload.get("entry", [])
+                if isinstance(entry.get("resource"), dict)
+            ]
+        return [payload]
+    return []
+
+
+def _unwrap_parameters_payload(payload):
+    """Support Parameters(resource, settings) wrapper for dynamic rule settings.
+
+    Mirrors a useful pattern from miracum/fhir-pseudonymizer while keeping the
+    core processing engine unchanged.
+    """
+    if not isinstance(payload, dict) or payload.get('resourceType') != 'Parameters':
+        return payload, None
+
+    parameters = payload.get('parameter', [])
+    dynamic_settings = {}
+    wrapped_resource = None
+
+    for p in parameters:
+        if not isinstance(p, dict):
+            continue
+        if p.get('name') == 'settings':
+            for part in p.get('part', []):
+                if isinstance(part, dict) and part.get('name'):
+                    dynamic_settings[part['name']] = _extract_value_part(part)
+        elif p.get('name') == 'resource' and isinstance(p.get('resource'), dict):
+            wrapped_resource = p['resource']
+
+    if wrapped_resource is None:
+        return payload, None
+    return wrapped_resource, dynamic_settings
+
+
+def _extract_value_part(part):
+    for key, value in part.items():
+        if key.startswith('value'):
+            return value
+    return None
