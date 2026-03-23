@@ -25,7 +25,7 @@ services:
       context: services/anonymizer
       dockerfile: Dockerfile
       target: prod
-    image: medanon:latest
+    image: ${ANONYMIZER_IMAGE:-medanon:latest}
     container_name: medanon
     restart: unless-stopped
     ports:
@@ -102,13 +102,14 @@ services:
     networks:
       - fhir-net
     healthcheck:
-      # hapiproject/hapi:latest is a distroless JRE image (no shell, no curl, no wget).
-      # Use a pre-compiled Java class to probe Spring Boot Actuator via java.net.http.
+      # HealthCheck.class must be compiled targeting the same Java version as this
+      # image (currently Java 17). Run `make build-healthcheck` to recompile, or
+      # `make up` which does it automatically.
       test: ["CMD", "java", "-cp", "/healthcheck", "HealthCheck"]
       interval: 30s
       timeout: 15s
       retries: 5
-      start_period: 60s
+      start_period: 90s
     deploy:
       resources:
         limits:
@@ -141,6 +142,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+      start_period: 30s
     deploy:
       resources:
         limits:

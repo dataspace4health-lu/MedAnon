@@ -23,6 +23,16 @@ spring:
         hbm2ddl:
           auto: update
 
+# Expose Spring Boot Actuator health endpoint for Docker/K8s health checks.
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
+
 hapi:
   fhir:
     fhir_version: R4

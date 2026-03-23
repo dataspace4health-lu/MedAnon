@@ -177,6 +177,9 @@ services/anonymizer/src/**/*.whl
 # Docker build cache
 .docker/
 
+# Compiled Java health check (auto-compiled from .java source by make build)
+services/fhir-server/healthcheck/*.class
+
 # Claude downloaded models (large, not source-controlled)
 .claude/
 CLAUDE.md   
