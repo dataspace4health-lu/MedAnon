@@ -37,3 +37,13 @@ FROM base AS dev
 RUN pip install --no-cache-dir watchfiles
 WORKDIR /code/src
 CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+
+# ── SDV stage — full synthetic data capability (GaussianCopula engine) ────────
+# Extends base before the non-root user switch so pip can write to site-packages.
+# Build: make build-sdv   Start: make up-sdv
+FROM base AS sdv
+COPY requirements-sdv.txt /code/requirements-sdv.txt
+RUN pip install --no-cache-dir -r /code/requirements-sdv.txt
+WORKDIR /code/src
+USER appuser
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]

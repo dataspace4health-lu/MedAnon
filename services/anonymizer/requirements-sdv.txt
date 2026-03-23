@@ -1,0 +1,9 @@
+# Optional SDV (Synthetic Data Vault) dependencies.
+# Install for advanced synthetic data generation with multivariate correlations.
+#
+# Usage:
+#   pip install -r requirements-sdv.txt
+#
+# The default image does NOT include these — keeps the image lean (~200MB smaller).
+# Use engine=sdv query param on /generate/synthetic to activate.
+sdv>=1.0.0,<2.0.0
