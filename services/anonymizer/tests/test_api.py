@@ -508,5 +508,84 @@ class TestParametersWrapper(unittest.TestCase):
         self.assertIn("Unsupported dynamic setting", resp.json()["detail"])
 
 
+class TestSSRFValidation(unittest.TestCase):
+    """Test SSRF validation distinguishes user URLs from env var URLs."""
+
+    @patch("integrations.fhir.client.fetch_everything")
+    def test_everything_env_var_localhost_trusted(self, mock_fetch):
+        """Environment variable with localhost should be trusted (not SSRF-blocked)."""
+        mock_fetch.return_value = []
+
+        # Create client with FHIR_SOURCE_URL set to localhost
+        client = _get_client(FHIR_SOURCE_URL="http://127.0.0.1:8081/fhir")
+
+        # Don't provide server_url in request → should use env var
+        resp = client.post("/process/everything", json={
+            "resource_type": "Patient",
+            "resource_id": "p1"
+        })
+        # Should NOT get 422 SSRF error
+        if resp.status_code == 422:
+            detail = resp.json().get("detail", "")
+            self.assertNotIn("private or loopback", detail,
+                           msg=f"Got SSRF error for env var URL: {detail}")
+
+    def test_everything_user_localhost_rejected(self):
+        """User-provided localhost should be SSRF-blocked."""
+        client = _get_client()
+        resp = client.post("/process/everything", json={
+            "resource_type": "Patient",
+            "resource_id": "p1",
+            "server_url": "http://127.0.0.1:8081/fhir"
+        })
+        self.assertEqual(resp.status_code, 422)
+        self.assertIn("private or loopback", resp.json()["detail"])
+
+    def test_everything_user_private_ip_rejected(self):
+        """User-provided private IP should be SSRF-blocked."""
+        client = _get_client()
+        resp = client.post("/process/everything", json={
+            "resource_type": "Patient",
+            "resource_id": "p1",
+            "server_url": "http://192.168.1.10:8080/fhir"
+        })
+        self.assertEqual(resp.status_code, 422)
+        self.assertIn("private or loopback", resp.json()["detail"])
+
+    @patch("integrations.fhir.client.fetch_everything")
+    def test_everything_user_dns_name_allowed(self, mock_fetch):
+        """User-provided DNS names should be allowed (SSRF validated)."""
+        mock_fetch.return_value = []
+        client = _get_client()
+        resp = client.post("/process/everything", json={
+            "resource_type": "Patient",
+            "resource_id": "p1",
+            "server_url": "http://fhir.example.com/fhir"
+        })
+        # Should NOT get SSRF error (DNS names allowed)
+        if resp.status_code == 422:
+            self.assertNotIn("private or loopback", resp.json().get("detail", ""))
+
+    @patch("integrations.fhir.client.fetch_all_resource_types")
+    @patch("integrations.fhir.client.upload_resources")
+    def test_round_trip_env_vars_trusted(self, mock_upload, mock_fetch):
+        """Both source and target env vars should be trusted."""
+        mock_fetch.return_value = iter([])
+        mock_upload.return_value = []
+
+        # Create client with both source and target as localhost/private IPs
+        client = _get_client(
+            FHIR_SOURCE_URL="http://127.0.0.1:8081/fhir",
+            FHIR_TARGET_URL="http://192.168.1.10:8080/fhir"
+        )
+
+        resp = client.post("/process/round-trip", json={
+            "resource_types": ["Patient"]
+        })
+        # Should NOT get SSRF error for env vars
+        if resp.status_code == 422:
+            self.assertNotIn("private or loopback", resp.json().get("detail", ""))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -12,6 +12,9 @@ import copy
 import json
 from rich import print
 
+_TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
+_TEST_KEYS_DIR = os.path.join(_TESTS_DIR, "keys")
+
 
 class TestProcessor(unittest.TestCase):
     """
@@ -25,7 +28,11 @@ class TestProcessor(unittest.TestCase):
         resource = read_resource_from_file(resource_filename)
         settings = Settings(config_filename)
         original_resource = copy.deepcopy(resource)
-        with patch.dict(os.environ, {'MEDANON_HASH_KEY': ''}, clear=False):
+        with patch.dict(os.environ, {
+            'MEDANON_HASH_KEY': '',
+            'MEDANON_HASH_ALLOW_PLAIN': 'true',
+            'MEDANON_KEY_ALLOWED_DIRS': _TEST_KEYS_DIR,
+        }, clear=False):
             ret = process_data(resource, settings)
         # Crypto hash checks
         print(f"Checking cryptohash...\t\t", end="", flush=True)
