@@ -41,6 +41,8 @@ ENDPOINT_ROLES: dict[str, str] = {
     "/generate/synthetic": "analyst",
     "/process/and-upload": "admin",
     "/process/round-trip": "admin",
+    "/process/bulk-export": "admin",
+    "/process/cohort": "analyst",
 }
 
 
