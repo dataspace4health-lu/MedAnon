@@ -11,7 +11,9 @@ from fastapi.responses import StreamingResponse
 import pipeline.config as config
 from pipeline.processor import process_data
 from integrations.fhir.client import (
+    bulk_export,
     fetch_all_resource_types,
+    fetch_cohort,
     fetch_everything,
     get_capability_statement,
     post_resource,
@@ -334,5 +336,156 @@ async def process_round_trip(
                     "status": "error",
                     "error": "processing error",
                 }) + "\n"
+
+    return StreamingResponse(_generate(), media_type="application/x-ndjson")
+
+
+@router.post('/process/bulk-export')
+@limiter.limit("5/minute")
+async def process_bulk_export(
+    request: Request,
+    settings: config.Settings = Depends(get_settings_dep),
+):
+    """Initiate a FHIR Bulk Data Export ($export), de-identify results, and return NDJSON.
+
+    Request body (JSON):
+    ```json
+    {
+      "server_url":    "http://host:8080/fhir",
+      "level":         "system",
+      "resource_type": "Patient",
+      "type_filter":   "Patient,Observation",
+      "since":         "2024-01-01T00:00:00Z",
+      "token":         "optional-bearer-token",
+      "timeout":       30
+    }
+    ```
+
+    Returns streaming NDJSON — one anonymized resource per line.
+    """
+    req_data = await _parse_json_body(request)
+
+    server_url = await _get_url_from_request_or_env(
+        req_data, "server_url", "FHIR_SOURCE_URL"
+    )
+
+    level = req_data.get("level", "system")
+    if level not in ("system", "type"):
+        raise HTTPException(status_code=422, detail="level must be 'system' or 'type'")
+
+    resource_type = req_data.get("resource_type")
+    if level == "type" and not resource_type:
+        raise HTTPException(status_code=422, detail="resource_type is required for type-level export")
+
+    type_filter = req_data.get("type_filter")
+    since = req_data.get("since")
+    token = req_data.get("token") or os.environ.get("FHIR_SOURCE_TOKEN")
+    timeout = _get_timeout(req_data)
+    runtime_settings = _runtime_settings(settings)
+
+    _SENTINEL = object()
+
+    async def _generate():
+        gen = bulk_export(
+            server_url,
+            level=level,
+            resource_type=resource_type,
+            type_filter=type_filter,
+            since=since,
+            token=token,
+            timeout=timeout,
+        )
+        try:
+            while True:
+                if await request.is_disconnected():
+                    logger.info("bulk-export: client disconnected, stopping stream")
+                    break
+                resource = await asyncio.to_thread(next, gen, _SENTINEL)
+                if resource is _SENTINEL:
+                    break
+                try:
+                    result = await asyncio.to_thread(process_data, resource, runtime_settings)
+                    yield json.dumps(result) + "\n"
+                except Exception as exc:
+                    _rtype = resource.get("resourceType", "Unknown") if isinstance(resource, dict) else "Unknown"
+                    logger.error("Error processing resource type=%s: %s", _rtype, type(exc).__name__, exc_info=False)
+                    yield json.dumps({"error": "processing error", "resourceType": _rtype}) + "\n"
+        except ValueError as exc:
+            logger.error("bulk-export error: %s", exc, exc_info=False)
+            yield json.dumps({"error": str(exc)}) + "\n"
+
+    return StreamingResponse(_generate(), media_type="application/x-ndjson")
+
+
+@router.post('/process/cohort')
+@limiter.limit("10/minute")
+async def process_cohort(
+    request: Request,
+    settings: config.Settings = Depends(get_settings_dep),
+):
+    """Search for patients matching a condition code and export their full records.
+
+    Two-phase workflow: searches for resources matching `search_type` + `search_params`,
+    extracts unique Patient references, then calls $everything for each patient.
+
+    Request body (JSON):
+    ```json
+    {
+      "server_url":    "http://host:8080/fhir",
+      "search_type":   "Condition",
+      "search_params": {"code": "E11"},
+      "everything_params": {"_count": 50},
+      "token":         "optional-bearer-token",
+      "timeout":       30
+    }
+    ```
+
+    Returns streaming NDJSON — one anonymized resource per line.
+    """
+    req_data = await _parse_json_body(request)
+
+    server_url = await _get_url_from_request_or_env(
+        req_data, "server_url", "FHIR_SOURCE_URL"
+    )
+
+    search_type = req_data.get("search_type")
+    if not search_type:
+        raise HTTPException(status_code=422, detail="search_type is required")
+
+    search_params = req_data.get("search_params") or {}
+    everything_params = req_data.get("everything_params") or {}
+    token = req_data.get("token") or os.environ.get("FHIR_SOURCE_TOKEN")
+    timeout = _get_timeout(req_data)
+    runtime_settings = _runtime_settings(settings)
+
+    _SENTINEL = object()
+
+    async def _generate():
+        gen = fetch_cohort(
+            server_url,
+            search_type=search_type,
+            search_params=search_params,
+            everything_params=everything_params,
+            token=token,
+            timeout=timeout,
+        )
+        try:
+            while True:
+                if await request.is_disconnected():
+                    logger.info("cohort: client disconnected, stopping stream")
+                    break
+                resource = await asyncio.to_thread(next, gen, _SENTINEL)
+                if resource is _SENTINEL:
+                    break
+                try:
+                    result = await asyncio.to_thread(process_data, resource, runtime_settings)
+                    yield json.dumps(result) + "\n"
+                except Exception as exc:
+                    _rtype = resource.get("resourceType", "Unknown") if isinstance(resource, dict) else "Unknown"
+                    logger.error("Error processing resource type=%s: %s", _rtype, type(exc).__name__, exc_info=False)
+                    yield json.dumps({"error": "processing error", "resourceType": _rtype}) + "\n"
+        except ValueError as exc:
+            logger.error("cohort error: %s", exc, exc_info=False)
+            yield json.dumps({"error": str(exc)}) + "\n"
 
     return StreamingResponse(_generate(), media_type="application/x-ndjson")
