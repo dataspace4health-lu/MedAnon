@@ -1,7 +1,7 @@
 # =============================================================================
 # MedAnon Structure-Preserving De-identification Profile
 # =============================================================================
-# Version: 1.0
+# Version: 2.0
 # Use case: De-identification that keeps the full FHIR structure intact.
 #           Fields are never removed — PII text is replaced with [REDACTED],
 #           IDs are pseudonymized via gPAS, and clinical data is untouched.
@@ -10,8 +10,11 @@
 #   - Same fields, same layout as original resource
 #   - IDs and cross-references: gPAS pseudonymization (deterministic, reversible)
 #   - PII text (names, addresses, telecom): replaced with [REDACTED]
-#   - birthDate: generalised to year only
-#   - Clinical data (codes, values, measurements, clinical dates): unchanged
+#   - Dates (birth, death, clinical, encounter): generalised to year only
+#   - Demographics (gender, marital status, extensions): redacted
+#   - Server metadata (lastUpdated, versionId, source): redacted
+#   - Device identifiers (UDI, serial, lot): redacted/substituted
+#   - Clinical data (codes, values, measurements): unchanged
 #   - Binary blobs (photo, attachment): redacted (no meaningful text substitute)
 #
 # Required env vars:
@@ -151,8 +154,43 @@ rules:
   action: substitute
   params: *redacted
 
+- name: redact patient address state
+  match: Patient.address.state
+  action: substitute
+  params: *redacted
+
+- name: redact patient address country
+  match: Patient.address.country
+  action: substitute
+  params: *redacted
+
+- name: redact patient gender
+  match: Patient.gender
+  action: substitute
+  params: *redacted
+
+- name: redact patient marital status
+  match: Patient.maritalStatus
+  action: redact
+
+- name: redact patient multiple birth boolean
+  match: Patient.multipleBirthBoolean
+  action: redact
+
+- name: redact patient multiple birth integer
+  match: Patient.multipleBirthInteger
+  action: redact
+
+- name: redact patient communication
+  match: Patient.communication
+  action: redact
+
+- name: redact patient extensions
+  match: Patient.extension
+  action: redact
+
 # ==========================================================
-# 4. BIRTH DATE — year only
+# 4. BIRTH DATE / DECEASED DATE — year only
 # ==========================================================
 
 - name: generalise birth date to year
@@ -161,8 +199,8 @@ rules:
   params:
     strategy: date_year
 
-- name: generalise birth time extension to year
-  match: Patient.extension.valueDateTime
+- name: generalise deceased date to year
+  match: Patient.deceasedDateTime
   action: generalize
   params:
     strategy: date_year
@@ -215,6 +253,49 @@ rules:
   match: Practitioner.photo
   action: redact
 
+- name: redact practitioner name prefix
+  match: Practitioner.name.prefix
+  action: substitute
+  params: *redacted
+
+- name: redact practitioner name suffix
+  match: Practitioner.name.suffix
+  action: substitute
+  params: *redacted
+
+- name: redact practitioner gender
+  match: Practitioner.gender
+  action: substitute
+  params: *redacted
+
+- name: generalise practitioner birth date
+  match: Practitioner.birthDate
+  action: generalize
+  params:
+    strategy: date_year
+
+- name: redact practitioner qualification
+  match: Practitioner.qualification
+  action: redact
+
+- name: redact practitioner address state
+  match: Practitioner.address.state
+  action: substitute
+  params: *redacted
+
+- name: redact practitioner address country
+  match: Practitioner.address.country
+  action: substitute
+  params: *redacted
+
+- name: redact practitioner role code
+  match: PractitionerRole.code
+  action: redact
+
+- name: redact practitioner role organization
+  match: PractitionerRole.organization
+  action: redact
+
 # ==========================================================
 # 6. RELATED PERSON
 # ==========================================================
@@ -263,6 +344,21 @@ rules:
   action: substitute
   params: *redacted
 
+- name: redact organization address postal code
+  match: Organization.address.postalCode
+  action: substitute
+  params: *redacted
+
+- name: redact organization address state
+  match: Organization.address.state
+  action: substitute
+  params: *redacted
+
+- name: redact organization address country
+  match: Organization.address.country
+  action: substitute
+  params: *redacted
+
 - name: pseudonymize organization identifier value
   match: Organization.identifier.value
   action: gpas_pseudonymize
@@ -280,6 +376,35 @@ rules:
 
 - name: redact location address city
   match: Location.address.city
+  action: substitute
+  params: *redacted
+
+- name: redact location telecom value
+  match: Location.telecom.value
+  action: substitute
+  params: *redacted
+
+- name: redact location address postal code
+  match: Location.address.postalCode
+  action: substitute
+  params: *redacted
+
+- name: redact location address state
+  match: Location.address.state
+  action: substitute
+  params: *redacted
+
+- name: redact location address country
+  match: Location.address.country
+  action: substitute
+  params: *redacted
+
+- name: redact location position
+  match: Location.position
+  action: redact
+
+- name: redact location managing org display
+  match: Location.managingOrganization.display
   action: substitute
   params: *redacted
 
@@ -313,8 +438,146 @@ rules:
   action: substitute
   params: *redacted
 
+- name: redact asserter display
+  match: "*.asserter.display"
+  action: substitute
+  params: *redacted
+
+- name: redact care team participant display
+  match: CareTeam.participant.individual.display
+  action: substitute
+  params: *redacted
+
+- name: redact encounter participant display
+  match: Encounter.participant.individual.display
+  action: substitute
+  params: *redacted
+
 # ==========================================================
-# 9. BINARY / DOCUMENT BLOBS
+# 9. CLINICAL DATES — generalise to year only
+#    Preserves that a date exists but removes day-level precision
+# ==========================================================
+
+- name: generalise effective date to year
+  match: "*.effectiveDateTime"
+  action: generalize
+  params:
+    strategy: date_year
+
+- name: generalise issued date to year
+  match: "*.issued"
+  action: generalize
+  params:
+    strategy: date_year
+
+- name: generalise authored on to year
+  match: "*.authoredOn"
+  action: generalize
+  params:
+    strategy: date_year
+
+- name: generalise recorded date to year
+  match: "*.recordedDate"
+  action: generalize
+  params:
+    strategy: date_year
+
+- name: generalise onset date to year
+  match: "*.onsetDateTime"
+  action: generalize
+  params:
+    strategy: date_year
+
+- name: generalise abatement date to year
+  match: "*.abatementDateTime"
+  action: generalize
+  params:
+    strategy: date_year
+
+- name: generalise performed date to year
+  match: "*.performedDateTime"
+  action: generalize
+  params:
+    strategy: date_year
+
+- name: generalise performed period start to year
+  match: "*.performedPeriod.start"
+  action: generalize
+  params:
+    strategy: date_year
+
+- name: generalise performed period end to year
+  match: "*.performedPeriod.end"
+  action: generalize
+  params:
+    strategy: date_year
+
+- name: generalise occurrence date to year
+  match: "*.occurrenceDateTime"
+  action: generalize
+  params:
+    strategy: date_year
+
+- name: generalise encounter period start to year
+  match: Encounter.period.start
+  action: generalize
+  params:
+    strategy: date_year
+
+- name: generalise encounter period end to year
+  match: Encounter.period.end
+  action: generalize
+  params:
+    strategy: date_year
+
+- name: generalise participant period start to year
+  match: "*.participant.period.start"
+  action: generalize
+  params:
+    strategy: date_year
+
+- name: generalise participant period end to year
+  match: "*.participant.period.end"
+  action: generalize
+  params:
+    strategy: date_year
+
+- name: generalise document date to year
+  match: DocumentReference.date
+  action: generalize
+  params:
+    strategy: date_year
+
+- name: generalise document context period start to year
+  match: DocumentReference.context.period.start
+  action: generalize
+  params:
+    strategy: date_year
+
+- name: generalise document context period end to year
+  match: DocumentReference.context.period.end
+  action: generalize
+  params:
+    strategy: date_year
+
+# ==========================================================
+# 10. SERVER METADATA
+# ==========================================================
+
+- name: redact meta last updated
+  match: "*.meta.lastUpdated"
+  action: redact
+
+- name: redact meta version id
+  match: "*.meta.versionId"
+  action: redact
+
+- name: redact meta source
+  match: "*.meta.source"
+  action: redact
+
+# ==========================================================
+# 11. BINARY / DOCUMENT BLOBS
 #    No meaningful text substitute — removed entirely
 # ==========================================================
 
@@ -331,7 +594,7 @@ rules:
   action: redact
 
 # ==========================================================
-# 10. FREE-TEXT NARRATIVE — scrub PII tokens in place
+# 12. FREE-TEXT NARRATIVE — scrub PII tokens in place
 #     scrub_text/nlp_detect replace PII inline; field stays present
 # ==========================================================
 
@@ -372,11 +635,170 @@ rules:
     mode: text
     patterns: all
 
+- name: nlp scrub code text
+  match: "*.code.text"
+  action: nlp_detect
+  params:
+    mode: tokenize
+    threshold: 0.4
+
+- name: nlp scrub substance text
+  match: "*.substance.text"
+  action: nlp_detect
+  params:
+    mode: tokenize
+    threshold: 0.4
+
+- name: nlp scrub value codeable concept text
+  match: "*.valueCodeableConcept.text"
+  action: nlp_detect
+  params:
+    mode: tokenize
+    threshold: 0.4
+
+- name: nlp scrub medication codeable concept text
+  match: "*.medicationCodeableConcept.text"
+  action: nlp_detect
+  params:
+    mode: tokenize
+    threshold: 0.4
+
+- name: scrub dosage text
+  match: "*.dosage.text"
+  action: scrub_text
+  params:
+    mode: text
+    patterns: all
+
+- name: scrub dosage patient instruction
+  match: "*.dosage.patientInstruction"
+  action: scrub_text
+  params:
+    mode: text
+    patterns: all
+
+- name: scrub reaction description
+  match: "*.reaction.description"
+  action: scrub_text
+  params:
+    mode: text
+    patterns: all
+
 # ==========================================================
-# 11. GLOBAL CATCH-ALL: identifier values across all types
+# 13. COMMUNICATION / MESSAGES
+# ==========================================================
+
+- name: redact communication sender display
+  match: Communication.sender.display
+  action: substitute
+  params: *redacted
+
+- name: redact communication recipient display
+  match: Communication.recipient.display
+  action: substitute
+  params: *redacted
+
+- name: scrub communication payload
+  match: Communication.payload.contentString
+  action: scrub_text
+  params:
+    mode: text
+    patterns: all
+
+# ==========================================================
+# 14. TASK / REQUEST WORKFLOW
+# ==========================================================
+
+- name: redact task requester display
+  match: Task.requester.display
+  action: substitute
+  params: *redacted
+
+- name: redact task owner display
+  match: Task.owner.display
+  action: substitute
+  params: *redacted
+
+- name: redact service request requester display
+  match: ServiceRequest.requester.display
+  action: substitute
+  params: *redacted
+
+# ==========================================================
+# 15. PROVENANCE / AUDIT
+# ==========================================================
+
+- name: redact provenance agent
+  match: Provenance.agent
+  action: redact
+
+- name: redact audit event agent
+  match: AuditEvent.agent
+  action: redact
+
+- name: redact audit event source
+  match: AuditEvent.source
+  action: redact
+
+# ==========================================================
+# 16. DEVICE IDENTIFIERS
+# ==========================================================
+
+- name: redact device udi carrier
+  match: Device.udiCarrier
+  action: redact
+
+- name: redact device serial number
+  match: Device.serialNumber
+  action: substitute
+  params: *redacted
+
+- name: redact device lot number
+  match: Device.lotNumber
+  action: substitute
+  params: *redacted
+
+- name: redact device distinct identifier
+  match: Device.distinctIdentifier
+  action: substitute
+  params: *redacted
+
+- name: generalise device manufacture date
+  match: Device.manufactureDate
+  action: generalize
+  params:
+    strategy: date_year
+
+- name: generalise device expiration date
+  match: Device.expirationDate
+  action: generalize
+  params:
+    strategy: date_year
+
+- name: pseudonymize device identifier value
+  match: Device.identifier.value
+  action: gpas_pseudonymize
+  params: *gpas
+
+# ==========================================================
+# 17. GLOBAL CATCH-ALL: names, telecom, addresses, identifiers
+#     These fire last, catching any resource type not explicitly
+#     listed above (e.g. Coverage, Claim, ExplanationOfBenefit).
 # ==========================================================
 
 - name: pseudonymize all identifier values
   match: "*.identifier.value"
   action: gpas_pseudonymize
   params: *gpas
+
+- name: redact all names
+  match: "*.name"
+  action: redact
+
+- name: redact all telecom
+  match: "*.telecom"
+  action: redact
+
+- name: redact all addresses
+  match: "*.address"
+  action: redact

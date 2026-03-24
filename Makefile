@@ -10,9 +10,10 @@ TEST_DIR    := $(ANONYMIZER)/tests
 COMPOSE     := docker compose
 DEV_COMPOSE := $(COMPOSE) -f docker-compose.yml -f docker-compose.dev.yml
 
-# HAPI FHIR image — single source of truth for the Java version used to
-# compile the health-check class. Update this when bumping the HAPI image.
-HAPI_IMAGE  := hapiproject/hapi:v7.6.0
+# HAPI FHIR image — update both together when bumping the HAPI version.
+# v7.x uses Java 17 (eclipse-temurin:17-jre-jammy base).
+HAPI_IMAGE     := hapiproject/hapi:v7.6.0
+HAPI_JAVA_VER  := 17
 HC_DIR      := services/fhir-server/healthcheck
 
 .PHONY: help setup test test-cov lint format batch fetch \
@@ -124,17 +125,13 @@ preflight:
 # to probe /actuator/health. It MUST be compiled for the same JDK version
 # as the HAPI image. This target auto-detects the version from the image.
 build-healthcheck:
-	@echo "Compiling HealthCheck.java targeting JDK from $(HAPI_IMAGE)..."
-	@JAVA_VER=$$(docker run --rm --entrypoint java $(HAPI_IMAGE) -version 2>&1 \
-		| head -1 | grep -oP '"[^"]+"' | tr -d '"' | cut -d. -f1); \
-	if [ -z "$$JAVA_VER" ]; then echo "FAIL: could not detect Java version from $(HAPI_IMAGE)"; exit 1; fi; \
-	echo "  Detected Java $$JAVA_VER inside $(HAPI_IMAGE)"; \
-	docker run --rm \
+	@echo "Compiling HealthCheck.java for Java $(HAPI_JAVA_VER) ($(HAPI_IMAGE))..."
+	@docker run --rm \
 		-v "$(CURDIR)/$(HC_DIR):/code" \
 		-w /code \
-		eclipse-temurin:$${JAVA_VER}-jdk \
-		javac --release $$JAVA_VER HealthCheck.java; \
-	echo "  HealthCheck.class compiled for Java $$JAVA_VER"
+		eclipse-temurin:$(HAPI_JAVA_VER)-jdk \
+		javac --release $(HAPI_JAVA_VER) HealthCheck.java
+	@echo "  HealthCheck.class compiled for Java $(HAPI_JAVA_VER)"
 
 # ── Docker compose helpers ────────────────────────────────────────────────────
 build: build-healthcheck
