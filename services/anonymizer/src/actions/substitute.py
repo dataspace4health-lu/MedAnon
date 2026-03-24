@@ -2,9 +2,6 @@ from utils.fhirpath import error, find_nodes
 
 expected_params = ['substitute_with']
 
-def _substitute(old_value, new_value):
-    return new_value
-
 def _substitute_nodes(node, key, value, new_value):
     if isinstance(node, list):
         [ _substitute_nodes(node[node_elem_idx], key, value, new_value) for node_elem_idx in range(len(node)) ]
