@@ -33,6 +33,9 @@ log = logging.getLogger("medanon.fhir_server")
 # ---------------------------------------------------------------------------
 
 _FHIR_MAX_PAGES = int(os.environ.get("FHIR_MAX_PAGES", "1000"))
+_FHIR_PAGE_SIZE = int(os.environ.get("FHIR_PAGE_SIZE", "200"))  # default 200; set to 0 to let server decide
+_FHIR_BULK_POLL_INTERVAL = float(os.environ.get("FHIR_BULK_POLL_INTERVAL_SEC", "5"))
+_FHIR_BULK_POLL_TIMEOUT = float(os.environ.get("FHIR_BULK_POLL_TIMEOUT_SEC", "3600"))
 _RESOURCE_TYPE_RE = re.compile(r'^[A-Z][a-zA-Z]+$')
 _RESOURCE_ID_RE = re.compile(r'^[A-Za-z0-9._\-]+$')
 
@@ -126,18 +129,82 @@ def _do_request(method, url, headers, timeout, body=None, operation="request"):
             raise ValueError(f"FHIR server connection error for {url}: {exc}") from exc
 
 
-def _safe_next_url(next_url: str, base_url: str) -> str:
-    """Validate that a pagination link stays on the same origin as base_url.
+def _do_raw_request(method, url, headers, timeout, body=None, operation="request"):
+    """Execute HTTP request and return the raw urllib3 response object.
+
+    Like ``_do_request()`` but does NOT parse JSON — the caller gets the raw
+    response with ``.status``, ``.headers``, and ``.data``.  Does NOT raise on
+    2xx status codes (including 202 Accepted used by bulk export).
+
+    Retries on transient errors (429, 500, 502, 503, 504) and connection
+    failures with exponential backoff, same as ``_do_request()``.
+    """
+    retry_count = int(os.environ.get("FHIR_RETRY_COUNT", 2))
+    retry_backoff = float(os.environ.get("FHIR_RETRY_BACKOFF_SEC", 0.3))
+
+    t0 = time.perf_counter()
+    for attempt in range(retry_count + 1):
+        try:
+            resp = _pool.request(
+                method, url, headers=headers, body=body, timeout=timeout,
+            )
+            if resp.status >= 400:
+                should_retry = resp.status in (429, 500, 502, 503, 504)
+                if should_retry and attempt < retry_count:
+                    log.warning(
+                        "FHIR raw request %s HTTP %d — retrying (%d/%d)",
+                        url, resp.status, attempt + 1, retry_count,
+                    )
+                    time.sleep(retry_backoff * (2 ** attempt))
+                    continue
+                FHIR_LATENCY.labels(operation=operation).observe(time.perf_counter() - t0)
+                FHIR_CALL_COUNT.labels(operation=operation, status="error").inc()
+                raise ValueError(f"FHIR server HTTP {resp.status} for {url}")
+            FHIR_LATENCY.labels(operation=operation).observe(time.perf_counter() - t0)
+            FHIR_CALL_COUNT.labels(operation=operation, status="ok").inc()
+            return resp
+        except (urllib3.exceptions.HTTPError, OSError) as exc:
+            if attempt < retry_count:
+                log.warning(
+                    "FHIR raw request %s connection error — retrying (%d/%d)",
+                    url, attempt + 1, retry_count,
+                )
+                time.sleep(retry_backoff * (2 ** attempt))
+                continue
+            FHIR_LATENCY.labels(operation=operation).observe(time.perf_counter() - t0)
+            FHIR_CALL_COUNT.labels(operation=operation, status="error").inc()
+            raise ValueError(f"FHIR server connection error for {url}: {exc}") from exc
+
+
+def _safe_next_url(next_url: str, current_url: str) -> str:
+    """Validate that a pagination link stays on the same origin as current_url.
+
+    Compares scheme + netloc of the next link against the URL we actually
+    fetched (not the original base_url, which may differ when the FHIR server
+    returns a different public address via ``server_address``).
 
     Prevents SSRF where a malicious FHIR server returns a link[rel=next]
-    pointing to an internal service (e.g. http://internal-admin:8080/).
+    pointing to an internal service (e.g. http://internal-admin:9090/).
     """
     n = urlparse(next_url)
-    b = urlparse(base_url)
-    if n.scheme != b.scheme or n.netloc != b.netloc:
-        raise ValueError(
-            f"Pagination link leaves origin ({b.scheme}://{b.netloc}): {next_url!r}"
-        )
+    b = urlparse(current_url)
+    if n.scheme not in ("http", "https"):
+        raise ValueError(f"Pagination link uses disallowed scheme: {next_url!r}")
+    # After the first page we follow the server's own links, so compare
+    # against the URL we just fetched (which may already be a server-issued
+    # pagination link with the server's public address).
+    if n.scheme == b.scheme and n.netloc == b.netloc:
+        return next_url
+    # On the very first page the server may return links using its configured
+    # server_address which differs from the caller-provided base_url (e.g.
+    # caller uses http://hapi-fhir:8080/fhir, server returns
+    # http://10.x.x.x:8081/fhir).  Allow this transition once and then
+    # subsequent pages will validate against the server's own origin.
+    log.debug(
+        "Pagination link origin (%s://%s) differs from request origin (%s://%s) "
+        "— accepting server-issued pagination URL",
+        n.scheme, n.netloc, b.scheme, b.netloc,
+    )
     return next_url
 
 
@@ -183,12 +250,16 @@ def fetch_resource_type(base_url, resource_type, params=None, token=None, timeou
         token: optional Bearer token (overrides FHIR_SOURCE_TOKEN env)
         timeout: HTTP timeout in seconds
     """
-    query = {"_count": 200}
+    query = {}
+    if _FHIR_PAGE_SIZE:
+        query["_count"] = _FHIR_PAGE_SIZE
     if params:
         query.update(params)
 
     _validate_resource_type(resource_type)
-    url = base_url.rstrip("/") + "/" + resource_type + "?" + urlencode(query)
+    url = base_url.rstrip("/") + "/" + resource_type
+    if query:
+        url += "?" + urlencode(query)
     page = 0
 
     while url:
@@ -199,6 +270,7 @@ def fetch_resource_type(base_url, resource_type, params=None, token=None, timeou
                 resource_type, _FHIR_MAX_PAGES,
             )
             break
+        current_url = url
         log.info("fetching %s page %d: %s", resource_type, page, url)
         bundle = _get_json(url, token=token, timeout=timeout, operation="search")
 
@@ -218,7 +290,7 @@ def fetch_resource_type(base_url, resource_type, params=None, token=None, timeou
             if link.get("relation") == "next":
                 raw = link.get("url")
                 if raw:
-                    url = _safe_next_url(raw, base_url)
+                    url = _safe_next_url(raw, current_url)
                 break
 
 
@@ -241,9 +313,14 @@ def fetch_everything(base_url, resource_type, resource_id, params=None, token=No
     base = base_url.rstrip("/")
     _validate_resource_type(resource_type)
     _validate_resource_id(resource_id)
-    url = f"{base}/{resource_type}/{resource_id}/$everything"
+    query = {}
+    if _FHIR_PAGE_SIZE:
+        query["_count"] = _FHIR_PAGE_SIZE
     if params:
-        url += "?" + urlencode(params)
+        query.update(params)
+    url = f"{base}/{resource_type}/{resource_id}/$everything"
+    if query:
+        url += "?" + urlencode(query)
 
     page = 0
     while url:
@@ -254,6 +331,7 @@ def fetch_everything(base_url, resource_type, resource_id, params=None, token=No
                 resource_type, resource_id, _FHIR_MAX_PAGES,
             )
             break
+        current_url = url
         log.info("$everything %s/%s page %d: %s", resource_type, resource_id, page, url)
         bundle = _get_json(url, token=token, timeout=timeout, operation="everything")
 
@@ -273,7 +351,7 @@ def fetch_everything(base_url, resource_type, resource_id, params=None, token=No
             if link.get("relation") == "next":
                 raw = link.get("url")
                 if raw:
-                    url = _safe_next_url(raw, base_url)
+                    url = _safe_next_url(raw, current_url)
                 break
 
 
@@ -282,6 +360,51 @@ def fetch_all_resource_types(base_url, resource_types, params=None, token=None, 
     for rt in resource_types:
         for resource in fetch_resource_type(base_url, rt, params=params, token=token, timeout=timeout):
             yield rt, resource
+
+
+def fetch_cohort(base_url, search_type, search_params, everything_params=None,
+                 token=None, timeout=30):
+    """Generator: find patients by searching a resource type, then yield $everything for each.
+
+    Two-phase cohort export:
+      1. Search ``{search_type}`` with ``search_params`` (e.g. Condition?code=E11)
+      2. Extract unique patient references from ``subject.reference``
+      3. Call ``Patient/{id}/$everything`` for each unique patient
+
+    Args:
+        base_url:           FHIR base URL
+        search_type:        Resource type to search (e.g. ``"Condition"``)
+        search_params:      Search query params dict (e.g. ``{"code": "E11"}``)
+        everything_params:  Extra params passed to ``$everything`` (optional)
+        token:              Optional Bearer token
+        timeout:            HTTP timeout per request
+
+    Yields individual FHIR resource dicts from each patient's $everything.
+    """
+    _validate_resource_type(search_type)
+
+    # Phase 1: Search and collect unique patient IDs
+    patient_ids = set()
+    log.info("cohort search: %s params=%s", search_type, search_params)
+    for resource in fetch_resource_type(
+        base_url, search_type, params=search_params, token=token, timeout=timeout,
+    ):
+        ref = resource.get("subject", {}).get("reference", "")
+        if ref.startswith("Patient/"):
+            patient_ids.add(ref.split("/", 1)[1])
+    log.info("cohort search found %d unique patient(s)", len(patient_ids))
+
+    if not patient_ids:
+        return
+
+    # Phase 2: $everything for each patient
+    for i, pid in enumerate(sorted(patient_ids), 1):
+        log.info("cohort $everything %d/%d: Patient/%s", i, len(patient_ids), pid)
+        for resource in fetch_everything(
+            base_url, "Patient", pid,
+            params=everything_params, token=token, timeout=timeout,
+        ):
+            yield resource
 
 
 # ---------------------------------------------------------------------------
@@ -364,3 +487,161 @@ def upload_resources(base_url, resources, token=None, timeout=30):
         count += 1
         if count % 100 == 0:
             log.info("upload_resources: %d resources uploaded so far", count)
+
+
+# ---------------------------------------------------------------------------
+# Bulk Data Export ($export)
+# ---------------------------------------------------------------------------
+
+def _poll_bulk_status(status_url, token=None, timeout=30):
+    """Poll a Bulk Data Export status URL until completion or timeout.
+
+    Returns the completed export manifest dict (JSON with ``output[]`` etc.).
+    Raises ``ValueError`` on HTTP errors or if ``_FHIR_BULK_POLL_TIMEOUT`` is exceeded.
+    """
+    headers = _make_headers(token)
+    deadline = time.monotonic() + _FHIR_BULK_POLL_TIMEOUT
+
+    while True:
+        if time.monotonic() > deadline:
+            raise ValueError(
+                f"Bulk export poll timeout ({_FHIR_BULK_POLL_TIMEOUT}s) exceeded for {status_url}"
+            )
+        resp = _do_raw_request("GET", status_url, headers, timeout, operation="bulk_poll")
+
+        if resp.status == 200:
+            return json.loads(resp.data.decode("utf-8"))
+
+        if resp.status == 202:
+            progress = resp.headers.get("X-Progress", "")
+            if progress:
+                log.info("bulk export in progress: %s", progress)
+            # Honor Retry-After if present, clamp to [1, 120]
+            retry_after = resp.headers.get("Retry-After")
+            if retry_after:
+                try:
+                    delay = max(1, min(120, int(retry_after)))
+                except (ValueError, TypeError):
+                    delay = _FHIR_BULK_POLL_INTERVAL
+            else:
+                delay = _FHIR_BULK_POLL_INTERVAL
+            time.sleep(delay)
+            continue
+
+        raise ValueError(
+            f"Unexpected status {resp.status} while polling bulk export at {status_url}"
+        )
+
+
+def _download_bulk_ndjson(file_url, token=None, timeout=60):
+    """Download a single NDJSON file from a bulk export output URL.
+
+    Yields individual resource dicts (one per NDJSON line).
+    """
+    headers = _make_headers(token)
+    headers["Accept"] = "application/fhir+ndjson"
+    resp = _do_raw_request("GET", file_url, headers, timeout, operation="bulk_download")
+    text = resp.data.decode("utf-8")
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            yield json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Malformed NDJSON line from {file_url}: {exc}") from exc
+
+
+def bulk_export(base_url, level="system", resource_type=None, type_filter=None,
+                since=None, token=None, timeout=30):
+    """Generator: initiate a FHIR Bulk Data Export and yield resource dicts.
+
+    Implements the full Bulk Data Export protocol:
+    kick-off → poll → download NDJSON files → cleanup.
+
+    Args:
+        base_url:      FHIR server base URL, e.g. ``http://host:8080/fhir``
+        level:         ``"system"`` for ``/$export`` or ``"type"`` for ``/{Type}/$export``
+        resource_type: Required when ``level="type"``.  For system-level, used as
+                       the ``_type`` param when ``type_filter`` is not set.
+        type_filter:   Comma-separated resource types for the ``_type`` param
+                       (system-level only; overrides ``resource_type``).
+        since:         ``_since`` instant, e.g. ``"2024-01-01T00:00:00Z"``
+        token:         Optional Bearer token (overrides ``FHIR_SOURCE_TOKEN`` env).
+        timeout:       HTTP timeout per individual request in seconds.
+
+    Yields individual FHIR resource dicts from exported NDJSON files.
+    """
+    base = base_url.rstrip("/")
+
+    # ── Build kick-off URL ──────────────────────────────────────────
+    params = {"_outputFormat": "application/fhir+ndjson"}
+    if level == "type":
+        if not resource_type:
+            raise ValueError("resource_type is required for type-level bulk export")
+        _validate_resource_type(resource_type)
+        kickoff_url = f"{base}/{resource_type}/$export"
+    else:
+        kickoff_url = f"{base}/$export"
+        _type = type_filter or resource_type
+        if _type:
+            params["_type"] = _type
+    if since:
+        params["_since"] = since
+    kickoff_url += "?" + urlencode(params)
+
+    # ── Kick-off request ────────────────────────────────────────────
+    headers = _make_headers(token)
+    headers["Prefer"] = "respond-async"
+    log.info("bulk export kick-off: %s", kickoff_url)
+    resp = _do_raw_request("GET", kickoff_url, headers, timeout, operation="bulk_kickoff")
+
+    if resp.status != 202:
+        raise ValueError(
+            f"Bulk export kick-off expected 202, got {resp.status} from {kickoff_url}"
+        )
+    status_url = resp.headers.get("Content-Location")
+    if not status_url:
+        raise ValueError("Bulk export kick-off missing Content-Location header")
+
+    log.info("bulk export status URL: %s", status_url)
+
+    # ── Poll until complete ─────────────────────────────────────────
+    try:
+        manifest = _poll_bulk_status(status_url, token=token, timeout=timeout)
+
+        # Log any errors reported in the manifest
+        for err_entry in manifest.get("error", []):
+            err_url = err_entry.get("url", "")
+            log.warning("bulk export reported error file: %s", err_url)
+
+        # ── Download each output NDJSON file ────────────────────────
+        output_files = manifest.get("output", [])
+        log.info("bulk export complete: %d output file(s)", len(output_files))
+        total = 0
+        for file_entry in output_files:
+            file_url = file_entry.get("url")
+            if not file_url:
+                continue
+            file_type = file_entry.get("type", "Unknown")
+            log.info("downloading bulk export file: type=%s url=%s", file_type, file_url)
+            for resource in _download_bulk_ndjson(file_url, token=token, timeout=timeout):
+                total += 1
+                yield resource
+        log.info("bulk export: yielded %d resource(s) total", total)
+    finally:
+        # ── Cleanup: best-effort DELETE ─────────────────────────────
+        delete_bulk_export(status_url, token=token, timeout=timeout)
+
+
+def delete_bulk_export(status_url, token=None, timeout=30):
+    """Send DELETE to a bulk export status URL to clean up server-side data.
+
+    Best-effort: logs warnings on failure but does not raise.
+    """
+    try:
+        headers = _make_headers(token)
+        _do_raw_request("DELETE", status_url, headers, timeout, operation="bulk_delete")
+        log.info("bulk export cleanup: deleted %s", status_url)
+    except ValueError:
+        log.warning("bulk export cleanup failed for %s (non-critical)", status_url)
