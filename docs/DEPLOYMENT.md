@@ -7,6 +7,7 @@
 3. [Environment Variables Reference](#3-environment-variables-reference)
 4. [Secrets Management](#4-secrets-management)
 5. [Kubernetes (Helm) Deployment](#5-kubernetes-helm-deployment)
+   - [K3s Deployment (Single-Node / Edge)](#k3s-deployment-single-node--edge)
 6. [Resource Requirements](#6-resource-requirements)
 7. [Production Hardening](#7-production-hardening)
 8. [Upgrading](#8-upgrading)
@@ -330,6 +331,129 @@ ingress:
     enabled: true
     secretName: medanon-tls
 ```
+
+### K3s Deployment (Single-Node / Edge)
+
+K3s is a lightweight Kubernetes distribution — no changes to the Helm charts are needed. Three
+environment differences require a values override file, provided at `helm/k3s-values.yaml`.
+
+#### K3s vs. full Kubernetes: what differs
+
+| Topic | Full K8s | K3s |
+|---|---|---|
+| Ingress controller | nginx-ingress (you install) | Traefik (built-in) |
+| Default StorageClass | Cloud PV / manual | `local-path` (built-in) |
+| Image source | External registry | Local import via `k3s ctr` |
+| NetworkPolicies | Enforced (Calico/Cilium) | Not enforced by default (Flannel) |
+
+#### Step 1: Install K3s
+
+```bash
+# Minimal single-node install (Traefik + local-path included by default)
+curl -sfL https://get.k3s.io | sh -
+
+# Verify
+sudo k3s kubectl get nodes
+```
+
+To also enforce NetworkPolicies, install with Cilium instead of Flannel:
+
+```bash
+curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="--flannel-backend=none --disable-network-policy" sh -
+# Then follow Cilium quick-install: https://docs.cilium.io/en/stable/gettingstarted/k3s/
+```
+
+#### Step 2: Install Helm (if not already installed)
+
+```bash
+curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+```
+
+Configure kubectl to use the K3s kubeconfig:
+
+```bash
+export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+# Or copy it to ~/.kube/config for permanent access
+sudo cp /etc/rancher/k3s/k3s.yaml ~/.kube/config
+sudo chown $USER ~/.kube/config
+```
+
+#### Step 3: Build and Import Images
+
+K3s uses its own containerd store, separate from Docker. Import built images directly:
+
+```bash
+# Build the anonymizer image
+make build
+
+# Import into k3s containerd (run as root or with sudo)
+docker save medanon:latest      | sudo k3s ctr images import -
+docker save medanon-ui:latest   | sudo k3s ctr images import -
+
+# Verify
+sudo k3s ctr images ls | grep medanon
+```
+
+Upstream images (HAPI FHIR, gPAS, MySQL, busybox) are pulled automatically from Docker Hub
+because `imagePullPolicy: Never` only applies to images with `global.registry` prefix in the
+Helm values — those entries are left with an empty registry and will still pull normally.
+
+> **Tip:** For a team setup, run a local registry (e.g. `registry:2` container) and push there.
+> Set `global.registry: localhost:5000` in `k3s-values.yaml` and remove `imagePullPolicy: Never`.
+
+#### Step 4: Generate Secrets
+
+```bash
+export HASH_KEY=$(openssl rand -hex 32)
+export WF_PASS=$(openssl rand -base64 24)
+export MYSQL_PASS=$(openssl rand -base64 24)
+```
+
+#### Step 5: Deploy
+
+```bash
+helm upgrade --install medanon ./helm/medanon \
+  -f helm/k3s-values.yaml \
+  --set anonymizer.secrets.MEDANON_HASH_KEY="$HASH_KEY" \
+  --set gpas.secrets.WF_ADMIN_PASS="$WF_PASS" \
+  --set gpas.db.secrets.rootPassword="$MYSQL_PASS" \
+  --namespace medanon --create-namespace
+```
+
+#### Step 6: Add Local DNS Entry
+
+For local access via the `medanon.local` hostname defined in `k3s-values.yaml`:
+
+```bash
+# Get the node IP
+NODE_IP=$(sudo k3s kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
+
+# Add to /etc/hosts
+echo "$NODE_IP  medanon.local" | sudo tee -a /etc/hosts
+```
+
+#### Step 7: Verify
+
+```bash
+sudo k3s kubectl get pods -n medanon     # all pods Running
+sudo k3s kubectl get ingress -n medanon  # ADDRESS populated by Traefik
+
+curl http://medanon.local/health         # {"status":"ok"}
+curl http://medanon.local/fhir/metadata  # HAPI FHIR CapabilityStatement
+```
+
+Port-forward if Traefik is not yet routing:
+
+```bash
+sudo k3s kubectl port-forward svc/medanon-anonymizer 8000:8000 -n medanon
+curl http://localhost:8000/health
+```
+
+#### NetworkPolicy Note
+
+K3s uses Flannel by default, which does **not** enforce `NetworkPolicy` resources. The chart
+applies them without error, but they have no effect. This means all pods can communicate freely
+within the cluster. For production or regulated environments, switch to Cilium (see Step 1).
 
 ---
 

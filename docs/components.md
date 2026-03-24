@@ -749,7 +749,7 @@ hapi:
         - http://medanon:8000
         - http://localhost:8000
         - http://localhost:8501
-    default_page_size: 20
+    default_page_size: 200
     max_page_size: 200
     narrative_enabled: false
 ```
