@@ -8,7 +8,9 @@ from rich import print
 
 from integrations.gpas.client import list_gpas_domains
 from integrations.fhir.client import (
+    bulk_export,
     fetch_all_resource_types,
+    fetch_cohort,
     fetch_everything,
     get_capability_statement,
     upload_resources,
@@ -59,8 +61,9 @@ def _add_fetch_args(p):
                    help="Output NDJSON file path.")
     p.add_argument("--config", "-c", dest="config_filename",
                    help="YAML config file for anonymization rules.")
-    p.add_argument("--count", type=int, default=200,
-                   help="Page size (_count) for FHIR search requests.")
+    p.add_argument("--count", type=int, default=None,
+                   help="Page size (_count) for FHIR search requests. "
+                        "Omit to let the server decide (controlled by FHIR_PAGE_SIZE env var).")
     p.add_argument("--since",
                    help="Only fetch resources modified after this date (sets _lastUpdated param).")
     p.add_argument("--params", dest="extra_params",
@@ -96,7 +99,9 @@ def _run_fetch(args):
         print(f"Found {len(resource_types)} resource type(s): {', '.join(resource_types)}")
 
     # Build query params
-    query_params = {"_count": args.count}
+    query_params = {}
+    if args.count:
+        query_params["_count"] = args.count
     if args.since:
         query_params["_lastUpdated"] = f"ge{args.since}"
     if args.extra_params:
@@ -250,6 +255,131 @@ def _run_push(args):
     print(f"{status} Pushed {total} resource(s) to {server} — {errors} error(s)")
 
 
+def _add_export_args(p):
+    """Add export-subcommand arguments to an argparse parser."""
+    p.add_argument("--server",
+                   help="FHIR base URL (overrides FHIR_SOURCE_URL env). "
+                        "E.g. http://host:8080/fhir")
+    p.add_argument("--level", choices=["system", "type"], default="system",
+                   help="Export level: 'system' for /$export, 'type' for /{Type}/$export.")
+    p.add_argument("--resource-type", dest="resource_type",
+                   help="Resource type for type-level export. "
+                        "For system-level, sets the _type filter parameter.")
+    p.add_argument("--type-filter", dest="type_filter",
+                   help="Comma-separated _type filter for system-level export "
+                        "(e.g. Patient,Observation). Overrides --resource-type for system level.")
+    p.add_argument("--since",
+                   help="Only export resources modified after this instant (sets _since param).")
+    p.add_argument("--output", required=True,
+                   help="Output NDJSON file path.")
+    p.add_argument("--config", "-c", dest="config_filename",
+                   help="YAML config file for anonymization rules.")
+    p.add_argument("--token", dest="fhir_token",
+                   help="Bearer token for FHIR server auth (overrides FHIR_SOURCE_TOKEN env).")
+    p.add_argument("--timeout", type=float, default=30.0,
+                   help="HTTP timeout per request in seconds.")
+    return p
+
+
+def _run_export(args):
+    server = (args.server or os.environ.get("FHIR_SOURCE_URL", "")).rstrip("/")
+    if not server:
+        raise SystemExit("error: --server or FHIR_SOURCE_URL env var is required")
+    token = args.fhir_token or os.environ.get("FHIR_SOURCE_TOKEN")
+    timeout = args.timeout
+
+    if args.level == "type" and not args.resource_type:
+        raise SystemExit("error: --resource-type is required for type-level export")
+
+    settings = None
+    if args.config_filename:
+        settings = config.Settings(args.config_filename)
+
+    output_path = Path(args.output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    total = 0
+    with open(output_path, "w", encoding="utf-8") as fout:
+        for resource in bulk_export(
+            server,
+            level=args.level,
+            resource_type=args.resource_type,
+            type_filter=args.type_filter,
+            since=args.since,
+            token=token,
+            timeout=timeout,
+        ):
+            if settings is not None:
+                resource = process_data(resource, settings)
+            fout.write(json.dumps(resource, separators=(',', ':')))
+            fout.write("\n")
+            total += 1
+            if total % 100 == 0:
+                print(f"  processed {total} resources...")
+
+    print(f":thumbs_up: Bulk export: {total} resource(s) → {output_path}")
+
+
+def _add_cohort_args(p):
+    """Add cohort-subcommand arguments to an argparse parser."""
+    p.add_argument("--server",
+                   help="FHIR base URL (overrides FHIR_SOURCE_URL env).")
+    p.add_argument("--search-type", dest="search_type", default="Condition",
+                   help="Resource type to search for cohort selection (default: Condition).")
+    p.add_argument("--code", required=True,
+                   help="Code to search for, e.g. 'E11' or 'http://hl7.org/fhir/sid/icd-10|E11'.")
+    p.add_argument("--search-params", dest="search_extra_params",
+                   help="Additional search params, e.g. 'clinical-status=active&verification-status=confirmed'.")
+    p.add_argument("--output", required=True,
+                   help="Output NDJSON file path.")
+    p.add_argument("--config", "-c", dest="config_filename",
+                   help="YAML config file for anonymization rules.")
+    p.add_argument("--token", dest="fhir_token",
+                   help="Bearer token for FHIR server auth (overrides FHIR_SOURCE_TOKEN env).")
+    p.add_argument("--timeout", type=float, default=30.0,
+                   help="HTTP timeout per request in seconds.")
+    return p
+
+
+def _run_cohort(args):
+    server = (args.server or os.environ.get("FHIR_SOURCE_URL", "")).rstrip("/")
+    if not server:
+        raise SystemExit("error: --server or FHIR_SOURCE_URL env var is required")
+    token = args.fhir_token or os.environ.get("FHIR_SOURCE_TOKEN")
+    timeout = args.timeout
+
+    # Build search params
+    search_params = {"code": args.code}
+    if args.search_extra_params:
+        for part in args.search_extra_params.split("&"):
+            if "=" in part:
+                k, v = part.split("=", 1)
+                search_params[k.strip()] = v.strip()
+
+    settings = None
+    if args.config_filename:
+        settings = config.Settings(args.config_filename)
+
+    output_path = Path(args.output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    total = 0
+    with open(output_path, "w", encoding="utf-8") as fout:
+        for resource in fetch_cohort(
+            server, args.search_type, search_params,
+            token=token, timeout=timeout,
+        ):
+            if settings is not None:
+                resource = process_data(resource, settings)
+            fout.write(json.dumps(resource, separators=(',', ':')))
+            fout.write("\n")
+            total += 1
+            if total % 100 == 0:
+                print(f"  processed {total} resources...")
+
+    print(f":thumbs_up: Cohort export: {total} resource(s) → {output_path}")
+
+
 def _build_parser():
     parser = argparse.ArgumentParser(
         description="Black-box FHIR processor for JSON, NDJSON, XML, and Bundles.",
@@ -314,6 +444,26 @@ def main(argv=None):
         _add_push_args(push_parser)
         push_args = push_parser.parse_args(argv[1:])
         _run_push(push_args)
+        return
+
+    if argv and argv[0] == "export":
+        export_parser = argparse.ArgumentParser(
+            prog="cli.py export",
+            description="Bulk export FHIR resources via $export, optionally de-identify, and save as NDJSON.",
+        )
+        _add_export_args(export_parser)
+        export_args = export_parser.parse_args(argv[1:])
+        _run_export(export_args)
+        return
+
+    if argv and argv[0] == "cohort":
+        cohort_parser = argparse.ArgumentParser(
+            prog="cli.py cohort",
+            description="Export all records for patients matching a condition code via $everything.",
+        )
+        _add_cohort_args(cohort_parser)
+        cohort_args = cohort_parser.parse_args(argv[1:])
+        _run_cohort(cohort_args)
         return
 
     parser = _build_parser()
