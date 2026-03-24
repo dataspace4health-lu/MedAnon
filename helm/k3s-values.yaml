@@ -1,0 +1,77 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# MedAnon — K3s override values
+#
+# Use this file when deploying to a K3s cluster (single-node or edge).
+# It handles the three main differences from a full Kubernetes cluster:
+#
+#   1. Images are imported locally (no external registry required)
+#   2. Ingress uses Traefik (K3s built-in) instead of nginx
+#   3. local-path StorageClass is used for MySQL PVC (K3s built-in)
+#
+# Usage:
+#   # Build and import images
+#   make build
+#   docker save medanon:latest | sudo k3s ctr images import -
+#
+#   # Deploy
+#   helm upgrade --install medanon ./helm/medanon \
+#     -f helm/k3s-values.yaml \
+#     --set anonymizer.secrets.MEDANON_HASH_KEY=<hex-key> \
+#     --set gpas.secrets.WF_ADMIN_PASS=<password> \
+#     --set gpas.db.secrets.rootPassword=<password> \
+#     --namespace medanon --create-namespace
+#
+# See docs/DEPLOYMENT.md § "K3s Deployment" for full step-by-step instructions.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ─── Global ───────────────────────────────────────────────────────────────────
+global:
+  # No registry prefix — images are imported directly into the k3s containerd store.
+  registry: ""
+  # Never pull from a remote registry; use only what was imported with k3s ctr.
+  imagePullPolicy: Never
+
+# ─── Anonymizer ───────────────────────────────────────────────────────────────
+anonymizer:
+  # Wait for gPAS to be ready before the anonymizer starts.
+  gpasServiceName: "medanon-gpas"
+
+  env:
+    # In-cluster service DNS names (release name "medanon" + chart name).
+    GPAS_URL: "http://medanon-gpas:8080/ttp-fhir/fhir/gpas"
+    FHIR_SOURCE_URL: "http://medanon-fhir-server:8080/fhir"
+
+# ─── FHIR Server ──────────────────────────────────────────────────────────────
+fhir-server:
+  # Must match the hostname used to reach the cluster from outside.
+  # For local development, use the node IP or a /etc/hosts alias.
+  serverAddress: "http://medanon.local/fhir"
+
+# ─── gPAS ─────────────────────────────────────────────────────────────────────
+gpas:
+  db:
+    persistence:
+      # K3s ships with the "local-path" provisioner as the default StorageClass.
+      # Leave storageClass empty to use the cluster default (local-path on K3s).
+      storageClass: ""
+      size: 10Gi
+
+# ─── Ingress ──────────────────────────────────────────────────────────────────
+ingress:
+  enabled: true
+
+  # K3s bundles Traefik as its default ingress controller.
+  # If you installed K3s with --disable=traefik and added nginx-ingress instead,
+  # change this to "nginx".
+  className: "traefik"
+
+  # For local development, add this to /etc/hosts:
+  #   <node-ip>  medanon.local
+  # For production, replace with a real DNS name.
+  host: "medanon.local"
+
+  tls:
+    # Set to true and provide a cert secret for HTTPS.
+    # Traefik can also manage certs automatically via cert-manager + Let's Encrypt.
+    enabled: false
+    secretName: "medanon-tls"
