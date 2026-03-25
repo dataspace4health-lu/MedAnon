@@ -75,7 +75,7 @@ trap 'rm -f "$RAW_TMP"' EXIT
 echo ""
 echo "Fetching raw data for Patient/${PATIENT_ID} ..."
 HTTP_STATUS=$(curl -s -o "$RAW_TMP" -w "%{http_code}" \
-  "${FHIR_SOURCE_URL}/Patient/${PATIENT_ID}/\$everything" \
+  "${FHIR_SOURCE_URL}/Patient/${PATIENT_ID}/\$everything?_count=200" \
   -H "Accept: application/fhir+json")
 
 if [[ "$HTTP_STATUS" != "200" ]]; then
