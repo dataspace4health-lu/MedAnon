@@ -1,4 +1,4 @@
-# SPE FHIR BlackBox — Architecture
+3. Data Flows# SPE FHIR BlackBox — Architecture
 
 ## Table of Contents
 
@@ -237,15 +237,16 @@ services/anonymizer/src/
 │   ├── auth.py           ← API-key auth; RBAC; structured audit log
 │   ├── deps.py           ← Rate limiter; SSRF protection; config loader; shared helpers
 │   └── routers/
-│       ├── process.py    ← /process, /process/raw, /process/ndjson, /process/batch,
-│       │                    /process/from-server, /process/everything,
-│       │                    /process/and-upload, /process/round-trip
+│       ├── process.py    ← /process, /process/raw, /process/ndjson, /process/batch
+│       ├── fhir_server.py ← /process/from-server, /process/everything,
+│       │                    /process/and-upload, /process/round-trip,
+│       │                    /process/bulk-export, /process/cohort
 │       ├── analytics.py  ← /analyse/risk
-│       ├── synthetic.py  ← /generate/synthetic
-│       └── fhir_server.py
+│       └── synthetic.py  ← /generate/synthetic
 ├── pipeline/
 │   ├── config.py         ← YAML loader + env interpolation
 │   ├── processor.py      ← Rule engine: FHIRPath match → action dispatch
+│   ├── deidentify.py     ← Action dispatch registry (local de-identification actions)
 │   └── io_formats.py     ← Multi-format parse + serialize
 ├── actions/              ← One file per action type
 ├── integrations/
@@ -254,7 +255,8 @@ services/anonymizer/src/
 │   └── nlp/              ← Presidio NER detector
 └── analytics/
     ├── risk.py           ← k-anonymity / l-diversity metrics
-    └── synthetic.py      ← Synthetic FHIR Patient generation
+    ├── synthetic.py      ← Synthetic FHIR Patient generation (stdlib engine)
+    └── synthetic_sdv.py  ← GaussianCopula synthesis (SDV engine; optional)
 ```
 
 #### Middleware Stack (applied to every request)
@@ -326,7 +328,9 @@ integrations/fhir/client.py
   • Paginated fetch (auto-follows Bundle.link[rel=next])
   • $everything operation
   • Bulk export ($export) kick-off, polling, and NDJSON download
+  • Cohort fetch (search by condition code, retrieve $everything per patient)
   • Resource upload (POST per resource type)
+  • Capability statement introspection (/metadata)
   • Exponential backoff retry (default 2× @ 0.3 s)
   • Configurable page size (FHIR_PAGE_SIZE, default 200)
 ```
@@ -625,16 +629,7 @@ Each profile is a YAML file under `services/anonymizer/config/`. The active prof
 | `research` | `config_research_pseudonymous.yaml` | IRB-grade longitudinal research | cryptohash | year-month | No |
 | `structural` | `config_structure_preserving.yaml` | Preserve full FHIR structure; mask PII | gpas_pseudonymize | year-only | **Yes** |
 
-### Structural Profile — Key Properties
-
-The `structural` profile is designed for downstream consumers that require a complete FHIR structure:
-
-- **Fields are never removed** — `action: substitute` replaces PII text with `[REDACTED]`; the field and its array structure remain
-- **IDs are pseudonymized** via gPAS; cross-references are rewritten by `rewrite_references: true`
-- **Clinical data is untouched** — no rules target codes, values, observations, conditions, or non-birthDate dates
-- **birthDate** generalised to year only (`generalize: date_year`)
-- **Binary blobs** (photo, attachment) are redacted (no meaningful text substitute)
-- **Free text** (narrative, notes, comments) scrubbed inline via `scrub_text` + `nlp_detect`
+See [policies.md](policies.md) for guidance on when to use each profile and how to create custom ones.
 
 ---
 
@@ -660,6 +655,7 @@ The `structural` profile is designed for downstream consumers that require a com
 | POST | `/process/batch` | JSON/NDJSON/XML | NDJSON | Unified batch endpoint |
 | POST | `/process/from-server` | JSON params | NDJSON | Fetch from FHIR server; stream de-identified output |
 | POST | `/process/everything` | JSON params | NDJSON | `$everything` for a single patient |
+| POST | `/process/cohort` | JSON params | NDJSON | Search patients by condition code; export full `$everything` records |
 
 ### Upload Endpoints (admin role required)
 
@@ -667,6 +663,7 @@ The `structural` profile is designed for downstream consumers that require a com
 |---|---|---|---|
 | POST | `/process/and-upload` | JSON (resource + target params) | JSON status |
 | POST | `/process/round-trip` | JSON (source + target params) | NDJSON status stream |
+| POST | `/process/bulk-export` | JSON params | NDJSON | Initiate `$export` on source server; de-identify and stream output |
 
 ### Analytics Endpoints (analyst role minimum)
 

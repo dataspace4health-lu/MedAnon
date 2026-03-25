@@ -110,13 +110,16 @@ This applies `docker-compose.dev.yml` overrides:
 
 Choose the profile that matches your use case:
 
-| Use Case | Config File | ID Strategy | Date Strategy |
-|---|---|---|---|
-| Local dev / testing | `config.yaml` | cryptohash (SHA3-256) | regex scrubbing |
-| Production (reversible pseudonyms) | `config_gpas.yaml` | gPAS pseudonymize | generalize + NLP |
-| EU patient data (GDPR) | `config_gdpr_eu.yaml` | HMAC pseudonymization | year-only |
-| US patient data (HIPAA) | `config_hipaa_safe_harbor.yaml` | cryptohash | year-only, 18 PHI categories |
-| Research under IRB | `config_research_pseudonymous.yaml` | cryptohash (longitudinal) | year-month |
+| Use Case | Config File |
+|---|---|
+| Local dev / testing | `config.yaml` |
+| Production (reversible pseudonyms, requires gPAS) | `config_gpas.yaml` |
+| EU patient data (GDPR Art. 4(5)) | `config_gdpr_eu.yaml` |
+| US patient data (HIPAA Safe Harbor) | `config_hipaa_safe_harbor.yaml` |
+| Research under IRB | `config_research_pseudonymous.yaml` |
+| Full FHIR structure intact (requires gPAS) | `config_structure_preserving.yaml` |
+
+See [policies.md](policies.md) for a full comparison of ID strategy, date handling, compliance notes, and limitations.
 
 The active config is auto-selected:
 - `GPAS_URL` set -> `config_gpas.yaml`
@@ -452,12 +455,23 @@ If a service is consistently OOM-killed, increase its memory limit in `docker-co
 | `make dev` | Start with hot-reload (source mounted into container) |
 | `make down` | Stop and remove containers (volumes preserved) |
 | `make build` | Rebuild Docker images (anonymizer + UI) |
+| `make build-sdv` | Build anonymizer image with SDV synthetic engine |
+| `make up-sdv` | Build SDV image and start full stack with SDV engine |
 | `make logs` | Tail all container logs |
+| `make verify` | Smoke-test a running stack (all 5 services) |
 | `make setup` | Create Python venv, install deps, download spaCy model |
+| `make test` | Run full test suite via pytest |
+| `make test-cov` | Run tests with coverage report |
 | `make lint` | Run ruff linter on anonymizer source |
 | `make format` | Run ruff formatter on anonymizer source |
+| `make clean` | Remove `__pycache__` and `.pytest_cache` |
 | `make batch` | Run batch_process.sh + generate analytics report |
+| `make fetch` | Pull resources from HAPI FHIR, anonymize, write NDJSON |
 | `make init-domains` | Create gPAS pseudonymization domain |
+| `make helm-lint` | Validate Helm chart (no cluster needed) |
+| `make helm-template` | Dry-run rendered Kubernetes YAML |
+| `make helm-install` | Install/upgrade chart on active cluster |
+| `make helm-uninstall` | Remove the Helm release |
 
 ### Testing
 
@@ -476,20 +490,40 @@ python3 -m pytest tests/test_api.py::test_health -q
 
 ---
 
-## 12. Security Checklist
+## 12. Security & Go-Live Checklist
 
-Before any non-local deployment:
+### Secrets & Keys
+- [ ] `MEDANON_HASH_KEY` set to a strong random secret (`openssl rand -hex 32`)
+- [ ] `MEDANON_API_KEY` set for authenticated API access
+- [ ] `GPAS_BASIC_PASS` and `GPAS_MYSQL_ROOT_PASSWORD` rotated from defaults
+- [ ] RSA keys generated if using `encrypt`/`decrypt` actions (`openssl genrsa -out private.pem 4096`)
+- [ ] All secrets injected via environment or Kubernetes Secrets — never committed to git
 
-- [ ] Set a strong `MEDANON_HASH_KEY` (`openssl rand -hex 32`)
-- [ ] Set `MEDANON_API_KEY` for authenticated access
-- [ ] Set strong passwords for `GPAS_BASIC_PASS`, `GPAS_MYSQL_ROOT_PASSWORD`
-- [ ] Enable TLS termination in front of the stack (nginx / Caddy / Traefik)
-- [ ] Restrict network access: only expose ports 8501 (UI) and 8000 (API) through the proxy
-- [ ] Set `LOG_LEVEL=INFO` (DEBUG logs may expose PHI)
-- [ ] Enable `MEDANON_MANIFEST_ENABLED=true` for GDPR accountability
-- [ ] Generate RSA keys if using encrypt/decrypt actions
-- [ ] Run risk assessment on every batch output before sharing data
-- [ ] Archive the evidence report alongside every de-identified dataset
-- [ ] Review Helm chart (`helm/`) security settings for Kubernetes deployments
-- [ ] Set up Prometheus monitoring for all services
-- [ ] Configure audit log rotation (`MEDANON_AUDIT_LOG_MAX_BYTES`, `MEDANON_AUDIT_LOG_BACKUP_COUNT`)
+### Network & TLS
+- [ ] TLS termination configured at reverse proxy (nginx / Caddy / Traefik)
+- [ ] All service ports bound to `127.0.0.1` (not `0.0.0.0`)
+- [ ] Only port 443 (HTTPS) exposed externally
+- [ ] `MEDANON_CORS_ORIGINS` restricted to known frontend origin(s)
+
+### Logging & Monitoring
+- [ ] `LOG_LEVEL=INFO` (DEBUG may expose PHI)
+- [ ] Audit log volume mounted; rotation configured (`MEDANON_AUDIT_LOG_MAX_BYTES`, `MEDANON_AUDIT_LOG_BACKUP_COUNT`)
+- [ ] Prometheus scraping enabled and alerting rules configured
+- [ ] gPAS MySQL volume backed up before first production run
+
+### Compliance
+- [ ] `MEDANON_MANIFEST_ENABLED=true` for GDPR Art. 30 accountability
+- [ ] Appropriate config profile selected for regulatory context — see [policies.md](policies.md)
+- [ ] Risk assessment (`/analyse/risk`) run on every de-identified batch before data sharing
+- [ ] Evidence report (`docs/EVIDENCE_REPORT_TEMPLATE.md`) completed and archived
+
+### gPAS Setup
+- [ ] gPAS domain created via web UI (`/gpas-web`), **not** via direct SQL insert
+- [ ] `GPAS_DOMAIN` matches the domain name exactly
+- [ ] gPAS connectivity verified: `curl http://localhost:8080/ttp-fhir/fhir/gpas/`
+
+### Load & Capacity
+- [ ] `/ready` returns `{"ready": true}` for all configured services
+- [ ] Batch processing tested with a representative dataset size
+- [ ] Memory limits adequate for NLP model if `nlp_detect` is used (add ~800 MB to anonymizer)
+- [ ] Helm chart security settings reviewed for Kubernetes deployments

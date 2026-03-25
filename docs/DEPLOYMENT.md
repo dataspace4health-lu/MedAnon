@@ -140,6 +140,7 @@ Applies `docker-compose.dev.yml` overrides:
 | `MEDANON_MANIFEST_ENABLED` | no | `false` | Attach transformation manifest to `meta.tag` (GDPR accountability) |
 | `MEDANON_NLP_MODEL` | no | — | Expected NLP model (e.g. `en_core_web_lg`). Triggers NLP readiness check |
 | `MEDANON_RATE_LIMIT_ENABLED` | no | `true` | Enable rate limiting |
+| `MEDANON_HASH_ALLOW_PLAIN` | no | — | Set to `true` to allow plain SHA3-256 without `MEDANON_HASH_KEY` (dev only; suppresses the startup warning) |
 
 ### Anonymizer: Security and Audit
 
@@ -162,6 +163,10 @@ Applies `docker-compose.dev.yml` overrides:
 | `HAPI_PORT` | no | `8081` | Host port for HAPI (dev mode only) |
 | `FHIR_RETRY_COUNT` | no | `2` | Retries on transient errors |
 | `FHIR_RETRY_BACKOFF_SEC` | no | `0.3` | Initial backoff (exponential) |
+| `FHIR_PAGE_SIZE` | no | `200` | Page size for paginated FHIR fetches; `0` = let server decide |
+| `FHIR_MAX_PAGES` | no | `1000` | Safety limit on total pages fetched per operation |
+| `FHIR_BULK_POLL_INTERVAL_SEC` | no | `5` | Polling interval (seconds) for async `$export` status checks |
+| `FHIR_BULK_POLL_TIMEOUT_SEC` | no | `3600` | Maximum wait time (seconds) for a bulk export operation to complete |
 
 ### gPAS: Core
 
@@ -174,6 +179,7 @@ Applies `docker-compose.dev.yml` overrides:
 | `GPAS_BASIC_USER` | for gPAS auth | — | gRAS username (e.g. `user@ths`) |
 | `GPAS_BASIC_PASS` | for gPAS auth | — | gRAS password |
 | `GPAS_TOKEN` | no | — | Bearer token (takes precedence over basic auth) |
+| `GPAS_ADMIN_URL` | no | — | Override gPAS admin URL for domain discovery (defaults to derived from `GPAS_URL`) |
 | `GPAS_MYSQL_ROOT_PASSWORD` | yes | — | MySQL root password |
 
 ### gPAS: Performance

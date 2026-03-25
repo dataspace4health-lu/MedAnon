@@ -61,6 +61,7 @@ All runtime configuration is injected via environment variables. Config YAML fil
 |---|---|---|---|
 | `MEDANON_MANIFEST_ENABLED` | `false` | No | Attach transformation manifest to `meta.tag` (GDPR Art. 30) |
 | `MEDANON_HASH_KEY` | — | **Recommended** | HMAC key for `cryptohash` action; warn if unset |
+| `MEDANON_HASH_ALLOW_PLAIN` | — | No | Set to `true` to suppress HMAC warning and allow plain SHA3-256 (dev only) |
 | `MEDANON_RSA_PUBLIC_KEY` | — | For `encrypt` | Path to RSA public key file |
 | `MEDANON_RSA_PRIVATE_KEY` | — | For `decrypt` | Path to RSA private key file |
 | `MEDANON_KEY_ALLOWED_DIRS` | — | No | Colon-separated allowlist for RSA key directories (path traversal guard) |
@@ -79,6 +80,7 @@ All runtime configuration is injected via environment variables. Config YAML fil
 | `GPAS_CACHE_ENABLED` | `true` | No | Enable thread-safe LRU cache for pseudonym lookups |
 | `GPAS_RETRY_COUNT` | `2` | No | Number of retry attempts on transient gPAS failures |
 | `GPAS_RETRY_BACKOFF_SEC` | `0.2` | No | Initial exponential backoff delay (seconds) |
+| `GPAS_ADMIN_URL` | — | No | Override gPAS admin URL for domain discovery (defaults to derived from `GPAS_URL`) |
 | `GPAS_CB_FAILURE_THRESHOLD` | `5` | No | Circuit-breaker: failures before opening circuit |
 | `GPAS_CB_RECOVERY_TIMEOUT_SEC` | `30` | No | Circuit-breaker: recovery probe delay (seconds) |
 | `GPAS_CB_WINDOW_SEC` | `60` | No | Circuit-breaker: failure counting window (seconds) |
@@ -95,6 +97,10 @@ All runtime configuration is injected via environment variables. Config YAML fil
 | `HAPI_SERVER_ADDRESS` | `http://localhost:8081/fhir` | No | Public-facing HAPI base URL (returned in Bundle responses) |
 | `FHIR_RETRY_COUNT` | `2` | No | Retries on transient FHIR server failures |
 | `FHIR_RETRY_BACKOFF_SEC` | `0.3` | No | Initial exponential backoff delay (seconds) |
+| `FHIR_PAGE_SIZE` | `200` | No | Page size for paginated FHIR fetches (`_count`); set to `0` to let the server decide |
+| `FHIR_MAX_PAGES` | `1000` | No | Safety limit on total pages fetched per operation |
+| `FHIR_BULK_POLL_INTERVAL_SEC` | `5` | No | Polling interval (seconds) for async `$export` status checks |
+| `FHIR_BULK_POLL_TIMEOUT_SEC` | `3600` | No | Maximum wait (seconds) for a bulk export operation to complete |
 
 #### Audit & Readiness
 
@@ -138,31 +144,7 @@ Each profile is a YAML file in `services/anonymizer/config/`. Rules are evaluate
 | **Text scrubbing** | regex | NLP + regex | regex | regex | regex | NLP + regex |
 | **Regulatory target** | Dev/test | Production | GDPR Art. 4(5) | HIPAA Safe Harbor | IRB research | Structure-first |
 
-#### Rule File Format
-
-```yaml
-general:
-  appname: SPE-FHIR-BlackBox
-  rewrite_references: true        # rewrite FHIR cross-references after ID change
-  rewrite_text_ids: true          # also replace IDs in free-text fields
-
-rules:
-  - name: "human-readable name"
-    match: "FHIRPath expression"  # e.g. Patient.birthDate, *.id, *.identifier.value
-    action: "action_name"         # see Actions Reference in section 02.5
-    params:                       # optional; action-specific
-      key: value
-```
-
-**YAML anchors** reduce repetition across rules:
-
-```yaml
-  params: &gpas                   # define anchor
-    gpas_url: ${GPAS_URL}
-    gpas_domain: ${GPAS_DOMAIN}
-
-  params: *gpas                   # reuse anchor
-```
+See [user-manual.md §5](user-manual.md#5-config-file-format) for the full rule file format, FHIRPath wildcard syntax, and YAML anchor examples.
 
 ---
 
@@ -425,6 +407,7 @@ health:  GET /health → {"status":"ok"}
 | `base` | System deps, Python 3.12, `pip install -r requirements.txt` |
 | `prod` | Non-root user, copy source, `CMD ["uvicorn", "api.main:app", ...]` |
 | `dev` | watchfiles hot-reload; source mounted via volume |
+| `sdv` | Extends `base`; installs SDV synthetic engine (`requirements-sdv.txt`); same entry point as `prod` |
 
 ### 02.3 API Endpoints
 
@@ -449,6 +432,7 @@ Note: `/ready` returns full `checks` detail only to authenticated callers (preve
 | POST | `/process/batch` | JSON / NDJSON / XML | NDJSON stream | Auto-detects format |
 | POST | `/process/from-server` | JSON params | NDJSON stream | Fetches from remote FHIR server |
 | POST | `/process/everything` | JSON params | NDJSON stream | FHIR `$everything` for one patient |
+| POST | `/process/cohort` | JSON params | NDJSON stream | Search patients by condition code; fetch and de-identify `$everything` per patient |
 
 **`/process/from-server` params:**
 
@@ -476,6 +460,7 @@ Note: `/ready` returns full `checks` detail only to authenticated callers (preve
 |---|---|---|
 | POST | `/process/and-upload` | De-identify a single resource and POST it to a target FHIR server |
 | POST | `/process/round-trip` | Fetch source FHIR → de-identify → upload to target; streaming status |
+| POST | `/process/bulk-export` | Initiate FHIR `$export` on source server; de-identify and stream NDJSON output |
 
 #### Analytics Endpoints (analyst role)
 
@@ -668,10 +653,11 @@ MEDANON_API_KEY set?
 admin
   ├─ /process/and-upload
   ├─ /process/round-trip
+  ├─ /process/bulk-export
   └─ (includes analyst)
        analyst
          ├─ /process, /process/raw, /process/ndjson, /process/batch
-         ├─ /process/from-server, /process/everything
+         ├─ /process/from-server, /process/everything, /process/cohort
          ├─ /analyse/risk
          ├─ /generate/synthetic
          └─ (includes viewer)
@@ -696,24 +682,18 @@ Applied to every request in this order:
 
 ### 02.8 CLI Interface
 
-The CLI provides bulk processing without an HTTP server:
+The CLI provides bulk processing without an HTTP server. Six subcommands:
 
-```bash
-# Process a local file
-medanon process input.ndjson --config config_gpas.yaml --output output.ndjson
+| Subcommand | Purpose |
+|---|---|
+| `process` | Transform a local file (JSON/NDJSON/XML → JSON/NDJSON/XML) |
+| `fetch` | Fetch from a FHIR server, de-identify, write NDJSON |
+| `everything` | Fetch `$everything` for one patient, de-identify |
+| `push` | Upload a local NDJSON file to a target FHIR server |
+| `export` | Trigger FHIR `$export` (system or type level), de-identify, write NDJSON |
+| `cohort` | Search by condition code, fetch `$everything` per patient, de-identify |
 
-# Fetch from a FHIR server and de-identify
-medanon fetch --server https://fhir.example.com/fhir \
-              --resource-types Patient Observation \
-              --config config_hipaa.yaml
-
-# Fetch $everything for a specific patient
-medanon everything --server https://fhir.example.com/fhir \
-                   --patient-id PAT-001 --config config_gpas.yaml
-
-# Push de-identified output to a target FHIR server
-medanon push input.ndjson --target https://target-fhir.example.com/fhir
-```
+See [user-manual.md §4](user-manual.md#4-cli-reference) for full flag reference and examples.
 
 ---
 
@@ -794,47 +774,11 @@ env:     ANONYMIZER_URL=http://anonymizer:8000
 
 ### 03.3 External Clients (EDC / FIWARE)
 
-External dataspace connectors can consume de-identified data from the Provider Agent via two integration patterns.
+Two integration patterns are supported:
+- **Pull-based file exchange** — MedAnon produces de-identified NDJSON via `/process/from-server`; registered as an EDC `HttpData` asset; consumer pulls under contract.
+- **Real-time proxy** — Consumer EDC data plane POSTs to `/process/round-trip`; MedAnon fetches, de-identifies, and uploads. Not suitable for large datasets (EDC `HttpProxy` does not support chunked streaming).
 
-#### Pattern A: Pull-Based File Exchange
-
-1. Provider runs `/process/from-server` or `/process/round-trip` to produce a de-identified NDJSON file
-2. File is registered as an EDC asset with an `HttpData` address
-3. Consumer negotiates a contract and pulls the file from the asset URL
-
-```
-Consumer EDC                Provider EDC
-    │  ── negotiate contract ──▶ │
-    │  ◀── contract agreed ───── │
-    │  ── initiate transfer ───▶ │
-    │                            │ ── GET asset URL ──▶ MedAnon /process/from-server
-    │                            │ ◀── NDJSON file ────
-    │  ◀── NDJSON file ────────── │
-```
-
-**Advantage:** No runtime coupling; EDC data plane doesn't need to support chunked streaming.
-
-#### Pattern B: Real-Time Processing Proxy
-
-Consumer EDC triggers MedAnon directly via the data plane:
-
-```
-Consumer EDC data plane
-  ── POST /process/round-trip ──▶ MedAnon Anonymizer
-                                    ├── Fetch from source FHIR
-                                    ├── Apply de-identification rules
-                                    └── Upload to target FHIR (or stream back)
-```
-
-**Limitation:** EDC `HttpProxy` does not support chunked NDJSON streaming; use pull pattern for large datasets.
-
-#### FIWARE / NGSI-LD
-
-NGSI-LD context brokers can subscribe to FHIR resources converted to NGSI-LD entities. MedAnon de-identifies before publishing:
-
-```
-HAPI FHIR ── /process ──▶ MedAnon ── NGSI-LD adapter ──▶ Context Broker
-```
+See [connector-integration.md](connector-integration.md) for step-by-step EDC and FIWARE/NGSI-LD integration guides.
 
 ---
 
@@ -1004,48 +948,4 @@ Monitoring:
 
 ### 99.4 Production Deployment Checklist
 
-Before going live with any non-test environment:
-
-#### Secrets & Keys
-
-- [ ] `MEDANON_HASH_KEY` set to a strong random secret (`openssl rand -hex 32`)
-- [ ] `MEDANON_API_KEY` set for authenticated API access
-- [ ] `GPAS_BASIC_PASS` / `GPAS_MYSQL_ROOT_PASSWORD` rotated from defaults
-- [ ] RSA keys generated if using `encrypt`/`decrypt` actions (`openssl genrsa -out private.pem 4096`)
-- [ ] All secrets injected via environment or Kubernetes Secrets (never committed to git)
-
-#### Network & TLS
-
-- [ ] TLS termination configured at reverse proxy
-- [ ] All service ports bound to `127.0.0.1` (not `0.0.0.0`)
-- [ ] Only port 443 (HTTPS) exposed externally
-- [ ] CORS `MEDANON_CORS_ORIGINS` restricted to known frontend origin(s)
-
-#### Logging & Monitoring
-
-- [ ] `LOG_LEVEL=INFO` (DEBUG may expose PHI)
-- [ ] Audit log volume mounted (`/output/audit.log`)
-- [ ] Log rotation configured (`MEDANON_AUDIT_LOG_MAX_BYTES`, `MEDANON_AUDIT_LOG_BACKUP_COUNT`)
-- [ ] Prometheus scraping enabled and alerting rules configured
-- [ ] gPAS MySQL volume backed up
-
-#### Compliance
-
-- [ ] `MEDANON_MANIFEST_ENABLED=true` for GDPR Art. 30 accountability
-- [ ] Appropriate config profile selected for regulatory context (HIPAA / GDPR / research)
-- [ ] Risk assessment (`/analyse/risk`) run on every de-identified batch before data sharing
-- [ ] Evidence report (`docs/EVIDENCE_REPORT_TEMPLATE.md`) completed and archived
-- [ ] Data sharing agreements in place for all recipients
-
-#### gPAS Domain Setup
-
-- [ ] gPAS domain created in web UI (`/gpas-web`)
-- [ ] `GPAS_DOMAIN` environment variable matches the domain name exactly
-- [ ] gPAS connectivity tested: `curl http://localhost:8080/ttp-fhir/fhir/gpas/`
-- [ ] gPAS database backed up before first production run
-
-#### Load Testing
-
-- [ ] `/ready` endpoint returns `{"ready": true}` for all configured services
-- [ ] Batch processing tested with representative dataset size
-- [ ] Memory limits adequate for NLP model if `nlp_detect` action is used (+800 MB)
+See [RUNBOOK.md §12](RUNBOOK.md#12-security--go-live-checklist) for the full go-live checklist (secrets, network/TLS, logging, compliance, gPAS setup, load testing).

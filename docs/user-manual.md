@@ -295,6 +295,37 @@ curl -X POST http://localhost:8000/process/round-trip \
 
 Returns streaming NDJSON with one status line per resource.
 
+#### `POST /process/bulk-export`
+
+Initiate a FHIR `$export` on the source server, de-identify the exported resources, and stream the result as NDJSON. Requires role: `admin`.
+
+```bash
+curl -X POST http://localhost:8000/process/bulk-export \
+  -H "Content-Type: application/json" \
+  -d '{
+    "server_url": "http://localhost:8081/fhir",
+    "resource_types": ["Patient", "Observation"]
+  }'
+```
+
+Returns streaming NDJSON. Rate limit: 5/minute.
+
+#### `POST /process/cohort`
+
+Search patients by condition code, then fetch and de-identify the full `$everything` bundle for each matching patient. Requires role: `analyst`.
+
+```bash
+curl -X POST http://localhost:8000/process/cohort \
+  -H "Content-Type: application/json" \
+  -d '{
+    "server_url": "http://localhost:8081/fhir",
+    "search_type": "Condition",
+    "search_params": {"code": "73211009"}
+  }'
+```
+
+Returns streaming NDJSON. Rate limit: 10/minute.
+
 ### Analytics Endpoints
 
 #### `POST /analyse/risk`
@@ -457,6 +488,53 @@ python3 -m cli.main push \
   --input output/patients.ndjson
 ```
 
+### `export` -- Bulk Export via FHIR `$export`
+
+Triggers a FHIR `$export` operation, polls for completion, de-identifies the exported resources, and writes NDJSON output.
+
+```bash
+python3 -m cli.main export \
+  --server http://localhost:8081/fhir \
+  --level system \
+  --output output/export.ndjson \
+  --config config/config_gpas.yaml
+```
+
+| Flag | Description |
+|---|---|
+| `--server` | FHIR base URL (or `FHIR_SOURCE_URL` env var) |
+| `--level` | Export level: `system` (all resources) or `type` (specific resource types). Default: `system` |
+| `--resource-type` | Comma-separated types for `type`-level export (e.g. `Patient,Observation`) |
+| `--type-filter` | FHIR `_typeFilter` parameter for additional filtering |
+| `--since` | Only resources updated after this date (ISO 8601) |
+| `--output` | Output NDJSON file path (required) |
+| `--config`, `-c` | YAML config file |
+| `--token` | Bearer token for FHIR auth |
+| `--timeout` | Maximum seconds to wait for export completion (default: `FHIR_BULK_POLL_TIMEOUT_SEC`) |
+
+### `cohort` -- Export Patients by Condition Code
+
+Searches for patients matching a condition code, then fetches and de-identifies the full `$everything` bundle for each matching patient.
+
+```bash
+python3 -m cli.main cohort \
+  --server http://localhost:8081/fhir \
+  --code 73211009 \
+  --output output/cohort.ndjson \
+  --config config/config_gpas.yaml
+```
+
+| Flag | Description |
+|---|---|
+| `--server` | FHIR base URL (or `FHIR_SOURCE_URL` env var) |
+| `--search-type` | Resource type to search (default: `Condition`) |
+| `--code` | Condition code to match (required) |
+| `--search-params` | Additional FHIR search parameters as `key=value` pairs |
+| `--output` | Output NDJSON file path (required) |
+| `--config`, `-c` | YAML config file |
+| `--token` | Bearer token for FHIR auth |
+| `--timeout` | Request timeout (seconds) |
+
 ### Batch Scripts
 
 ```bash
@@ -531,6 +609,9 @@ Override in the CLI with `--config <file>`.
 | `config_gdpr_eu.yaml` | GDPR Art. 4(5) HMAC pseudonymization |
 | `config_hipaa_safe_harbor.yaml` | HIPAA Safe Harbor (all 18 PHI categories) |
 | `config_research_pseudonymous.yaml` | IRB-grade research (year-month dates) |
+| `config_structure_preserving.yaml` | Full FHIR structure intact; IDs pseudonymized via gPAS |
+
+See [policies.md](policies.md) for compliance guidance, when-to-use notes, and limitations for each profile.
 
 ---
 
