@@ -1,46 +1,50 @@
 # SPE FHIR BlackBox — Component Catalog
 
+This document is the technical reference for every component in the MedAnon stack. It covers how each service is deployed, configured, and connected — and documents the contracts between them: API endpoints, environment variables, config profiles, auth rules, and data flows.
+
+
+
 ## Table of Contents
 
-- [00 — Common](#00--common)
-  - [00.1 Environment Variables](#001-environment-variables)
-  - [00.2 Configuration Profiles](#002-configuration-profiles)
-  - [00.3 Shared Libraries](#003-shared-libraries)
-  - [00.4 Network & Ports](#004-network--ports)
-  - [00.5 Audit & Observability](#005-audit--observability)
-- [01 — Governance Authority (gPAS + MySQL)](#01--governance-authority-gpas--mysql)
-  - [01.1 Purpose](#011-purpose)
-  - [01.2 Deployment](#012-deployment)
+- [00 — Infrastructure & Shared Configuration](#00--infrastructure--shared-configuration)
+  - [00.1 Environment Variables Reference](#001-environment-variables-reference)
+  - [00.2 De-identification Config Profiles](#002-de-identification-config-profiles)
+  - [00.3 Shared Code Modules](#003-shared-code-modules)
+  - [00.4 Network Layout & Port Map](#004-network-layout--port-map)
+  - [00.5 Audit Logging & Observability](#005-audit-logging--observability)
+- [01 — Pseudonymization Service (gPAS + MySQL)](#01--pseudonymization-service-gpas--mysql)
+  - [01.1 What gPAS Does](#011-what-gpas-does)
+  - [01.2 Container & Configuration](#012-container--configuration)
   - [01.3 Pseudonymization API](#013-pseudonymization-api)
   - [01.4 Authentication](#014-authentication)
-  - [01.5 Resilience](#015-resilience)
-  - [01.6 Operations & Administration](#016-operations--administration)
-- [02 — Provider Agent (Anonymizer / MedAnon API)](#02--provider-agent-anonymizer--medanon-api)
-  - [02.1 Purpose](#021-purpose)
-  - [02.2 Deployment](#022-deployment)
-  - [02.3 API Endpoints](#023-api-endpoints)
-  - [02.4 Rule Engine](#024-rule-engine)
-  - [02.5 Actions Reference](#025-actions-reference)
-  - [02.6 Authentication & RBAC](#026-authentication--rbac)
-  - [02.7 Middleware Stack](#027-middleware-stack)
-  - [02.8 CLI Interface](#028-cli-interface)
-- [03 — Consumer Agent (FHIR Server + UI + External Clients)](#03--consumer-agent-fhir-server--ui--external-clients)
+  - [01.5 Retry, Circuit Breaker & Cache](#015-retry-circuit-breaker--cache)
+  - [01.6 Domain Management & Operations](#016-domain-management--operations)
+- [02 — De-identification Engine (Anonymizer API)](#02--de-identification-engine-anonymizer-api)
+  - [02.1 What the Anonymizer Does](#021-what-the-anonymizer-does)
+  - [02.2 Container & Build Stages](#022-container--build-stages)
+  - [02.3 REST API Endpoints](#023-rest-api-endpoints)
+  - [02.4 FHIRPath Rule Engine](#024-fhirpath-rule-engine)
+  - [02.5 De-identification Actions](#025-de-identification-actions)
+  - [02.6 API Authentication & Role-Based Access](#026-api-authentication--role-based-access)
+  - [02.7 Request Middleware Stack](#027-request-middleware-stack)
+  - [02.8 Command-Line Interface (CLI)](#028-command-line-interface-cli)
+- [03 — Data Consumers (FHIR Server, UI & Integrations)](#03--data-consumers-fhir-server-ui--integrations)
   - [03.1 HAPI FHIR Server](#031-hapi-fhir-server)
-  - [03.2 Streamlit Dashboard](#032-streamlit-dashboard)
-  - [03.3 External Clients (EDC / FIWARE)](#033-external-clients-edc--fiware)
-- [99 — Big Picture](#99--big-picture)
+  - [03.2 Streamlit Web Dashboard](#032-streamlit-web-dashboard)
+  - [03.3 External System Integrations (EDC / FIWARE)](#033-external-system-integrations-edc--fiware)
+- [99 — Architecture Overview](#99--architecture-overview)
   - [99.1 End-to-End System Diagram](#991-end-to-end-system-diagram)
-  - [99.2 Processing Flow Diagrams](#992-processing-flow-diagrams)
+  - [99.2 Data Processing Flow](#992-data-processing-flow)
   - [99.3 Deployment Topologies](#993-deployment-topologies)
   - [99.4 Production Deployment Checklist](#994-production-deployment-checklist)
 
 ---
 
-## 00 — Common
+## 00 — Infrastructure & Shared Configuration
 
 Cross-cutting concerns, shared configuration, and infrastructure elements that apply to all components.
 
-### 00.1 Environment Variables
+### 00.1 Environment Variables Reference
 
 All runtime configuration is injected via environment variables. Config YAML files are version-controlled; secrets are environment-only.
 
@@ -114,7 +118,7 @@ All runtime configuration is injected via environment variables. Config YAML fil
 
 ---
 
-### 00.2 Configuration Profiles
+### 00.2 De-identification Config Profiles
 
 Each profile is a YAML file in `services/anonymizer/config/`. Rules are evaluated in the order they appear.
 
@@ -148,7 +152,7 @@ See [user-manual.md §5](user-manual.md#5-config-file-format) for the full rule 
 
 ---
 
-### 00.3 Shared Libraries
+### 00.3 Shared Code Modules
 
 | Module | Path | Responsibility |
 |---|---|---|
@@ -162,7 +166,7 @@ See [user-manual.md §5](user-manual.md#5-config-file-format) for the full rule 
 
 ---
 
-### 00.4 Network & Ports
+### 00.4 Network Layout & Port Map
 
 #### Docker Compose
 
@@ -187,7 +191,7 @@ All services are on the `fhir-net` bridge network. Expose via a reverse proxy fo
 
 ---
 
-### 00.5 Audit & Observability
+### 00.5 Audit Logging & Observability
 
 #### Audit Log
 
@@ -220,19 +224,19 @@ Metrics exposed at `/metrics` (anonymizer) and `/actuator/prometheus` (HAPI FHIR
 
 ---
 
-## 01 — Governance Authority (gPAS + MySQL)
+## 01 — Pseudonymization Service (gPAS + MySQL)
 
-### 01.1 Purpose
+### 01.1 What gPAS Does
 
-The Governance Authority is the **Trusted Third Party (TTP)** that holds the sole mapping between real patient identifiers and their pseudonyms. It is the trust anchor of the pseudonymization process:
+The Pseudonymization Service is the **Trusted Third Party (TTP)** that holds the sole mapping between real patient identifiers and their pseudonyms. It is the trust anchor of the pseudonymization process:
 
-- The MedAnon service never stores the mapping — it submits identifiers to gPAS and receives opaque pseudonyms
+- The De-identification Engine never stores the mapping — it submits identifiers to gPAS and receives opaque pseudonyms
 - The `gPAS MySQL` database is the only place where the mapping persists
 - Access to re-identification requires credentials with `gras` admin rights
 
 **Key guarantee:** Loss of the `gpas-db` volume means permanent loss of the pseudonym-to-original mapping. Back up regularly.
 
-### 01.2 Deployment
+### 01.2 Container & Configuration
 
 #### Docker Compose Services
 
@@ -302,7 +306,7 @@ Authorization: Basic <base64(user:pass)>
 
 Bearer token takes precedence over basic auth. Both are transmitted over HTTPS in production.
 
-### 01.5 Resilience
+### 01.5 Retry, Circuit Breaker & Cache
 
 The MedAnon gPAS client implements three resilience patterns:
 
@@ -343,7 +347,7 @@ State: CLOSED               State: OPEN
 
 Prevents cascade failures when gPAS is unavailable. Configurable via `GPAS_CB_*` variables.
 
-### 01.6 Operations & Administration
+### 01.6 Domain Management & Operations
 
 #### gPAS Web UI
 
@@ -377,18 +381,18 @@ curl -X POST http://localhost:8080/ttp-fhir/fhir/gpas/domain \
 
 ---
 
-## 02 — Provider Agent (Anonymizer / MedAnon API)
+## 02 — De-identification Engine (Anonymizer API)
 
-### 02.1 Purpose
+### 02.1 What the Anonymizer Does
 
-The Provider Agent is the service that **ingests real FHIR data, applies de-identification rules, and produces privacy-preserved output**. It is the primary interface for all data consumers. It:
+The De-identification Engine is the service that **ingests real FHIR data, applies de-identification rules, and produces privacy-preserved output**. It is the primary interface for all data consumers. It:
 
 - Enforces configurable de-identification profiles
-- Orchestrates calls to the Governance Authority (gPAS) for pseudonymization
+- Orchestrates calls to the Pseudonymization Service (gPAS) for reversible pseudonymization
 - Enforces access control and records every operation in the audit log
 - Provides risk assessment and synthetic data generation for the resulting datasets
 
-### 02.2 Deployment
+### 02.2 Container & Build Stages
 
 ```yaml
 image:   medanon:latest
@@ -409,7 +413,7 @@ health:  GET /health → {"status":"ok"}
 | `dev` | watchfiles hot-reload; source mounted via volume |
 | `sdv` | Extends `base`; installs SDV synthetic engine (`requirements-sdv.txt`); same entry point as `prod` |
 
-### 02.3 API Endpoints
+### 02.3 REST API Endpoints
 
 #### Open Paths (no auth required)
 
@@ -479,7 +483,7 @@ Note: `/ready` returns full `checks` detail only to authenticated callers (preve
 | `include_conditions` | `false` | bool | Also generate linked Conditions |
 | `count_per_patient` | 2 | 0–10 | Max Conditions per synthetic Patient |
 
-### 02.4 Rule Engine
+### 02.4 FHIRPath Rule Engine
 
 The rule engine is implemented in `pipeline/processor.py`. It processes each FHIR resource independently:
 
@@ -516,7 +520,7 @@ resource (dict)
 - `raise` — any action error aborts the request (default for production)
 - `skip` — log the error; continue with remaining rules
 
-### 02.5 Actions Reference
+### 02.5 De-identification Actions
 
 #### `redact`
 
@@ -635,7 +639,7 @@ params:
   gpas_basic_pass: ${GPAS_BASIC_PASS}
 ```
 
-### 02.6 Authentication & RBAC
+### 02.6 API Authentication & Role-Based Access
 
 #### API Key Auth
 
@@ -666,7 +670,7 @@ admin
                 └─ /docs, /openapi.json, /redoc
 ```
 
-### 02.7 Middleware Stack
+### 02.7 Request Middleware Stack
 
 Applied to every request in this order:
 
@@ -680,7 +684,7 @@ Applied to every request in this order:
 | CORS middleware | Allowlist origins | `MEDANON_CORS_ORIGINS` |
 | Rate limiter | 30 req/min per IP (most endpoints) | `MEDANON_RATE_LIMIT_ENABLED` |
 
-### 02.8 CLI Interface
+### 02.8 Command-Line Interface (CLI)
 
 The CLI provides bulk processing without an HTTP server. Six subcommands:
 
@@ -697,9 +701,9 @@ See [user-manual.md §4](user-manual.md#4-cli-reference) for full flag reference
 
 ---
 
-## 03 — Consumer Agent (FHIR Server + UI + External Clients)
+## 03 — Data Consumers (FHIR Server, UI & Integrations)
 
-Consumer agents are components that **receive de-identified FHIR data** produced by the Provider Agent and use it for research, analysis, or downstream processing.
+These components **receive de-identified FHIR data** produced by the De-identification Engine and use it for research, analysis, or downstream processing.
 
 ### 03.1 HAPI FHIR Server
 
@@ -746,7 +750,7 @@ curl -X POST http://localhost:8081/fhir/Patient \
      -d @patient.json
 ```
 
-### 03.2 Streamlit Dashboard
+### 03.2 Streamlit Web Dashboard
 
 The Streamlit UI is the primary operator-facing interface. It wraps all MedAnon API endpoints in a browser UI with no additional business logic.
 
@@ -772,7 +776,7 @@ env:     ANONYMIZER_URL=http://anonymizer:8000
 | **Synthetic Data** | Upload de-identified Patients; configure `count`, `seed`, `engine`; download synthetic cohort |
 | **Status Dashboard** | Live health grid for all backend services; 30-second auto-refresh |
 
-### 03.3 External Clients (EDC / FIWARE)
+### 03.3 External System Integrations (EDC / FIWARE)
 
 Two integration patterns are supported:
 - **Pull-based file exchange** — MedAnon produces de-identified NDJSON via `/process/from-server`; registered as an EDC `HttpData` asset; consumer pulls under contract.
@@ -782,7 +786,7 @@ See [connector-integration.md](connector-integration.md) for step-by-step EDC an
 
 ---
 
-## 99 — Big Picture
+## 99 — Architecture Overview
 
 ### 99.1 End-to-End System Diagram
 
@@ -793,7 +797,7 @@ See [connector-integration.md](connector-integration.md) for step-by-step EDC an
                    │  Browser (UI)                 │  curl / SDK / EDC Connector
                    ▼                               ▼
     ┌──────────────────────────┐   ┌───────────────────────────────────────────┐
-    │   03 — Consumer Agent    │   │          02 — Provider Agent              │
+    │  03 — Data Consumers     │   │    02 — De-identification Engine          │
     │   Streamlit Dashboard    │   │          MedAnon API (:8000)              │
     │   (:8501)                │   │                                           │
     │                          │   │  ┌─────────────────────────────────────┐  │
@@ -819,7 +823,7 @@ See [connector-integration.md](connector-integration.md) for step-by-step EDC an
               ┌────────────────────────────────┘              │
               ▼                                                ▼
 ┌─────────────────────────────────┐          ┌───────────────────────────────┐
-│  01 — Governance Authority      │          │  03 — Consumer Agent          │
+│  01 — Pseudonymization Service  │          │  03 — Data Consumers          │
 │                                 │          │  HAPI FHIR Server (:8081)     │
 │  gPAS (:8080)                   │          │                               │
 │  WildFly + TTP-FHIR gateway     │          │  • Source: real patient data  │
@@ -834,7 +838,7 @@ See [connector-integration.md](connector-integration.md) for step-by-step EDC an
 └─────────────────────────────────┘
 ```
 
-### 99.2 Processing Flow Diagrams
+### 99.2 Data Processing Flow
 
 #### Standard De-identification
 
