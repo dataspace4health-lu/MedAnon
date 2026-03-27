@@ -12,6 +12,7 @@
 #   # Build and import images
 #   make build
 #   docker save medanon:latest | sudo k3s ctr images import -
+#   docker save medanon-ui:latest | sudo k3s ctr images import -
 #
 #   # Deploy
 #   helm upgrade --install medanon ./helm/medanon \
@@ -55,6 +56,12 @@ gpas:
       # Leave storageClass empty to use the cluster default (local-path on K3s).
       storageClass: ""
       size: 10Gi
+
+# ─── UI ──────────────────────────────────────────────────────────────────────
+ui:
+  # In-cluster service DNS names (release name "medanon" + chart name).
+  anonymizerServiceName: "medanon-anonymizer"
+  fhirServerServiceName: "medanon-fhir-server"
 
 # ─── Ingress ──────────────────────────────────────────────────────────────────
 ingress:

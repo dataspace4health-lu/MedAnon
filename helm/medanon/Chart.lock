@@ -8,5 +8,8 @@ dependencies:
 - name: gpas
   repository: file://../charts/gpas
   version: 0.1.0
-digest: sha256:9e473d8c65998c361e72c9cda4aa419f0d94c59a096bcabaed8bc8b57665438a
-generated: "2026-03-17T13:21:08.63395086Z"
+- name: ui
+  repository: file://../charts/ui
+  version: 0.1.0
+digest: sha256:ed0f8219a1ec96d9cb26afa97105e0d4bbd8a2b5cac1d55ef9fd44370d34e2fb
+generated: "2026-03-26T10:30:24.955099777+01:00"
