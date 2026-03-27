@@ -219,9 +219,17 @@ def readiness(request: Request):
 
     ready = all(v == "ok" for v in checks.values())
 
-    # Unauthenticated callers only get the binary ready status — no topology details
-    caller_authenticated = getattr(request.state, "auth", None) is not None
-    body = {"ready": ready}
+    # /ready is in OPEN_PATHS so auth_middleware never sets request.state.auth.
+    # Resolve auth explicitly here: in open mode (no API key) everyone is admin;
+    # with an API key only valid-key callers see the dependency details.
+    from api.auth import get_auth_context as _get_auth_ctx
+    try:
+        _get_auth_ctx(request)
+        caller_authenticated = True
+    except Exception:
+        caller_authenticated = False
+
+    body: dict = {"ready": ready}
     if caller_authenticated:
         body["checks"] = checks
 
