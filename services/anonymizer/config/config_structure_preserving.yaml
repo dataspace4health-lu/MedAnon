@@ -185,8 +185,64 @@ rules:
   match: Patient.communication
   action: redact
 
-- name: redact patient extensions
-  match: Patient.extension
+# ==========================================================
+# 3. PATIENT EXTENSIONS (specific PHI handling instead of blanket redaction)
+# ==========================================================
+
+# US Core Race Extension - contains demographic information (PHI)
+- name: redact race omb category coding
+  match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-race').extension.where(url='ombCategory').value.coding
+  action: redact
+
+- name: redact race text value
+  match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-race').extension.where(url='text').value
+  action: substitute
+  params: *redacted
+
+# US Core Ethnicity Extension - contains demographic information (PHI)
+- name: redact ethnicity omb category coding
+  match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-ethnicity').extension.where(url='ombCategory').value.coding
+  action: redact
+
+- name: redact ethnicity text value
+  match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-ethnicity').extension.where(url='text').value
+  action: substitute
+  params: *redacted
+
+# Mother's Maiden Name Extension - contains identifying information (PHI)
+- name: redact mothers maiden name
+  match: Patient.extension.where(url='http://hl7.org/fhir/StructureDefinition/patient-mothersMaidenName').value
+  action: substitute
+  params: *redacted
+
+# Birth Sex Extension - may be kept for medical purposes or redacted depending on policy
+- name: redact birth sex
+  match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-birthsex').value
+  action: redact
+
+# Birth Place Extension - contains geographic identifiers (PHI)
+- name: redact birth place city
+  match: Patient.extension.where(url='http://hl7.org/fhir/StructureDefinition/patient-birthPlace').value.city
+  action: substitute
+  params: *redacted
+
+- name: redact birth place state
+  match: Patient.extension.where(url='http://hl7.org/fhir/StructureDefinition/patient-birthPlace').value.state
+  action: substitute
+  params: *redacted
+
+- name: redact birth place country
+  match: Patient.extension.where(url='http://hl7.org/fhir/StructureDefinition/patient-birthPlace').value.country
+  action: substitute
+  params: *redacted
+
+# Synthea-specific extensions - may contain identifiable data
+- name: redact synthea disability adjusted life years
+  match: Patient.extension.where(url='http://synthetichealth.github.io/synthea/disability-adjusted-life-years').value
+  action: redact
+
+- name: redact synthea quality adjusted life years
+  match: Patient.extension.where(url='http://synthetichealth.github.io/synthea/quality-adjusted-life-years').value
   action: redact
 
 # ==========================================================

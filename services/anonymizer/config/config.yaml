@@ -46,7 +46,23 @@ rules:
   - match: Patient.identifier.value
     action: cryptohash
 
-  - match: Patient.extension
+  # Patient Extensions - specific PHI handling instead of blanket redaction
+  - match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-race')
+    action: redact
+
+  - match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-ethnicity')
+    action: redact
+
+  - match: Patient.extension.where(url='http://hl7.org/fhir/StructureDefinition/patient-mothersMaidenName')
+    action: redact
+
+  - match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-birthsex')
+    action: redact
+
+  - match: Patient.extension.where(url='http://hl7.org/fhir/StructureDefinition/patient-birthPlace')
+    action: redact
+
+  - match: Patient.extension.where(url.startsWith('http://synthetichealth.github.io/synthea/'))
     action: redact
 
   - match: Patient.gender

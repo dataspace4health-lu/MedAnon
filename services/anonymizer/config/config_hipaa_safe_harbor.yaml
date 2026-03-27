@@ -113,8 +113,24 @@ rules:
   - match: Patient.identifier
     action: redact
 
-  # Identifier 12+13: Vehicle / device identifiers (usually in extensions)
-  - match: Patient.extension
+  # Identifier 12+13: Vehicle / device identifiers and specific extension PHI
+  # Instead of blanket redaction, target specific PHI-containing extensions
+  - match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-race')
+    action: redact
+
+  - match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-ethnicity')
+    action: redact
+
+  - match: Patient.extension.where(url='http://hl7.org/fhir/StructureDefinition/patient-mothersMaidenName')
+    action: redact
+
+  - match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-birthsex')
+    action: redact
+
+  - match: Patient.extension.where(url='http://hl7.org/fhir/StructureDefinition/patient-birthPlace')
+    action: redact
+
+  - match: Patient.extension.where(url.startsWith('http://synthetichealth.github.io/synthea/'))
     action: redact
 
   # Identifier 16+17: Biometric data and photographs

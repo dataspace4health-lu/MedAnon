@@ -79,8 +79,23 @@ rules:
   - match: Patient.link
     action: redact
 
-  # Extensions (may contain custom identifiers)
-  - match: Patient.extension
+  # Extensions - specific PHI handling for research use (may contain custom identifiers)
+  - match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-race')
+    action: redact
+
+  - match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-ethnicity')
+    action: redact
+
+  - match: Patient.extension.where(url='http://hl7.org/fhir/StructureDefinition/patient-mothersMaidenName')
+    action: redact
+
+  - match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-birthsex')
+    action: redact
+
+  - match: Patient.extension.where(url='http://hl7.org/fhir/StructureDefinition/patient-birthPlace')
+    action: redact
+
+  - match: Patient.extension.where(url.startsWith('http://synthetichealth.github.io/synthea/'))
     action: redact
 
   # ===========================================================================
