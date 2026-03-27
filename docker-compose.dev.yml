@@ -29,3 +29,13 @@ services:
     ports:
       - "${GPAS_PORT:-8080}:8080"
       - "127.0.0.1:9990:9990"
+
+  ui:
+    build:
+      context: client
+      dockerfile: Dockerfile
+      target: build
+    command: ["npx", "vite", "--host", "0.0.0.0", "--port", "8501"]
+    volumes:
+      - ./client/src:/app/src
+      - ./client/index.html:/app/index.html

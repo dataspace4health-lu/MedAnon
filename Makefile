@@ -38,7 +38,7 @@ help:
 	@echo "  make dev                Start stack with hot-reload (dev overrides)"
 	@echo "  make down               Stop and remove containers"
 	@echo "  make build              (Re)build all images"
-	@echo "  make build-ui           Build only the Streamlit UI image"
+	@echo "  make build-ui           Build only the React UI image"
 	@echo "  make build-sdv          Build anonymizer with SDV synthetic engine (GaussianCopula)"
 	@echo "  make up-sdv             Build SDV image and start full stack with SDV engine"
 	@echo "  make build-healthcheck  Compile HAPI FHIR health check for correct Java version"

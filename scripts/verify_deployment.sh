@@ -130,13 +130,13 @@ else
 fi
 echo ""
 
-# ── 5. Streamlit UI ─────────────────────────────────────────────────────────
-echo "5. Streamlit UI (port $UI_PORT)"
-HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${UI_PORT}/_stcore/health" 2>/dev/null || echo "000")
+# ── 5. React UI ──────────────────────────────────────────────────────────────
+echo "5. Web UI (port $UI_PORT)"
+HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${UI_PORT}/healthz" 2>/dev/null || echo "000")
 if [ "$HTTP_CODE" = "200" ]; then
-    pass "/_stcore/health -> 200"
+    pass "/healthz -> 200"
 else
-    warn "/_stcore/health -> $HTTP_CODE (UI may still be starting)"
+    warn "/healthz -> $HTTP_CODE (UI may still be starting)"
 fi
 echo ""
 
