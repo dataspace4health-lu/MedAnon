@@ -30,7 +30,7 @@ This document is the technical reference for every component in the MedAnon stac
   - [02.8 Command-Line Interface (CLI)](#028-command-line-interface-cli)
 - [03 — Data Consumers (FHIR Server, UI & Integrations)](#03--data-consumers-fhir-server-ui--integrations)
   - [03.1 HAPI FHIR Server](#031-hapi-fhir-server)
-  - [03.2 Streamlit Web Dashboard](#032-streamlit-web-dashboard)
+  - [03.2 React Web Dashboard](#032-react-web-dashboard)
   - [03.3 External System Integrations (EDC / FIWARE)](#033-external-system-integrations-edc--fiware)
 - [99 — Architecture Overview](#99--architecture-overview)
   - [99.1 End-to-End System Diagram](#991-end-to-end-system-diagram)
@@ -750,18 +750,18 @@ curl -X POST http://localhost:8081/fhir/Patient \
      -d @patient.json
 ```
 
-### 03.2 Streamlit Web Dashboard
+### 03.2 React Web Dashboard
 
-The Streamlit UI is the primary operator-facing interface. It wraps all MedAnon API endpoints in a browser UI with no additional business logic.
+The React UI is the primary operator-facing interface. Built with React, TypeScript, Shadcn/ui, and Tailwind CSS, it is served as a static SPA via nginx. The nginx layer also proxies API calls to backend services, eliminating CORS configuration.
 
 #### Deployment
 
 ```yaml
-image:   medanon-ui:latest
+image:   medanon-ui:latest (nginx:1.27-alpine)
 port:    8501 → 127.0.0.1:8501
-memory:  512 MB limit / 128 MB reservation
-env:     ANONYMIZER_URL=http://anonymizer:8000
-         FHIR_URL=http://hapi-fhir:8080/fhir
+memory:  128 MB limit / 32 MB reservation
+proxy:   /api/ → http://medanon:8000
+         /fhir/ → http://hapi-fhir:8080/fhir
 ```
 
 #### Page Descriptions
@@ -798,7 +798,7 @@ See [connector-integration.md](connector-integration.md) for step-by-step EDC an
                    ▼                               ▼
     ┌──────────────────────────┐   ┌───────────────────────────────────────────┐
     │  03 — Data Consumers     │   │    02 — De-identification Engine          │
-    │   Streamlit Dashboard    │   │          MedAnon API (:8000)              │
+    │   React Dashboard         │   │          MedAnon API (:8000)              │
     │   (:8501)                │   │                                           │
     │                          │   │  ┌─────────────────────────────────────┐  │
     │  • Patient Browser       │   │  │  Middleware Stack                   │  │
@@ -908,7 +908,7 @@ localhost
   ├── :8000  MedAnon API
   ├── :8080  gPAS
   ├── :8081  HAPI FHIR
-  └── :8501  Streamlit UI
+  └── :8501  React UI
 
 All ports on 127.0.0.1 — local access only
 Start: make up   (or: docker compose up -d)

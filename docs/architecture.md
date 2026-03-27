@@ -8,7 +8,7 @@
    - 2.2 [Governance Authority — gPAS (Trusted Third Party)](#22-governance-authority--gpas-trusted-third-party)
    - 2.3 [De-identification Service — Anonymizer](#23-de-identification-service--anonymizer)
    - 2.4 [FHIR Data Layer — HAPI FHIR Server](#24-fhir-data-layer--hapi-fhir-server)
-   - 2.5 [Operator Tooling — Streamlit Dashboard](#25-operator-tooling--streamlit-dashboard)
+   - 2.5 [Operator Tooling — React Dashboard](#25-operator-tooling--react-dashboard)
 3. [Data Flows](#3-data-flows)
    - 3.1 [Core Processing Pipeline](#31-core-processing-pipeline)
    - 3.2 [Inline De-identification](#32-inline-de-identification)
@@ -64,7 +64,7 @@ The **Anonymizer service** is the orchestrator. The Rule Engine is internal logi
              │ Browser (operator UI)    │ REST API / CLI
              ▼                          ▼
   ┌──────────────────┐      ┌───────────────────────────────────────────────────┐
-  │  Streamlit UI    │      │              MedAnon Anonymizer  (port 8000)       │
+  │  React UI        │      │              MedAnon Anonymizer  (port 8000)       │
   │  operator tooling│─────▶│  ┌─────────────────────────────────────────────┐  │
   │  (port 8501)     │      │  │  API layer: auth · RBAC · audit · middleware │  │
   └──────────────────┘      │  └──────────────────────┬──────────────────────┘  │
@@ -319,7 +319,7 @@ HAPI FHIR acts as the primary data store for FHIR R4 resources. It can serve as 
 - Store and serve HL7 FHIR R4 Patient, Observation, Condition, and other resources
 - Support paginated search (`GET /fhir/Patient?_count=200`)
 - Support `$everything` operations (`GET /fhir/Patient/{id}/$everything`)
-- Provide CORS access to the Streamlit UI and Anonymizer
+- Provide CORS access to the React UI and Anonymizer
 
 #### FHIR Client (in Anonymizer)
 
@@ -347,11 +347,11 @@ integrations/fhir/client.py
 
 ---
 
-### 2.5 Operator Tooling — Streamlit Dashboard
+### 2.5 Operator Tooling — React Dashboard
 
-> **Role clarification:** The Streamlit UI is **operator and researcher tooling** — it is designed for internal clinical data engineers, data stewards, and researchers who already have access to the environment. It is not a hardened end-user portal and does not have its own independent authentication layer. In production, access should be controlled at the network/proxy level; the UI trusts the MedAnon API's auth model.
+> **Role clarification:** The React UI is **operator and researcher tooling** — it is designed for internal clinical data engineers, data stewards, and researchers who already have access to the environment. It is not a hardened end-user portal and does not have its own independent authentication layer. In production, access should be controlled at the network/proxy level; the UI trusts the MedAnon API's auth model.
 
-The Streamlit UI wraps the MedAnon REST API and provides a browser-based interface for common workflows.
+The React UI wraps the MedAnon REST API and provides a browser-based interface for common workflows. It is served as a static SPA via nginx, which also proxies API calls to the backend services.
 
 #### Pages
 
@@ -557,7 +557,7 @@ Services (fhir-net bridge network):
   fhir-server    port 8081  → 127.0.0.1     HAPI FHIR JPA
   gpas           port 8080  → 127.0.0.1     WildFly + gPAS
   anonymizer     port 8000  → 127.0.0.1     FastAPI (MedAnon)
-  ui             port 8501  → 127.0.0.1     Streamlit
+  ui             port 8501  → 127.0.0.1     React UI
 ```
 
 **Startup sequence** (health-check driven):
@@ -565,7 +565,7 @@ Services (fhir-net bridge network):
 2. `fhir-server` — HAPI ready (~30 s)
 3. `gpas` — WildFly + gPAS ready (~90 s; depends on MySQL)
 4. `anonymizer` — FastAPI ready (~10 s; depends on gPAS + FHIR)
-5. `ui` — Streamlit ready (~10 s; depends on anonymizer)
+5. `ui` — React UI ready (~10 s; depends on anonymizer)
 
 **Resource requirements:**
 

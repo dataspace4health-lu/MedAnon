@@ -59,7 +59,7 @@ make build
 
 Builds two local images:
 - `medanon:latest` — FastAPI anonymizer (from `services/anonymizer/Dockerfile`)
-- `medanon-ui:latest` — Streamlit UI (from `client/Dockerfile`)
+- `medanon-ui:latest` — React UI / nginx (from `client/Dockerfile`)
 
 gPAS and HAPI FHIR use upstream images pulled automatically.
 
@@ -99,7 +99,7 @@ Or manually via `http://localhost:8080/gpas-web/` (login: `admin@ths`):
 curl http://localhost:8000/health         # {"status":"ok"}
 curl http://localhost:8000/ready          # {"ready": true}
 curl http://localhost:8081/fhir/metadata  # HAPI FHIR CapabilityStatement
-open http://localhost:8501                # Streamlit UI
+open http://localhost:8501                # Web UI
 ```
 
 ### Development Mode
@@ -202,7 +202,7 @@ Applies `docker-compose.dev.yml` overrides:
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `UI_PORT` | no | `8501` | Host port for Streamlit UI |
+| `UI_PORT` | no | `8501` | Host port for Web UI |
 
 ---
 
@@ -245,7 +245,7 @@ The `.gitignore` already excludes:
 
 ## 5. Kubernetes (Helm) Deployment
 
-The umbrella chart at `helm/medanon/` deploys the anonymizer, HAPI FHIR, and gPAS.
+The umbrella chart at `helm/medanon/` deploys the anonymizer, HAPI FHIR, gPAS, and the React UI.
 
 ### Step 1: Build and Push Images
 
@@ -276,6 +276,8 @@ helm upgrade --install medanon ./helm/medanon \
   --set anonymizer.env.GPAS_URL=http://medanon-gpas:8080/ttp-fhir/fhir/gpas \
   --set anonymizer.env.FHIR_SOURCE_URL=http://medanon-fhir-server:8080/fhir \
   --set anonymizer.secrets.MEDANON_HASH_KEY=<hex-key> \
+  --set ui.anonymizerServiceName=medanon-anonymizer \
+  --set ui.fhirServerServiceName=medanon-fhir-server \
   --set gpas.secrets.WF_ADMIN_PASS=<password> \
   --set gpas.db.secrets.rootPassword=<password> \
   --namespace medanon --create-namespace
@@ -306,13 +308,14 @@ curl http://localhost:8000/health
 helm/
 ├── medanon/                     Umbrella chart
 │   ├── Chart.yaml
-│   ├── values.yaml              Global defaults (registry, ingress)
+│   ├── values.yaml              Global defaults (registry, ingress, UI proxy)
 │   └── templates/
 │       └── ingress.yaml         Optional ingress (set ingress.enabled: true)
 └── charts/
     ├── anonymizer/              Deployment, Service, ConfigMap, Secret
     ├── fhir-server/             Deployment, Service, ConfigMap
-    └── gpas/                    Deployment, StatefulSet (MySQL), Services, Secrets
+    ├── gpas/                    Deployment, StatefulSet (MySQL), Services, Secrets
+    └── ui/                      Deployment, Service, ConfigMap (nginx), NetworkPolicy
 ```
 
 ### Kubernetes-Specific Notes
@@ -322,7 +325,7 @@ helm/
 - **Network policies:** Each sub-chart restricts ingress to expected callers only.
 - **Non-root:** Anonymizer runs as UID 1000. gPAS runs with `runAsNonRoot: true`.
 - **MySQL persistence:** StatefulSet with PVC. Data survives pod restarts. To wipe: `kubectl delete pvc -l app.kubernetes.io/component=gpas-db -n medanon`.
-- **Ingress paths:** `/` -> anonymizer, `/fhir` -> HAPI FHIR, `/gpas-web` and `/ttp-fhir` -> gPAS.
+- **Ingress paths:** `/` -> React UI, `/api` -> anonymizer (direct), `/fhir` -> HAPI FHIR, `/gpas-web` and `/ttp-fhir` -> gPAS.
 - **Prometheus:** All pods have scrape annotations (`prometheus.io/scrape: "true"`).
 
 ### Optional Components
@@ -469,7 +472,7 @@ Measured at idle after full startup:
 
 | Service | RAM (idle) | RAM (limit) | CPU (idle) | CPU (limit) |
 |---|---|---|---|---|
-| `ui` | ~150 MB | 512 MB | ~0.05 | 0.5 |
+| `ui` | ~15 MB | 128 MB | ~0.01 | 0.5 |
 | `anonymizer` | ~300 MB | 2 GB | ~0.05 | 1.0 |
 | `fhir-server` | ~1.2 GB | 3 GB | ~0.1 | 2.0 |
 | `gpas` | ~1.5 GB | 6 GB | ~0.1 | 2.0 |
@@ -496,7 +499,7 @@ server {
     ssl_certificate     /etc/ssl/certs/medanon.crt;
     ssl_certificate_key /etc/ssl/private/medanon.key;
 
-    # Streamlit UI
+    # Web UI
     location / {
         proxy_pass http://127.0.0.1:8501;
         proxy_set_header Host $host;
@@ -608,8 +611,8 @@ curl -s http://localhost:8081/fhir/metadata | head -5
 # gPAS
 curl -s http://localhost:8080/ttp-fhir/fhir/gpas/metadata | head -5
 
-# Streamlit UI
-curl -s http://localhost:8501/_stcore/health
+# Web UI
+curl -s http://localhost:8501/healthz
 ```
 
 ### End-to-End Smoke Test

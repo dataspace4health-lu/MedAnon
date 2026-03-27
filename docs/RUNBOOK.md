@@ -79,8 +79,8 @@ curl -s http://localhost:8081/fhir/metadata | head -5
 # gPAS
 curl -s http://localhost:8080/ttp-fhir/fhir/gpas/metadata | head -5
 
-# Streamlit UI
-curl -s http://localhost:8501/_stcore/health
+# Web UI
+curl -s http://localhost:8501/healthz
 ```
 
 ### Step 5: Initialize gPAS Domain
@@ -131,7 +131,7 @@ Override in CLI: `--config config/<profile>.yaml`
 
 ## 4. Processing Workflows
 
-### Option A: Streamlit UI (Recommended for Interactive Use)
+### Option A: Web UI (Recommended for Interactive Use)
 
 1. Open `http://localhost:8501`
 2. The UI uses API key authentication automatically when configured
@@ -441,7 +441,7 @@ Current memory limits:
 | HAPI FHIR | 3 GB |
 | gPAS | 6 GB (JVM: -Xmx4G) |
 | MySQL | 4 GB (InnoDB: 512 MB) |
-| UI | 512 MB |
+| UI | 128 MB |
 
 If a service is consistently OOM-killed, increase its memory limit in `docker-compose.yml`.
 

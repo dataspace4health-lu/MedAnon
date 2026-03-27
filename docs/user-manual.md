@@ -3,7 +3,7 @@
 ## Table of Contents
 
 1. [Getting Started](#1-getting-started)
-2. [Streamlit UI Guide](#2-streamlit-ui-guide)
+2. [Web UI Guide](#2-web-ui-guide)
 3. [REST API Reference](#3-rest-api-reference)
 4. [CLI Reference](#4-cli-reference)
 5. [Config File Format](#5-config-file-format)
@@ -38,7 +38,7 @@ curl http://localhost:8000/ready     # {"ready": true}
 
 | Service | URL | Purpose |
 |---|---|---|
-| Streamlit UI | `http://localhost:8501` | Browser-based interface |
+| Web UI | `http://localhost:8501` | Browser-based interface |
 | Anonymizer API | `http://localhost:8000` | REST API |
 | Swagger UI | `http://localhost:8000/docs` | Interactive API explorer |
 | FHIR Server | `http://localhost:8081/fhir` | HAPI FHIR server |
@@ -56,9 +56,9 @@ This uses `config.yaml` (cryptohash mode, no gPAS or FHIR server required).
 
 ---
 
-## 2. Streamlit UI Guide
+## 2. Web UI Guide
 
-Open `http://localhost:8501` in your browser. When `MEDANON_API_KEY` is configured, the UI automatically authenticates API requests. The sidebar shows the current anonymizer health status and navigation links.
+Open `http://localhost:8501` in your browser. When `MEDANON_API_KEY` is configured via localStorage, the UI automatically authenticates API requests. The sidebar shows the current anonymizer health status and navigation links.
 
 ### 2.1 Patient Browser
 
