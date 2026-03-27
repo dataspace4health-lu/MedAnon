@@ -1,12 +1,17 @@
-FROM python:3.12-slim
-RUN addgroup --system appgroup && adduser --system --ingroup appgroup appuser
+# Stage 1: Build
+FROM node:20-alpine AS build
 WORKDIR /app
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY package.json package-lock.json ./
+RUN npm ci
 COPY . .
-USER appuser
+RUN npm run build
+
+# Stage 2: Serve
+FROM nginx:1.27-alpine
+COPY --from=build /app/dist /usr/share/nginx/html
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+RUN chown -R nginx:nginx /var/cache/nginx /var/log/nginx /usr/share/nginx/html && \
+    touch /var/run/nginx.pid && chown nginx:nginx /var/run/nginx.pid
+USER nginx
 EXPOSE 8501
-CMD ["streamlit", "run", "app.py", \
-     "--server.port=8501", \
-     "--server.address=0.0.0.0", \
-     "--server.headless=true"]
+CMD ["nginx", "-g", "daemon off;"]
