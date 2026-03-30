@@ -50,6 +50,21 @@ def _load_settings(config_filename, match, action, gpas_url, gpas_domain,
     })()
 
 
+def _resource_types_from_config(settings) -> set:
+    """Return FHIR resource type names inferred from the leading segment of rule match expressions.
+
+    E.g. a rule matching ``Patient.name`` contributes ``Patient``.
+    """
+    types: set = set()
+    for rule in getattr(settings, "rules", []) or []:
+        match_expr = rule.get("match") if isinstance(rule, dict) else getattr(rule, "match", None)
+        if match_expr:
+            first = str(match_expr).split(".")[0]
+            if first:
+                types.add(first)
+    return types
+
+
 def _add_fetch_args(p):
     """Add fetch-subcommand arguments to an argparse parser."""
     p.add_argument("--server",
@@ -72,8 +87,8 @@ def _add_fetch_args(p):
                    help="Bearer token for FHIR server auth (overrides FHIR_SOURCE_TOKEN env).")
     p.add_argument("--timeout", type=float, default=30.0,
                    help="HTTP timeout in seconds.")
-    p.add_argument("--discover-only", action="store_true",
-                   help="Print available resource types from /metadata and exit.")
+    p.add_argument("--discover", "--discover-only", action="store_true",
+                   help="List available resource types from /metadata, write to --output, and exit.")
     return p
 
 
@@ -84,18 +99,37 @@ def _run_fetch(args):
     token = args.fhir_token or os.environ.get("FHIR_SOURCE_TOKEN")
     timeout = args.timeout
 
-    if args.discover_only:
-        resource_types = get_capability_statement(server, token=token, timeout=timeout)
+    # Load settings early so resource type filtering can use config rules
+    settings = None
+    if args.config_filename:
+        settings = config.Settings(args.config_filename)
+
+    if args.discover:
+        try:
+            resource_types = get_capability_statement(server, token=token, timeout=timeout)
+        except ValueError as exc:
+            raise SystemExit(f"error: FHIR server error during /metadata: {exc}") from exc
         for rt in resource_types:
             print(rt)
+        output_path = Path(args.output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text("\n".join(resource_types) + "\n")
         return
 
     # Resolve resource types
     if args.resource_types:
         resource_types = [rt.strip() for rt in args.resource_types.split(",") if rt.strip()]
     else:
-        print("[bold]No --resource-type specified, discovering from /metadata...[/bold]")
-        resource_types = get_capability_statement(server, token=token, timeout=timeout)
+        try:
+            resource_types = get_capability_statement(server, token=token, timeout=timeout)
+        except ValueError as exc:
+            raise SystemExit(f"error: FHIR server error during /metadata: {exc}") from exc
+        # Filter by resource types referenced in config rules when config is provided
+        if settings is not None:
+            config_types = _resource_types_from_config(settings)
+            if config_types:
+                resource_types = [rt for rt in resource_types if rt in config_types]
+        print(f"No --resource-type specified, discovering from /metadata...")
         print(f"Found {len(resource_types)} resource type(s): {', '.join(resource_types)}")
 
     # Build query params
@@ -110,26 +144,24 @@ def _run_fetch(args):
                 k, v = part.split("=", 1)
                 query_params[k.strip()] = v.strip()
 
-    # Load settings if config provided
-    settings = None
-    if args.config_filename:
-        settings = config.Settings(args.config_filename)
-
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     total = 0
-    with open(output_path, "w", encoding="utf-8") as fout:
-        for rt, resource in fetch_all_resource_types(
-            server, resource_types, params=query_params, token=token, timeout=timeout
-        ):
-            if settings is not None:
-                resource = process_data(resource, settings)
-            fout.write(json.dumps(resource, separators=(',', ':')))
-            fout.write("\n")
-            total += 1
-            if total % 100 == 0:
-                print(f"  processed {total} resources...")
+    try:
+        with open(output_path, "w", encoding="utf-8") as fout:
+            for rt, resource in fetch_all_resource_types(
+                server, resource_types, params=query_params, token=token, timeout=timeout
+            ):
+                if settings is not None:
+                    resource = process_data(resource, settings)
+                fout.write(json.dumps(resource, separators=(',', ':')))
+                fout.write("\n")
+                total += 1
+                if total % 100 == 0:
+                    print(f"  processed {total} resources...")
+    except ValueError as exc:
+        raise SystemExit(f"error: FHIR server error: {exc}") from exc
 
     print(f":thumbs_up: Fetched and processed {total} resource(s) → {output_path}")
 
@@ -196,11 +228,13 @@ def _run_everything(args):
 
 def _add_push_args(p):
     """Add push-subcommand arguments to an argparse parser."""
+    p.add_argument("input_file", nargs="?", default=None,
+                   help="Input file (NDJSON or JSON). Each line / resource is uploaded individually.")
+    p.add_argument("--input", dest="input_flag", default=None,
+                   help="Input file (alternative to positional argument).")
     p.add_argument("--server",
                    help="Target FHIR base URL (overrides FHIR_TARGET_URL env). "
                         "E.g. http://host:8080/fhir")
-    p.add_argument("--input", required=True, dest="input_file",
-                   help="Input file (NDJSON or JSON). Each line / resource is uploaded individually.")
     p.add_argument("--config", "-c", dest="config_filename",
                    help="YAML config for de-identification rules. If omitted, resources are uploaded as-is.")
     p.add_argument("--token", dest="fhir_token",
@@ -221,7 +255,10 @@ def _run_push(args):
     if args.config_filename:
         settings = config.Settings(args.config_filename)
 
-    input_path = Path(args.input_file)
+    input_file = args.input_file or getattr(args, "input_flag", None)
+    if not input_file:
+        raise SystemExit(2)
+    input_path = Path(input_file)
     chosen_format = detect_format(str(input_path), "auto")
     resource_or_list = read_input_file(str(input_path), chosen_format)
 
