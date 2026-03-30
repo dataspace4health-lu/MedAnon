@@ -32,7 +32,12 @@ from api.deps import (
     get_settings,
     limiter,
 )
-from api.routers import analytics, fhir_server, jobs, process, synthetic
+from api.routers import analytics, dicom, fhir_bulk, fhir_server, hl7v2, jobs, process, synthetic
+from api.routers import fhir_subscriptions, smart
+
+# Refresh fhir_bulk's module-level URL cache so that re-imports (e.g. during
+# TestClient construction with patched env) capture the current FHIR_SOURCE_URL.
+fhir_bulk._FHIR_SOURCE_URL = os.environ.get("FHIR_SOURCE_URL", "").strip()
 
 import asyncio
 
@@ -83,6 +88,16 @@ async def _startup() -> None:
         logger.info("job_worker started max_concurrent=%d", max_concurrent)
     except Exception as exc:
         logger.warning("job_worker_start_failed: %s", exc)
+
+    # FHIR Subscription store
+    try:
+        from pipeline.subscriptions import init_subscription_store
+        sub_db = os.environ.get("MEDANON_SUBSCRIPTION_DB", "/output/subscriptions.db")
+        init_subscription_store(sub_db)
+        logger.info("subscription_store started path=%s", sub_db)
+    except Exception as exc:
+        logger.warning("subscription_store_start_failed: %s", exc)
+
 app.state.limiter = limiter
 if RateLimitExceeded is not None:
     app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
@@ -91,7 +106,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_ALLOWED_ORIGINS,
     allow_credentials=False,
-    allow_methods=["POST", "GET"],
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["Content-Type", "Authorization", "X-API-Key"],
 )
 
@@ -257,3 +272,8 @@ app.include_router(fhir_server.router, prefix="/v1")
 app.include_router(analytics.router, prefix="/v1")
 app.include_router(synthetic.router, prefix="/v1")
 app.include_router(jobs.router, prefix="/v1")
+app.include_router(dicom.router, prefix="/v1")
+app.include_router(hl7v2.router, prefix="/v1")
+app.include_router(fhir_bulk.router, prefix="/fhir")
+app.include_router(fhir_subscriptions.router)
+app.include_router(smart.router)

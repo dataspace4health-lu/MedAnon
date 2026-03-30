@@ -28,6 +28,7 @@ _API_KEY = os.environ.get("MEDANON_API_KEY", "").strip()
 
 OPEN_PATHS = frozenset({
     "/health", "/ready", "/metrics", "/docs", "/openapi.json", "/redoc", "/",
+    "/.well-known/smart-configuration",
 })
 
 ENDPOINT_ROLES: dict[str, str] = {
@@ -37,6 +38,10 @@ ENDPOINT_ROLES: dict[str, str] = {
     "/v1/process/batch": "analyst",
     "/v1/process/from-server": "analyst",
     "/v1/process/everything": "analyst",
+    "/v1/process/dicom": "analyst",
+    "/v1/process/dicom/batch": "analyst",
+    "/v1/process/hl7v2": "analyst",
+    "/v1/process/hl7v2/batch": "analyst",
     "/v1/analyse/risk": "analyst",
     "/v1/generate/synthetic": "analyst",
     "/v1/process/and-upload": "admin",
@@ -44,6 +49,13 @@ ENDPOINT_ROLES: dict[str, str] = {
     "/v1/process/bulk-export": "admin",
     "/v1/process/cohort": "analyst",
     "/v1/jobs": "analyst",
+    # FHIR Bulk Data Access IG
+    "/fhir/$export": "admin",
+    "/fhir/Patient/$export": "analyst",
+    # FHIR Subscriptions — list requires admin; CRUD handled by prefix below
+    "/fhir/Subscription": "admin",
+    # SMART token introspection
+    "/oauth2/introspect": "analyst",
 }
 
 # Prefix-based role mapping for parameterized paths (e.g. /v1/jobs/{job_id}).
@@ -52,6 +64,9 @@ ENDPOINT_ROLE_PREFIXES: dict[str, str] = {
     "/v1/jobs/bulk-export": "admin",   # exact — listed first for priority
     "/v1/jobs/cohort": "analyst",
     "/v1/jobs/": "analyst",            # covers /v1/jobs/{id} and /v1/jobs/{id}/result
+    "/fhir/Group/": "admin",           # /fhir/Group/{id}/$export
+    "/fhir/export-status/": "analyst", # /fhir/export-status/{job_id}
+    "/fhir/Subscription/": "analyst",  # /fhir/Subscription/{id} CRUD
 }
 
 
@@ -97,16 +112,74 @@ class AuthContext:
 # Unified auth context resolver
 # ---------------------------------------------------------------------------
 def get_auth_context(request: Request) -> AuthContext:
-    """Resolve auth from the request; raises HTTPException(401) on failure."""
-    # 1. Try API key
+    """Resolve auth from the request; raises HTTPException(401) on failure.
+
+    Auth priority:
+    1. X-API-Key header (API key mode)
+    2. Authorization: Bearer <token> (SMART bearer token)
+    3. Open access when MEDANON_API_KEY is not configured
+    """
     api_key_header = request.headers.get("X-API-Key", "")
+    bearer_token = _extract_bearer(request)
+
     if _API_KEY:
+        # API-key auth
         if api_key_header == _API_KEY:
             return AuthContext(subject="api-key-user", roles=frozenset({"admin"}), auth_method="api-key")
+        # SMART bearer token auth
+        if bearer_token:
+            return _resolve_bearer_context(bearer_token)
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-    # 2. No auth configured — open access
+    # Open access — no auth configured
     return AuthContext(subject="anonymous", roles=frozenset({"admin"}), auth_method="none")
+
+
+def _extract_bearer(request: Request) -> str | None:
+    """Return the bearer token from the Authorization header, or None."""
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.lower().startswith("bearer "):
+        return auth_header[7:].strip() or None
+    return None
+
+
+def _resolve_bearer_context(token: str) -> AuthContext:
+    """Map a bearer token to an AuthContext using SMART introspection or API key fallback."""
+    import json
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+
+    introspection_url = os.environ.get("SMART_INTROSPECTION_URL", "").strip()
+
+    if introspection_url:
+        try:
+            body = urllib.parse.urlencode({"token": token}).encode("utf-8")
+            req = urllib.request.Request(
+                introspection_url,
+                data=body,
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                data = json.loads(resp.read())
+            if not data.get("active", False):
+                raise HTTPException(status_code=401, detail="Token inactive")
+            scope = data.get("scope", "")
+            from api.smart_scopes import parse_smart_scopes
+            role = parse_smart_scopes(scope)
+            sub = data.get("sub", data.get("username", "smart-user"))
+            return AuthContext(subject=sub, roles=frozenset({role}), auth_method="smart-bearer")
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(status_code=401, detail="Unauthorized")
+
+    # Fallback: accept the API key as a bearer token
+    if _API_KEY and token == _API_KEY:
+        return AuthContext(subject="api-key-user", roles=frozenset({"admin"}), auth_method="bearer-apikey")
+
+    raise HTTPException(status_code=401, detail="Unauthorized")
 
 
 # ---------------------------------------------------------------------------

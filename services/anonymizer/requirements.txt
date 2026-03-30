@@ -3,6 +3,7 @@
 fastapi==0.135.1
 pydantic==2.12.5
 uvicorn==0.42.0
+python-multipart==0.0.22    # required for Form fields (SMART /oauth2/introspect)
 PyYAML==6.0.3              # CVE history in older versions — always pin exactly
 fhirpathpy==0.1.0
 rich==14.3.3
@@ -15,6 +16,9 @@ urllib3==2.3.0             # FHIR client connection pooling
 
 # Redis — L2 gPAS cache + scalable job queue (BLPOP event-driven worker)
 redis==5.2.1
+
+# HL7 v2 message parsing
+hl7==0.4.5
 
 # NLP-based PHI/PII detection
 presidio-analyzer==2.2.361
