@@ -1,4 +1,4 @@
-import { ChevronDown, User } from "lucide-react";
+import { Check, ChevronDown, User } from "lucide-react";
 import {
   Collapsible,
   CollapsibleContent,
@@ -20,6 +20,7 @@ interface ConditionCardProps {
     patient_gender: string;
   };
   selected?: boolean;
+  onSelect?: () => void;
   onDeidentify?: () => void;
 }
 
@@ -53,18 +54,40 @@ function getStatusStyle(status: string) {
   );
 }
 
-export function ConditionCard({ condition, selected = false, onDeidentify }: ConditionCardProps) {
+export function ConditionCard({ condition, selected = false, onSelect, onDeidentify }: ConditionCardProps) {
   const style = getStatusStyle(condition.clinical_status);
 
   return (
-    <Card className={cn("overflow-hidden transition-shadow hover:shadow-sm", selected && "ring-2 ring-primary")}>
+    <Card className={cn(
+      "overflow-hidden transition-shadow hover:shadow-sm",
+      selected && "ring-2 ring-primary bg-primary/5",
+    )}>
       <Collapsible>
         {/* Header — always visible */}
         <div className="flex items-start gap-3 px-4 pt-4 pb-3">
-          {/* Status dot */}
-          <div className="mt-1 flex shrink-0 items-center">
-            <span className={cn("size-2 rounded-full", style.dot)} />
-          </div>
+          {/* Selection checkbox */}
+          {onSelect && (
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); onSelect(); }}
+              aria-label={selected ? "Deselect condition" : "Select condition for export"}
+              className={cn(
+                "mt-0.5 flex shrink-0 size-5 items-center justify-center rounded border-2 transition-colors",
+                selected
+                  ? "border-primary bg-primary text-primary-foreground"
+                  : "border-muted-foreground/40 bg-background hover:border-primary",
+              )}
+            >
+              {selected && <Check className="size-3" strokeWidth={3} />}
+            </button>
+          )}
+
+          {/* Status dot (only when no checkbox) */}
+          {!onSelect && (
+            <div className="mt-1 flex shrink-0 items-center">
+              <span className={cn("size-2 rounded-full", style.dot)} />
+            </div>
+          )}
 
           {/* Main content */}
           <div className="min-w-0 flex-1">
@@ -72,6 +95,10 @@ export function ConditionCard({ condition, selected = false, onDeidentify }: Con
               {condition.display || condition.code || "Unknown condition"}
             </p>
             <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+              {/* Status dot beside badge when checkbox is shown */}
+              {onSelect && (
+                <span className={cn("size-2 rounded-full shrink-0", style.dot)} />
+              )}
               <span
                 className={cn(
                   "inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium capitalize",
@@ -86,7 +113,6 @@ export function ConditionCard({ condition, selected = false, onDeidentify }: Con
                 </span>
               )}
             </div>
-            {/* Patient name preview */}
             {condition.patient_name && (
               <div className="mt-2 flex items-center gap-1 text-xs text-muted-foreground">
                 <User className="size-3 shrink-0" />
@@ -125,11 +151,11 @@ export function ConditionCard({ condition, selected = false, onDeidentify }: Con
               <div className="mt-3">
                 <Button
                   size="sm"
-                  variant={selected ? "outline" : "default"}
+                  variant="default"
                   onClick={onDeidentify}
                   className="w-full"
                 >
-                  {selected ? 'Deselect Patient' : 'De-identify Patient'}
+                  De-identify Patient
                 </Button>
               </div>
             )}

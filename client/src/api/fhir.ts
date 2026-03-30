@@ -6,7 +6,7 @@
  * pagination and resource joining (e.g. Condition + included Patient).
  */
 
-import { fetchFhir } from "./client";
+import { fetchFhir, fetchFhirByUrl } from "./client";
 import type { ConditionRow, PatientSummary } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -135,43 +135,50 @@ export async function searchPatients(
 // Condition queries
 // ---------------------------------------------------------------------------
 
+export interface PatientInfo {
+  name: string;
+  birthDate: string;
+  gender: string;
+}
+
+/** Cached patient data keyed by FHIR Patient id — accumulated across pages. */
+export type PatientMap = Record<string, PatientInfo>;
+
+export interface ConditionPageResult extends PagedResult<ConditionRow> {
+  /** Patient records included in this page's bundle. Merge into a running
+   *  cache so load-more pages can still resolve patient names for conditions
+   *  whose Patient resource was only included on an earlier page. */
+  patientMap: PatientMap;
+  /** The absolute HAPI URL for the next page, or null if this is the last page.
+   *  Use fetchConditionsNextPage() to follow it — do NOT reconstruct with offset. */
+  nextLink: string | null;
+}
+
 /**
- * GET /fhir/Condition -- search conditions by code text and include
- * the referenced Patient resources via _include.
- *
- * Replicates the original FHIR client logic: separates Patient and Condition
- * resources from the Bundle, builds a patient lookup map, then joins
- * each Condition to its referenced Patient for display.
+ * Returns true when the query looks like a code value (all digits / digits with
+ * dots or hyphens), e.g. a SNOMED CT code like "73211009" or ICD-10 "E11.9".
+ * In that case we use the `code=` parameter instead of `code:text=` so HAPI
+ * matches the actual code system value rather than the display text.
  */
-export async function searchConditions(
-  query?: string,
-  clinicalStatus?: string,
-  count: number = 20,
-  offset: number = 0,
-): Promise<PagedResult<ConditionRow>> {
-  const params: Record<string, string> = {
-    _count: String(count),
-    _include: "Condition:subject",
-  };
-  if (offset > 0) {
-    params._getpagesoffset = String(offset);
-  }
-  if (query) {
-    params["code:text"] = query;
-  }
-  if (clinicalStatus) {
-    params["clinical-status"] = clinicalStatus;
+function isCodeQuery(query: string): boolean {
+  return /^\d[\d.\-]*$/.test(query.trim());
+}
+
+/** Parse a raw FHIR bundle into a ConditionPageResult. Shared by the initial
+ *  search and the next-link pagination path. */
+function parseBundleToConditionPage(
+  bundle: FhirBundle,
+  knownPatients: PatientMap,
+): ConditionPageResult {
+  const nextLink =
+    bundle.link?.find((l) => l.relation === "next")?.url ?? null;
+  const hasMore = nextLink !== null;
+
+  if (!bundle.entry) {
+    return { items: [], total: bundle.total ?? null, hasMore, nextLink, patientMap: {} };
   }
 
-  const bundle = await fetchFhir<FhirBundle>("/Condition", params);
-  const hasMore = bundle.link?.some((l) => l.relation === "next") ?? false;
-
-  if (!bundle.entry) return { items: [], total: bundle.total ?? null, hasMore };
-
-  // Separate included Patient resources from Condition resources.
-  // FHIR _include returns Patients with search.mode = "include" and
-  // Conditions with search.mode = "match" (or no search mode).
-  const patients = new Map<string, Record<string, unknown>>();
+  const pagePatients: PatientMap = {};
   const conditions: Array<Record<string, unknown>> = [];
 
   for (const entry of bundle.entry) {
@@ -181,16 +188,21 @@ export async function searchConditions(
     if (resource.resourceType === "Patient") {
       const id = String(resource.id ?? "");
       if (id) {
-        patients.set(id, resource);
+        pagePatients[id] = {
+          name: formatPatientName(resource.name as FhirHumanName[] | undefined),
+          birthDate: String(resource.birthDate ?? ""),
+          gender: String(resource.gender ?? ""),
+        };
       }
     } else if (resource.resourceType === "Condition") {
       conditions.push(resource);
     }
   }
 
-  // Join Conditions to their referenced Patients.
+  // Merge: page patients take precedence over cache (fresher data).
+  const mergedPatients: PatientMap = { ...knownPatients, ...pagePatients };
+
   const items = conditions.map((c) => {
-    // Extract the patient ID from subject.reference ("Patient/123" -> "123")
     const subjectRef =
       (c.subject as Record<string, unknown> | undefined)?.reference;
     const refStr = typeof subjectRef === "string" ? subjectRef : "";
@@ -198,49 +210,128 @@ export async function searchConditions(
       ? refStr.split("/").pop() ?? ""
       : refStr;
 
-    // Look up the included Patient resource
-    const patient = patients.get(patientId);
+    const patient = mergedPatients[patientId];
 
-    // Extract condition code/display from coding[0]
     const codeObj = c.code as Record<string, unknown> | undefined;
-    const codings = (codeObj?.coding ?? []) as Array<
-      Record<string, unknown>
-    >;
+    const codings = (codeObj?.coding ?? []) as Array<Record<string, unknown>>;
     const firstCoding = codings[0] ?? {};
 
-    // Extract clinical status
-    const clinicalStatusObj = c.clinicalStatus as
-      | Record<string, unknown>
-      | undefined;
-    const statusCodings = (clinicalStatusObj?.coding ?? []) as Array<
-      Record<string, unknown>
-    >;
-    const statusText =
-      statusCodings[0]?.code ??
-      clinicalStatusObj?.text ??
-      "";
+    const clinicalStatusObj = c.clinicalStatus as Record<string, unknown> | undefined;
+    const statusCodings = (clinicalStatusObj?.coding ?? []) as Array<Record<string, unknown>>;
+    const statusText = statusCodings[0]?.code ?? clinicalStatusObj?.text ?? "";
 
     return {
       condition_id: String(c.id ?? ""),
       code: String(firstCoding.code ?? codeObj?.text ?? ""),
-      display: String(
-        firstCoding.display ?? codeObj?.text ?? "",
-      ),
+      display: String(firstCoding.display ?? codeObj?.text ?? ""),
       clinical_status: String(statusText),
       patient_id: patientId,
-      patient_name: patient
-        ? formatPatientName(
-            patient.name as FhirHumanName[] | undefined,
-          )
-        : "",
-      patient_birth_date: patient
-        ? String(patient.birthDate ?? "")
-        : "",
-      patient_gender: patient
-        ? String(patient.gender ?? "")
-        : "",
+      patient_name: patient?.name ?? "",
+      patient_birth_date: patient?.birthDate ?? "",
+      patient_gender: patient?.gender ?? "",
     };
   });
 
-  return { items, total: bundle.total ?? null, hasMore };
+  return { items, total: bundle.total ?? null, hasMore, nextLink, patientMap: pagePatients };
+}
+
+/**
+ * GET /fhir/Condition — search conditions with _include:Condition:subject.
+ *
+ * Pass `category` to restrict the result set:
+ *   "encounter-diagnosis,problem-list-item" (default) — clinical conditions only,
+ *     excludes social determinants (employment, criminal record, etc.)
+ *   "" — all conditions including social/contextual ones
+ *   "social-history" — social determinants only
+ *
+ * Returns `nextLink` (absolute HAPI URL for the next page). Use
+ * fetchConditionsNextPage() to paginate — do NOT reconstruct with _getpagesoffset,
+ * as HAPI's cursor-based paging doesn't support arbitrary offset reconstruction.
+ */
+export async function searchConditions(
+  query?: string,
+  clinicalStatus?: string,
+  count: number = 20,
+  category: string = "encounter-diagnosis,problem-list-item",
+  knownPatients: PatientMap = {},
+): Promise<ConditionPageResult> {
+  const params: Record<string, string> = {
+    _count: String(count),
+    _include: "Condition:subject",
+  };
+  if (query) {
+    if (isCodeQuery(query)) {
+      params["code"] = query;
+    } else {
+      params["code:text"] = query;
+    }
+  }
+  if (clinicalStatus) {
+    params["clinical-status"] = clinicalStatus;
+  }
+  if (category) {
+    params["category"] = category;
+  }
+
+  const bundle = await fetchFhir<FhirBundle>("/Condition", params);
+  return parseBundleToConditionPage(bundle, knownPatients);
+}
+
+/**
+ * Fetch the next page of a condition search by following the bundle `next` link.
+ *
+ * HAPI FHIR uses cursor-based paging: the `next` link encodes a server-side
+ * page token (_getpages=...) that cannot be reconstructed from an offset.
+ * Always call this instead of issuing a new searchConditions() with an offset.
+ */
+export async function fetchConditionsNextPage(
+  nextLink: string,
+  knownPatients: PatientMap = {},
+): Promise<ConditionPageResult> {
+  const bundle = await fetchFhirByUrl<FhirBundle>(nextLink);
+  return parseBundleToConditionPage(bundle, knownPatients);
+}
+
+/**
+ * Fetch ALL pages of a condition search and return the complete deduplicated list.
+ *
+ * Uses a large page size (200) to minimise round-trips, then follows every
+ * `next` link until the server has no more pages. Conditions are deduplicated
+ * by `condition_id` across pages to handle HAPI cursor-paging overlaps.
+ */
+export async function searchAllConditions(
+  query?: string,
+  clinicalStatus?: string,
+  category: string = "encounter-diagnosis,problem-list-item",
+): Promise<{ items: ConditionRow[]; total: number | null }> {
+  let patientMap: PatientMap = {};
+  const seen = new Set<string>();
+  const all: ConditionRow[] = [];
+
+  // First page — use a large count to minimise round-trips
+  let page = await searchConditions(query, clinicalStatus, 200, category, patientMap);
+  let total = page.total;
+
+  for (const item of page.items) {
+    if (!seen.has(item.condition_id)) {
+      seen.add(item.condition_id);
+      all.push(item);
+    }
+  }
+  patientMap = { ...patientMap, ...page.patientMap };
+
+  // Follow every subsequent page
+  while (page.nextLink) {
+    page = await fetchConditionsNextPage(page.nextLink, patientMap);
+    if (page.total !== null) total = page.total;
+    for (const item of page.items) {
+      if (!seen.has(item.condition_id)) {
+        seen.add(item.condition_id);
+        all.push(item);
+      }
+    }
+    patientMap = { ...patientMap, ...page.patientMap };
+  }
+
+  return { items: all, total };
 }

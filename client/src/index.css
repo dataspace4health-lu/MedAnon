@@ -55,6 +55,15 @@
   --radius-4xl: calc(var(--radius) * 2.6);
 }
 
+html,
+body {
+  /* Prevent a second native scrollbar alongside the main content area's
+     overflow-y-auto scroll. The app root uses h-screen overflow-hidden;
+     the only scroll container is <main>. */
+  overflow: hidden;
+  height: 100%;
+}
+
 body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
     "Helvetica Neue", Arial, sans-serif;

@@ -103,6 +103,50 @@ export async function fetchApi<T>(
 // ---------------------------------------------------------------------------
 
 /**
+ * Fetch a FHIR bundle from an absolute HAPI URL returned in a bundle link.
+ *
+ * HAPI returns paginated `next` links as full absolute URLs pointing at the
+ * internal Docker host (e.g. http://hapi-fhir:8080/fhir?_getpages=...).
+ * We strip the origin so the request goes through the nginx /fhir proxy.
+ */
+export async function fetchFhirByUrl<T>(hapiAbsoluteUrl: string): Promise<T> {
+  // Extract pathname + search from the absolute URL so nginx can proxy it.
+  let proxyUrl: string;
+  try {
+    const parsed = new URL(hapiAbsoluteUrl);
+    proxyUrl = parsed.pathname + parsed.search;
+  } catch {
+    proxyUrl = hapiAbsoluteUrl;
+  }
+
+  const timeout = 15_000;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
+
+  try {
+    const response = await fetch(proxyUrl, {
+      signal: controller.signal,
+      headers: { Accept: "application/fhir+json" },
+    });
+
+    if (!response.ok) {
+      let detail: string;
+      try {
+        const body = await response.json();
+        detail = body?.issue?.[0]?.diagnostics ?? body?.detail ?? response.statusText;
+      } catch {
+        detail = response.statusText;
+      }
+      throw new ApiError(response.status, detail);
+    }
+
+    return (await response.json()) as T;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+/**
  * Typed fetch wrapper for the HAPI FHIR server.
  *
  * - Prefixes `path` with `/fhir`

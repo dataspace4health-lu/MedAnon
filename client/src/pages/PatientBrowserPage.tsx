@@ -29,12 +29,28 @@ export default function PatientBrowserPage() {
   // Committed search term (only changes on Search click / Enter)
   const [committedName, setCommittedName] = useState('');
 
-  // FHIR connectivity check on mount
+  // FHIR connectivity check + initial data load on mount
   useEffect(() => {
     let cancelled = false;
-    capabilityStatement()
-      .then(() => { if (!cancelled) setFhirConnected(true); })
-      .catch(() => { if (!cancelled) setFhirConnected(false); });
+    const run = async () => {
+      try {
+        await capabilityStatement();
+        if (cancelled) return;
+        setFhirConnected(true);
+        setSearching(true);
+        const result = await searchPatients(undefined, PAGE_SIZE, 0);
+        if (cancelled) return;
+        setPatients(result.items);
+        setTotal(result.total);
+        setHasMore(result.hasMore);
+        setOffset(PAGE_SIZE);
+      } catch {
+        if (!cancelled) setFhirConnected(false);
+      } finally {
+        if (!cancelled) setSearching(false);
+      }
+    };
+    run();
     return () => { cancelled = true; };
   }, []);
 
@@ -143,7 +159,7 @@ export default function PatientBrowserPage() {
       {!searching && patients.length === 0 && fhirConnected && (
         <div className="flex flex-col items-center justify-center rounded-lg border border-dashed py-16 text-center text-muted-foreground">
           <Users className="mb-3 h-10 w-10" />
-          <p className="text-sm">No patients to display. Use the search bar above to find patients.</p>
+          <p className="text-sm">No patients found. Try adjusting the search term above.</p>
         </div>
       )}
 
