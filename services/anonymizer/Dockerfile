@@ -1,17 +1,24 @@
+# Build context must be the repo root.
+# docker-compose uses: context: . / dockerfile: services/anonymizer/Dockerfile
+#
 # ── Base stage ────────────────────────────────────────────────────────────────
 FROM python:3.12-slim AS base
 
 WORKDIR /code
 
-# Install deps first (layer-cached unless requirements change)
-COPY requirements.txt /code/requirements.txt
+# Install medanon-core shared library first (layer-cached unless package changes)
+COPY packages/medanon-core/ /build/medanon-core/
+RUN pip install --no-cache-dir /build/medanon-core/
+
+# Install service deps (layer-cached unless requirements change)
+COPY services/anonymizer/requirements.txt /code/requirements.txt
 RUN pip install --no-cache-dir --upgrade -r /code/requirements.txt
 
 # Download spaCy model
 RUN python -m spacy download en_core_web_lg --quiet
 
-COPY src/ /code/src/
-COPY config/ /code/config/
+COPY services/anonymizer/src/ /code/src/
+COPY services/anonymizer/config/ /code/config/
 # NOTE: RSA keys are NOT baked into the image.
 # Mount them at runtime via Docker volume or Kubernetes Secret:
 #   docker run -v /path/to/keys:/code/keys ...
@@ -42,7 +49,7 @@ CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload
 # Extends base before the non-root user switch so pip can write to site-packages.
 # Build: make build-sdv   Start: make up-sdv
 FROM base AS sdv
-COPY requirements-sdv.txt /code/requirements-sdv.txt
+COPY services/anonymizer/requirements-sdv.txt /code/requirements-sdv.txt
 RUN pip install --no-cache-dir -r /code/requirements-sdv.txt
 WORKDIR /code/src
 USER appuser
