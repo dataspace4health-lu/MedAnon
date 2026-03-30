@@ -36,6 +36,7 @@ class Job:
     )
     result_path: str | None = None
     error: str | None = None
+    checkpoint_data: dict | None = None
 
 
 class JobStoreUnavailable(Exception):

@@ -45,23 +45,29 @@ class SqliteJobStore:
         with self._connect() as conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS jobs (
-                    id          TEXT PRIMARY KEY,
-                    type        TEXT NOT NULL,
-                    params      TEXT NOT NULL,
-                    status      TEXT NOT NULL,
-                    created_at  TEXT NOT NULL,
-                    updated_at  TEXT NOT NULL,
-                    result_path TEXT,
-                    error       TEXT
+                    id              TEXT PRIMARY KEY,
+                    type            TEXT NOT NULL,
+                    params          TEXT NOT NULL,
+                    status          TEXT NOT NULL,
+                    created_at      TEXT NOT NULL,
+                    updated_at      TEXT NOT NULL,
+                    result_path     TEXT,
+                    error           TEXT,
+                    checkpoint_data TEXT
                 )
             """)
+            # Migrate existing tables that predate the checkpoint_data column.
+            try:
+                conn.execute("ALTER TABLE jobs ADD COLUMN checkpoint_data TEXT")
+            except Exception:
+                pass  # Column already exists — nothing to do.
 
     def create(self, job_type: str, params: dict) -> Job:
         """Persist a new PENDING job and return it."""
         job = Job(id=str(uuid.uuid4()), type=job_type, params=params)
         with self._connect() as conn:
             conn.execute(
-                "INSERT INTO jobs VALUES (?,?,?,?,?,?,?,?)",
+                "INSERT INTO jobs VALUES (?,?,?,?,?,?,?,?,?)",
                 (
                     job.id,
                     job.type,
@@ -71,6 +77,7 @@ class SqliteJobStore:
                     job.updated_at,
                     job.result_path,
                     job.error,
+                    json.dumps(job.checkpoint_data) if job.checkpoint_data is not None else None,
                 ),
             )
         _jobs_log.info("job_created id=%s type=%s", job.id, job.type)
@@ -85,12 +92,28 @@ class SqliteJobStore:
         return _row_to_job(row) if row else None
 
     def update(self, job: Job) -> None:
-        """Persist status, result_path and error changes for *job*."""
+        """Persist status, result_path, error, and checkpoint_data changes for *job*."""
         job.updated_at = datetime.now(timezone.utc).isoformat()
         with self._connect() as conn:
             conn.execute(
-                "UPDATE jobs SET status=?, updated_at=?, result_path=?, error=? WHERE id=?",
-                (job.status.value, job.updated_at, job.result_path, job.error, job.id),
+                "UPDATE jobs SET status=?, updated_at=?, result_path=?, error=?, checkpoint_data=? WHERE id=?",
+                (
+                    job.status.value,
+                    job.updated_at,
+                    job.result_path,
+                    job.error,
+                    json.dumps(job.checkpoint_data) if job.checkpoint_data is not None else None,
+                    job.id,
+                ),
+            )
+
+    def update_checkpoint(self, job_id: str, data: dict) -> None:
+        """Persist only the checkpoint_data column for an in-progress job."""
+        updated_at = datetime.now(timezone.utc).isoformat()
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE jobs SET checkpoint_data=?, updated_at=? WHERE id=?",
+                (json.dumps(data), updated_at, job_id),
             )
 
     def next_pending(self) -> Job | None:
@@ -133,6 +156,7 @@ JobStore = SqliteJobStore
 
 
 def _row_to_job(row: sqlite3.Row) -> Job:
+    raw_cp = row["checkpoint_data"] if "checkpoint_data" in row.keys() else None
     return Job(
         id=row["id"],
         type=row["type"],
@@ -142,6 +166,7 @@ def _row_to_job(row: sqlite3.Row) -> Job:
         updated_at=row["updated_at"],
         result_path=row["result_path"],
         error=row["error"],
+        checkpoint_data=json.loads(raw_cp) if raw_cp else None,
     )
 
 

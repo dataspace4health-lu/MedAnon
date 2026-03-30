@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 
 from medanon_core.domain import Job, JobStatus
+from pipeline.checkpoint import CHECKPOINT_INTERVAL, load_checkpoint, save_checkpoint
 
 _worker_log = logging.getLogger("medanon.worker")
 _store = None
@@ -37,7 +38,7 @@ def init_worker(store, max_concurrent: int = 3) -> None:
 # ---------------------------------------------------------------------------
 
 def _execute_bulk_export(job: Job) -> None:
-    """Run a bulk-export job synchronously."""
+    """Run a bulk-export job synchronously, resuming from checkpoint when available."""
     from integrations.fhir.client import bulk_export
     from pipeline.config_service import get_settings
     from pipeline.processor import process_data
@@ -56,6 +57,12 @@ def _execute_bulk_export(job: Job) -> None:
     output_path = os.path.join(_OUTPUT_DIR, f"{job.id}.ndjson")
     Path(_OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
 
+    checkpoint = load_checkpoint(job) or {}
+    already_written = checkpoint.get("lines_written", 0)
+    open_mode = "a" if already_written > 0 else "w"
+    if already_written:
+        _worker_log.info("bulk_export_resume job=%s from_line=%d", job.id, already_written)
+
     gen = bulk_export(
         server_url,
         level=level,
@@ -65,9 +72,11 @@ def _execute_bulk_export(job: Job) -> None:
         token=token,
         timeout=timeout,
     )
-    count = 0
-    with open(output_path, "w", encoding="utf-8") as fh:
-        for resource in gen:
+    count = already_written
+    with open(output_path, open_mode, encoding="utf-8") as fh:
+        for i, resource in enumerate(gen):
+            if i < already_written:
+                continue  # skip resources already written in a previous run
             try:
                 result = process_data(resource, settings)
                 fh.write(json.dumps(result) + "\n")
@@ -82,13 +91,17 @@ def _execute_bulk_export(job: Job) -> None:
                     job.id, rtype, exc,
                 )
                 fh.write(json.dumps({"error": "processing error", "resourceType": rtype}) + "\n")
+                count += 1
+            if count % CHECKPOINT_INTERVAL == 0:
+                fh.flush()
+                save_checkpoint(_store, job, {"lines_written": count})
 
     job.result_path = output_path
     _worker_log.info("bulk_export_done job=%s count=%d", job.id, count)
 
 
 def _execute_cohort(job: Job) -> None:
-    """Run a cohort export job synchronously."""
+    """Run a cohort export job synchronously, resuming from checkpoint when available."""
     from integrations.fhir.client import fetch_cohort
     from pipeline.config_service import get_settings
     from pipeline.processor import process_data
@@ -106,6 +119,12 @@ def _execute_cohort(job: Job) -> None:
     output_path = os.path.join(_OUTPUT_DIR, f"{job.id}.ndjson")
     Path(_OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
 
+    checkpoint = load_checkpoint(job) or {}
+    already_written = checkpoint.get("lines_written", 0)
+    open_mode = "a" if already_written > 0 else "w"
+    if already_written:
+        _worker_log.info("cohort_resume job=%s from_line=%d", job.id, already_written)
+
     gen = fetch_cohort(
         server_url,
         search_type=search_type,
@@ -114,9 +133,11 @@ def _execute_cohort(job: Job) -> None:
         token=token,
         timeout=timeout,
     )
-    count = 0
-    with open(output_path, "w", encoding="utf-8") as fh:
-        for resource in gen:
+    count = already_written
+    with open(output_path, open_mode, encoding="utf-8") as fh:
+        for i, resource in enumerate(gen):
+            if i < already_written:
+                continue  # skip resources already written in a previous run
             try:
                 result = process_data(resource, settings)
                 fh.write(json.dumps(result) + "\n")
@@ -131,6 +152,10 @@ def _execute_cohort(job: Job) -> None:
                     job.id, rtype, exc,
                 )
                 fh.write(json.dumps({"error": "processing error", "resourceType": rtype}) + "\n")
+                count += 1
+            if count % CHECKPOINT_INTERVAL == 0:
+                fh.flush()
+                save_checkpoint(_store, job, {"lines_written": count})
 
     job.result_path = output_path
     _worker_log.info("cohort_done job=%s count=%d", job.id, count)
@@ -184,8 +209,27 @@ async def _run_and_release(job: Job) -> None:
 # Worker loop — event-driven for Redis, polling for SQLite
 # ---------------------------------------------------------------------------
 
+def _recover_running_jobs() -> int:
+    """Reset jobs left in RUNNING state from a previous crashed process to PENDING.
+
+    Returns the count of recovered jobs.
+    """
+    if _store is None or not hasattr(_store, "list_jobs"):
+        return 0
+    recovered = 0
+    try:
+        stuck = _store.list_jobs(status="running", limit=100)
+        for job in stuck:
+            job.status = JobStatus.PENDING
+            job.error = None
+            _store.update(job)
+            recovered += 1
+    except Exception as exc:
+        _worker_log.warning("recovery_scan_failed: %s", type(exc).__name__)
+    return recovered
+
+
 async def _get_next_job(is_event_driven: bool) -> Job | None:
-    """Retrieve the next job to execute."""
     if is_event_driven:
         job_id = await asyncio.to_thread(_store.wait_for_job, 5)
         if job_id is None:
@@ -207,6 +251,11 @@ async def worker_loop() -> None:
 
     _semaphore = asyncio.Semaphore(_max_concurrent)
     is_event_driven = hasattr(_store, "wait_for_job")
+
+    # Recover jobs left in RUNNING state by a previous process that crashed.
+    recovered = _recover_running_jobs()
+    if recovered:
+        _worker_log.warning("worker_startup_recovered jobs=%d", recovered)
 
     if is_event_driven:
         _worker_log.info(
