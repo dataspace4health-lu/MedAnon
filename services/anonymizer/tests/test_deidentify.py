@@ -68,7 +68,7 @@ class TestConfig(unittest.TestCase):
         settings = Settings(config_filename)
         # Unset MEDANON_HASH_KEY so the test always uses plain SHA3-256,
         # regardless of the environment the tests are run in.
-        with patch.dict(os.environ, {'MEDANON_HASH_KEY': ''}, clear=False):
+        with patch.dict(os.environ, {'MEDANON_HASH_KEY': '', 'MEDANON_HASH_ALLOW_PLAIN': 'true'}, clear=False):
             ret = process_data(resource, settings)
         print(f"Checking cryptohash...\t", end="", flush=True)
         self.assertEqual(

@@ -255,8 +255,11 @@ class TestFetch(unittest.TestCase):
             mock_cap.assert_called_once_with(
                 "http://fhir.example.com/fhir", token=None, timeout=30.0,
             )
-            # Output file should NOT be written in discover-only mode
-            self.assertFalse(output_path.exists())
+            # Discover writes types to the output file
+            content = output_path.read_text()
+            self.assertIn("Patient", content)
+            self.assertIn("Observation", content)
+            self.assertIn("Condition", content)
 
     @patch.dict(os.environ, {"FHIR_SOURCE_URL": ""}, clear=False)
     def test_fetch_no_server_exits(self):
