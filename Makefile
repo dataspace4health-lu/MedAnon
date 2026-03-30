@@ -59,6 +59,7 @@ help:
 setup:
 	python3 -m venv $(VENV)
 	$(PIP) install --upgrade pip
+	$(PIP) install -e packages/medanon-core/
 	$(PIP) install -r services/anonymizer/requirements.txt
 	$(PY) -m spacy download en_core_web_lg
 	@echo "✓ virtualenv ready — activate with: source $(VENV)/bin/activate"
