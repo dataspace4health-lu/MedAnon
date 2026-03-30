@@ -86,7 +86,7 @@ HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' \
     $AUTH_HEADER \
     -H "Content-Type: application/json" \
     -d '{"resourceType":"Patient","id":"smoke-test","name":[{"family":"Test"}]}' \
-    "http://localhost:${ANON_PORT}/process" 2>/dev/null || echo "000")
+    "http://localhost:${ANON_PORT}/v1/process" 2>/dev/null || echo "000")
 if [ "$HTTP_CODE" = "200" ]; then
     pass "/process -> 200 (de-identification works)"
 else
