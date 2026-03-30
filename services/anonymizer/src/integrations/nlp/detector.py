@@ -269,7 +269,11 @@ def nlp_detect_by_path(resource: dict, el: dict, params: dict) -> None:
     """Detect and replace PHI/PII using NLP in the field matched by *el*.
 
     Modifies *resource* in-place (same contract as all other actions).
+
+    When NLP_SERVICE_URL is set, delegates detection to the remote NLP
+    microservice. Otherwise runs Presidio locally (default behaviour).
     """
+    import os
     entities = _resolve_entities(params.get("entities", "healthcare"))
     threshold = float(params.get("threshold", 0.4))
     language = str(params.get("language", "en"))
@@ -282,8 +286,17 @@ def nlp_detect_by_path(resource: dict, el: dict, params: dict) -> None:
     # Use lock when accessing global state for thread safety
     token_lock = _GLOBAL_TOKEN_LOCK if token_state is _GLOBAL_TOKEN_STATE else None
 
-    def scrub_fn(text: str) -> str:
-        return _analyze_and_replace(text, entities, threshold, language, mode, token_state, token_lock)
+    if os.environ.get("NLP_SERVICE_URL", ""):
+        # Remote path — delegate to NLP microservice
+        from integrations.nlp.remote_detector import analyze_and_replace_remote
+
+        def scrub_fn(text: str) -> str:
+            return analyze_and_replace_remote(
+                text, entities, threshold, language, mode, token_state
+            )
+    else:
+        def scrub_fn(text: str) -> str:
+            return _analyze_and_replace(text, entities, threshold, language, mode, token_state, token_lock)
 
     path = el["path"]
     parts = path.split(".")
