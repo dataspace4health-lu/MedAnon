@@ -1,5 +1,9 @@
 """gPAS circuit breaker — prevents cascade failures when gPAS is down.
 
+``GpasUnavailableError`` is raised (not ``ValueError``) whenever gPAS is
+unreachable: circuit OPEN, connection refused, or timeout after all retries.
+Callers distinguish this from ordinary validation errors and surface HTTP 503.
+
 States:
   CLOSED    — normal operation; failures are counted
   OPEN      — all requests fail-fast without hitting gPAS
@@ -18,6 +22,14 @@ import threading
 import time
 
 gpas_log = logging.getLogger("medanon.gpas")
+
+
+class GpasUnavailableError(Exception):
+    """Raised when gPAS is unreachable (circuit OPEN, connection failure, timeout).
+
+    Distinct from ``ValueError`` so callers can return HTTP 503 and stop
+    streaming immediately rather than treating this as a bad-input error.
+    """
 
 
 class _CircuitBreaker:

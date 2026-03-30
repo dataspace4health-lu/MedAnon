@@ -40,7 +40,21 @@ except ImportError:
 _RATE_LIMIT_ENABLED = os.environ.get("MEDANON_RATE_LIMIT_ENABLED", "true").lower() in (
     "1", "true", "yes"
 )
-limiter = Limiter(key_func=get_remote_address, enabled=_RATE_LIMIT_ENABLED)
+
+# Use Redis-backed storage when available so rate-limit counters are shared
+# across all anonymizer replicas (required for correct horizontal scaling).
+# Falls back to in-process memory when MEDANON_REDIS_URL is not set.
+_redis_url = os.environ.get("MEDANON_REDIS_URL", "")
+_limiter_storage_uri = (
+    _redis_url.rstrip("/") + "/2"  # DB 2: rate-limit counters
+    if _redis_url
+    else "memory://"
+)
+limiter = Limiter(
+    key_func=get_remote_address,
+    enabled=_RATE_LIMIT_ENABLED,
+    storage_uri=_limiter_storage_uri,
+)
 
 # Maximum accepted request body size (10 MB default).
 MAX_BODY_BYTES = int(os.environ.get("MEDANON_MAX_BODY_BYTES", 10 * 1024 * 1024))

@@ -6,6 +6,7 @@ import logging
 from typing import AsyncIterator
 
 from pipeline.processor import process_data
+from integrations.gpas.circuit_breaker import GpasUnavailableError
 
 logger = logging.getLogger("medanon")
 
@@ -40,6 +41,14 @@ class ProcessingService:
             result = await asyncio.to_thread(process_data, resource, settings)
             logger.info("Processing complete: resourceType=%s", resource_type)
             return result
+        except GpasUnavailableError as exc:
+            logger.error("gPAS unavailable: %s", exc, exc_info=False)
+            raise ProcessingError(
+                "gPAS pseudonymization service is unavailable. "
+                "Processing has been halted to prevent partial results. "
+                "Retry once gPAS recovers.",
+                status=503,
+            ) from exc
         except ValueError as exc:
             logger.warning(
                 "Validation error processing resourceType=%s: %s", resource_type, exc
@@ -62,7 +71,11 @@ class ProcessingService:
     async def process_ndjson_lines(
         self, lines: list[str], settings
     ) -> AsyncIterator[str]:
-        """Process NDJSON lines, yielding JSON result strings (no trailing newline)."""
+        """Process NDJSON lines, yielding JSON result strings (no trailing newline).
+
+        If gPAS becomes unavailable mid-stream, a fatal error sentinel is yielded
+        and the generator stops immediately — no partial results are silently dropped.
+        """
         for lineno, raw in enumerate(lines, start=1):
             line = raw.strip()
             if not line or line.startswith("//"):
@@ -78,6 +91,14 @@ class ProcessingService:
             try:
                 result = await asyncio.to_thread(process_data, resource, settings)
                 yield json.dumps(result)
+            except GpasUnavailableError as exc:
+                logger.error("ndjson_stream: gPAS unavailable at line %d: %s", lineno, exc, exc_info=False)
+                yield json.dumps({
+                    "error": "gPAS service unavailable — stream halted to prevent partial results",
+                    "fatal": True,
+                    "stopped_at_line": lineno,
+                })
+                return  # stop the generator; no further resources processed
             except Exception as exc:
                 logger.error(
                     "NDJSON line %d: processing error: %s",
@@ -90,11 +111,23 @@ class ProcessingService:
     async def process_resource_stream(
         self, resources: list[dict], settings
     ) -> AsyncIterator[str]:
-        """Process a list of resources, yielding JSON result strings."""
+        """Process a list of resources, yielding JSON result strings.
+
+        If gPAS becomes unavailable mid-stream, a fatal error sentinel is yielded
+        and the generator stops immediately — no partial results are silently dropped.
+        """
         for idx, resource in enumerate(resources):
             try:
                 result = await asyncio.to_thread(process_data, resource, settings)
                 yield json.dumps(result)
+            except GpasUnavailableError as exc:
+                logger.error("batch_stream: gPAS unavailable at resource %d: %s", idx, exc, exc_info=False)
+                yield json.dumps({
+                    "error": "gPAS service unavailable — stream halted to prevent partial results",
+                    "fatal": True,
+                    "stopped_at_resource": idx,
+                })
+                return  # stop the generator; no further resources processed
             except Exception as exc:
                 logger.error(
                     "process_batch resource %d: %s",

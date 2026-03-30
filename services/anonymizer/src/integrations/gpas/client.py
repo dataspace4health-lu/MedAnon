@@ -14,6 +14,7 @@ import os
 from utils.fhirpath import find_nodes
 from actions.substitute import _substitute_nodes
 
+from .circuit_breaker import GpasUnavailableError  # noqa: F401 — re-exported for callers
 from .transport import (
     _resolve_gpas_base,
     _is_cache_enabled,

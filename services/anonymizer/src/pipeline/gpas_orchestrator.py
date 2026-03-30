@@ -16,6 +16,7 @@ from actions.substitute import _substitute_nodes
 from pipeline.action_dispatcher import BatchWork
 from pipeline.rule_matcher import _resolve_rule_params
 from pipeline.deidentify import perform_deidentification
+from integrations.gpas.circuit_breaker import GpasUnavailableError  # noqa: F401 — re-exported
 
 audit_log = logging.getLogger("medanon.audit")
 
@@ -77,9 +78,12 @@ def run_gpas_batch(
         original_value = str(val) if not isinstance(val, dict) else json.dumps(val)
         values_to_pseudonymize.append(original_value)
 
-    # Batch call — may raise; caller decides whether to propagate or skip
+    # Batch call — GpasUnavailableError always propagates (gPAS is down, no partial results).
+    # Other exceptions respect processing_mode: 'skip' falls back to redaction, 'raise' propagates.
     try:
         batch_mapping = pseudonymizer.pseudonymize_batch(values_to_pseudonymize, gpas_params)
+    except GpasUnavailableError:
+        raise  # never swallow — caller must surface HTTP 503 and stop all processing
     except Exception as exc:
         if processing_mode == "skip":
             audit_log.warning(

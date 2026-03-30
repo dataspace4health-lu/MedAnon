@@ -24,7 +24,7 @@ from utils.metrics import (
     GPAS_LATENCY,
 )
 
-from .circuit_breaker import _gpas_circuit_breaker
+from .circuit_breaker import GpasUnavailableError, _gpas_circuit_breaker
 
 gpas_log = logging.getLogger("medanon.gpas")
 
@@ -179,9 +179,9 @@ def _call_gpas_operation(base_url, operation, fhir_params, params):
     """
     if not _gpas_circuit_breaker.allow_request():
         GPAS_CALL_COUNT.labels(operation=operation, status='error').inc()
-        raise ValueError(
-            f'gPAS circuit breaker is OPEN — requests to ${operation} are '
-            f'temporarily blocked. Service will retry automatically.'
+        raise GpasUnavailableError(
+            f'gPAS is unavailable — circuit breaker OPEN for ${operation}. '
+            f'Processing halted; retry after gPAS recovers.'
         )
 
     url = f"{base_url}/${operation}"
@@ -248,6 +248,8 @@ def _call_gpas_operation(base_url, operation, fhir_params, params):
             GPAS_LATENCY.labels(operation=operation).observe(time.perf_counter() - t0)
             GPAS_CALL_COUNT.labels(operation=operation, status='error').inc()
             _gpas_circuit_breaker.record_failure()
-            raise ValueError(f'gPAS connection error on ${operation}: {exc.reason}') from exc
+            raise GpasUnavailableError(
+                f'gPAS unreachable on ${operation}: {exc.reason}'
+            ) from exc
 
-    raise ValueError(f'gPAS request failed on ${operation}')
+    raise GpasUnavailableError(f'gPAS request failed after retries on ${operation}')
