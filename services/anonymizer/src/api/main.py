@@ -24,7 +24,7 @@ except ImportError:
 import pipeline.config as config
 from utils.logging import REQUEST_ID, setup_logging
 from utils.metrics import REQUEST_COUNT, REQUEST_LATENCY
-from api.auth import get_auth_context, log_audit, OPEN_PATHS, ENDPOINT_ROLES
+from api.auth import get_auth_context, get_required_role, log_audit, OPEN_PATHS
 from api.deps import (
     MAX_BODY_BYTES,
     RateLimitExceeded,
@@ -32,7 +32,9 @@ from api.deps import (
     get_settings,
     limiter,
 )
-from api.routers import analytics, fhir_server, process, synthetic
+from api.routers import analytics, fhir_server, jobs, process, synthetic
+
+import asyncio
 
 setup_logging(os.environ.get("LOG_LEVEL", "INFO"))
 logger = logging.getLogger("medanon")
@@ -46,6 +48,41 @@ _ALLOWED_ORIGINS = [o.strip() for o in os.environ.get(
 # ---------------------------------------------------------------------------
 
 app = FastAPI(title="MedAnon", version="2.0.0")
+
+
+@app.on_event("startup")
+async def _startup() -> None:
+    # Opt-in Redis L2 cache for cross-replica gPAS result sharing
+    redis_url = os.environ.get("MEDANON_REDIS_URL", "").strip()
+    if redis_url:
+        try:
+            from utils.cache import RedisCache, configure_cache
+            configure_cache(RedisCache(redis_url))
+            logger.info("gpas_cache=redis")
+        except Exception as exc:
+            logger.warning("redis_cache_setup_failed falling_back=local: %s", exc)
+
+    # Async job queue — select backend based on MEDANON_REDIS_URL
+    max_concurrent = int(os.environ.get("MEDANON_JOB_WORKERS", "3"))
+    try:
+        from pipeline.jobs import init_job_store
+        from pipeline import worker as _worker
+
+        job_store = None
+        if redis_url:
+            try:
+                from integrations.redis.job_store import RedisJobStore
+                job_store = RedisJobStore(redis_url)
+                logger.info("job_store=redis")
+            except Exception as exc:
+                logger.warning("redis_job_store_failed falling_back=sqlite: %s", exc)
+
+        store = init_job_store(store=job_store)
+        _worker.init_worker(store, max_concurrent=max_concurrent)
+        asyncio.create_task(_worker.worker_loop())
+        logger.info("job_worker started max_concurrent=%d", max_concurrent)
+    except Exception as exc:
+        logger.warning("job_worker_start_failed: %s", exc)
 app.state.limiter = limiter
 if RateLimitExceeded is not None:
     app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
@@ -69,7 +106,7 @@ async def auth_middleware(request: Request, call_next):
     except HTTPException as exc:
         return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
     request.state.auth = auth_ctx
-    required = ENDPOINT_ROLES.get(request.url.path)
+    required = get_required_role(request.url.path)
     if required and not auth_ctx.has_role(required):
         return JSONResponse({"detail": "Forbidden"}, status_code=403)
     return await call_next(request)
@@ -180,43 +217,8 @@ def readiness(request: Request):
     {"ready": true/false} without upstream service details to avoid
     leaking internal network topology.
     """
-    import urllib.request as _ureq
-    import urllib.error
-    timeout = float(os.environ.get("MEDANON_READY_TIMEOUT", "5.0"))
-    checks: dict[str, str] = {}
-
-    gpas_url = os.environ.get("GPAS_URL", "")
-    if gpas_url:
-        try:
-            _ureq.urlopen(gpas_url.rstrip("/"), timeout=timeout)
-            checks["gpas"] = "ok"
-        except urllib.error.HTTPError:
-            # Any HTTP response (400, 401, etc.) means the service is reachable
-            checks["gpas"] = "ok"
-        except Exception as exc:
-            logger.debug("readiness: gpas unreachable: %s", exc)
-            checks["gpas"] = "error"
-
-    fhir_url = os.environ.get("FHIR_SOURCE_URL", "")
-    if fhir_url:
-        try:
-            _ureq.urlopen(f"{fhir_url.rstrip('/')}/metadata", timeout=timeout)
-            checks["fhir"] = "ok"
-        except Exception as exc:
-            logger.debug("readiness: fhir unreachable: %s", exc)
-            checks["fhir"] = "error"
-
-    # NLP engine readiness (when Presidio/spaCy is expected)
-    nlp_model = os.environ.get("MEDANON_NLP_MODEL", "")
-    if nlp_model:
-        try:
-            from integrations.nlp.detector import _get_analyzer
-            _get_analyzer()
-            checks["nlp"] = "ok"
-        except Exception as exc:
-            logger.debug("readiness: nlp engine not ready: %s", exc)
-            checks["nlp"] = "error"
-
+    from api.services.health import HealthCheckService
+    checks = HealthCheckService().check_readiness()
     ready = all(v == "ok" for v in checks.values())
 
     # /ready is in OPEN_PATHS so auth_middleware never sets request.state.auth.
@@ -250,7 +252,8 @@ def metrics():
 # Router registration
 # ---------------------------------------------------------------------------
 
-app.include_router(process.router)
-app.include_router(fhir_server.router)
-app.include_router(analytics.router)
-app.include_router(synthetic.router)
+app.include_router(process.router, prefix="/v1")
+app.include_router(fhir_server.router, prefix="/v1")
+app.include_router(analytics.router, prefix="/v1")
+app.include_router(synthetic.router, prefix="/v1")
+app.include_router(jobs.router, prefix="/v1")

@@ -31,19 +31,39 @@ OPEN_PATHS = frozenset({
 })
 
 ENDPOINT_ROLES: dict[str, str] = {
-    "/process": "analyst",
-    "/process/raw": "analyst",
-    "/process/ndjson": "analyst",
-    "/process/batch": "analyst",
-    "/process/from-server": "analyst",
-    "/process/everything": "analyst",
-    "/analyse/risk": "analyst",
-    "/generate/synthetic": "analyst",
-    "/process/and-upload": "admin",
-    "/process/round-trip": "admin",
-    "/process/bulk-export": "admin",
-    "/process/cohort": "analyst",
+    "/v1/process": "analyst",
+    "/v1/process/raw": "analyst",
+    "/v1/process/ndjson": "analyst",
+    "/v1/process/batch": "analyst",
+    "/v1/process/from-server": "analyst",
+    "/v1/process/everything": "analyst",
+    "/v1/analyse/risk": "analyst",
+    "/v1/generate/synthetic": "analyst",
+    "/v1/process/and-upload": "admin",
+    "/v1/process/round-trip": "admin",
+    "/v1/process/bulk-export": "admin",
+    "/v1/process/cohort": "analyst",
+    "/v1/jobs": "analyst",
 }
+
+# Prefix-based role mapping for parameterized paths (e.g. /v1/jobs/{job_id}).
+# Checked when ENDPOINT_ROLES produces no exact match.
+ENDPOINT_ROLE_PREFIXES: dict[str, str] = {
+    "/v1/jobs/bulk-export": "admin",   # exact — listed first for priority
+    "/v1/jobs/cohort": "analyst",
+    "/v1/jobs/": "analyst",            # covers /v1/jobs/{id} and /v1/jobs/{id}/result
+}
+
+
+def get_required_role(path: str) -> str | None:
+    """Return the minimum required role for *path*, or None if unrestricted."""
+    role = ENDPOINT_ROLES.get(path)
+    if role is None:
+        for prefix, r in ENDPOINT_ROLE_PREFIXES.items():
+            if path.startswith(prefix):
+                role = r
+                break
+    return role
 
 
 # ---------------------------------------------------------------------------

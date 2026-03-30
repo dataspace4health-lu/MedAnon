@@ -1,30 +1,22 @@
-"""Synthetic data generation endpoint: /generate/synthetic."""
+"""Synthetic data generation endpoint: /generate/synthetic.
 
-import asyncio
+Strangler Fig: when ANALYTICS_SERVICE_URL is set, requests are proxied to the
+standalone analytics microservice. Otherwise, generation runs locally (default).
+"""
+
 import json
 import logging
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
-from pipeline.io_formats import parse_payload_bytes
-from analytics.synthetic import generate_synthetic_patients as _generate_synthetic_patients
-from analytics.synthetic import generate_synthetic_conditions as _generate_synthetic_conditions
-
-# SDV is optional — graceful fallback to stdlib generator.
-try:
-    from analytics.synthetic_sdv import (
-        SDV_AVAILABLE,
-        generate_synthetic_patients_sdv as _generate_synthetic_patients_sdv,
-        generate_synthetic_conditions_sdv as _generate_synthetic_conditions_sdv,
-    )
-except ImportError:
-    SDV_AVAILABLE = False
-
-from api.deps import MAX_BODY_BYTES, limiter, _unwrap_to_resources
+from api.deps import MAX_BODY_BYTES, limiter
+from api.services.synthetic import SyntheticDataService
 
 router = APIRouter()
 logger = logging.getLogger("medanon")
+
+_service = SyntheticDataService()
 
 
 @router.post("/generate/synthetic")
@@ -51,6 +43,8 @@ async def generate_synthetic(
 
     Synthetic resources are tagged with the ``SYN`` code in ``meta.tag`` so
     downstream systems can distinguish them from real de-identified data.
+
+    When ANALYTICS_SERVICE_URL is set, proxies to the analytics microservice.
     """
     body = await request.body()
     if len(body) > MAX_BODY_BYTES:
@@ -59,75 +53,39 @@ async def generate_synthetic(
             detail=f"Request body exceeds the {MAX_BODY_BYTES // (1024 * 1024)} MB limit",
         )
     content_type = request.headers.get("content-type", "")
+
     try:
-        payload = parse_payload_bytes(body, content_type=content_type)
-    except Exception as exc:
-        raise HTTPException(status_code=422, detail=f"Could not parse input: {exc}") from exc
-
-    resources = _unwrap_to_resources(payload)
-    patients = [r for r in resources if r.get("resourceType") == "Patient"]
-
-    if not patients:
-        raise HTTPException(
-            status_code=422,
-            detail="No Patient resources found in input — provide de-identified Patient FHIR resources",
+        result = await _service.generate(
+            body, content_type,
+            count=count, seed=seed, engine=engine,
+            include_conditions=include_conditions,
+            count_per_patient=count_per_patient,
         )
-
-    # Resolve engine choice.
-    use_sdv = False
-    if engine == "sdv":
-        if not SDV_AVAILABLE:
-            raise HTTPException(
-                status_code=422,
-                detail="SDV engine requested but sdv package is not installed. Install with: pip install -r requirements-sdv.txt",
-            )
-        use_sdv = True
-    elif engine == "auto":
-        use_sdv = SDV_AVAILABLE
-    elif engine != "stdlib":
-        raise HTTPException(status_code=422, detail=f"Unknown engine '{engine}'. Choose: auto, sdv, stdlib")
-
-    try:
-        if use_sdv:
-            synthetic = await asyncio.to_thread(
-                _generate_synthetic_patients_sdv, patients, count=count, seed=seed
-            )
-        else:
-            synthetic = _generate_synthetic_patients(patients, count=count, seed=seed)
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        msg = str(exc)
+        if "proxy" in msg.lower() or "service" in msg.lower():
+            raise HTTPException(status_code=502, detail=msg) from exc
+        raise HTTPException(status_code=422, detail=msg) from exc
     except Exception as exc:
         logger.error("generate_synthetic: unexpected error: %s", type(exc).__name__, exc_info=False)
         raise HTTPException(status_code=500, detail="Synthetic generation error") from exc
 
-    # Optionally generate linked Conditions.
-    synthetic_conditions: list[dict] = []
-    if include_conditions:
-        conditions = [r for r in resources if r.get("resourceType") == "Condition"]
-        if conditions:
-            try:
-                if use_sdv:
-                    synthetic_conditions = await asyncio.to_thread(
-                        _generate_synthetic_conditions_sdv,
-                        conditions, synthetic, count_per_patient=count_per_patient, seed=seed,
-                    )
-                else:
-                    synthetic_conditions = _generate_synthetic_conditions(
-                        conditions, synthetic, count_per_patient=count_per_patient, seed=seed,
-                    )
-            except ValueError:
-                pass  # Silently skip if conditions input is insufficient.
+    # Proxy returns raw bytes
+    if isinstance(result, bytes):
+        async def _passthrough():
+            yield result
+        return StreamingResponse(_passthrough(), media_type="application/x-ndjson")
 
-    engine_used = "sdv" if use_sdv else "stdlib"
-
+    # Local generation returns SyntheticResult
     async def _stream():
-        for patient in synthetic:
+        for patient in result.patients:
             yield json.dumps(patient) + "\n"
-        for condition in synthetic_conditions:
+        for condition in result.conditions:
             yield json.dumps(condition) + "\n"
 
     return StreamingResponse(
         _stream(),
         media_type="application/x-ndjson",
-        headers={"X-Synthetic-Engine": engine_used},
+        headers={"X-Synthetic-Engine": result.engine_used},
     )
+

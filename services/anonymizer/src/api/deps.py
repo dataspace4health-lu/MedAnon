@@ -7,12 +7,16 @@ to keep the dependency graph acyclic.
 import ipaddress
 import os
 import urllib.parse
-from functools import lru_cache
 from typing import Any
 
 from fastapi import HTTPException, Query
 
+from pydantic import ValidationError as _ValidationError
+
+from api.schemas.processing import DynamicSettings as _DynamicSettings
+
 import pipeline.config as config
+from pipeline.config_service import get_settings  # noqa: F401 — re-exported for router imports
 
 # ---------------------------------------------------------------------------
 # Rate limiting (slowapi dependency)
@@ -40,9 +44,6 @@ limiter = Limiter(key_func=get_remote_address, enabled=_RATE_LIMIT_ENABLED)
 
 # Maximum accepted request body size (10 MB default).
 MAX_BODY_BYTES = int(os.environ.get("MEDANON_MAX_BODY_BYTES", 10 * 1024 * 1024))
-
-# Directory where config YAML files are located.
-_CONFIG_DIR = os.environ.get("MEDANON_CONFIG_DIR", "/code/config")
 
 # ---------------------------------------------------------------------------
 # SSRF protection — reject server_url values targeting private/loopback space
@@ -95,16 +96,15 @@ async def _validate_server_url(url: str) -> str:
 
 
 async def _get_url_from_request_or_env(
-    req_data: dict,
-    req_key: str,
+    user_url: str | None,
     env_var: str,
+    field_name: str = "server_url",
 ) -> str:
-    """Get URL from request body or environment variable, validating only user input.
+    """Get URL from an optional user-provided value or environment variable.
 
     SSRF protection applies ONLY to user-provided URLs (untrusted input).
     Environment variables are trusted configuration set by administrators.
     """
-    user_url = req_data.get(req_key)
     env_url = os.environ.get(env_var)
 
     if user_url:
@@ -115,81 +115,35 @@ async def _get_url_from_request_or_env(
     else:
         raise HTTPException(
             status_code=422,
-            detail=f"{req_key} required (provide in request body or set {env_var} env var)"
+            detail=f"{field_name} required (provide in request body or set {env_var} env var)",
         )
 
 
 # ---------------------------------------------------------------------------
 # Dynamic settings validation — prevents SSRF via FHIR Parameters wrapper
 # ---------------------------------------------------------------------------
-_ALLOWED_DYNAMIC_SETTINGS = frozenset({
-    'gpas_url', 'gpas_domain', 'gpas_operation', 'gpas_token',
-    'gpas_basic_user', 'gpas_basic_pass', 'gpas_timeout_sec',
-    'gpas_retry_count', 'processing_errors', 'rewrite_references',
-    'rewrite_text_ids',
-})
-_DYNAMIC_URL_KEYS = frozenset({'gpas_url'})
-
 
 async def _validate_dynamic_settings(dynamic_settings: dict) -> None:
-    """Raise HTTP 422 for unknown or unsafe URL-valued dynamic settings."""
+    """Raise HTTP 422 for unknown or unsafe URL-valued dynamic settings.
+
+    Uses ``DynamicSettings`` (extra='forbid') to reject unrecognised keys,
+    then SSRF-validates any user-supplied URL values.
+    """
     if not dynamic_settings:
         return
-    for key in dynamic_settings:
-        if key not in _ALLOWED_DYNAMIC_SETTINGS:
-            raise HTTPException(
-                status_code=422,
-                detail=f"Unsupported dynamic setting: {key!r}",
-            )
-    for key in _DYNAMIC_URL_KEYS:
-        val = dynamic_settings.get(key)
-        if val:
-            await _validate_server_url(str(val))
-
-
-# ---------------------------------------------------------------------------
-# Config profile mapping + settings loader
-# ---------------------------------------------------------------------------
-_PROFILE_MAP = {
-    'auto': None,  # triggers auto-selection logic
-    'minimal': 'config.yaml',
-    'gpas': 'config_gpas.yaml',
-    'gdpr': 'config_gdpr_eu.yaml',
-    'hipaa': 'config_hipaa_safe_harbor.yaml',
-    'research': 'config_research_pseudonymous.yaml',
-    'structural': 'config_structure_preserving.yaml',
-}
-
-
-@lru_cache(maxsize=8)
-def get_settings(profile: str = 'auto') -> config.Settings:
-    """Load Settings for the specified config profile.
-
-    Args:
-        profile: One of: auto, minimal, gpas, gdpr, hipaa, research.
-                 Default 'auto' selects based on GPAS_URL environment.
-
-    Returns:
-        Loaded Settings instance (cached up to 8 profiles).
-
-    Raises:
-        ValueError: If profile is unknown.
-        FileNotFoundError: If config file doesn't exist.
-    """
-    if profile not in _PROFILE_MAP:
-        valid = ', '.join(_PROFILE_MAP.keys())
-        raise ValueError(f"Unknown profile '{profile}'. Valid: {valid}")
-
-    config_file = _PROFILE_MAP[profile]
-
-    if config_file is None:
-        if os.environ.get('GPAS_URL'):
-            config_file = 'config_gpas.yaml'
-        else:
-            config_file = 'config.yaml'
-
-    config_path = os.path.join(_CONFIG_DIR, config_file)
-    return config.Settings(config_path)
+    try:
+        parsed = _DynamicSettings.model_validate(dynamic_settings)
+    except _ValidationError as exc:
+        # Surface extra-field errors as the well-known "Unsupported dynamic setting" message
+        for err in exc.errors():
+            if err.get("type") == "extra_forbidden" and err.get("loc"):
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Unsupported dynamic setting: {err['loc'][0]!r}",
+                ) from exc
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if parsed.gpas_url:
+        await _validate_server_url(parsed.gpas_url)
 
 
 def get_settings_dep(
@@ -208,12 +162,14 @@ def get_settings_dep(
 
 def _runtime_settings(base_settings, dynamic_settings=None):
     """Build a lightweight runtime settings object merging base config + dynamic overrides."""
-    return type('RuntimeSettings', (), {
-        'rules': getattr(base_settings, 'rules', []),
-        'processing_errors': getattr(base_settings, 'processing_errors', 'raise'),
-        'rewrite_references': getattr(base_settings, 'rewrite_references', False),
-        'dynamic_rule_settings': dynamic_settings or {},
-    })()
+    from api.schemas.processing import RuntimeSettings
+    return RuntimeSettings(
+        rules=getattr(base_settings, 'rules', []),
+        processing_errors=getattr(base_settings, 'processing_errors', 'raise'),
+        rewrite_references=getattr(base_settings, 'rewrite_references', False),
+        rewrite_text_ids=getattr(base_settings, 'rewrite_text_ids', False),
+        dynamic_rule_settings=dynamic_settings or {},
+    )
 
 
 def _unwrap_to_resources(payload: Any) -> list[dict]:

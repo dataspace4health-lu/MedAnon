@@ -1,17 +1,21 @@
-"""Analytics endpoints: /analyse/risk."""
+"""Analytics endpoints: /analyse/risk.
+
+Strangler Fig: when ANALYTICS_SERVICE_URL is set, requests are proxied to the
+standalone analytics microservice. Otherwise, analytics runs locally (default).
+"""
 
 import logging
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from pipeline.io_formats import parse_payload_bytes
-from analytics.risk import assess_risk_resources as _assess_risk_resources
-
-from api.deps import MAX_BODY_BYTES, limiter, _unwrap_to_resources
+from api.deps import MAX_BODY_BYTES, limiter
+from api.services.analytics import RiskAnalysisService
 
 router = APIRouter()
 logger = logging.getLogger("medanon")
+
+_service = RiskAnalysisService()
 
 
 @router.post("/analyse/risk")
@@ -31,6 +35,8 @@ async def analyse_risk(request: Request):
     - Prosecutor / journalist / marketer re-identification risk scores
     - Risk level: low (k>=5) / medium (k>=3) / high (k>=2) / critical (k=1)
     - l-diversity (if Condition resources are present)
+
+    When ANALYTICS_SERVICE_URL is set, proxies to the analytics microservice.
     """
     body = await request.body()
     if len(body) > MAX_BODY_BYTES:
@@ -39,20 +45,19 @@ async def analyse_risk(request: Request):
             detail=f"Request body exceeds the {MAX_BODY_BYTES // (1024 * 1024)} MB limit",
         )
     content_type = request.headers.get("content-type", "")
-    try:
-        payload = parse_payload_bytes(body, content_type=content_type)
-    except Exception as exc:
-        raise HTTPException(status_code=422, detail=f"Could not parse input: {exc}") from exc
-
-    resources = _unwrap_to_resources(payload)
 
     try:
-        report = _assess_risk_resources(resources)
+        report = await _service.analyse_risk(body, content_type)
     except ValueError as exc:
-        logger.warning("analyse_risk: value error: %s", exc)
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        msg = str(exc)
+        if "service" in msg.lower() or "proxy" in msg.lower():
+            raise HTTPException(status_code=502, detail=msg) from exc
+        if "parse" in msg.lower() or "Could not" in msg:
+            raise HTTPException(status_code=422, detail=f"Could not parse input: {exc}") from exc
+        raise HTTPException(status_code=422, detail=msg) from exc
     except Exception as exc:
         logger.error("analyse_risk: unexpected error type=%s", type(exc).__name__, exc_info=False)
         raise HTTPException(status_code=500, detail="Risk analysis error") from exc
 
     return JSONResponse(content=report)
+

@@ -1,16 +1,12 @@
 """Core processing endpoints: /process, /process/ndjson, /process/raw, /process/batch."""
 
-import asyncio
-import json
 import logging
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
-from typing import Any
 
 import pipeline.config as config
 from pipeline.io_formats import parse_payload_bytes, serialize_payload
-from pipeline.processor import process_data
 
 from api.deps import (
     MAX_BODY_BYTES,
@@ -21,9 +17,12 @@ from api.deps import (
     _unwrap_parameters_payload,
     _validate_dynamic_settings,
 )
+from api.services.processing import ProcessingError, ProcessingService
 
 router = APIRouter()
 logger = logging.getLogger("medanon")
+
+_service = ProcessingService()
 
 
 # ---------------------------------------------------------------------------
@@ -34,7 +33,7 @@ logger = logging.getLogger("medanon")
 @limiter.limit("60/minute")
 async def process(
     request: Request,
-    resource: Any = Body(...),
+    resource: dict | list = Body(...),
     settings: config.Settings = Depends(get_settings_dep),
 ):
     """Process a single FHIR resource or a FHIR Bundle.
@@ -42,31 +41,16 @@ async def process(
     Accepts any valid FHIR JSON object or a JSON array of resources.
     Applies the configured rules and returns the pseudonymized/de-identified result.
     """
-    if not isinstance(resource, (dict, list)):
-        raise HTTPException(status_code=422, detail="Request body must be a FHIR JSON object or array")
 
     resource, dynamic_settings = _unwrap_parameters_payload(resource)
     if dynamic_settings:
         await _validate_dynamic_settings(dynamic_settings)
     runtime_settings = _runtime_settings(settings, dynamic_settings)
 
-    resource_type = resource.get("resourceType", "unknown") if isinstance(resource, dict) else "array"
-    logger.info("Processing request: resourceType=%s", resource_type)
-
     try:
-        result = await asyncio.to_thread(process_data, resource, runtime_settings)
-        logger.info("Processing complete: resourceType=%s", resource_type)
-        return result
-    except ValueError as exc:
-        logger.warning("Validation error processing resourceType=%s: %s", resource_type, exc)
-        raise HTTPException(status_code=422, detail="Invalid input") from exc
-    except NotImplementedError as exc:
-        logger.warning("Not-implemented action for resourceType=%s: %s", resource_type, exc)
-        raise HTTPException(status_code=400, detail="Unsupported operation") from exc
-    except Exception as exc:
-        # Do not use logger.exception — traceback may contain PHI from resource processing
-        logger.error("Unexpected error processing resourceType=%s: %s", resource_type, type(exc).__name__, exc_info=False)
-        raise HTTPException(status_code=500, detail="Unexpected processing error") from exc
+        return await _service.process_resource(resource, runtime_settings)
+    except ProcessingError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
 
 
 @router.post("/process/ndjson")
@@ -89,26 +73,11 @@ async def process_ndjson(
     runtime_settings = _runtime_settings(settings)
 
     async def _generate():
-        for lineno, raw in enumerate(lines, start=1):
+        async for line in _service.process_ndjson_lines(lines, runtime_settings):
             if await request.is_disconnected():
-                logger.info("NDJSON: client disconnected at line %d", lineno)
+                logger.info("NDJSON: client disconnected")
                 break
-            line = raw.strip()
-            if not line or line.startswith("//"):
-                continue
-            try:
-                resource = json.loads(line)
-            except json.JSONDecodeError as exc:
-                logger.warning("NDJSON line %d: JSON parse error — %s", lineno, exc)
-                yield json.dumps({"error": f"line {lineno}: invalid JSON — {exc}"}) + "\n"
-                continue
-            try:
-                result = await asyncio.to_thread(process_data, resource, runtime_settings)
-                yield json.dumps(result) + "\n"
-            except Exception as exc:
-                # Do not log exception — traceback may contain PHI
-                logger.error("NDJSON line %d: processing error: %s", lineno, type(exc).__name__, exc_info=False)
-                yield json.dumps({"error": f"line {lineno}: processing error"}) + "\n"
+            yield line + "\n"
 
     return StreamingResponse(_generate(), media_type="application/x-ndjson")
 
@@ -150,13 +119,13 @@ async def process_raw(
             await _validate_dynamic_settings(dynamic_settings)
         runtime_settings = _runtime_settings(settings, dynamic_settings)
 
-        if isinstance(payload, list):
-            result = [await asyncio.to_thread(process_data, item, runtime_settings) for item in payload]
-        else:
-            result = await asyncio.to_thread(process_data, payload, runtime_settings)
-
+        result = await _service.process_resource(payload, runtime_settings)
         text, media_type = serialize_payload(result, out_format=output_format)
         return Response(content=text, media_type=media_type)
+    except ProcessingError as exc:
+        if exc.status == 422:
+            raise HTTPException(status_code=422, detail="Invalid input") from exc
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
     except ValueError as exc:
         logger.warning("validation error in /process/raw: %s", exc)
         raise HTTPException(status_code=422, detail="Invalid input") from exc
@@ -198,15 +167,11 @@ async def process_batch(
     runtime_settings = _runtime_settings(settings)
 
     async def _generate():
-        for idx, resource in enumerate(resources):
+        async for line in _service.process_resource_stream(resources, runtime_settings):
             if await request.is_disconnected():
-                logger.info("process_batch: client disconnected at resource %d", idx)
+                logger.info("process_batch: client disconnected")
                 break
-            try:
-                result = await asyncio.to_thread(process_data, resource, runtime_settings)
-                yield json.dumps(result) + "\n"
-            except Exception as exc:
-                logger.error("process_batch resource %d: %s", idx, type(exc).__name__, exc_info=False)
-                yield json.dumps({"error": f"resource {idx}: processing error"}) + "\n"
+            yield line + "\n"
 
     return StreamingResponse(_generate(), media_type="application/x-ndjson")
+

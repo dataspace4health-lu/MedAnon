@@ -1,27 +1,14 @@
 """FHIR server integration endpoints: from-server, everything, and-upload, round-trip."""
 
-import asyncio
-import json
 import logging
 import os
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 import pipeline.config as config
-from pipeline.processor import process_data
-from integrations.fhir.client import (
-    bulk_export,
-    fetch_all_resource_types,
-    fetch_cohort,
-    fetch_everything,
-    get_capability_statement,
-    post_resource,
-    upload_resources,
-)
 
 from api.deps import (
-    MAX_BODY_BYTES,
     get_settings_dep,
     limiter,
     _get_url_from_request_or_env,
@@ -29,47 +16,28 @@ from api.deps import (
     _unwrap_parameters_payload,
     _validate_dynamic_settings,
 )
+from api.schemas.fhir_ops import (
+    AndUploadRequest,
+    BulkExportRequest,
+    CohortRequest,
+    EverythingRequest,
+    FromServerRequest,
+    RoundTripRequest,
+)
 
 router = APIRouter()
 logger = logging.getLogger("medanon")
 
 
 # ---------------------------------------------------------------------------
-# Local helpers
+# Service factory
 # ---------------------------------------------------------------------------
 
-async def _parse_json_body(request: Request) -> dict:
-    """Read and parse a JSON request body; raises 422 on invalid JSON."""
-    body = await request.body()
-    try:
-        return json.loads(body)
-    except json.JSONDecodeError as exc:
-        raise HTTPException(status_code=422, detail=f"Invalid JSON body: {exc}") from exc
-
-
-def _get_timeout(req_data: dict, default: float = 30.0) -> float:
-    """Extract and validate the timeout field; raises 422 on bad value."""
-    try:
-        return float(req_data.get("timeout", default))
-    except (TypeError, ValueError) as exc:
-        raise HTTPException(status_code=422, detail=f"Invalid timeout value: {exc}") from exc
-
-
-def _resolve_resource_types(server_url: str, req_data: dict, token, timeout: float) -> list:
-    """Return resource_types from request data or auto-discover from /metadata.
-
-    Raises 502 if the source server is unreachable.
-    """
-    resource_types = req_data.get("resource_types")
-    if not resource_types:
-        try:
-            resource_types = get_capability_statement(server_url, token=token, timeout=timeout)
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=502,
-                detail=f"Could not reach FHIR server: {exc}",
-            ) from exc
-    return resource_types
+def _get_service():
+    """Return a FhirServerService wired to the HTTP FHIR client adapter."""
+    from api.services.fhir_server import FhirServerService
+    from integrations.fhir.adapter import HttpFhirClientAdapter
+    return FhirServerService(HttpFhirClientAdapter())
 
 
 # ---------------------------------------------------------------------------
@@ -80,6 +48,7 @@ def _resolve_resource_types(server_url: str, req_data: dict, token, timeout: flo
 @limiter.limit("10/minute")
 async def process_from_server(
     request: Request,
+    req: FromServerRequest = Body(...),
     settings: config.Settings = Depends(get_settings_dep),
 ):
     """Fetch FHIR resources directly from a FHIR server, anonymize, and return NDJSON.
@@ -96,32 +65,25 @@ async def process_from_server(
 
     Returns streaming NDJSON — one anonymized resource per line.
     """
-    req_data = await _parse_json_body(request)
-
-    server_url = await _get_url_from_request_or_env(
-        req_data, "server_url", "FHIR_SOURCE_URL"
-    )
-
-    extra_params = req_data.get("params") or {}
-    token = req_data.get("token") or os.environ.get("FHIR_SOURCE_TOKEN")
-    timeout = _get_timeout(req_data)
-    resource_types = _resolve_resource_types(server_url, req_data, token, timeout)
+    server_url = await _get_url_from_request_or_env(req.server_url, "FHIR_SOURCE_URL")
+    token = req.token or os.environ.get("FHIR_SOURCE_TOKEN")
+    svc = _get_service()
+    try:
+        resource_types = svc.resolve_resource_types(
+            server_url, req.resource_types, token, req.timeout
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail=f"Could not reach FHIR server: {exc}") from exc
     runtime_settings = _runtime_settings(settings)
 
     async def _generate():
-        for _rt, resource in fetch_all_resource_types(
-            server_url, resource_types, params=extra_params, token=token, timeout=timeout
+        async for line in svc.stream_from_server(
+            server_url, resource_types, req.params, token, req.timeout, runtime_settings
         ):
             if await request.is_disconnected():
                 logger.info("from-server: client disconnected, stopping stream")
                 break
-            try:
-                result = await asyncio.to_thread(process_data, resource, runtime_settings)
-                yield json.dumps(result) + "\n"
-            except Exception as exc:
-                # Do not log exception — traceback may contain PHI
-                logger.error("Error processing resource type=%s: %s", _rt, type(exc).__name__, exc_info=False)
-                yield json.dumps({"error": "processing error", "resourceType": _rt}) + "\n"
+            yield line + "\n"
 
     return StreamingResponse(_generate(), media_type="application/x-ndjson")
 
@@ -130,6 +92,7 @@ async def process_from_server(
 @limiter.limit("10/minute")
 async def process_everything(
     request: Request,
+    req: EverythingRequest = Body(...),
     settings: config.Settings = Depends(get_settings_dep),
 ):
     """Fetch all resources via FHIR $everything, anonymize, and return NDJSON.
@@ -150,41 +113,20 @@ async def process_everything(
 
     Returns streaming NDJSON — one anonymized resource per line.
     """
-    req_data = await _parse_json_body(request)
-
-    server_url = await _get_url_from_request_or_env(
-        req_data, "server_url", "FHIR_SOURCE_URL"
-    )
-
-    resource_type = req_data.get("resource_type")
-    if not resource_type:
-        raise HTTPException(status_code=422, detail="resource_type is required")
-
-    resource_id = req_data.get("resource_id")
-    if not resource_id:
-        raise HTTPException(status_code=422, detail="resource_id is required")
-
-    extra_params = req_data.get("params") or {}
-    token = req_data.get("token") or os.environ.get("FHIR_SOURCE_TOKEN")
-    timeout = _get_timeout(req_data)
+    server_url = await _get_url_from_request_or_env(req.server_url, "FHIR_SOURCE_URL")
+    token = req.token or os.environ.get("FHIR_SOURCE_TOKEN")
     runtime_settings = _runtime_settings(settings)
+    svc = _get_service()
 
     async def _generate():
-        for resource in fetch_everything(
-            server_url, resource_type, resource_id,
-            params=extra_params, token=token, timeout=timeout,
+        async for line in svc.stream_everything(
+            server_url, req.resource_type, req.resource_id,
+            req.params, token, req.timeout, runtime_settings,
         ):
             if await request.is_disconnected():
                 logger.info("everything: client disconnected, stopping stream")
                 break
-            try:
-                result = await asyncio.to_thread(process_data, resource, runtime_settings)
-                yield json.dumps(result) + "\n"
-            except Exception as exc:
-                # Do not log exception — traceback may contain PHI
-                _rtype = resource.get("resourceType", resource_type)
-                logger.error("Error processing resource type=%s: %s", _rtype, type(exc).__name__, exc_info=False)
-                yield json.dumps({"error": "processing error", "resourceType": _rtype}) + "\n"
+            yield line + "\n"
 
     return StreamingResponse(_generate(), media_type="application/x-ndjson")
 
@@ -193,6 +135,7 @@ async def process_everything(
 @limiter.limit("10/minute")
 async def process_and_upload(
     request: Request,
+    req: AndUploadRequest = Body(...),
     settings: config.Settings = Depends(get_settings_dep),
 ):
     """De-identify a FHIR resource (or Bundle) and upload the result to a FHIR server.
@@ -212,65 +155,35 @@ async def process_and_upload(
     { "uploaded": 2, "errors": 0, "results": [...] }
     ```
     """
-    body = await request.body()
-    if len(body) > MAX_BODY_BYTES:
-        raise HTTPException(status_code=413, detail=f"Request body exceeds {MAX_BODY_BYTES // (1024*1024)} MB limit")
-    try:
-        req_data = json.loads(body)
-    except json.JSONDecodeError as exc:
-        raise HTTPException(status_code=422, detail=f"Invalid JSON body: {exc}") from exc
-
     target_url = await _get_url_from_request_or_env(
-        req_data, "target_server_url", "FHIR_TARGET_URL"
+        req.target_server_url, "FHIR_TARGET_URL", "target_server_url"
     )
+    target_token = req.target_token or os.environ.get("FHIR_TARGET_TOKEN")
 
-    resource = req_data.get("resource")
-    if not resource or not isinstance(resource, dict):
-        raise HTTPException(status_code=422, detail="resource must be a FHIR JSON object")
-
-    target_token = req_data.get("target_token") or os.environ.get("FHIR_TARGET_TOKEN")
-    timeout = _get_timeout(req_data)
-
-    resource, dynamic_settings = _unwrap_parameters_payload(resource)
+    resource, dynamic_settings = _unwrap_parameters_payload(req.resource)
     if dynamic_settings:
         await _validate_dynamic_settings(dynamic_settings)
     runtime_settings = _runtime_settings(settings, dynamic_settings)
 
+    svc = _get_service()
     try:
-        deidentified = await asyncio.to_thread(process_data, resource, runtime_settings)
+        return await svc.process_and_upload(
+            resource, target_url, target_token, req.timeout, runtime_settings
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
-        # Do not log exception — traceback may contain PHI
-        logger.error("process_and_upload: de-identification error: %s", type(exc).__name__, exc_info=False)
+        logger.error(
+            "process_and_upload error: %s", type(exc).__name__, exc_info=False
+        )
         raise HTTPException(status_code=500, detail="De-identification error") from exc
-
-    # Flatten Bundle entries or wrap single resource into a list
-    if isinstance(deidentified, dict) and deidentified.get("resourceType") == "Bundle":
-        resources_to_upload = [
-            entry["resource"]
-            for entry in deidentified.get("entry", [])
-            if isinstance(entry.get("resource"), dict)
-        ]
-    elif isinstance(deidentified, list):
-        resources_to_upload = deidentified
-    else:
-        resources_to_upload = [deidentified]
-
-    results = list(await asyncio.to_thread(
-        lambda: list(upload_resources(target_url, resources_to_upload, token=target_token, timeout=timeout))
-    ))
-    uploaded = sum(1 for r in results if r["success"])
-    errors = sum(1 for r in results if not r["success"])
-
-    logger.info("process_and_upload: uploaded=%d errors=%d target=%s", uploaded, errors, target_url)
-    return {"uploaded": uploaded, "errors": errors, "results": results}
 
 
 @router.post("/process/round-trip")
 @limiter.limit("10/minute")
 async def process_round_trip(
     request: Request,
+    req: RoundTripRequest = Body(...),
     settings: config.Settings = Depends(get_settings_dep),
 ):
     """Fetch from a source FHIR server, de-identify, and upload to a target server.
@@ -293,49 +206,32 @@ async def process_round_trip(
 
     Returns streaming NDJSON — one status line per resource.
     """
-    body = await request.body()
-    if len(body) > MAX_BODY_BYTES:
-        raise HTTPException(status_code=413, detail=f"Request body exceeds {MAX_BODY_BYTES // (1024*1024)} MB limit")
-
-    req_data = await _parse_json_body(request)
-
     source_url = await _get_url_from_request_or_env(
-        req_data, "source_server_url", "FHIR_SOURCE_URL"
+        req.source_server_url, "FHIR_SOURCE_URL", "source_server_url"
     )
     target_url = await _get_url_from_request_or_env(
-        req_data, "target_server_url", "FHIR_TARGET_URL"
+        req.target_server_url, "FHIR_TARGET_URL", "target_server_url"
     )
-
-    extra_params = req_data.get("params") or {}
-    source_token = req_data.get("source_token") or os.environ.get("FHIR_SOURCE_TOKEN")
-    target_token = req_data.get("target_token") or os.environ.get("FHIR_TARGET_TOKEN")
-    timeout = _get_timeout(req_data)
-    resource_types = _resolve_resource_types(source_url, req_data, source_token, timeout)
+    source_token = req.source_token or os.environ.get("FHIR_SOURCE_TOKEN")
+    target_token = req.target_token or os.environ.get("FHIR_TARGET_TOKEN")
+    svc = _get_service()
+    try:
+        resource_types = svc.resolve_resource_types(
+            source_url, req.resource_types, source_token, req.timeout
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail=f"Could not reach FHIR server: {exc}") from exc
     runtime_settings = _runtime_settings(settings)
 
     async def _generate():
-        for _rt, resource in fetch_all_resource_types(
-            source_url, resource_types, params=extra_params, token=source_token, timeout=timeout
+        async for line in svc.stream_round_trip(
+            source_url, target_url, resource_types, req.params,
+            source_token, target_token, req.timeout, runtime_settings,
         ):
             if await request.is_disconnected():
                 logger.info("round-trip: client disconnected, stopping stream")
                 break
-            try:
-                deidentified = await asyncio.to_thread(process_data, resource, runtime_settings)
-                resp = await asyncio.to_thread(post_resource, target_url, deidentified, token=target_token, timeout=timeout)
-                yield json.dumps({
-                    "resourceType": _rt,
-                    "target_id": resp.get("id"),
-                    "status": "ok",
-                }) + "\n"
-            except Exception as exc:
-                # Do not log exception — traceback may contain PHI
-                logger.error("round_trip error type=%s: %s", _rt, type(exc).__name__, exc_info=False)
-                yield json.dumps({
-                    "resourceType": _rt,
-                    "status": "error",
-                    "error": "processing error",
-                }) + "\n"
+            yield line + "\n"
 
     return StreamingResponse(_generate(), media_type="application/x-ndjson")
 
@@ -344,6 +240,7 @@ async def process_round_trip(
 @limiter.limit("5/minute")
 async def process_bulk_export(
     request: Request,
+    req: BulkExportRequest = Body(...),
     settings: config.Settings = Depends(get_settings_dep),
 ):
     """Initiate a FHIR Bulk Data Export ($export), de-identify results, and return NDJSON.
@@ -363,56 +260,22 @@ async def process_bulk_export(
 
     Returns streaming NDJSON — one anonymized resource per line.
     """
-    req_data = await _parse_json_body(request)
-
-    server_url = await _get_url_from_request_or_env(
-        req_data, "server_url", "FHIR_SOURCE_URL"
-    )
-
-    level = req_data.get("level", "system")
-    if level not in ("system", "type"):
-        raise HTTPException(status_code=422, detail="level must be 'system' or 'type'")
-
-    resource_type = req_data.get("resource_type")
-    if level == "type" and not resource_type:
+    server_url = await _get_url_from_request_or_env(req.server_url, "FHIR_SOURCE_URL")
+    if req.level == "type" and not req.resource_type:
         raise HTTPException(status_code=422, detail="resource_type is required for type-level export")
-
-    type_filter = req_data.get("type_filter")
-    since = req_data.get("since")
-    token = req_data.get("token") or os.environ.get("FHIR_SOURCE_TOKEN")
-    timeout = _get_timeout(req_data)
+    token = req.token or os.environ.get("FHIR_SOURCE_TOKEN")
     runtime_settings = _runtime_settings(settings)
-
-    _SENTINEL = object()
+    svc = _get_service()
 
     async def _generate():
-        gen = bulk_export(
-            server_url,
-            level=level,
-            resource_type=resource_type,
-            type_filter=type_filter,
-            since=since,
-            token=token,
-            timeout=timeout,
-        )
-        try:
-            while True:
-                if await request.is_disconnected():
-                    logger.info("bulk-export: client disconnected, stopping stream")
-                    break
-                resource = await asyncio.to_thread(next, gen, _SENTINEL)
-                if resource is _SENTINEL:
-                    break
-                try:
-                    result = await asyncio.to_thread(process_data, resource, runtime_settings)
-                    yield json.dumps(result) + "\n"
-                except Exception as exc:
-                    _rtype = resource.get("resourceType", "Unknown") if isinstance(resource, dict) else "Unknown"
-                    logger.error("Error processing resource type=%s: %s", _rtype, type(exc).__name__, exc_info=False)
-                    yield json.dumps({"error": "processing error", "resourceType": _rtype}) + "\n"
-        except ValueError as exc:
-            logger.error("bulk-export error: %s", exc, exc_info=False)
-            yield json.dumps({"error": str(exc)}) + "\n"
+        async for line in svc.stream_bulk_export(
+            server_url, req.level, req.resource_type, req.type_filter,
+            req.since, token, req.timeout, runtime_settings,
+        ):
+            if await request.is_disconnected():
+                logger.info("bulk-export: client disconnected, stopping stream")
+                break
+            yield line + "\n"
 
     return StreamingResponse(_generate(), media_type="application/x-ndjson")
 
@@ -421,6 +284,7 @@ async def process_bulk_export(
 @limiter.limit("10/minute")
 async def process_cohort(
     request: Request,
+    req: CohortRequest = Body(...),
     settings: config.Settings = Depends(get_settings_dep),
 ):
     """Search for patients matching a condition code and export their full records.
@@ -442,50 +306,20 @@ async def process_cohort(
 
     Returns streaming NDJSON — one anonymized resource per line.
     """
-    req_data = await _parse_json_body(request)
-
-    server_url = await _get_url_from_request_or_env(
-        req_data, "server_url", "FHIR_SOURCE_URL"
-    )
-
-    search_type = req_data.get("search_type")
-    if not search_type:
-        raise HTTPException(status_code=422, detail="search_type is required")
-
-    search_params = req_data.get("search_params") or {}
-    everything_params = req_data.get("everything_params") or {}
-    token = req_data.get("token") or os.environ.get("FHIR_SOURCE_TOKEN")
-    timeout = _get_timeout(req_data)
+    server_url = await _get_url_from_request_or_env(req.server_url, "FHIR_SOURCE_URL")
+    token = req.token or os.environ.get("FHIR_SOURCE_TOKEN")
     runtime_settings = _runtime_settings(settings)
-
-    _SENTINEL = object()
+    svc = _get_service()
 
     async def _generate():
-        gen = fetch_cohort(
-            server_url,
-            search_type=search_type,
-            search_params=search_params,
-            everything_params=everything_params,
-            token=token,
-            timeout=timeout,
-        )
-        try:
-            while True:
-                if await request.is_disconnected():
-                    logger.info("cohort: client disconnected, stopping stream")
-                    break
-                resource = await asyncio.to_thread(next, gen, _SENTINEL)
-                if resource is _SENTINEL:
-                    break
-                try:
-                    result = await asyncio.to_thread(process_data, resource, runtime_settings)
-                    yield json.dumps(result) + "\n"
-                except Exception as exc:
-                    _rtype = resource.get("resourceType", "Unknown") if isinstance(resource, dict) else "Unknown"
-                    logger.error("Error processing resource type=%s: %s", _rtype, type(exc).__name__, exc_info=False)
-                    yield json.dumps({"error": "processing error", "resourceType": _rtype}) + "\n"
-        except ValueError as exc:
-            logger.error("cohort error: %s", exc, exc_info=False)
-            yield json.dumps({"error": str(exc)}) + "\n"
+        async for line in svc.stream_cohort(
+            server_url, req.search_type, req.search_params,
+            req.everything_params, token, req.timeout, runtime_settings,
+        ):
+            if await request.is_disconnected():
+                logger.info("cohort: client disconnected, stopping stream")
+                break
+            yield line + "\n"
 
     return StreamingResponse(_generate(), media_type="application/x-ndjson")
+
