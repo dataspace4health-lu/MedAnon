@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useMemo } from "react";
-import { Play, Square, AlertCircle, GitCompare, FileJson, Maximize2, Minimize2 } from "lucide-react";
+import { Play, Square, AlertCircle, GitCompare, FileJson, TableProperties, Maximize2, Minimize2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Collapsible,
@@ -11,6 +11,7 @@ import { ResourceTypeSummary } from "@/components/shared/ResourceTypeSummary";
 import { FhirCodeViewer } from "@/components/shared/FhirCodeViewer";
 import { JsonDiffViewer } from "@/components/shared/JsonDiffViewer";
 import { MultiFormatDownload } from "@/components/shared/MultiFormatDownload";
+import { FhirTableView } from "@/components/shared/FhirTableView";
 import { getAuthHeaders } from "@/api/client";
 
 interface DeidentifyPanelProps {
@@ -41,7 +42,7 @@ export function DeidentifyPanel({
     errorCount: 0,
     error: null,
   });
-  const [activeTab, setActiveTab] = useState<"output" | "diff">("output");
+  const [activeTab, setActiveTab] = useState<"output" | "diff" | "table">("output");
   const [fullView, setFullView] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -327,6 +328,17 @@ export function DeidentifyPanel({
                 <GitCompare className="h-3.5 w-3.5" />
                 Compare
               </button>
+              <button
+                onClick={() => setActiveTab("table")}
+                className={`flex flex-1 items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                  activeTab === "table"
+                    ? "bg-background shadow-sm text-foreground"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                <TableProperties className="h-3.5 w-3.5" />
+                Table
+              </button>
             </div>
 
             {/* Full view toggle */}
@@ -386,6 +398,19 @@ export function DeidentifyPanel({
               disableGapCompression={fullView}
               fullHeight={fullView}
             />
+          )}
+
+          {/* Table tab */}
+          {activeTab === "table" && (
+            <div
+              className="overflow-auto"
+              style={{ maxHeight: fullView ? "none" : "520px" }}
+            >
+              <FhirTableView
+                originalResources={state.originalResources}
+                resources={state.resources}
+              />
+            </div>
           )}
         </>
       )}

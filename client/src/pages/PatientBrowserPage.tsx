@@ -4,15 +4,19 @@ import { toast } from 'sonner';
 import { Search, Loader2, AlertCircle, Users, ChevronDown } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { PatientCard } from '@/components/shared/PatientCard';
+import { BulkExportButton } from '@/components/shared/BulkExportButton';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { capabilityStatement, searchPatients } from '@/api/fhir';
+import { submitBulkExportJob } from '@/api/medanon';
+import { useConfig } from '@/context/ConfigContext';
 import type { PatientSummary } from '@/api/types';
 
 const PAGE_SIZE = 20;
 
 export default function PatientBrowserPage() {
   const navigate = useNavigate();
+  const { configProfile } = useConfig();
 
   const [patients, setPatients] = useState<PatientSummary[]>([]);
   const [total, setTotal] = useState<number | null>(null);
@@ -125,6 +129,14 @@ export default function PatientBrowserPage() {
           )}
           {searching ? 'Searching…' : 'Search'}
         </Button>
+        <div className="sm:self-end">
+          <BulkExportButton
+            label="Bulk Export All"
+            onSubmit={() => submitBulkExportJob({ config_profile: configProfile })}
+            filename="all-patients-deidentified.ndjson"
+            disabled={!fhirConnected}
+          />
+        </div>
       </div>
 
       {/* Empty state */}

@@ -139,6 +139,8 @@ export interface JobResponse {
   updated_at: string;
   result_path: string | null;
   error: string | null;
+  processed: number;
+  phase: "queued" | "fetching" | "processing" | "done";
 }
 
 /** POST /api/v1/jobs/bulk-export — queue a bulk-export job, returns 202. */
@@ -175,6 +177,30 @@ export async function getJobStatus(jobId: string): Promise<JobResponse> {
     const body = await response.json().catch(() => ({}));
     throw new Error(
       `getJobStatus failed (${response.status}): ${body?.detail ?? response.statusText}`,
+    );
+  }
+  return response.json() as Promise<JobResponse>;
+}
+
+/** POST /api/v1/jobs/cohort — queue a cohort export job, returns 202. */
+export async function submitCohortJob(params: {
+  server_url?: string;
+  search_type: string;
+  search_params?: Record<string, unknown>;
+  everything_params?: Record<string, unknown>;
+  token?: string;
+  timeout?: number;
+  config_profile?: string;
+}): Promise<JobResponse> {
+  const response = await fetch("/api/v1/jobs/cohort", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    body: JSON.stringify(params),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(
+      `submitCohortJob failed (${response.status}): ${body?.detail ?? response.statusText}`,
     );
   }
   return response.json() as Promise<JobResponse>;

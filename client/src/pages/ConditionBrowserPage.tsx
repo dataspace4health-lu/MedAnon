@@ -4,6 +4,7 @@ import { toast } from 'sonner';
 import { Search, Loader2, AlertCircle, Stethoscope, ChevronDown } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { ConditionCard } from '@/components/shared/ConditionCard';
+import { BulkExportButton } from '@/components/shared/BulkExportButton';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import {
@@ -14,6 +15,8 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { capabilityStatement, searchConditions } from '@/api/fhir';
+import { submitCohortJob } from '@/api/medanon';
+import { useConfig } from '@/context/ConfigContext';
 import type { ConditionRow } from '@/api/types';
 
 const PAGE_SIZE = 20;
@@ -27,6 +30,7 @@ const CLINICAL_STATUSES = [
 
 export default function ConditionBrowserPage() {
   const navigate = useNavigate();
+  const { configProfile } = useConfig();
 
   const [conditions, setConditions] = useState<ConditionRow[]>([]);
   const [total, setTotal] = useState<number | null>(null);
@@ -167,6 +171,23 @@ export default function ConditionBrowserPage() {
           )}
           {searching ? 'Searching…' : 'Search'}
         </Button>
+        <div className="sm:self-end">
+          <BulkExportButton
+            label="Bulk Export by Condition"
+            onSubmit={() =>
+              submitCohortJob({
+                search_type: 'Condition',
+                search_params: {
+                  ...(committedQuery ? { 'code:text': committedQuery } : {}),
+                  ...(committedStatus !== 'any' ? { 'clinical-status': committedStatus } : {}),
+                },
+                config_profile: configProfile,
+              })
+            }
+            filename="conditions-deidentified.ndjson"
+            disabled={!fhirConnected}
+          />
+        </div>
       </div>
 
       {/* Empty state */}

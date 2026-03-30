@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Outlet } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
+import { BulkExportTracker } from '@/components/shared/BulkExportTracker';
 import { Menu, X, ShieldCheck } from 'lucide-react';
 
 export function AppLayout() {
@@ -55,6 +56,9 @@ export function AppLayout() {
           <Outlet />
         </div>
       </main>
+
+      {/* Global bulk export progress tracker */}
+      <BulkExportTracker />
     </div>
   );
 }
