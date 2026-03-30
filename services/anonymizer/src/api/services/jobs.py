@@ -23,6 +23,7 @@ class JobService:
         return _job_store
 
     def _job_to_dict(self, job) -> dict:
+        checkpoint = job.checkpoint_data or {}
         return {
             "job_id": job.id,
             "type": job.type,
@@ -31,6 +32,8 @@ class JobService:
             "updated_at": job.updated_at,
             "result_path": job.result_path,
             "error": job.error,
+            "processed": checkpoint.get("lines_written", 0),
+            "phase": checkpoint.get("phase", "queued"),
         }
 
     def submit_bulk_export(self, server_url: str, params: dict) -> dict:

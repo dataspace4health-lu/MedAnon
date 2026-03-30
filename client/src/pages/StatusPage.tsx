@@ -97,7 +97,7 @@ function formatTime(date: Date): string {
 
 export default function StatusPage() {
   const [state, setState] = useState<ServiceState>(initialState);
-  const [autoRefresh, setAutoRefresh] = useState(true);
+  const [autoRefresh, setAutoRefresh] = useState(false);
   const [lastChecked, setLastChecked] = useState<Date | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);

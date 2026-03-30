@@ -17,13 +17,14 @@ import os
 from pathlib import Path
 
 from medanon_core.domain import Job, JobStatus
-from pipeline.checkpoint import CHECKPOINT_INTERVAL, load_checkpoint, save_checkpoint
+from pipeline.checkpoint import load_checkpoint, save_checkpoint
 
 _worker_log = logging.getLogger("medanon.worker")
 _store = None
 _OUTPUT_DIR = os.environ.get("MEDANON_OUTPUT_DIR", "/output")
 _max_concurrent: int = 3
 _semaphore: asyncio.Semaphore | None = None
+_PROGRESS_INTERVAL: int = int(os.environ.get("MEDANON_PROGRESS_INTERVAL", "20"))
 
 
 def init_worker(store, max_concurrent: int = 3) -> None:
@@ -63,6 +64,8 @@ def _execute_bulk_export(job: Job) -> None:
     if already_written:
         _worker_log.info("bulk_export_resume job=%s from_line=%d", job.id, already_written)
 
+    # Phase 1: fetching data from FHIR server (blocks until export completes)
+    save_checkpoint(_store, job, {"phase": "fetching", "lines_written": already_written})
     gen = bulk_export(
         server_url,
         level=level,
@@ -72,6 +75,7 @@ def _execute_bulk_export(job: Job) -> None:
         token=token,
         timeout=timeout,
     )
+    # Phase 2: processing resources
     count = already_written
     with open(output_path, open_mode, encoding="utf-8") as fh:
         for i, resource in enumerate(gen):
@@ -92,11 +96,12 @@ def _execute_bulk_export(job: Job) -> None:
                 )
                 fh.write(json.dumps({"error": "processing error", "resourceType": rtype}) + "\n")
                 count += 1
-            if count % CHECKPOINT_INTERVAL == 0:
+            if count % _PROGRESS_INTERVAL == 0:
                 fh.flush()
-                save_checkpoint(_store, job, {"lines_written": count})
+                save_checkpoint(_store, job, {"phase": "processing", "lines_written": count})
 
     job.result_path = output_path
+    save_checkpoint(_store, job, {"phase": "done", "lines_written": count})
     _worker_log.info("bulk_export_done job=%s count=%d", job.id, count)
 
 
@@ -125,6 +130,8 @@ def _execute_cohort(job: Job) -> None:
     if already_written:
         _worker_log.info("cohort_resume job=%s from_line=%d", job.id, already_written)
 
+    # Phase 1: fetching data from FHIR server
+    save_checkpoint(_store, job, {"phase": "fetching", "lines_written": already_written})
     gen = fetch_cohort(
         server_url,
         search_type=search_type,
@@ -133,6 +140,7 @@ def _execute_cohort(job: Job) -> None:
         token=token,
         timeout=timeout,
     )
+    # Phase 2: processing resources
     count = already_written
     with open(output_path, open_mode, encoding="utf-8") as fh:
         for i, resource in enumerate(gen):
@@ -153,11 +161,12 @@ def _execute_cohort(job: Job) -> None:
                 )
                 fh.write(json.dumps({"error": "processing error", "resourceType": rtype}) + "\n")
                 count += 1
-            if count % CHECKPOINT_INTERVAL == 0:
+            if count % _PROGRESS_INTERVAL == 0:
                 fh.flush()
-                save_checkpoint(_store, job, {"lines_written": count})
+                save_checkpoint(_store, job, {"phase": "processing", "lines_written": count})
 
     job.result_path = output_path
+    save_checkpoint(_store, job, {"phase": "done", "lines_written": count})
     _worker_log.info("cohort_done job=%s count=%d", job.id, count)
 
 

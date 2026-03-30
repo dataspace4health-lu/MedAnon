@@ -62,6 +62,7 @@ class RedisJobStore:
                 "updated_at": job.updated_at,
                 "result_path": "",
                 "error": "",
+                "checkpoint_data": "",
             },
         )
         pipe.expire(self._job_key(job.id), self._ttl)
@@ -80,7 +81,7 @@ class RedisJobStore:
         return self._hash_to_job(data)
 
     def update(self, job: Job) -> None:
-        """Persist status, result_path and error changes for *job*."""
+        """Persist status, result_path, error, and checkpoint_data changes for *job*."""
         job.updated_at = datetime.now(timezone.utc).isoformat()
         key = self._job_key(job.id)
         old_status = self._client.hget(key, "status")
@@ -92,6 +93,7 @@ class RedisJobStore:
                 "updated_at": job.updated_at,
                 "result_path": job.result_path or "",
                 "error": job.error or "",
+                "checkpoint_data": json.dumps(job.checkpoint_data) if job.checkpoint_data else "",
             },
         )
         pipe.expire(key, self._ttl)
@@ -151,6 +153,18 @@ class RedisJobStore:
         """Push job_id onto the notification list for BLPOP-based workers."""
         self._client.rpush(_QUEUE_KEY, job_id)
 
+    def update_checkpoint(self, job_id: str, data: dict) -> None:
+        """Persist only checkpoint_data for an in-progress job."""
+        key = self._job_key(job_id)
+        updated_at = datetime.now(timezone.utc).isoformat()
+        self._client.hset(
+            key,
+            mapping={
+                "checkpoint_data": json.dumps(data),
+                "updated_at": updated_at,
+            },
+        )
+
     def wait_for_job(self, timeout: int = 5) -> str | None:
         """Block until a job_id appears on the queue, or timeout.
 
@@ -164,6 +178,7 @@ class RedisJobStore:
 
     @staticmethod
     def _hash_to_job(data: dict) -> Job:
+        raw_cp = data.get("checkpoint_data", "")
         return Job(
             id=data["id"],
             type=data["type"],
@@ -173,4 +188,5 @@ class RedisJobStore:
             updated_at=data["updated_at"],
             result_path=data["result_path"] or None,
             error=data["error"] or None,
+            checkpoint_data=json.loads(raw_cp) if raw_cp else None,
         )
