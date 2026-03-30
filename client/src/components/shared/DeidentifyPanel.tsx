@@ -88,7 +88,7 @@ export function DeidentifyPanel({
 
       // Step 2: Stream the bundle through /process/batch for de-identification.
       const params = new URLSearchParams({ config_profile: configProfile });
-      const response = await fetch(`/api/process/batch?${params}`, {
+      const response = await fetch(`/api/v1/process/batch?${params}`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -206,7 +206,7 @@ export function DeidentifyPanel({
 
   const handleXmlDownload = useCallback(async () => {
     try {
-      const response = await fetch(`/api/process/batch?config_profile=${configProfile}&output_format=xml`, {
+      const response = await fetch(`/api/v1/process/batch?config_profile=${configProfile}&output_format=xml`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

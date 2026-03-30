@@ -33,7 +33,7 @@ export function ready(): Promise<ReadyResponse> {
 // ---------------------------------------------------------------------------
 
 /**
- * POST /api/process/raw -- black-box endpoint for any FHIR format.
+ * POST /api/v1/process/raw -- black-box endpoint for any FHIR format.
  *
  * Sends the raw body string, returns the processed output as a string
  * (JSON, XML, or NDJSON depending on `outputFormat`).
@@ -48,7 +48,7 @@ export async function processRaw(
     config_profile: configProfile,
   });
 
-  const response = await fetch(`/api/process/raw?${params.toString()}`, {
+  const response = await fetch(`/api/v1/process/raw?${params.toString()}`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -72,7 +72,7 @@ export async function processRaw(
 }
 
 /**
- * POST /api/process/batch -- streaming batch processing.
+ * POST /api/v1/process/batch -- streaming batch processing.
  *
  * Sends FHIR content (JSON, NDJSON, or XML) and streams back processed
  * resources as NDJSON lines. Each yielded object has either resource data
@@ -87,7 +87,7 @@ export function processBatch(
   const params = new URLSearchParams({ config_profile: configProfile });
 
   return streamNdjson<StreamLine>(
-    `/api/process/batch?${params.toString()}`,
+    `/api/v1/process/batch?${params.toString()}`,
     {
       method: "POST",
       headers: { "Content-Type": contentType },
@@ -98,7 +98,7 @@ export function processBatch(
 }
 
 /**
- * POST /api/process/everything -- fetch $everything, de-identify, stream NDJSON.
+ * POST /api/v1/process/everything -- fetch $everything, de-identify, stream NDJSON.
  *
  * Delegates to the server-side $everything endpoint. Streams back
  * de-identified resources one per line.
@@ -113,7 +113,7 @@ export function processEverything(
   const params = new URLSearchParams({ config_profile: configProfile });
 
   return streamNdjson<StreamLine>(
-    `/api/process/everything?${params.toString()}`,
+    `/api/v1/process/everything?${params.toString()}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -125,6 +125,74 @@ export function processEverything(
     },
     signal,
   );
+}
+
+// ---------------------------------------------------------------------------
+// Async job queue
+// ---------------------------------------------------------------------------
+
+export interface JobResponse {
+  job_id: string;
+  type: string;
+  status: "pending" | "running" | "done" | "error";
+  created_at: string;
+  updated_at: string;
+  result_path: string | null;
+  error: string | null;
+}
+
+/** POST /api/v1/jobs/bulk-export — queue a bulk-export job, returns 202. */
+export async function submitBulkExportJob(params: {
+  server_url?: string;
+  level?: string;
+  resource_type?: string;
+  type_filter?: string;
+  since?: string;
+  token?: string;
+  timeout?: number;
+  config_profile?: string;
+}): Promise<JobResponse> {
+  const response = await fetch("/api/v1/jobs/bulk-export", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    body: JSON.stringify(params),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(
+      `submitBulkExportJob failed (${response.status}): ${body?.detail ?? response.statusText}`,
+    );
+  }
+  return response.json() as Promise<JobResponse>;
+}
+
+/** GET /api/v1/jobs/:jobId — poll job status. */
+export async function getJobStatus(jobId: string): Promise<JobResponse> {
+  const response = await fetch(`/api/v1/jobs/${encodeURIComponent(jobId)}`, {
+    headers: getAuthHeaders(),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(
+      `getJobStatus failed (${response.status}): ${body?.detail ?? response.statusText}`,
+    );
+  }
+  return response.json() as Promise<JobResponse>;
+}
+
+/** GET /api/v1/jobs/:jobId/result — download completed NDJSON result as a Blob. */
+export async function getJobResult(jobId: string): Promise<Blob> {
+  const response = await fetch(
+    `/api/v1/jobs/${encodeURIComponent(jobId)}/result`,
+    { headers: getAuthHeaders() },
+  );
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(
+      `getJobResult failed (${response.status}): ${body?.detail ?? response.statusText}`,
+    );
+  }
+  return response.blob();
 }
 
 // ---------------------------------------------------------------------------
@@ -140,7 +208,7 @@ export async function analyseRisk(
   content: string,
   contentType: string = "application/x-ndjson",
 ): Promise<RiskReport> {
-  const response = await fetch("/api/analyse/risk", {
+  const response = await fetch("/api/v1/analyse/risk", {
     method: "POST",
     headers: {
       "Content-Type": contentType,
@@ -168,7 +236,7 @@ export async function analyseRisk(
 // ---------------------------------------------------------------------------
 
 /**
- * POST /api/generate/synthetic -- generate synthetic FHIR data.
+ * POST /api/v1/generate/synthetic -- generate synthetic FHIR data.
  *
  * Returns the raw NDJSON response as a Blob so the caller can either
  * parse it line-by-line or offer it as a download.
@@ -185,7 +253,7 @@ export async function generateSynthetic(
   }
 
   const response = await fetch(
-    `/api/generate/synthetic?${params.toString()}`,
+    `/api/v1/generate/synthetic?${params.toString()}`,
     {
       method: "POST",
       headers: {
