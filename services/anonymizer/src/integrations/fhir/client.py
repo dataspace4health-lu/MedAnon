@@ -426,6 +426,11 @@ def post_resource(base_url, resource, token=None, timeout=30):
 
     rid = resource.get("id")
     if rid:
+        # HAPI FHIR rejects purely numeric IDs on PUT (HAPI-0960).
+        # Prefix them so they contain at least one non-numeric character.
+        if rid.isdigit():
+            rid = f"p-{rid}"
+            resource = {**resource, "id": rid}
         _validate_resource_type(rt)
         _validate_resource_id(rid)
         url = f"{base_url.rstrip('/')}/{rt}/{rid}"
