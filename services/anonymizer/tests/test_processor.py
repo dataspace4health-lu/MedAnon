@@ -157,7 +157,7 @@ class TestProcessor(unittest.TestCase):
         self.assertEqual(len(ret['identifier'][0]['value']), 64)
         self.assertEqual(len(ret['identifier'][1]['value']), 64)
 
-    @patch('integrations.gpas.client.request.urlopen')
+    @patch('integrations.gpas.transport.request.urlopen')
     def test_gpas_pseudonymize_via_fhir_parameters(self, mock_urlopen):
         """gPAS $pseudonymizeAllowCreate: send original, receive pseudonym via FHIR Parameters."""
         print(f"======== TEST GPAS PSEUDONYMIZE (FHIR Parameters) ========")
@@ -219,7 +219,7 @@ class TestProcessor(unittest.TestCase):
         self.assertIn('original', names)
         print(f"Checking gPAS pseudonymize (FHIR Parameters)...\t:thumbs_up:")
 
-    @patch('integrations.gpas.client.request.urlopen')
+    @patch('integrations.gpas.transport.request.urlopen')
     def test_gpas_depseudonymize_via_fhir_parameters(self, mock_urlopen):
         """gPAS $dePseudonymize: send pseudonym, receive original via FHIR Parameters."""
         print(f"======== TEST GPAS DEPSEUDONYMIZE (FHIR Parameters) ========")
@@ -276,7 +276,7 @@ class TestProcessor(unittest.TestCase):
         self.assertIn('pseudonym', names)
         print(f"Checking gPAS depseudonymize (FHIR Parameters)...\t:thumbs_up:")
 
-    @patch('integrations.gpas.client.request.urlopen')
+    @patch('integrations.gpas.transport.request.urlopen')
     def test_gpas_error_handling(self, mock_urlopen):
         """gPAS returns an error entry when an original value is not found."""
         print(f"======== TEST GPAS ERROR HANDLING ========")
@@ -325,7 +325,7 @@ class TestProcessor(unittest.TestCase):
         self.assertIn('not-found', str(ctx.exception))
         print(f"Checking gPAS error handling...\t\t:thumbs_up:")
 
-    @patch('integrations.gpas.client.request.urlopen')
+    @patch('integrations.gpas.transport.request.urlopen')
     def test_gpas_admin_url_is_normalized_to_fhir_base(self, mock_urlopen):
         """A gPAS admin UI URL should be normalized to the FHIR API base."""
         print(f"======== TEST GPAS ADMIN URL NORMALIZATION ========")
@@ -379,7 +379,7 @@ class TestProcessor(unittest.TestCase):
         self.assertEqual(actual_req.full_url, 'http://10.168.192.22:8080/ttp-fhir/fhir/gpas/$pseudonymizeAllowCreate')
         print(f"Checking gPAS admin URL normalization...\t:thumbs_up:")
 
-    @patch('integrations.gpas.client.request.urlopen')
+    @patch('integrations.gpas.transport.request.urlopen')
     def test_gpas_unknown_domain_lists_available_domains(self, mock_urlopen):
         """Unknown-domain errors should include domains discovered from the admin UI."""
         print(f"======== TEST GPAS DOMAIN DISCOVERY ========")
@@ -430,7 +430,7 @@ class TestProcessor(unittest.TestCase):
         self.assertIn('Available domains: Biolabor, demo.study.demo', str(ctx.exception))
         print(f"Checking gPAS domain discovery...\t\t:thumbs_up:")
 
-    @patch('integrations.gpas.client.request.urlopen')
+    @patch('integrations.gpas.transport.request.urlopen')
     def test_bundle_reference_rewriting_after_pseudonymization(self, mock_urlopen):
         """When resource IDs are pseudonymized, all FHIR references and request.url must follow."""
         print(f"======== TEST BUNDLE REFERENCE REWRITING ========")
@@ -559,7 +559,7 @@ class TestProcessor(unittest.TestCase):
         self.assertEqual(ret['id'], 'dyn-123')
         print(f"Checking dynamic settings interpolation...\t:thumbs_up:")
 
-    @patch('integrations.gpas.client.request.urlopen')
+    @patch('integrations.gpas.transport.request.urlopen')
     def test_gpas_retry_on_transient_urlerror(self, mock_urlopen):
         print(f"======== TEST GPAS RETRY ========")
 
@@ -608,7 +608,7 @@ class TestProcessor(unittest.TestCase):
         self.assertEqual(mock_urlopen.call_count, 2)
         print(f"Checking gPAS retry behavior...\t\t:thumbs_up:")
 
-    @patch('integrations.gpas.client.request.urlopen')
+    @patch('integrations.gpas.transport.request.urlopen')
     def test_gpas_cache_avoids_duplicate_calls(self, mock_urlopen):
         print(f"======== TEST GPAS CACHE ========")
 

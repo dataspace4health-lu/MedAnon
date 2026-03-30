@@ -52,9 +52,10 @@ def _get_client(**env_overrides):
         for mod in ("api.auth", "api.main"):
             if mod in sys.modules:
                 del sys.modules[mod]
-        from api.main import app, get_settings
-        # Clear the lru_cache on get_settings so it reads from the test config dir
-        get_settings.cache_clear()
+        from api.main import app
+        from pipeline.config_service import clear_settings_cache
+        # Clear the config cache so it reads from the test config dir
+        clear_settings_cache()
         return TestClient(app, raise_server_exceptions=False)
 
 
@@ -124,7 +125,7 @@ class TestProcessEndpoint(unittest.TestCase):
         cls.client = _get_client()
 
     def test_process_single_patient(self):
-        resp = self.client.post("/process", json=_SIMPLE_PATIENT)
+        resp = self.client.post("/v1/process", json=_SIMPLE_PATIENT)
         self.assertEqual(resp.status_code, 200)
         body = resp.json()
         self.assertEqual(body["resourceType"], "Patient")
@@ -134,7 +135,7 @@ class TestProcessEndpoint(unittest.TestCase):
         self.assertNotIn("name", body)
 
     def test_process_bundle(self):
-        resp = self.client.post("/process", json=_BUNDLE)
+        resp = self.client.post("/v1/process", json=_BUNDLE)
         self.assertEqual(resp.status_code, 200)
         body = resp.json()
         self.assertEqual(body["resourceType"], "Bundle")
@@ -143,12 +144,12 @@ class TestProcessEndpoint(unittest.TestCase):
         self.assertNotIn("name", body["entry"][0]["resource"])
 
     def test_process_invalid_body(self):
-        resp = self.client.post("/process", content=b'"just a string"',
+        resp = self.client.post("/v1/process", content=b'"just a string"',
                                 headers={"Content-Type": "application/json"})
         self.assertEqual(resp.status_code, 422)
 
     def test_process_observation(self):
-        resp = self.client.post("/process", json=_SIMPLE_OBSERVATION)
+        resp = self.client.post("/v1/process", json=_SIMPLE_OBSERVATION)
         self.assertEqual(resp.status_code, 200)
         body = resp.json()
         self.assertEqual(body["resourceType"], "Observation")
@@ -164,7 +165,7 @@ class TestProcessRawEndpoint(unittest.TestCase):
 
     def test_raw_json_in_json_out(self):
         resp = self.client.post(
-            "/process/raw?output_format=json&input_format=json",
+            "/v1/process/raw?output_format=json&input_format=json",
             content=json.dumps(_SIMPLE_PATIENT).encode(),
             headers={"Content-Type": "application/json"},
         )
@@ -175,7 +176,7 @@ class TestProcessRawEndpoint(unittest.TestCase):
 
     def test_raw_invalid_json(self):
         resp = self.client.post(
-            "/process/raw?input_format=json",
+            "/v1/process/raw?input_format=json",
             content=b"not json",
             headers={"Content-Type": "application/json"},
         )
@@ -196,7 +197,7 @@ class TestProcessNdjsonEndpoint(unittest.TestCase):
         ]
         body = "\n".join(lines) + "\n"
         resp = self.client.post(
-            "/process/ndjson",
+            "/v1/process/ndjson",
             content=body.encode(),
             headers={"Content-Type": "application/x-ndjson"},
         )
@@ -214,7 +215,7 @@ class TestProcessNdjsonEndpoint(unittest.TestCase):
         ]
         body = "\n".join(lines) + "\n"
         resp = self.client.post(
-            "/process/ndjson",
+            "/v1/process/ndjson",
             content=body.encode(),
             headers={"Content-Type": "application/x-ndjson"},
         )
@@ -225,7 +226,7 @@ class TestProcessNdjsonEndpoint(unittest.TestCase):
     def test_ndjson_invalid_line_returns_error(self):
         body = "not valid json\n"
         resp = self.client.post(
-            "/process/ndjson",
+            "/v1/process/ndjson",
             content=body.encode(),
             headers={"Content-Type": "application/x-ndjson"},
         )
@@ -243,7 +244,7 @@ class TestProcessBatchEndpoint(unittest.TestCase):
 
     def test_batch_json_bundle(self):
         resp = self.client.post(
-            "/process/batch",
+            "/v1/process/batch",
             content=json.dumps(_BUNDLE).encode(),
             headers={"Content-Type": "application/json"},
         )
@@ -253,7 +254,7 @@ class TestProcessBatchEndpoint(unittest.TestCase):
 
     def test_batch_single_resource(self):
         resp = self.client.post(
-            "/process/batch",
+            "/v1/process/batch",
             content=json.dumps(_SIMPLE_PATIENT).encode(),
             headers={"Content-Type": "application/json"},
         )
@@ -281,7 +282,7 @@ class TestAnalyseRisk(unittest.TestCase):
             "entry": [{"resource": p} for p in patients],
         }
         resp = self.client.post(
-            "/analyse/risk",
+            "/v1/analyse/risk",
             content=json.dumps(bundle).encode(),
             headers={"Content-Type": "application/json"},
         )
@@ -294,7 +295,7 @@ class TestAnalyseRisk(unittest.TestCase):
 
     def test_risk_invalid_input(self):
         resp = self.client.post(
-            "/analyse/risk",
+            "/v1/analyse/risk",
             content=b"not valid",
             headers={"Content-Type": "application/json"},
         )
@@ -320,7 +321,7 @@ class TestGenerateSynthetic(unittest.TestCase):
             "entry": [{"resource": p} for p in patients],
         }
         resp = self.client.post(
-            "/generate/synthetic?count=5&seed=42",
+            "/v1/generate/synthetic?count=5&seed=42",
             content=json.dumps(bundle).encode(),
             headers={"Content-Type": "application/json"},
         )
@@ -337,7 +338,7 @@ class TestGenerateSynthetic(unittest.TestCase):
     def test_synthetic_no_patients_returns_422(self):
         obs = {"resourceType": "Observation", "id": "o1", "status": "final"}
         resp = self.client.post(
-            "/generate/synthetic?count=5",
+            "/v1/generate/synthetic?count=5",
             content=json.dumps(obs).encode(),
             headers={"Content-Type": "application/json"},
         )
@@ -353,7 +354,7 @@ class TestBodySizeEnforcement(unittest.TestCase):
 
     def test_oversized_content_length_rejected(self):
         resp = self.client.post(
-            "/process",
+            "/v1/process",
             content=b'{"resourceType":"Patient"}',
             headers={
                 "Content-Type": "application/json",
@@ -376,12 +377,12 @@ class TestApiKeyAuth(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
 
     def test_process_requires_api_key(self):
-        resp = self.client.post("/process", json=_SIMPLE_PATIENT)
+        resp = self.client.post("/v1/process", json=_SIMPLE_PATIENT)
         self.assertEqual(resp.status_code, 401)
 
     def test_process_with_valid_key(self):
         resp = self.client.post(
-            "/process",
+            "/v1/process",
             json=_SIMPLE_PATIENT,
             headers={"X-API-Key": "test-secret-key"},
         )
@@ -389,7 +390,7 @@ class TestApiKeyAuth(unittest.TestCase):
 
     def test_process_with_wrong_key(self):
         resp = self.client.post(
-            "/process",
+            "/v1/process",
             json=_SIMPLE_PATIENT,
             headers={"X-API-Key": "wrong-key"},
         )
@@ -423,7 +424,7 @@ class TestSSRFValidation(unittest.TestCase):
 
     def test_from_server_rejects_private_ip(self):
         resp = self.client.post(
-            "/process/from-server",
+            "/v1/process/from-server",
             content=json.dumps({
                 "server_url": "http://127.0.0.1:8080/fhir",
                 "resource_types": ["Patient"],
@@ -435,7 +436,7 @@ class TestSSRFValidation(unittest.TestCase):
 
     def test_from_server_rejects_non_http_scheme(self):
         resp = self.client.post(
-            "/process/from-server",
+            "/v1/process/from-server",
             content=json.dumps({
                 "server_url": "file:///etc/passwd",
             }).encode(),
@@ -445,7 +446,7 @@ class TestSSRFValidation(unittest.TestCase):
 
     def test_everything_rejects_metadata_ip(self):
         resp = self.client.post(
-            "/process/everything",
+            "/v1/process/everything",
             content=json.dumps({
                 "server_url": "http://169.254.169.254/latest",
                 "resource_type": "Patient",
@@ -481,7 +482,7 @@ class TestParametersWrapper(unittest.TestCase):
                 }
             ]
         }
-        resp = self.client.post("/process", json=payload)
+        resp = self.client.post("/v1/process", json=payload)
         self.assertEqual(resp.status_code, 200)
         body = resp.json()
         self.assertEqual(body["resourceType"], "Patient")
@@ -503,7 +504,7 @@ class TestParametersWrapper(unittest.TestCase):
                 },
             ],
         }
-        resp = self.client.post("/process", json=payload)
+        resp = self.client.post("/v1/process", json=payload)
         self.assertEqual(resp.status_code, 422)
         self.assertIn("Unsupported dynamic setting", resp.json()["detail"])
 
@@ -520,7 +521,7 @@ class TestSSRFValidation(unittest.TestCase):
         client = _get_client(FHIR_SOURCE_URL="http://127.0.0.1:8081/fhir")
 
         # Don't provide server_url in request → should use env var
-        resp = client.post("/process/everything", json={
+        resp = client.post("/v1/process/everything", json={
             "resource_type": "Patient",
             "resource_id": "p1"
         })
@@ -533,7 +534,7 @@ class TestSSRFValidation(unittest.TestCase):
     def test_everything_user_localhost_rejected(self):
         """User-provided localhost should be SSRF-blocked."""
         client = _get_client()
-        resp = client.post("/process/everything", json={
+        resp = client.post("/v1/process/everything", json={
             "resource_type": "Patient",
             "resource_id": "p1",
             "server_url": "http://127.0.0.1:8081/fhir"
@@ -544,7 +545,7 @@ class TestSSRFValidation(unittest.TestCase):
     def test_everything_user_private_ip_rejected(self):
         """User-provided private IP should be SSRF-blocked."""
         client = _get_client()
-        resp = client.post("/process/everything", json={
+        resp = client.post("/v1/process/everything", json={
             "resource_type": "Patient",
             "resource_id": "p1",
             "server_url": "http://192.168.1.10:8080/fhir"
@@ -557,7 +558,7 @@ class TestSSRFValidation(unittest.TestCase):
         """User-provided DNS names should be allowed (SSRF validated)."""
         mock_fetch.return_value = []
         client = _get_client()
-        resp = client.post("/process/everything", json={
+        resp = client.post("/v1/process/everything", json={
             "resource_type": "Patient",
             "resource_id": "p1",
             "server_url": "http://fhir.example.com/fhir"
@@ -579,7 +580,7 @@ class TestSSRFValidation(unittest.TestCase):
             FHIR_TARGET_URL="http://192.168.1.10:8080/fhir"
         )
 
-        resp = client.post("/process/round-trip", json={
+        resp = client.post("/v1/process/round-trip", json={
             "resource_types": ["Patient"]
         })
         # Should NOT get SSRF error for env vars

@@ -70,7 +70,7 @@ class TestFullPipeline(unittest.TestCase):
 
         # Run de-identification once; all tests share the result
         resp = cls.client.post(
-            "/process",
+            "/v1/process",
             content=json.dumps(cls.bundle).encode(),
             headers={"Content-Type": "application/json"},
         )
@@ -138,7 +138,7 @@ class TestFullPipeline(unittest.TestCase):
         if not self.deid_ndjson:
             self.skipTest("No de-identified output from previous step")
         resp = self.client.post(
-            "/analyse/risk",
+            "/v1/analyse/risk",
             content=self.deid_ndjson,
             headers={"Content-Type": "application/x-ndjson"},
         )
@@ -149,7 +149,7 @@ class TestFullPipeline(unittest.TestCase):
         if not self.deid_ndjson:
             self.skipTest("No de-identified output from previous step")
         resp = self.client.post(
-            "/analyse/risk",
+            "/v1/analyse/risk",
             content=self.deid_ndjson,
             headers={"Content-Type": "application/x-ndjson"},
         )
@@ -163,7 +163,7 @@ class TestFullPipeline(unittest.TestCase):
         if not self.deid_ndjson:
             self.skipTest("No de-identified output from previous step")
         resp = self.client.post(
-            "/analyse/risk",
+            "/v1/analyse/risk",
             content=self.deid_ndjson,
             headers={"Content-Type": "application/x-ndjson"},
         )
@@ -183,7 +183,7 @@ class TestFullPipeline(unittest.TestCase):
             "entry": [{"resource": p} for p in self.deid_patients],
         }
         resp = self.client.post(
-            "/generate/synthetic?count=5&engine=stdlib&seed=42",
+            "/v1/generate/synthetic?count=5&engine=stdlib&seed=42",
             content=json.dumps(bundle).encode(),
             headers={"Content-Type": "application/json"},
         )
@@ -201,7 +201,7 @@ class TestFullPipeline(unittest.TestCase):
             "entry": [{"resource": p} for p in self.deid_patients],
         }
         resp = self.client.post(
-            "/generate/synthetic?count=3&engine=stdlib&seed=0",
+            "/v1/generate/synthetic?count=3&engine=stdlib&seed=0",
             content=json.dumps(bundle).encode(),
             headers={"Content-Type": "application/json"},
         )
@@ -224,7 +224,7 @@ class TestFullPipeline(unittest.TestCase):
             "entry": [{"resource": p} for p in self.deid_patients],
         }
         resp = self.client.post(
-            "/generate/synthetic?count=5&engine=stdlib&seed=1",
+            "/v1/generate/synthetic?count=5&engine=stdlib&seed=1",
             content=json.dumps(bundle).encode(),
             headers={"Content-Type": "application/json"},
         )
@@ -243,7 +243,7 @@ class TestFullPipeline(unittest.TestCase):
             "entry": [{"resource": p} for p in self.deid_patients],
         }
         resp = self.client.post(
-            "/generate/synthetic?count=2&engine=stdlib",
+            "/v1/generate/synthetic?count=2&engine=stdlib",
             content=json.dumps(bundle).encode(),
             headers={"Content-Type": "application/json"},
         )

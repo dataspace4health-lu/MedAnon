@@ -389,5 +389,74 @@ class TestStructuralProfile(unittest.TestCase):
         )
 
 
+# ---------------------------------------------------------------------------
+# TestConfigServiceCache — caching behaviour of pipeline.config_service
+# ---------------------------------------------------------------------------
+
+class TestConfigServiceCache(unittest.TestCase):
+    """Tests for get_settings() caching behaviour in pipeline.config_service.
+
+    These tests verify three properties:
+      1. 'auto' is re-resolved on every call (not cached under the alias).
+      2. clear_settings_cache() forces a cache miss on the next call.
+      3. MEDANON_CONFIG_CACHE_TTL triggers automatic cache invalidation.
+    """
+
+    _LOCAL_CONFIG_DIR = os.path.join(os.path.dirname(__file__), "..", "config")
+
+    def setUp(self):
+        import pipeline.config_service as cs
+        self._cs = cs
+        # Point to the local config directory so calls don't need Docker (/code/config).
+        self._orig_config_dir = cs._CONFIG_DIR
+        cs._CONFIG_DIR = self._LOCAL_CONFIG_DIR
+        cs.clear_settings_cache()
+
+    def tearDown(self):
+        self._cs._CONFIG_DIR = self._orig_config_dir
+        self._cs.clear_settings_cache()
+        os.environ.pop('GPAS_URL', None)
+
+    def test_auto_profile_resolves_per_call(self):
+        """'auto' must re-resolve on every call without requiring a cache clear."""
+        os.environ.pop('GPAS_URL', None)
+        self.assertEqual(self._cs._resolve_profile('auto'), 'config.yaml')
+        os.environ['GPAS_URL'] = 'http://gpas:8080'
+        self.assertEqual(self._cs._resolve_profile('auto'), 'config_gpas.yaml')
+
+    def test_clear_cache_forces_reload(self):
+        """clear_settings_cache() must cause the next get_settings() call to be a miss."""
+        self._cs.get_settings('minimal')
+        self.assertEqual(self._cs._load_settings.cache_info().currsize, 1)
+
+        self._cs.clear_settings_cache()
+        self.assertEqual(self._cs._load_settings.cache_info().currsize, 0,
+                         "Cache should be empty after clear")
+
+        self._cs.get_settings('minimal')
+        self.assertEqual(self._cs._load_settings.cache_info().misses, 1,
+                         "Call after clear must be a fresh cache miss")
+
+    def test_ttl_clears_cache(self):
+        """When _CACHE_TTL > 0, an expired _last_clear triggers automatic invalidation."""
+        import time
+        orig_ttl = self._cs._CACHE_TTL
+        try:
+            # Pre-populate the cache with one entry.
+            self._cs.get_settings('minimal')
+            self.assertEqual(self._cs._load_settings.cache_info().currsize, 1)
+
+            # Enable TTL of 1 s and backdate _last_clear by 2 s to simulate expiry.
+            self._cs._CACHE_TTL = 1
+            self._cs._last_clear = time.monotonic() - 2
+
+            # Next call must auto-clear and reload (1 fresh miss).
+            self._cs.get_settings('minimal')
+            self.assertEqual(self._cs._load_settings.cache_info().misses, 1,
+                             "TTL-triggered clear must produce a fresh cache miss")
+        finally:
+            self._cs._CACHE_TTL = orig_ttl
+
+
 if __name__ == "__main__":
     unittest.main()

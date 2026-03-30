@@ -68,7 +68,7 @@ class TestNoAuthConfigured(unittest.TestCase):
             "MEDANON_CONFIG_DIR": os.path.join(os.path.dirname(__file__), "..", "config"),
             "MEDANON_RATE_LIMIT_ENABLED": "false",
         })
-        resp = client.post("/process", json={"resourceType": "Patient", "id": "1"})
+        resp = client.post("/v1/process", json={"resourceType": "Patient", "id": "1"})
         self.assertEqual(resp.status_code, 200)
 
 
@@ -81,7 +81,7 @@ class TestApiKeyAuth(unittest.TestCase):
             "MEDANON_CONFIG_DIR": os.path.join(os.path.dirname(__file__), "..", "config"),
             "MEDANON_RATE_LIMIT_ENABLED": "false",
         })
-        resp = client.post("/process", json={"resourceType": "Patient"})
+        resp = client.post("/v1/process", json={"resourceType": "Patient"})
         self.assertEqual(resp.status_code, 401)
 
     def test_wrong_key_returns_401(self):
@@ -90,7 +90,7 @@ class TestApiKeyAuth(unittest.TestCase):
             "MEDANON_CONFIG_DIR": os.path.join(os.path.dirname(__file__), "..", "config"),
             "MEDANON_RATE_LIMIT_ENABLED": "false",
         })
-        resp = client.post("/process", json={"resourceType": "Patient"},
+        resp = client.post("/v1/process", json={"resourceType": "Patient"},
                            headers={"X-API-Key": "wrong"})
         self.assertEqual(resp.status_code, 401)
 
@@ -100,7 +100,7 @@ class TestApiKeyAuth(unittest.TestCase):
             "MEDANON_CONFIG_DIR": os.path.join(os.path.dirname(__file__), "..", "config"),
             "MEDANON_RATE_LIMIT_ENABLED": "false",
         })
-        resp = client.post("/process", json={"resourceType": "Patient", "id": "1"},
+        resp = client.post("/v1/process", json={"resourceType": "Patient", "id": "1"},
                            headers={"X-API-Key": "test-secret"})
         self.assertEqual(resp.status_code, 200)
 
@@ -112,7 +112,7 @@ class TestApiKeyAuth(unittest.TestCase):
             "MEDANON_RATE_LIMIT_ENABLED": "false",
         })
         # admin-only endpoint should work with API key
-        resp = client.post("/process", json={"resourceType": "Patient", "id": "1"},
+        resp = client.post("/v1/process", json={"resourceType": "Patient", "id": "1"},
                            headers={"X-API-Key": "test-secret"})
         self.assertEqual(resp.status_code, 200)
 
