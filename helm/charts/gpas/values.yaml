@@ -108,3 +108,21 @@ db:
     limits:
       memory: "4Gi"
       cpu: "1000m"
+
+  # ─── MySQL read replica (opt-in HA profile) ─────────────────────────────────
+  # When enabled, a read-only MySQL replica is deployed alongside the primary.
+  # Useful for audit queries and backups at high throughput.
+  # gPAS always writes to the primary; the replica endpoint is gpas-db-read.
+  #
+  # After deploying, run the one-time replication init commands documented in
+  # helm/charts/gpas/templates/db-replica-statefulset.yaml.
+  replica:
+    enabled: false
+    storage: ""      # leave empty to inherit db.storage
+    resources:
+      requests:
+        memory: "256Mi"
+        cpu: "100m"
+      limits:
+        memory: "1Gi"
+        cpu: "500m"

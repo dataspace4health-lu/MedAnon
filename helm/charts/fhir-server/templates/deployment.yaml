@@ -53,6 +53,33 @@ spec:
             - name: HAPI_SERVER_ADDRESS
               value: {{ .Values.serverAddress | quote }}
             {{- end }}
+            {{- if eq .Values.db.type "postgresql" }}
+            - name: SPRING_DATASOURCE_URL
+              value: "jdbc:postgresql://{{ .Values.db.postgresql.host }}:{{ .Values.db.postgresql.port }}/{{ .Values.db.postgresql.database }}"
+            - name: SPRING_DATASOURCE_DRIVER_CLASS_NAME
+              value: "org.postgresql.Driver"
+            - name: SPRING_JPA_PROPERTIES_HIBERNATE_DIALECT
+              value: "ca.uhn.fhir.jpa.model.dialect.HapiFhirPostgres94Dialect"
+            - name: SPRING_JPA_HIBERNATE_DDL_AUTO
+              value: "validate"
+            {{- if .Values.db.postgresql.existingSecret }}
+            - name: SPRING_DATASOURCE_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.db.postgresql.existingSecret }}
+                  key: username
+            - name: SPRING_DATASOURCE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.db.postgresql.existingSecret }}
+                  key: password
+            {{- else }}
+            - name: SPRING_DATASOURCE_USERNAME
+              value: {{ .Values.db.postgresql.username | quote }}
+            - name: SPRING_DATASOURCE_PASSWORD
+              value: {{ .Values.db.postgresql.password | default "" | quote }}
+            {{- end }}
+            {{- end }}
           volumeMounts:
             - name: config
               mountPath: /app/config/application.yaml

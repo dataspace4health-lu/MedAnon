@@ -26,3 +26,9 @@ dependencies:
   - name: ui
     version: "0.1.0"
     repository: "file://../charts/ui"
+  # Opt-in analytics microservice sub-chart.
+  # Enable with: --set analytics.enabled=true (or in values.yaml)
+  - name: analytics
+    version: "0.1.0"
+    repository: "file://../charts/analytics"
+    condition: analytics.enabled

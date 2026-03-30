@@ -37,6 +37,13 @@ anonymizer:
     FHIR_SOURCE_TOKEN: ""
     FHIR_TARGET_URL: ""
     FHIR_TARGET_TOKEN: ""
+    # Opt-in microservice URLs. Leave empty to run analytics/NLP in-process.
+    # When analytics sub-chart is enabled, set to http://<release>-analytics:8100
+    ANALYTICS_SERVICE_URL: ""
+    # When NLP sub-chart is deployed (future), set to http://<release>-nlp:8200
+    NLP_SERVICE_URL: ""
+    # Redis URL for cross-replica gPAS cache. Leave empty for per-process LRU.
+    MEDANON_REDIS_URL: ""
 
   secrets:
     MEDANON_HASH_KEY: ""
@@ -62,6 +69,16 @@ gpas:
     secrets:
       # REQUIRED: set via --set or a sealed secret. Generate: openssl rand -base64 24
       rootPassword: ""
+
+# ─── Analytics microservice overrides (Phase 3 — opt-in) ─────────────────────
+# Deploy the analytics sub-chart by setting analytics.enabled=true.
+# When deployed, also set anonymizer.env.ANALYTICS_SERVICE_URL to
+# http://<release>-analytics:8100 so the anonymizer proxies to it.
+analytics:
+  enabled: false
+  env:
+    # Comma-separated CORS origins exposed by the analytics service.
+    MEDANON_CORS_ORIGINS: ""
 
 # ─── UI overrides ────────────────────────────────────────────────────────────
 # React SPA served via nginx. The nginx config proxies /api/ and /fhir/
