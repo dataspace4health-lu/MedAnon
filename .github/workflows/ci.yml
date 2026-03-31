@@ -27,7 +27,10 @@ jobs:
           cache: pip
           cache-dependency-path: services/anonymizer/requirements.txt
       - name: Install dependencies
-        run: pip install -r services/anonymizer/requirements.txt
+        run: |
+          pip install -e packages/medanon-core
+          pip install -r services/anonymizer/requirements.txt
+          pip install pytest pytest-asyncio pytest-cov
       - name: Run local tests (no Docker required)
         working-directory: services/anonymizer
         env:
