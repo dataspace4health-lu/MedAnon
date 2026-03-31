@@ -57,6 +57,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build anonymizer image
-        run: docker build -t medanon:ci services/anonymizer --target prod
+        run: docker build -t medanon:ci -f services/anonymizer/Dockerfile --target prod .
       - name: Build UI image
         run: docker build -t medanon-ui:ci client
