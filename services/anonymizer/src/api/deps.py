@@ -34,7 +34,7 @@ except ImportError:
             return decorator
     Limiter = _NoOpLimiter
     RateLimitExceeded = None
-    get_remote_address = lambda r: "127.0.0.1"
+    def get_remote_address(r): return "127.0.0.1"
     _rate_limit_exceeded_handler = None
 
 _RATE_LIMIT_ENABLED = os.environ.get("MEDANON_RATE_LIMIT_ENABLED", "true").lower() in (

@@ -23,7 +23,7 @@ from medanon_core.domain import JobStatus
 
 from api.deps import limiter
 from api.schemas.fhir_bulk import BulkExportManifest, BulkExportOutputFile
-from api.services.jobs import JobNotFound, JobService, JobStoreUnavailable
+from api.services.jobs import JobService, JobStoreUnavailable
 
 logger = logging.getLogger("medanon")
 
