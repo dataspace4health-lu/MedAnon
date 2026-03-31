@@ -1,11 +1,12 @@
 import { useState } from "react";
 import { ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { PiiDetectionMap } from "@/lib/piiDetection";
+import type { PiiDetectionMap, FieldSummaryMap } from "@/lib/piiDetection";
 
 interface ResourceTypeSummaryProps {
   counts: Record<string, number>;
   piiData?: PiiDetectionMap;
+  fieldSummary?: FieldSummaryMap;
 }
 
 // Deterministic color per resource type
@@ -50,7 +51,11 @@ function actionBadgeClass(action: string): string {
   return ACTION_COLORS[action] ?? ACTION_COLORS.modified;
 }
 
-export function ResourceTypeSummary({ counts, piiData }: ResourceTypeSummaryProps) {
+export function ResourceTypeSummary({
+  counts,
+  piiData,
+  fieldSummary,
+}: ResourceTypeSummaryProps) {
   const sorted = Object.entries(counts).sort(([, a], [, b]) => b - a);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
@@ -74,15 +79,24 @@ export function ResourceTypeSummary({ counts, piiData }: ResourceTypeSummaryProp
   return (
     <div className="rounded-lg border overflow-hidden">
       <div className="bg-muted/30 px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-        Resource Summary &middot; {total} total
+        Resource Summary · {total} total
       </div>
       <div className="divide-y">
         {sorted.map(([type, count], index) => {
           const pct = total > 0 ? (count / total) * 100 : 0;
           const barColor = getBarColor(type, index);
+
+          // Prefer fieldSummary (full field list), fall back to pii-only for backwards compat
+          const fieldRows = fieldSummary?.[type];
           const piiEntries = piiData?.[type];
-          const hasExpansion = piiEntries && piiEntries.length > 0;
+          const hasExpansion =
+            (fieldRows && fieldRows.length > 0) ||
+            (piiEntries && piiEntries.length > 0);
           const isExpanded = expanded.has(type);
+
+          const piiCount = fieldRows
+            ? fieldRows.filter((f) => f.action).length
+            : (piiEntries?.length ?? 0);
 
           return (
             <div key={type}>
@@ -106,17 +120,19 @@ export function ResourceTypeSummary({ counts, piiData }: ResourceTypeSummaryProp
                 )}
 
                 {/* Color dot */}
-                <span
-                  className={cn(
-                    "size-2 shrink-0 rounded-full",
-                    barColor
-                  )}
-                />
+                <span className={cn("size-2 shrink-0 rounded-full", barColor)} />
 
                 {/* Type name */}
                 <span className="min-w-0 flex-1 truncate text-sm font-medium">
                   {type}
                 </span>
+
+                {/* PII field count */}
+                {piiCount > 0 && (
+                  <span className="hidden sm:inline-block rounded px-1.5 py-0.5 text-[10px] font-medium bg-rose-50 text-rose-700 border border-rose-200">
+                    {piiCount} PII field{piiCount !== 1 ? "s" : ""}
+                  </span>
+                )}
 
                 {/* Fill bar */}
                 <div className="hidden w-24 sm:flex">
@@ -139,38 +155,66 @@ export function ResourceTypeSummary({ counts, piiData }: ResourceTypeSummaryProp
                 </span>
               </div>
 
-              {/* PII sub-table */}
-              {isExpanded && piiEntries && (
+              {/* Expanded field table */}
+              {isExpanded && (
                 <div className="border-t bg-muted/10 px-4 py-2">
                   <table className="w-full text-xs">
                     <thead>
                       <tr className="text-muted-foreground">
                         <th className="pb-1.5 text-left font-medium">Field</th>
-                        <th className="pb-1.5 text-left font-medium">Action</th>
-                        <th className="pb-1.5 text-right font-medium">Count</th>
+                        <th className="pb-1.5 text-left font-medium">Action Applied</th>
+                        <th className="pb-1.5 text-right font-medium">Occurrences</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-muted/40">
-                      {piiEntries.map((entry) => (
-                        <tr key={`${entry.fieldPath}-${entry.action}`}>
-                          <td className="py-1 font-mono text-foreground">
-                            {entry.fieldPath}
-                          </td>
-                          <td className="py-1">
-                            <span
-                              className={cn(
-                                "inline-block rounded px-1.5 py-0.5 text-[10px] font-medium",
-                                actionBadgeClass(entry.action),
-                              )}
+                      {fieldRows
+                        ? fieldRows.map((entry) => (
+                            <tr
+                              key={entry.fieldPath}
+                              className={cn(entry.action && "bg-rose-50/40")}
                             >
-                              {entry.action}
-                            </span>
-                          </td>
-                          <td className="py-1 text-right tabular-nums text-muted-foreground">
-                            {entry.count}
-                          </td>
-                        </tr>
-                      ))}
+                              <td className="py-1 font-mono text-foreground">
+                                {entry.fieldPath}
+                              </td>
+                              <td className="py-1">
+                                {entry.action ? (
+                                  <span
+                                    className={cn(
+                                      "inline-block rounded px-1.5 py-0.5 text-[10px] font-medium",
+                                      actionBadgeClass(entry.action),
+                                    )}
+                                  >
+                                    {entry.action}
+                                  </span>
+                                ) : (
+                                  <span className="text-muted-foreground/50">—</span>
+                                )}
+                              </td>
+                              <td className="py-1 text-right tabular-nums text-muted-foreground">
+                                {entry.count}
+                              </td>
+                            </tr>
+                          ))
+                        : piiEntries?.map((entry) => (
+                            <tr key={`${entry.fieldPath}-${entry.action}`}>
+                              <td className="py-1 font-mono text-foreground">
+                                {entry.fieldPath}
+                              </td>
+                              <td className="py-1">
+                                <span
+                                  className={cn(
+                                    "inline-block rounded px-1.5 py-0.5 text-[10px] font-medium",
+                                    actionBadgeClass(entry.action),
+                                  )}
+                                >
+                                  {entry.action}
+                                </span>
+                              </td>
+                              <td className="py-1 text-right tabular-nums text-muted-foreground">
+                                {entry.count}
+                              </td>
+                            </tr>
+                          ))}
                     </tbody>
                   </table>
                 </div>

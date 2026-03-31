@@ -144,10 +144,13 @@ export function buildPiiDetectionMap(
 // ---------------------------------------------------------------------------
 // Heuristic action classifier — used when no manifest is available and
 // there are no original resources to diff against (bulk export results).
+// Also supplements manifest data for post-processing changes not tracked.
 // ---------------------------------------------------------------------------
 
 const HEX_64 = /^[0-9a-f]{64}$/;
 const TOKEN_PATTERN = /\[\[[A-Z_]+_\d+]]/;
+/** Year-month only, e.g. "2024-03" (from research_pseudonymous generalize) */
+const YEAR_MONTH = /^\d{4}-\d{2}$/;
 
 function classifyValue(value: string): string | null {
   if (value === "[REDACTED]" || value === "REDACTED") return "redact";
@@ -155,6 +158,8 @@ function classifyValue(value: string): string | null {
   if (TOKEN_PATTERN.test(value)) return "scrub_text";
   // Year-only date (generalize date_year)
   if (/^\d{4}$/.test(value)) return "generalize";
+  // Year-month (generalize date_year_month)
+  if (YEAR_MONTH.test(value)) return "generalize";
   return null;
 }
 
@@ -164,8 +169,9 @@ function classifyValue(value: string): string | null {
  * Used by the Bulk De-identify page where original resources are not available.
  * Strategy:
  * 1. Parse the manifest from meta.tag — authoritative when present.
- * 2. When no manifest, scan extracted field values for PII signatures
- *    (hashes, [REDACTED], [[TYPE_N]] tokens, year-only dates).
+ * 2. Also scan extracted field values for PII signatures to catch
+ *    post-processing changes not tracked in the manifest
+ *    (reference rewriting, text-ID replacement, display field deletion).
  * 3. Aggregate by (resourceType, fieldPath, action).
  */
 export function buildPiiFromDeidentifiedOnly(
@@ -178,25 +184,28 @@ export function buildPiiFromDeidentifiedOnly(
     if (!agg.has(resourceType)) agg.set(resourceType, new Map());
     const typeAgg = agg.get(resourceType)!;
 
-    // Try manifest first
+    // Collect manifest entries (authoritative for rule-matched actions)
     const manifestEntries = parseManifestEntries(resource);
+    const manifestFields = new Set<string>();
     if (manifestEntries.length > 0) {
       const seen = new Set<string>();
       for (const entry of manifestEntries) {
         const field = simplifyPath(entry.path);
+        manifestFields.add(field);
         const key = `${field}::${entry.action}`;
         if (!seen.has(key)) {
           seen.add(key);
           typeAgg.set(key, (typeAgg.get(key) ?? 0) + 1);
         }
       }
-      continue;
     }
 
-    // Fallback: heuristic scan of field values
+    // Also run heuristic scan on fields NOT already covered by manifest
+    // to catch post-processing changes (reference rewriting, text-ID replacement)
     const fields = extractFields(resource);
     for (const { field, value } of fields) {
-      if (field === "resourceType" || field === "id") continue;
+      if (field === "resourceType" || field === "id" && manifestFields.has("id")) continue;
+      if (manifestFields.has(field)) continue;
       const action = classifyValue(value);
       if (action) {
         const key = `${field}::${action}`;
@@ -217,5 +226,49 @@ export function buildPiiFromDeidentifiedOnly(
     result[resourceType] = entries;
   }
 
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// Full field summary (all fields across all resources, PII fields highlighted)
+// ---------------------------------------------------------------------------
+
+export interface FieldSummaryEntry {
+  fieldPath: string;
+  count: number;
+  /** Set to the PII action when this field was transformed. */
+  action?: string;
+}
+
+/** All fields per resource type, sorted by occurrence count descending. */
+export type FieldSummaryMap = Record<string, FieldSummaryEntry[]>;
+
+/**
+ * Build a full field summary map with PII actions overlaid.
+ *
+ * @param allFieldCounts  Occurrence counts for every field across ALL resources.
+ *                        Shape: resType → field → count.
+ * @param piiData         PII detection map built from the sample.
+ */
+export function buildFieldSummary(
+  allFieldCounts: Record<string, Record<string, number>>,
+  piiData: PiiDetectionMap,
+): FieldSummaryMap {
+  const result: FieldSummaryMap = {};
+  for (const [resType, fieldCounts] of Object.entries(allFieldCounts)) {
+    const piiActions: Record<string, string> = {};
+    if (piiData[resType]) {
+      for (const e of piiData[resType]) {
+        if (!piiActions[e.fieldPath]) piiActions[e.fieldPath] = e.action;
+      }
+    }
+    result[resType] = Object.entries(fieldCounts)
+      .map(([fieldPath, count]) => ({
+        fieldPath,
+        count,
+        action: piiActions[fieldPath],
+      }))
+      .sort((a, b) => b.count - a.count || a.fieldPath.localeCompare(b.fieldPath));
+  }
   return result;
 }
