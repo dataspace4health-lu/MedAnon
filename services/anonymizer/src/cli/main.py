@@ -129,7 +129,7 @@ def _run_fetch(args):
             config_types = _resource_types_from_config(settings)
             if config_types:
                 resource_types = [rt for rt in resource_types if rt in config_types]
-        print(f"No --resource-type specified, discovering from /metadata...")
+        print("No --resource-type specified, discovering from /metadata...")
         print(f"Found {len(resource_types)} resource type(s): {', '.join(resource_types)}")
 
     # Build query params
