@@ -24,10 +24,13 @@ from functools import lru_cache
 
 import pipeline.config as config
 
-# Directory where config YAML files are located.
+# Directory where bundled config YAML files are located.
 _CONFIG_DIR = os.environ.get("MEDANON_CONFIG_DIR", "/code/config")
 
-# Canonical profile name → config filename mapping.
+# Directory where user-defined config YAML files are stored at runtime.
+_USER_CONFIG_DIR = os.environ.get("MEDANON_USER_CONFIG_DIR", "/output/user-configs")
+
+# Canonical profile name → config filename mapping (bundled system profiles only).
 _PROFILE_MAP = {
     'auto':       None,                              # triggers auto-selection logic below
     'minimal':    'config.yaml',
@@ -43,25 +46,40 @@ _CACHE_TTL = int(os.environ.get("MEDANON_CONFIG_CACHE_TTL", "0"))
 _last_clear: float = 0.0
 
 
-@lru_cache(maxsize=8)
-def _load_settings(filename: str) -> config.Settings:
-    """Internal: load and cache settings by resolved filename."""
-    return config.Settings(os.path.join(_CONFIG_DIR, filename))
+@lru_cache(maxsize=32)
+def _load_settings(abs_path: str) -> config.Settings:
+    """Internal: load and cache settings by absolute file path."""
+    return config.Settings(abs_path)
 
 
 def _resolve_profile(profile: str) -> str:
-    """Resolve a profile alias to a concrete YAML filename using the current env.
+    """Resolve a profile alias to an absolute YAML file path.
+
+    Resolution order:
+    1. System profiles in _PROFILE_MAP  → _CONFIG_DIR/<filename>
+    2. User-defined profiles            → _USER_CONFIG_DIR/<profile>.yaml
+    3. ValueError if neither found
 
     Raises:
-        ValueError: If *profile* is not in _PROFILE_MAP.
+        ValueError: If *profile* is unknown and no user config file exists.
     """
-    if profile not in _PROFILE_MAP:
-        valid = ', '.join(_PROFILE_MAP.keys())
-        raise ValueError(f"Unknown profile '{profile}'. Valid: {valid}")
-    filename = _PROFILE_MAP[profile]
-    if filename is None:  # 'auto'
-        filename = 'config_gpas.yaml' if os.environ.get('GPAS_URL') else 'config.yaml'
-    return filename
+    # System profile?
+    if profile in _PROFILE_MAP:
+        filename = _PROFILE_MAP[profile]
+        if filename is None:  # 'auto'
+            filename = 'config_gpas.yaml' if os.environ.get('GPAS_URL') else 'config.yaml'
+        return os.path.join(_CONFIG_DIR, filename)
+
+    # User-defined profile?
+    user_path = os.path.join(_USER_CONFIG_DIR, f"{profile}.yaml")
+    if os.path.isfile(user_path):
+        return user_path
+
+    valid = ', '.join(_PROFILE_MAP.keys())
+    raise ValueError(
+        f"Unknown profile '{profile}'. Built-in profiles: {valid}. "
+        "For user-defined configs, create one via POST /v1/configs first."
+    )
 
 
 def clear_settings_cache() -> None:
@@ -75,7 +93,8 @@ def get_settings(profile: str = 'auto') -> config.Settings:
     """Load Settings for the named config profile (results cached per resolved filename).
 
     Args:
-        profile: One of: auto, minimal, gpas, gdpr, hipaa, research, structural.
+        profile: A built-in profile name (auto, minimal, gpas, gdpr, hipaa, research,
+                 structural) or a user-defined profile name created via POST /v1/configs.
                  'auto' selects config_gpas.yaml when GPAS_URL is set, else config.yaml.
                  The 'auto' alias is resolved on every call so it always reflects the
                  current environment — it is never cached under the key 'auto'.
@@ -84,8 +103,8 @@ def get_settings(profile: str = 'auto') -> config.Settings:
         Loaded and validated Settings instance.
 
     Raises:
-        ValueError: If *profile* is not in _PROFILE_MAP.
-        FileNotFoundError: If the resolved config file does not exist.
+        ValueError: If *profile* is unknown and no user config file exists.
+        FileNotFoundError: If the resolved config file does not exist on disk.
     """
     global _last_clear
     if _CACHE_TTL > 0:
@@ -93,4 +112,5 @@ def get_settings(profile: str = 'auto') -> config.Settings:
         if now - _last_clear > _CACHE_TTL:
             _load_settings.cache_clear()
             _last_clear = now
-    return _load_settings(_resolve_profile(profile))
+    abs_path = _resolve_profile(profile)
+    return _load_settings(abs_path)
