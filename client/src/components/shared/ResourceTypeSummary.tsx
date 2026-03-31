@@ -1,7 +1,11 @@
+import { useState } from "react";
+import { ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
+import type { PiiDetectionMap } from "@/lib/piiDetection";
 
 interface ResourceTypeSummaryProps {
   counts: Record<string, number>;
+  piiData?: PiiDetectionMap;
 }
 
 // Deterministic color per resource type
@@ -29,8 +33,26 @@ function getBarColor(type: string, index: number): string {
   return FALLBACKS[index % FALLBACKS.length];
 }
 
-export function ResourceTypeSummary({ counts }: ResourceTypeSummaryProps) {
+const ACTION_COLORS: Record<string, string> = {
+  redact: "bg-red-100 text-red-800",
+  cryptohash: "bg-blue-100 text-blue-800",
+  generalize: "bg-amber-100 text-amber-800",
+  gpas_pseudonymize: "bg-purple-100 text-purple-800",
+  encrypt: "bg-indigo-100 text-indigo-800",
+  perturb: "bg-teal-100 text-teal-800",
+  substitute: "bg-orange-100 text-orange-800",
+  scrub_text: "bg-pink-100 text-pink-800",
+  nlp_detect: "bg-pink-100 text-pink-800",
+  modified: "bg-slate-100 text-slate-700",
+};
+
+function actionBadgeClass(action: string): string {
+  return ACTION_COLORS[action] ?? ACTION_COLORS.modified;
+}
+
+export function ResourceTypeSummary({ counts, piiData }: ResourceTypeSummaryProps) {
   const sorted = Object.entries(counts).sort(([, a], [, b]) => b - a);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
   if (sorted.length === 0) {
     return (
@@ -39,6 +61,15 @@ export function ResourceTypeSummary({ counts }: ResourceTypeSummaryProps) {
   }
 
   const total = sorted.reduce((sum, [, count]) => sum + count, 0);
+
+  const toggle = (type: string) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(type)) next.delete(type);
+      else next.add(type);
+      return next;
+    });
+  };
 
   return (
     <div className="rounded-lg border overflow-hidden">
@@ -49,41 +80,101 @@ export function ResourceTypeSummary({ counts }: ResourceTypeSummaryProps) {
         {sorted.map(([type, count], index) => {
           const pct = total > 0 ? (count / total) * 100 : 0;
           const barColor = getBarColor(type, index);
+          const piiEntries = piiData?.[type];
+          const hasExpansion = piiEntries && piiEntries.length > 0;
+          const isExpanded = expanded.has(type);
 
           return (
-            <div key={type} className="flex items-center gap-3 px-3 py-2.5">
-              {/* Color dot */}
-              <span
+            <div key={type}>
+              <div
                 className={cn(
-                  "size-2 shrink-0 rounded-full",
-                  barColor
+                  "flex items-center gap-3 px-3 py-2.5",
+                  hasExpansion && "cursor-pointer hover:bg-muted/20 transition-colors",
                 )}
-              />
-
-              {/* Type name */}
-              <span className="min-w-0 flex-1 truncate text-sm font-medium">
-                {type}
-              </span>
-
-              {/* Fill bar */}
-              <div className="hidden w-24 sm:flex">
-                <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
-                  <div
-                    className={cn("h-full rounded-full transition-all", barColor)}
-                    style={{ width: `${pct}%` }}
+                onClick={hasExpansion ? () => toggle(type) : undefined}
+              >
+                {/* Expand chevron */}
+                {hasExpansion ? (
+                  <ChevronRight
+                    className={cn(
+                      "size-3.5 shrink-0 text-muted-foreground transition-transform",
+                      isExpanded && "rotate-90",
+                    )}
                   />
+                ) : (
+                  <span className="size-3.5 shrink-0" />
+                )}
+
+                {/* Color dot */}
+                <span
+                  className={cn(
+                    "size-2 shrink-0 rounded-full",
+                    barColor
+                  )}
+                />
+
+                {/* Type name */}
+                <span className="min-w-0 flex-1 truncate text-sm font-medium">
+                  {type}
+                </span>
+
+                {/* Fill bar */}
+                <div className="hidden w-24 sm:flex">
+                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                    <div
+                      className={cn("h-full rounded-full transition-all", barColor)}
+                      style={{ width: `${pct}%` }}
+                    />
+                  </div>
                 </div>
+
+                {/* Percentage */}
+                <span className="w-10 text-right text-xs text-muted-foreground tabular-nums">
+                  {pct.toFixed(0)}%
+                </span>
+
+                {/* Count */}
+                <span className="w-6 text-right text-sm font-semibold tabular-nums">
+                  {count}
+                </span>
               </div>
 
-              {/* Percentage */}
-              <span className="w-10 text-right text-xs text-muted-foreground tabular-nums">
-                {pct.toFixed(0)}%
-              </span>
-
-              {/* Count */}
-              <span className="w-6 text-right text-sm font-semibold tabular-nums">
-                {count}
-              </span>
+              {/* PII sub-table */}
+              {isExpanded && piiEntries && (
+                <div className="border-t bg-muted/10 px-4 py-2">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="text-muted-foreground">
+                        <th className="pb-1.5 text-left font-medium">Field</th>
+                        <th className="pb-1.5 text-left font-medium">Action</th>
+                        <th className="pb-1.5 text-right font-medium">Count</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-muted/40">
+                      {piiEntries.map((entry) => (
+                        <tr key={`${entry.fieldPath}-${entry.action}`}>
+                          <td className="py-1 font-mono text-foreground">
+                            {entry.fieldPath}
+                          </td>
+                          <td className="py-1">
+                            <span
+                              className={cn(
+                                "inline-block rounded px-1.5 py-0.5 text-[10px] font-medium",
+                                actionBadgeClass(entry.action),
+                              )}
+                            >
+                              {entry.action}
+                            </span>
+                          </td>
+                          <td className="py-1 text-right tabular-nums text-muted-foreground">
+                            {entry.count}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           );
         })}

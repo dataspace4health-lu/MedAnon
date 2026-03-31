@@ -1,15 +1,15 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
-import { Search, Loader2, AlertCircle, Users, ChevronDown } from 'lucide-react';
+import { Search, Loader2, AlertCircle, Users, ChevronDown, PackageOpen } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { PatientCard } from '@/components/shared/PatientCard';
-import { BulkExportButton } from '@/components/shared/BulkExportButton';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { capabilityStatement, searchPatients } from '@/api/fhir';
 import { submitBulkExportJob } from '@/api/medanon';
 import { useConfig } from '@/context/ConfigContext';
+import { useBulkExport } from '@/context/BulkExportContext';
 import type { PatientSummary } from '@/api/types';
 
 const PAGE_SIZE = 20;
@@ -17,6 +17,7 @@ const PAGE_SIZE = 20;
 export default function PatientBrowserPage() {
   const navigate = useNavigate();
   const { configProfile } = useConfig();
+  const { submitExport } = useBulkExport();
 
   const [patients, setPatients] = useState<PatientSummary[]>([]);
   const [total, setTotal] = useState<number | null>(null);
@@ -146,12 +147,28 @@ export default function PatientBrowserPage() {
           {searching ? 'Searching…' : 'Search'}
         </Button>
         <div className="sm:self-end">
-          <BulkExportButton
-            label="Bulk Export All"
-            onSubmit={() => submitBulkExportJob({ config_profile: configProfile })}
-            filename="all-patients-deidentified.ndjson"
+          <Button
+            variant="outline"
+            size="sm"
             disabled={!fhirConnected}
-          />
+            onClick={() => {
+              const exportId = submitExport(
+                'Bulk Export All',
+                'all-patients-deidentified.ndjson',
+                () => submitBulkExportJob({ config_profile: configProfile }),
+              );
+              navigate('/bulk-deidentify', {
+                state: {
+                  source: 'all',
+                  exportId,
+                  configProfile,
+                },
+              });
+            }}
+          >
+            <PackageOpen className="h-4 w-4" />
+            Bulk Export All
+          </Button>
         </div>
       </div>
 

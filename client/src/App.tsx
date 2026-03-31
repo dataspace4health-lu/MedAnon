@@ -13,6 +13,7 @@ const SyntheticDataPage = lazy(() => import('@/pages/SyntheticDataPage'));
 const StatusPage = lazy(() => import('@/pages/StatusPage'));
 const ConfigsPage = lazy(() => import('@/pages/ConfigsPage'));
 const ConfigBuilderPage = lazy(() => import('@/pages/ConfigBuilderPage'));
+const BulkDeidentifyPage = lazy(() => import('@/pages/BulkDeidentifyPage'));
 
 function PageLoader() {
   return (
@@ -39,6 +40,7 @@ export default function App() {
           <Route path="configs" element={<ConfigsPage />} />
           <Route path="configs/new" element={<ConfigBuilderPage />} />
           <Route path="configs/:name/edit" element={<ConfigBuilderPage />} />
+          <Route path="bulk-deidentify" element={<BulkDeidentifyPage />} />
         </Route>
       </Routes>
     </Suspense>

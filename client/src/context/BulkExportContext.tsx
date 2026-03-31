@@ -31,7 +31,7 @@ interface BulkExportContextValue {
     label: string,
     filename: string,
     onSubmit: () => Promise<JobResponse>,
-  ) => void;
+  ) => string;
   downloadResult: (id: string) => Promise<void>;
   dismissJob: (id: string) => void;
   clearCompleted: () => void;
@@ -120,7 +120,7 @@ export function BulkExportProvider({ children }: { children: ReactNode }) {
       label: string,
       filename: string,
       onSubmit: () => Promise<JobResponse>,
-    ) => {
+    ): string => {
       const id = `export-${nextId++}`;
       const newJob: ExportJob = {
         id,
@@ -149,6 +149,8 @@ export function BulkExportProvider({ children }: { children: ReactNode }) {
                 : "Failed to submit export",
           });
         });
+
+      return id;
     },
     [updateJob, startPolling],
   );

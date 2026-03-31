@@ -12,6 +12,7 @@ import { FhirCodeViewer } from "@/components/shared/FhirCodeViewer";
 import { JsonDiffViewer } from "@/components/shared/JsonDiffViewer";
 import { MultiFormatDownload } from "@/components/shared/MultiFormatDownload";
 import { FhirTableView } from "@/components/shared/FhirTableView";
+import { buildPiiDetectionMap } from "@/lib/piiDetection";
 import { getAuthHeaders } from "@/api/client";
 
 interface DeidentifyPanelProps {
@@ -252,6 +253,14 @@ export function DeidentifyPanel({
 
   const hasResults = !state.isStreaming && state.resources.length > 0;
 
+  const piiDetectionMap = useMemo(
+    () =>
+      hasResults
+        ? buildPiiDetectionMap(state.originalResources, state.resources)
+        : {},
+    [hasResults, state.originalResources, state.resources],
+  );
+
   return (
     <div className="flex flex-col gap-4">
       {/* Header row */}
@@ -297,7 +306,7 @@ export function DeidentifyPanel({
 
       {/* Resource breakdown */}
       {Object.keys(state.resourceCounts).length > 0 && (
-        <ResourceTypeSummary counts={state.resourceCounts} />
+        <ResourceTypeSummary counts={state.resourceCounts} piiData={piiDetectionMap} />
       )}
 
       {/* Results */}

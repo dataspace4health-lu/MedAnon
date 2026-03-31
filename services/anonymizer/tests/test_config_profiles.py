@@ -420,9 +420,11 @@ class TestConfigServiceCache(unittest.TestCase):
     def test_auto_profile_resolves_per_call(self):
         """'auto' must re-resolve on every call without requiring a cache clear."""
         os.environ.pop('GPAS_URL', None)
-        self.assertEqual(self._cs._resolve_profile('auto'), 'config.yaml')
+        expected_default = os.path.join(self._LOCAL_CONFIG_DIR, 'config.yaml')
+        expected_gpas = os.path.join(self._LOCAL_CONFIG_DIR, 'config_gpas.yaml')
+        self.assertEqual(self._cs._resolve_profile('auto'), expected_default)
         os.environ['GPAS_URL'] = 'http://gpas:8080'
-        self.assertEqual(self._cs._resolve_profile('auto'), 'config_gpas.yaml')
+        self.assertEqual(self._cs._resolve_profile('auto'), expected_gpas)
 
     def test_clear_cache_forces_reload(self):
         """clear_settings_cache() must cause the next get_settings() call to be a miss."""
