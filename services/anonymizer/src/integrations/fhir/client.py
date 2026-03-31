@@ -54,8 +54,8 @@ def _validate_resource_id(resource_id: str) -> str:
     """Validate that resource_id contains only safe characters."""
     if not _RESOURCE_ID_RE.match(resource_id):
         raise ValueError(
-            f"Invalid FHIR resource ID format. "
-            f"Must match [A-Za-z0-9._-]+"
+            "Invalid FHIR resource ID format. "
+            "Must match [A-Za-z0-9._-]+"
         )
     return resource_id
 

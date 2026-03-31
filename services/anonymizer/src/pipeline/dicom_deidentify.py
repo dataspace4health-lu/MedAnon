@@ -143,8 +143,6 @@ def _walk_and_scrub(dataset) -> None:  # type: ignore[type-arg]
     Args:
         dataset: a ``pydicom.Dataset`` (or compatible mapping) to scrub in place.
     """
-    import pydicom
-
     tags_to_delete: list = []
 
     for elem in dataset:
@@ -187,8 +185,6 @@ def deidentify_dicom(raw_bytes: bytes) -> bytes:
     """
     import pydicom
     import pydicom.errors
-    from pydicom.dataset import Dataset
-    from pydicom.sequence import Sequence
 
     try:
         ds = pydicom.dcmread(io.BytesIO(raw_bytes), force=True)

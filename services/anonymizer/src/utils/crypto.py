@@ -62,8 +62,8 @@ def _validate_key_path(key_path):
 
     if not allowed_dirs:
         raise PermissionError(
-            f"No allowed key directories configured or found. "
-            f"Set MEDANON_KEY_ALLOWED_DIRS or ensure /code/keys or /keys exists."
+            "No allowed key directories configured or found. "
+            "Set MEDANON_KEY_ALLOWED_DIRS or ensure /code/keys or /keys exists."
         )
 
     if not any(resolved.startswith(d + os.sep) or resolved == d for d in allowed_dirs):
