@@ -30,7 +30,7 @@ jobs:
         run: |
           pip install -e packages/medanon-core
           pip install -r services/anonymizer/requirements.txt
-          pip install pytest pytest-asyncio pytest-cov
+          pip install pytest pytest-asyncio pytest-cov httpx
       - name: Run local tests (no Docker required)
         working-directory: services/anonymizer
         env:
