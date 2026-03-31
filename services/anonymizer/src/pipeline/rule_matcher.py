@@ -33,24 +33,34 @@ def _evaluate_fhirpath_cached(resource: dict, expression: str) -> list:
 # Match candidate expansion
 # ---------------------------------------------------------------------------
 
+_candidates_cache: dict[tuple, list] = {}
+
+
 def _build_match_candidates(match_expr: str, resource: dict) -> list[str]:
     """Expand a match expression into concrete FHIRPath candidates for this resource.
 
     Handles ``*.field`` wildcards and ``{resourceType}`` placeholders.
     """
+    resource_type = resource.get("resourceType") if isinstance(resource, dict) else None
+    cache_key = (match_expr, resource_type)
+    cached = _candidates_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     if not isinstance(match_expr, str):
+        _candidates_cache[cache_key] = []
         return []
 
     candidates = [match_expr]
-    if isinstance(resource, dict):
-        resource_type = resource.get("resourceType")
-        if resource_type:
-            if match_expr.startswith("*."):
-                candidates.append(f"{resource_type}{match_expr[1:]}")
-            if "{resourceType}" in match_expr:
-                candidates.append(match_expr.replace("{resourceType}", resource_type))
+    if resource_type:
+        if match_expr.startswith("*."):
+            candidates.append(f"{resource_type}{match_expr[1:]}")
+        if "{resourceType}" in match_expr:
+            candidates.append(match_expr.replace("{resourceType}", resource_type))
 
-    return list(dict.fromkeys(candidates))
+    result = list(dict.fromkeys(candidates))
+    _candidates_cache[cache_key] = result
+    return result
 
 
 # ---------------------------------------------------------------------------

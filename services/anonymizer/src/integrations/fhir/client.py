@@ -34,7 +34,7 @@ log = logging.getLogger("medanon.fhir_server")
 
 _FHIR_MAX_PAGES = int(os.environ.get("FHIR_MAX_PAGES", "1000"))
 _FHIR_PAGE_SIZE = int(os.environ.get("FHIR_PAGE_SIZE", "200"))  # default 200; set to 0 to let server decide
-_FHIR_BULK_POLL_INTERVAL = float(os.environ.get("FHIR_BULK_POLL_INTERVAL_SEC", "5"))
+_FHIR_BULK_POLL_INTERVAL = float(os.environ.get("FHIR_BULK_POLL_INTERVAL_SEC", "2"))
 _FHIR_BULK_POLL_TIMEOUT = float(os.environ.get("FHIR_BULK_POLL_TIMEOUT_SEC", "3600"))
 _RESOURCE_TYPE_RE = re.compile(r'^[A-Z][a-zA-Z]+$')
 _RESOURCE_ID_RE = re.compile(r'^[A-Za-z0-9._\-]+$')
@@ -236,6 +236,29 @@ def get_capability_statement(base_url, token=None, timeout=30):
             if rt:
                 resource_types.append(rt)
     return resource_types
+
+
+def preflight_resource_count(base_url, resource_type=None, token=None, timeout=10):
+    """Quick count of resources on the server using ``_summary=count``.
+
+    Returns the ``total`` from the Bundle response, or 0 when the server
+    does not report one.  Used as a fast pre-check before expensive export
+    operations so we can bail early on empty servers.
+    """
+    base = base_url.rstrip("/")
+    if resource_type:
+        _validate_resource_type(resource_type)
+        url = f"{base}/{resource_type}?_summary=count&_count=0"
+    else:
+        # System-level: check Patient count as a proxy for "any data"
+        url = f"{base}/Patient?_summary=count&_count=0"
+    try:
+        bundle = _get_json(url, token=token, timeout=timeout, operation="preflight")
+        return bundle.get("total", 0)
+    except Exception as exc:
+        log.warning("preflight_resource_count failed (%s), skipping pre-check", exc)
+        # If the pre-check fails, don't block — let the real export run.
+        return -1
 
 
 def fetch_resource_type(base_url, resource_type, params=None, token=None, timeout=30):
@@ -521,11 +544,11 @@ def _poll_bulk_status(status_url, token=None, timeout=30):
             progress = resp.headers.get("X-Progress", "")
             if progress:
                 log.info("bulk export in progress: %s", progress)
-            # Honor Retry-After if present, clamp to [1, 120]
+            # Honor Retry-After if present, clamp to [1, 10]
             retry_after = resp.headers.get("Retry-After")
             if retry_after:
                 try:
-                    delay = max(1, min(120, int(retry_after)))
+                    delay = max(1, min(10, int(retry_after)))
                 except (ValueError, TypeError):
                     delay = _FHIR_BULK_POLL_INTERVAL
             else:

@@ -83,7 +83,7 @@ def dispatch_pass1(
                 matched = _evaluate_fhirpath_cached(resource, candidate + ".log()")
                 matched_elements.extend(matched)
             except Exception:
-                audit_log.warning(
+                audit_log.debug(
                     "fhirpath_eval_failed expression=%s resource_type=%s",
                     candidate.replace("\n", " ").replace("\r", " "),
                     resource.get("resourceType", "unknown") if isinstance(resource, dict) else "unknown",
@@ -106,7 +106,7 @@ def dispatch_pass1(
             el_path = el.get("path", "?")
             path_key = (el_path, category)
             if path_key in processed_paths:
-                audit_log.info(
+                audit_log.debug(
                     "rule_skipped_duplicate action=%s path=%s category=%s",
                     action, el_path, category,
                 )
@@ -119,7 +119,7 @@ def dispatch_pass1(
         for el in elements_to_process:
             el_path = el.get("path", "?")
 
-            audit_log.info(
+            audit_log.debug(
                 "rule_applied action=%s match=%s path=%s resource_type=%s",
                 action,
                 rule["match"],
