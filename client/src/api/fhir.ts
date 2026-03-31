@@ -70,6 +70,70 @@ export function capabilityStatement(): Promise<Record<string, unknown>> {
 }
 
 // ---------------------------------------------------------------------------
+// Resource type discovery
+// ---------------------------------------------------------------------------
+
+/** Infrastructure types excluded from resource-type counts (not useful for export). */
+const EXCLUDED_TYPES = new Set([
+  "CapabilityStatement", "OperationDefinition", "SearchParameter",
+  "StructureDefinition", "CompartmentDefinition", "ImplementationGuide",
+  "CodeSystem", "ValueSet", "ConceptMap", "NamingSystem",
+  "OperationOutcome", "Bundle",
+]);
+
+/**
+ * Read supported resource types from the server's CapabilityStatement.
+ *
+ * Falls back to a minimal list if the metadata request fails.
+ */
+async function discoverResourceTypes(): Promise<string[]> {
+  try {
+    const cs = await capabilityStatement();
+    const rest = cs.rest as Array<{ resource?: Array<{ type?: string }> }> | undefined;
+    const types = rest?.[0]?.resource
+      ?.map((r) => r.type)
+      .filter((t): t is string => typeof t === "string" && !EXCLUDED_TYPES.has(t));
+    if (types && types.length > 0) return types;
+  } catch {
+    // metadata unavailable — fall through to fallback
+  }
+  return ["Patient", "Observation", "Condition", "Encounter", "Procedure"];
+}
+
+export interface ResourceTypeCount {
+  type: string;
+  count: number;
+}
+
+/**
+ * Discover resource types from the CapabilityStatement, then probe each
+ * with `?_summary=count&_count=0` in parallel.
+ *
+ * Returns only types with count > 0, sorted by count descending.
+ */
+export async function fetchResourceTypeCounts(): Promise<ResourceTypeCount[]> {
+  const types = await discoverResourceTypes();
+
+  const results = await Promise.allSettled(
+    types.map(async (type) => {
+      const bundle = await fetchFhir<FhirBundle>(`/${type}`, {
+        _summary: "count",
+        _count: "0",
+      });
+      return { type, count: bundle.total ?? 0 };
+    }),
+  );
+
+  return results
+    .filter(
+      (r): r is PromiseFulfilledResult<ResourceTypeCount> =>
+        r.status === "fulfilled" && r.value.count > 0,
+    )
+    .map((r) => r.value)
+    .sort((a, b) => b.count - a.count);
+}
+
+// ---------------------------------------------------------------------------
 // Patient queries
 // ---------------------------------------------------------------------------
 
