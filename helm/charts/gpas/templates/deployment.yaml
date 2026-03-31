@@ -22,6 +22,10 @@ spec:
         app.kubernetes.io/component: gpas
       annotations:
         checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        # Prometheus scraping (WildFly MicroProfile Metrics)
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "{{ .Values.port }}"
+        prometheus.io/path: "/metrics"
     spec:
       serviceAccountName: {{ include "gpas.fullname" . }}
       securityContext:

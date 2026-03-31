@@ -8,7 +8,13 @@ umask 0077   # All new files/dirs created by this script are owner-only (no worl
 
 MEDANON_PORT="${MEDANON_PORT:-8000}"
 MEDANON_URL="http://localhost:${MEDANON_PORT}"
+MEDANON_CONFIG_PROFILE="${MEDANON_CONFIG_PROFILE:-structural}"
 FHIR_SOURCE_URL="${FHIR_SOURCE_URL:-http://localhost:8081/fhir}"
+# URL that MedAnon uses to reach HAPI FHIR from *inside* Docker.
+# When MedAnon runs in the compose stack it can't use localhost — it must
+# use the Docker service hostname. Override to http://localhost:8081/fhir
+# only if running MedAnon directly on the host (outside Docker).
+MEDANON_FHIR_URL="${MEDANON_FHIR_URL:-http://hapi-fhir:8080/fhir}"
 DATA_DIR="$(cd "$(dirname "$0")/.." && pwd)/data"
 OUTPUT_DIR="$(cd "$(dirname "$0")/.." && pwd)/output"
 mkdir -p "$DATA_DIR" "$OUTPUT_DIR"
@@ -41,6 +47,7 @@ fi
 echo ""
 echo "FHIR source : ${FHIR_SOURCE_URL}"
 echo "MedAnon     : ${MEDANON_URL}"
+echo "Config      : ${MEDANON_CONFIG_PROFILE}"
 echo ""
 read -rp "Patient ID: " PATIENT_ID
 
@@ -68,7 +75,7 @@ trap 'rm -f "$RAW_TMP"' EXIT
 echo ""
 echo "Fetching raw data for Patient/${PATIENT_ID} ..."
 HTTP_STATUS=$(curl -s -o "$RAW_TMP" -w "%{http_code}" \
-  "${FHIR_SOURCE_URL}/Patient/${PATIENT_ID}/\$everything" \
+  "${FHIR_SOURCE_URL}/Patient/${PATIENT_ID}/\$everything?_count=200" \
   -H "Accept: application/fhir+json")
 
 if [[ "$HTTP_STATUS" != "200" ]]; then
@@ -90,15 +97,14 @@ RAW_COUNT=$(wc -l < "$RAW_FILE")
 echo "  Saved ${RAW_COUNT} raw resources → ${RAW_FILE}"
 
 # ── 4. De-identify via MedAnon ────────────────────────────────────────────────
-# Build JSON payload with jq to avoid injection if FHIR_SOURCE_URL or PATIENT_ID
-# contains quotes, backslashes, or other shell metacharacters.
+# Build JSON payload via Python to safely handle any special characters in the
+# URL or patient ID without requiring jq.
 echo "De-identifying ..."
-PAYLOAD=$(jq -n \
-  --arg url "$FHIR_SOURCE_URL" \
-  --arg rt  "Patient" \
-  --arg id  "$PATIENT_ID" \
-  '{server_url: $url, resource_type: $rt, resource_id: $id}')
-curl -sf -X POST "${MEDANON_URL}/process/everything" \
+PAYLOAD=$(python3 -c "
+import json, sys
+print(json.dumps({'server_url': sys.argv[1], 'resource_type': sys.argv[2], 'resource_id': sys.argv[3]}))
+" "$MEDANON_FHIR_URL" "Patient" "$PATIENT_ID")
+curl -sf -X POST "${MEDANON_URL}/process/everything?config_profile=${MEDANON_CONFIG_PROFILE}" \
   -H "Content-Type: application/json" \
   -d "$PAYLOAD" \
   > "$OUT_FILE"

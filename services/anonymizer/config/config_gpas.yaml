@@ -64,7 +64,23 @@ rules:
 - match: Patient.communication
   action: redact
 
-- match: Patient.extension
+# Patient Extensions - specific PHI handling instead of blanket redaction
+- match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-race')
+  action: redact
+
+- match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-ethnicity')
+  action: redact
+
+- match: Patient.extension.where(url='http://hl7.org/fhir/StructureDefinition/patient-mothersMaidenName')
+  action: redact
+
+- match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-birthsex')
+  action: redact
+
+- match: Patient.extension.where(url='http://hl7.org/fhir/StructureDefinition/patient-birthPlace')
+  action: redact
+
+- match: Patient.extension.where(url.startsWith('http://synthetichealth.github.io/synthea/'))
   action: redact
 
 # ==========================================================
@@ -195,17 +211,19 @@ rules:
 # 8. DISPLAY FIELDS AND SUBJECT/PATIENT REFERENCES
 # ==========================================================
 
-- match: "*.display"
-  action: redact
+#- match: "*.display"
+# action: redact
 
-- match: "*.subject.display"
-  action: redact
+#- match: "*.subject.display"
+#  action: redact
 
 - match: "*.subject.reference"
-  action: redact
+  action: gpas_pseudonymize
+  params: *gpas
 
 - match: "*.patient.reference"
-  action: redact
+  action: gpas_pseudonymize
+  params: *gpas
 
 # ==========================================================
 # 9. DOCUMENTS / ATTACHMENTS

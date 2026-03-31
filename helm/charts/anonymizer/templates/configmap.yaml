@@ -6,7 +6,7 @@ metadata:
     {{- include "anonymizer.labels" . | nindent 4 }}
     app.kubernetes.io/component: anonymizer
 data:
-  # All three config profiles are mounted into the container.
+  # All six config profiles are mounted into the container.
   # The active profile is selected via configProfile in values.yaml.
   # Customise the files under files/anonymizer/ to change rules.
   config.yaml: |-
@@ -15,3 +15,9 @@ data:
 {{ .Files.Get "files/anonymizer/config_gpas.yaml" | indent 4 }}
   config_gdpr_eu.yaml: |-
 {{ .Files.Get "files/anonymizer/config_gdpr_eu.yaml" | indent 4 }}
+  config_hipaa_safe_harbor.yaml: |-
+{{ .Files.Get "files/anonymizer/config_hipaa_safe_harbor.yaml" | indent 4 }}
+  config_research_pseudonymous.yaml: |-
+{{ .Files.Get "files/anonymizer/config_research_pseudonymous.yaml" | indent 4 }}
+  config_structure_preserving.yaml: |-
+{{ .Files.Get "files/anonymizer/config_structure_preserving.yaml" | indent 4 }}

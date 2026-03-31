@@ -1,0 +1,96 @@
+{{- if .Values.db.replica.enabled -}}
+{{- $dbRegistry := coalesce .Values.db.registry .Values.global.registry "" -}}
+# MySQL read replica for gPAS — enabled with db.replica.enabled=true.
+#
+# IMPORTANT: Replication must be initialised once after both pods are running:
+#   kubectl exec -n <ns> <primary-pod> -- mysql -uroot -p$MYSQL_ROOT_PASSWORD \
+#     -e "GRANT REPLICATION SLAVE ON *.* TO 'repl'@'%' IDENTIFIED BY '$REPL_PASSWORD';"
+#   kubectl exec -n <ns> <replica-pod> -- mysql -uroot -p$MYSQL_ROOT_PASSWORD \
+#     -e "CHANGE MASTER TO MASTER_HOST='<primary-svc>', MASTER_USER='repl', \
+#         MASTER_PASSWORD='$REPL_PASSWORD', MASTER_AUTO_POSITION=1; START SLAVE;"
+#
+# gPAS (WildFly) always points at the primary. The replica is read-only and
+# is only useful for audit queries and backups.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "gpas.fullname" . }}-db-replica
+  labels:
+    {{- include "gpas.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gpas-db-replica
+spec:
+  serviceName: {{ include "gpas.fullname" . }}-db-replica
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "gpas.selectorLabels" (dict "Release" .Release "component" "gpas-db-replica") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "gpas.selectorLabels" (dict "Release" .Release "component" "gpas-db-replica") | nindent 8 }}
+        {{- include "gpas.labels" . | nindent 8 }}
+        app.kubernetes.io/component: gpas-db-replica
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        fsGroup: 999
+      {{- with (coalesce .Values.imagePullSecrets .Values.global.imagePullSecrets) }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: mysql-replica
+          image: "{{ if $dbRegistry }}{{ $dbRegistry }}/{{ end }}{{ .Values.db.image }}:{{ .Values.db.tag }}"
+          imagePullPolicy: {{ coalesce .Values.global.imagePullPolicy .Values.imagePullPolicy | default "IfNotPresent" }}
+          args:
+            - --server-id=2
+            - --read-only=ON
+            - --log-bin=mysql-bin
+            - --binlog-format=ROW
+            - --gtid-mode=ON
+            - --enforce-gtid-consistency=ON
+            {{- range .Values.db.args }}
+            - {{ . | quote }}
+            {{- end }}
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "gpas.fullname" . }}-db-secret
+                  key: rootPassword
+            {{- range $k, $v := .Values.db.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+          ports:
+            - containerPort: {{ .Values.db.port }}
+          livenessProbe:
+            exec:
+              command: ["mysqladmin", "ping", "-h", "localhost"]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+          readinessProbe:
+            exec:
+              command: ["mysqladmin", "ping", "-h", "localhost"]
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+          resources:
+            {{- toYaml .Values.db.replica.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mysql
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- if .Values.db.storageClass }}
+        storageClassName: {{ .Values.db.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.db.replica.storage | default .Values.db.storage }}
+{{- end }}

@@ -25,8 +25,18 @@ spec:
     - host: {{ .Values.ingress.host | quote }}
       http:
         paths:
-          # MedAnon anonymizer API — root path
+          # React UI — SPA served via nginx (root path)
+          # The UI's nginx also proxies /api/ and /fhir/ internally,
+          # but direct Ingress routes are provided for non-browser clients.
           - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ printf "%s-ui" .Release.Name | trunc 63 | trimSuffix "-" }}
+                port:
+                  name: http
+          # MedAnon anonymizer API — direct access for CLI / external clients
+          - path: /api
             pathType: Prefix
             backend:
               service:
@@ -49,7 +59,7 @@ spec:
                 name: {{ printf "%s-gpas" .Release.Name | trunc 63 | trimSuffix "-" }}
                 port:
                   name: http
-          # gPAS TTP-FHIR gateway
+          # gPAS TTP-FHIR gateway (internal service API)
           - path: /ttp-fhir
             pathType: Prefix
             backend:

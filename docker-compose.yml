@@ -14,7 +14,9 @@ networks:
 # ── Named volumes ─────────────────────────────────────────────────────────────
 volumes:
   gpas-db-data:
+  gpas-db-replica-data:
   hapi-data:
+  redis-data:
 
 # ── Services ──────────────────────────────────────────────────────────────────
 services:
@@ -22,10 +24,10 @@ services:
   # ── 1. FHIR de-identification / anonymiser ──────────────────────────────────
   anonymizer:
     build:
-      context: services/anonymizer
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: services/anonymizer/Dockerfile
       target: prod
-    image: medanon:latest
+    image: ${ANONYMIZER_IMAGE:-medanon:latest}
     container_name: medanon
     restart: unless-stopped
     ports:
@@ -51,6 +53,9 @@ services:
       - FHIR_SOURCE_TOKEN=${FHIR_SOURCE_TOKEN:-}
       - FHIR_TARGET_URL=${FHIR_TARGET_URL:-}
       - FHIR_TARGET_TOKEN=${FHIR_TARGET_TOKEN:-}
+      - MEDANON_AUDIT_LOG_FILE=/output/audit.log
+      - MEDANON_REDIS_URL=${MEDANON_REDIS_URL:-redis://redis:6379/0}
+      - MEDANON_JOB_WORKERS=${MEDANON_JOB_WORKERS:-3}
     volumes:
       - ./data:/data:ro
       - ./output:/output
@@ -60,6 +65,8 @@ services:
       gpas:
         condition: service_healthy
       fhir-server:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/ready')"]
@@ -71,14 +78,21 @@ services:
       resources:
         limits:
           cpus: "1.0"
-          memory: 1G
+          memory: 2G
         reservations:
           cpus: "0.25"
-          memory: 256M
+          memory: 512M
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:size=100M
 
   # ── 2. HAPI FHIR server (embedded H2 database) ────────────────────────────
   fhir-server:
-    image: hapiproject/hapi:latest
+    image: hapiproject/hapi:v7.6.0
     container_name: hapi-fhir
     restart: unless-stopped
     ports:
@@ -94,13 +108,14 @@ services:
     networks:
       - fhir-net
     healthcheck:
-      # hapiproject/hapi:latest is a distroless JRE image (no shell, no curl, no wget).
-      # Use a pre-compiled Java class to probe Spring Boot Actuator via java.net.http.
+      # HealthCheck.class must be compiled targeting the same Java version as this
+      # image (currently Java 17). Run `make build-healthcheck` to recompile, or
+      # `make up` which does it automatically.
       test: ["CMD", "java", "-cp", "/healthcheck", "HealthCheck"]
       interval: 30s
       timeout: 15s
       retries: 5
-      start_period: 60s
+      start_period: 90s
     deploy:
       resources:
         limits:
@@ -127,12 +142,13 @@ services:
       - gpas-db-data:/var/lib/mysql
     networks:
       - fhir-net
-    command: --max_allowed_packet=20M --default-time-zone=Europe/Berlin --innodb_buffer_pool_size=2G --default-authentication-plugin=mysql_native_password
+    command: --max_allowed_packet=20M --default-time-zone=Europe/Berlin --innodb_buffer_pool_size=512M --default-authentication-plugin=mysql_native_password
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
       interval: 10s
       timeout: 5s
       retries: 10
+      start_period: 30s
     deploy:
       resources:
         limits:
@@ -141,41 +157,6 @@ services:
         reservations:
           cpus: "0.25"
           memory: 512M
-
-  # ── 5. Streamlit UI ───────────────────────────────────────────────────────
-  ui:
-    build:
-      context: client
-      dockerfile: Dockerfile
-    image: medanon-ui:latest
-    container_name: medanon-ui
-    restart: unless-stopped
-    ports:
-      - "${UI_PORT:-8501}:8501"
-    environment:
-      - MEDANON_URL=http://medanon:8000
-      - FHIR_URL=http://hapi-fhir:8080/fhir
-      - GPAS_DOMAIN=${GPAS_DOMAIN:-}
-      - MEDANON_API_KEY=${MEDANON_API_KEY:-}
-    networks:
-      - fhir-net
-    depends_on:
-      anonymizer:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health')"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 20s
-    deploy:
-      resources:
-        limits:
-          cpus: "0.5"
-          memory: 512M
-        reservations:
-          cpus: "0.1"
-          memory: 128M
 
   # ── 4. gPAS TTP pseudonymisation service (official mosaicgreifswald) ───────
   gpas:
@@ -217,3 +198,182 @@ services:
         reservations:
           cpus: "0.5"
           memory: 1G
+
+  # ── 5. Analytics microservice (opt-in — start with: docker compose --profile analytics up) ─
+  analytics:
+    build:
+      context: .
+      dockerfile: services/analytics/Dockerfile
+    image: medanon-analytics:latest
+    container_name: medanon-analytics
+    profiles: [analytics]
+    restart: unless-stopped
+    ports:
+      - "${ANALYTICS_PORT:-8100}:8100"
+    networks:
+      - fhir-net
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8100/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+        reservations:
+          cpus: "0.1"
+          memory: 64M
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  # ── 6. NLP microservice (opt-in — start with: docker compose --profile nlp up) ────────────
+  nlp:
+    build:
+      context: .
+      dockerfile: services/nlp/Dockerfile
+    image: medanon-nlp:latest
+    container_name: medanon-nlp
+    profiles: [nlp]
+    restart: unless-stopped
+    ports:
+      - "${NLP_PORT:-8200}:8200"
+    networks:
+      - fhir-net
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8200/health')"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1500M
+        reservations:
+          cpus: "0.5"
+          memory: 800M
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  # ── 7. gPAS MySQL read replica (opt-in HA — start with: docker compose --profile ha up) ───
+  # The replica mirrors the primary gpas-db using MySQL binary replication.
+  # gPAS (WildFly) always writes to the primary; the replica is read-only and
+  # is useful for audit queries, backups, and reducing read load.
+  #
+  # Initialisation: after starting both containers run once:
+  #   docker exec gpas-mysql mysql -uroot -p${GPAS_MYSQL_ROOT_PASSWORD} \
+  #     -e "GRANT REPLICATION SLAVE ON *.* TO 'repl'@'%' IDENTIFIED BY '${GPAS_REPL_PASSWORD}';"
+  #   docker exec gpas-mysql-replica mysql -uroot -p${GPAS_MYSQL_ROOT_PASSWORD} \
+  #     -e "CHANGE MASTER TO MASTER_HOST='gpas-db', MASTER_USER='repl', \
+  #         MASTER_PASSWORD='${GPAS_REPL_PASSWORD}', MASTER_AUTO_POSITION=1; START SLAVE;"
+  gpas-db-replica:
+    image: mysql:8.0
+    container_name: gpas-mysql-replica
+    profiles: [ha]
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${GPAS_MYSQL_ROOT_PASSWORD}
+      TZ: Europe/Berlin
+    volumes:
+      - gpas-db-replica-data:/var/lib/mysql
+    networks:
+      - fhir-net
+    depends_on:
+      gpas-db:
+        condition: service_healthy
+    command: >
+      --server-id=2
+      --read-only=ON
+      --log-bin=mysql-bin
+      --binlog-format=ROW
+      --gtid-mode=ON
+      --enforce-gtid-consistency=ON
+      --max_allowed_packet=20M
+      --default-time-zone=Europe/Berlin
+      --default-authentication-plugin=mysql_native_password
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 1G
+        reservations:
+          cpus: "0.1"
+          memory: 256M
+
+  # ── 8. React UI ──────────────────────────────────────────────────────────
+  ui:
+    build:
+      context: client
+      dockerfile: Dockerfile
+    image: medanon-ui:latest
+    container_name: medanon-ui
+    restart: unless-stopped
+    ports:
+      - "${UI_PORT:-8501}:8501"
+    networks:
+      - fhir-net
+    depends_on:
+      anonymizer:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8501/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128M
+        reservations:
+          cpus: "0.1"
+          memory: 32M
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  # ── 9. Redis (shared cache + job queue) ──────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: medanon-redis
+    restart: unless-stopped
+    user: redis
+    command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru --save ""
+    volumes:
+      - redis-data:/data
+    networks:
+      - fhir-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+        reservations:
+          cpus: "0.1"
+          memory: 64M
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL

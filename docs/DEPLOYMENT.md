@@ -1,8 +1,4 @@
-# MedAnon — Deployment Guide
-
-This document covers everything needed to deploy MedAnon in Docker Compose (local / single-node) and Kubernetes (Helm), including environment variables, secrets management, resource requirements, production hardening, and health verification.
-
----
+# MedAnon Deployment Guide
 
 ## Table of Contents
 
@@ -11,6 +7,7 @@ This document covers everything needed to deploy MedAnon in Docker Compose (loca
 3. [Environment Variables Reference](#3-environment-variables-reference)
 4. [Secrets Management](#4-secrets-management)
 5. [Kubernetes (Helm) Deployment](#5-kubernetes-helm-deployment)
+   - [K3s Deployment (Single-Node / Edge)](#k3s-deployment-single-node--edge)
 6. [Resource Requirements](#6-resource-requirements)
 7. [Production Hardening](#7-production-hardening)
 8. [Upgrading](#8-upgrading)
@@ -25,25 +22,26 @@ This document covers everything needed to deploy MedAnon in Docker Compose (loca
 
 | Requirement | Minimum | Notes |
 |---|---|---|
-| Docker Engine | 24.x | |
-| Docker Compose plugin | v2.x | `docker compose` (not `docker-compose`) |
-| RAM | 8 GB | gPAS (WildFly) needs ~2 GB; MySQL ~2 GB |
-| Disk | 10 GB | Images ~4 GB; gPAS MySQL data volume |
-| CPU | 2 cores | |
+| Docker Engine | 24.x | `docker --version` |
+| Docker Compose plugin | v2.x | `docker compose version` (not `docker-compose`) |
+| RAM | 8 GB | Comfortable: 12 GB+ |
+| Disk | 10 GB | Images ~4 GB + MySQL data volume |
+| CPU | 2 cores | 4+ recommended for production |
 
 ### Kubernetes (Helm)
 
-| Requirement | Version |
+| Requirement | Minimum |
 |---|---|
-| Kubernetes | ≥ 1.26 |
-| Helm | ≥ 3.12 |
-| Container registry | Any (GHCR, ECR, Docker Hub, etc.) |
+| Kubernetes | 1.26+ |
+| Helm | 3.12+ |
+| Container registry | Any (GHCR, ECR, Docker Hub) |
+| Cluster RAM | 12 GB allocatable |
 
 ---
 
 ## 2. Docker Compose Deployment
 
-### Step 1 — Clone and configure
+### Step 1: Clone and Configure
 
 ```bash
 git clone <repo-url> medanon
@@ -51,275 +49,447 @@ cd medanon
 cp .env.example .env
 ```
 
-Edit `.env` and fill in all `REPLACE_WITH_...` placeholders (see [Environment Variables Reference](#3-environment-variables-reference)).
+Edit `.env` and replace every `REPLACE_WITH_...` placeholder. See [Secrets Management](#4-secrets-management) for generating values.
 
-### Step 2 — Build images
+### Step 2: Build Images
 
 ```bash
 make build
 ```
 
-This builds two images:
-- `medanon:latest` — the FastAPI anonymizer (from `services/anonymizer/Dockerfile`)
-- `medanon-ui:latest` — the Streamlit UI (from `client/Dockerfile`)
+Builds two local images:
+- `medanon:latest` — FastAPI anonymizer (from `services/anonymizer/Dockerfile`)
+- `medanon-ui:latest` — React UI / nginx (from `client/Dockerfile`)
 
-gPAS and HAPI FHIR use official upstream images and are pulled automatically.
+gPAS and HAPI FHIR use upstream images pulled automatically.
 
-### Step 3 — Start the stack
+### Step 3: Start the Stack
 
 ```bash
 make up
 ```
 
-This runs `docker compose up -d`. Five containers start:
+Five containers start in dependency order:
 
-| Container | Image | Purpose |
-|---|---|---|
-| `medanon-ui` | `medanon-ui:latest` | Streamlit browser UI |
-| `medanon` | `medanon:latest` | Anonymizer API |
-| `hapi-fhir` | `hapiproject/hapi:latest` | HAPI FHIR R4 server |
-| `gpas-wildfly` | `mosaicgreifswald/wildfly:38` | gPAS TTP pseudonymization |
-| `gpas-mysql` | `mysql:8.0` | MySQL backend for gPAS |
+| # | Container | Image | Host Port | Startup Time |
+|---|---|---|---|---|
+| 1 | `gpas-db` | `mysql:8.0` | (internal) | ~15 s |
+| 2 | `fhir-server` | `hapiproject/hapi:v7.6.0` | 8081 | ~30 s |
+| 3 | `gpas` | `mosaicgreifswald/wildfly:38` | 8080 | ~90 s |
+| 4 | `anonymizer` | `medanon:latest` | 8000 | ~10 s |
+| 5 | `ui` | `medanon-ui:latest` | 8501 | ~10 s |
 
-Startup order is enforced via `depends_on` + healthchecks. gPAS takes the longest (~90 s for WildFly to deploy the WAR files).
-
-### Step 4 — Create gPAS domain
+### Step 4: Initialize gPAS Domain
 
 ```bash
 make init-domains
 ```
 
-Or manually via the web UI at `http://localhost:8080/gpas-web/` (log in as `admin@ths`):
-- Navigate to **gPAS → Domains → New**
-- Name: `TESTING` (or whatever you set as `GPAS_DOMAIN` in `.env`)
-- Generator: `ReedSolomonLagrange`, Alphabet: `Symbol31`
+Or manually via `http://localhost:8080/gpas-web/` (login: `admin@ths`):
+1. Navigate to **gPAS -> Domains -> New**
+2. Name: value of `GPAS_DOMAIN` in `.env` (e.g., `TESTING`)
+3. Generator: `ReedSolomonLagrange`, Alphabet: `Symbol31`
+4. Save
 
-> **Important:** Do not insert domains directly into MySQL. gPAS maintains an in-memory domain cache (`domainLocks HashMap`) that is only populated when gPAS itself creates the domain via its API.
+**Important:** Never insert domains directly into MySQL. gPAS maintains an in-memory cache that is only populated when domains are created through the API.
 
-### Step 5 — Verify
+### Step 5: Verify
 
 ```bash
-curl http://localhost:8000/health      # {"status":"ok"}
-curl http://localhost:8081/fhir/metadata  # HAPI CapabilityStatement
-curl http://localhost:8080/             # gPAS WildFly welcome page
-open http://localhost:8501              # Streamlit UI
+curl http://localhost:8000/health         # {"status":"ok"}
+curl http://localhost:8000/ready          # {"ready": true}
+curl http://localhost:8081/fhir/metadata  # HAPI FHIR CapabilityStatement
+open http://localhost:8501                # Web UI
 ```
 
 ### Development Mode
-
-Hot-reload mode mounts source code into the anonymizer container:
 
 ```bash
 make dev
 ```
 
-This applies `docker-compose.dev.yml` overrides:
-- Anonymizer: source directory mounted live, uvicorn `--reload` enabled
-- HAPI FHIR: in-memory H2 (data resets on restart)
+Applies `docker-compose.dev.yml` overrides:
+- Anonymizer: source directory mounted live at `/code/src`, uvicorn `--reload` enabled
+- HAPI FHIR: in-memory H2 database (data resets on restart)
 - gPAS: WildFly management console exposed on `127.0.0.1:9990`
+- gPAS: FHIR API exposed on host port 8080
 
 ---
 
 ## 3. Environment Variables Reference
 
-Copy `.env.example` to `.env`. All secrets must be replaced before any non-local deployment.
-
-### Anonymizer
+### Anonymizer: Core
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `MEDANON_HASH_KEY` | production | — | Hex key for HMAC-SHA3-256 hashing. Generate: `openssl rand -hex 32` |
-| `MEDANON_RSA_PUBLIC_KEY` | for encrypt | `/code/keys/id_rsa.pub` | Path to RSA public key inside container |
-| `MEDANON_RSA_PRIVATE_KEY` | for decrypt | `/code/keys/id_rsa` | Path to RSA private key inside container |
-| `MEDANON_MAX_BODY_BYTES` | no | `10485760` | Max request body size (bytes) |
+| `MEDANON_CONFIG_DIR` | no | `/code/config` | YAML config file directory |
+| `MEDANON_HASH_KEY` | production | — | HMAC-SHA3-256 key. Generate: `openssl rand -hex 32` |
+| `MEDANON_RSA_PUBLIC_KEY` | for encrypt | `/code/keys/id_rsa.pub` | RSA public key path (inside container) |
+| `MEDANON_RSA_PRIVATE_KEY` | for decrypt | `/code/keys/id_rsa` | RSA private key path (inside container) |
+| `MEDANON_MAX_BODY_BYTES` | no | `10485760` | Max request body (bytes). Default: 10 MB |
+| `MEDANON_API_KEY` | no | — | Legacy shared API key. If set, requires `X-API-Key` header |
 | `MEDANON_CORS_ORIGINS` | no | — | Comma-separated CORS origins |
-| `MEDANON_API_KEY` | no | — | Shared API key. If set, all endpoints require `X-API-Key` header |
 | `MEDANON_READY_TIMEOUT` | no | `5.0` | Readiness probe timeout (seconds) |
-| `LOG_LEVEL` | no | `INFO` | `DEBUG`, `INFO`, `WARNING`, or `ERROR` |
-| `ANONYMIZER_PORT` | no | `8000` | Host port for the anonymizer |
+| `LOG_LEVEL` | no | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR` |
+| `ANONYMIZER_PORT` | no | `8000` | Host port |
 
-### FHIR server
+### Anonymizer: Features
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `FHIR_SOURCE_URL` | for fetch ops | `http://hapi-fhir:8080/fhir` | FHIR server base URL for fetch operations |
-| `FHIR_SOURCE_TOKEN` | no | — | Bearer token for source FHIR server |
+| `MEDANON_MANIFEST_ENABLED` | no | `false` | Attach transformation manifest to `meta.tag` (GDPR accountability) |
+| `MEDANON_NLP_MODEL` | no | — | Expected NLP model (e.g. `en_core_web_lg`). Triggers NLP readiness check |
+| `MEDANON_RATE_LIMIT_ENABLED` | no | `true` | Enable rate limiting |
+| `MEDANON_HASH_ALLOW_PLAIN` | no | — | Set to `true` to allow plain SHA3-256 without `MEDANON_HASH_KEY` (dev only; suppresses the startup warning) |
+
+### Anonymizer: Security and Audit
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `MEDANON_KEY_ALLOWED_DIRS` | no | `/code/keys` | Colon-separated allowed RSA key directories |
+| `MEDANON_AUDIT_LOG_FILE` | no | `/output/audit.log` | Audit log file path |
+| `MEDANON_AUDIT_LOG_MAX_BYTES` | no | `10485760` | Audit log rotation size (10 MB) |
+| `MEDANON_AUDIT_LOG_BACKUP_COUNT` | no | `5` | Number of rotated audit log backups |
+
+### FHIR Server
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `FHIR_SOURCE_URL` | for fetch ops | `http://hapi-fhir:8080/fhir` | Source FHIR server (Docker-internal) |
+| `FHIR_SOURCE_TOKEN` | no | — | Bearer token for source FHIR |
 | `FHIR_TARGET_URL` | no | — | Target FHIR server for upload operations |
-| `FHIR_TARGET_TOKEN` | no | — | Bearer token for target FHIR server |
-| `HAPI_SERVER_ADDRESS` | no | `http://hapi-fhir:8080/fhir` | Public address used in HAPI Bundle links |
-| `HAPI_PORT` | no | `8081` | Host port for HAPI FHIR |
+| `FHIR_TARGET_TOKEN` | no | — | Bearer token for target FHIR |
+| `HAPI_SERVER_ADDRESS` | no | `http://hapi-fhir:8080/fhir` | Public base URL for HAPI Bundle links |
+| `HAPI_PORT` | no | `8081` | Host port for HAPI (dev mode only) |
+| `FHIR_RETRY_COUNT` | no | `2` | Retries on transient errors |
+| `FHIR_RETRY_BACKOFF_SEC` | no | `0.3` | Initial backoff (exponential) |
+| `FHIR_PAGE_SIZE` | no | `200` | Page size for paginated FHIR fetches; `0` = let server decide |
+| `FHIR_MAX_PAGES` | no | `1000` | Safety limit on total pages fetched per operation |
+| `FHIR_BULK_POLL_INTERVAL_SEC` | no | `5` | Polling interval (seconds) for async `$export` status checks |
+| `FHIR_BULK_POLL_TIMEOUT_SEC` | no | `3600` | Maximum wait time (seconds) for a bulk export operation to complete |
 
-### gPAS
+### gPAS: Core
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `GPAS_URL` | for gPAS | — | gPAS TTP-FHIR gateway URL, e.g. `http://gpas:8080/ttp-fhir/fhir/gpas` |
-| `GPAS_DOMAIN` | for gPAS | — | Pseudonymization domain, e.g. `TESTING` |
-| `GPAS_OPERATION` | no | `pseudonymizeAllowCreate` | `pseudonymize`, `pseudonymizeAllowCreate`, or `dePseudonymize` |
-| `GPAS_TIMEOUT_SEC` | no | `30` | HTTP timeout for gPAS calls |
-| `GPAS_BASIC_USER` | for gPAS auth | — | gRAS username, e.g. `user@ths` |
-| `GPAS_BASIC_PASS` | for gPAS auth | — | gRAS password. Generate: `openssl rand -base64 24` |
+| `GPAS_URL` | for gPAS | — | gPAS TTP-FHIR gateway URL |
+| `GPAS_DOMAIN` | for gPAS | — | Pseudonymization domain (e.g. `TESTING`) |
+| `GPAS_OPERATION` | no | `pseudonymizeAllowCreate` | gPAS operation |
+| `GPAS_TIMEOUT_SEC` | no | `30` | HTTP timeout |
+| `GPAS_BASIC_USER` | for gPAS auth | — | gRAS username (e.g. `user@ths`) |
+| `GPAS_BASIC_PASS` | for gPAS auth | — | gRAS password |
 | `GPAS_TOKEN` | no | — | Bearer token (takes precedence over basic auth) |
-| `GPAS_ADMIN_URL` | no | — | gPAS admin URL (for domain management) |
-| `GPAS_CACHE_ENABLED` | no | `true` | Enable LRU pseudonym cache |
-| `GPAS_RETRY_COUNT` | no | `2` | Number of retries on gPAS failure |
-| `GPAS_RETRY_BACKOFF_SEC` | no | `0.2` | Initial backoff (seconds) for retry |
-| `GPAS_PORT` | no | `8080` | Host port for gPAS |
-| `GPAS_MYSQL_ROOT_PASSWORD` | yes | — | MySQL root password. Generate: `openssl rand -base64 24` |
+| `GPAS_ADMIN_URL` | no | — | Override gPAS admin URL for domain discovery (defaults to derived from `GPAS_URL`) |
+| `GPAS_MYSQL_ROOT_PASSWORD` | yes | — | MySQL root password |
 
-### Streamlit UI
+### gPAS: Performance
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `UI_PORT` | no | `8501` | Host port for the Streamlit UI |
+| `GPAS_CACHE_ENABLED` | no | `true` | Enable LRU pseudonym cache |
+| `GPAS_RETRY_COUNT` | no | `2` | Retries on failure |
+| `GPAS_RETRY_BACKOFF_SEC` | no | `0.2` | Initial backoff |
+
+### gPAS: Circuit Breaker
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `GPAS_CB_FAILURE_THRESHOLD` | no | `5` | Failures before circuit opens |
+| `GPAS_CB_RECOVERY_TIMEOUT_SEC` | no | `30` | Recovery probe timeout |
+| `GPAS_CB_WINDOW_SEC` | no | `60` | Failure counting window |
+
+### UI
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `UI_PORT` | no | `8501` | Host port for Web UI |
 
 ---
 
 ## 4. Secrets Management
 
-### Generating secrets
+### Generating Secrets
 
 ```bash
-# HMAC hash key
+# HMAC hash key (64 hex chars)
 openssl rand -hex 32
 
-# MySQL / gRAS passwords
+# Passwords (24-char base64)
 openssl rand -base64 24
 
-# RSA keypair for encrypt/decrypt action
+# Cookie secrets (32-byte base64)
+openssl rand -base64 32
+
+# RSA keypair (4096-bit)
 openssl genrsa -out services/anonymizer/keys/id_rsa 4096
 openssl rsa -in services/anonymizer/keys/id_rsa -pubout -out services/anonymizer/keys/id_rsa.pub
 ```
 
-### What must never be committed
+### Files That Must Never Be Committed
 
 The `.gitignore` already excludes:
-- `.env` — all secrets
-- `services/anonymizer/keys/id_rsa` — RSA private key
-- `output/` — de-identified data
+- `.env` (all secrets)
+- `services/anonymizer/keys/id_rsa` (RSA private key)
+- `output/` (de-identified data and audit logs)
 
-Never commit any file containing real passwords, hash keys, or private keys.
+### Secret Rotation
 
-### Rotating secrets
-
-| Secret | Rotation effect |
+| Secret | Rotation Effect |
 |---|---|
-| `MEDANON_HASH_KEY` | All existing cryptohash pseudonyms become invalid (different output). Rotate intentionally. |
-| `MEDANON_RSA_PRIVATE_KEY` | Old encrypted values become unreadable. Keep the old key if you need to decrypt historical data. |
-| `GPAS_BASIC_PASS` | Update both `.env` and the gRAS MySQL record: `CALL changePassword('user', 'new-pass');` |
-| `GPAS_MYSQL_ROOT_PASSWORD` | Requires re-creating the MySQL volume (`docker compose down -v`) to take effect. |
+| `MEDANON_HASH_KEY` | All cryptohash pseudonyms change. Rotate intentionally. |
+| `MEDANON_RSA_PRIVATE_KEY` | Old encrypted values become unreadable. Keep old key for historical data. |
+| `GPAS_BASIC_PASS` | Update `.env` + MySQL: `CALL changePassword('user','new-pass');` |
+| `GPAS_MYSQL_ROOT_PASSWORD` | Requires `docker compose down -v` (destroys data). Back up first. |
 
 ---
 
 ## 5. Kubernetes (Helm) Deployment
 
-The Helm umbrella chart at `helm/medanon/` deploys the anonymizer, HAPI FHIR, and gPAS as Kubernetes workloads. The Streamlit UI is not yet included in the Helm chart — deploy it separately or add a sub-chart.
+The umbrella chart at `helm/medanon/` deploys the anonymizer, HAPI FHIR, gPAS, and the React UI.
 
-### Step 1 — Build and push images
+### Step 1: Build and Push Images
 
 ```bash
 # Anonymizer
 docker build --target prod \
-  -t registry.example.com/medanon:latest \
+  -t registry.example.com/medanon:1.0.0 \
   services/anonymizer/
-docker push registry.example.com/medanon:latest
+docker push registry.example.com/medanon:1.0.0
 
-# gPAS (bundles WAR/EAR into image)
-make helm-build-gpas REGISTRY=registry.example.com
-docker push registry.example.com/medanon-gpas:latest
+# UI
+docker build -t registry.example.com/medanon-ui:1.0.0 client/
+docker push registry.example.com/medanon-ui:1.0.0
 ```
 
-### Step 2 — Validate the chart (no cluster needed)
+### Step 2: Validate
 
 ```bash
 make helm-lint        # yamllint + Helm schema validation
-make helm-template    # print all rendered Kubernetes YAML
+make helm-template    # render all Kubernetes YAML (dry run)
 ```
 
-### Step 3 — Install
+### Step 3: Install
+
+```bash
+helm upgrade --install medanon ./helm/medanon \
+  --set global.registry=registry.example.com \
+  --set anonymizer.env.GPAS_URL=http://medanon-gpas:8080/ttp-fhir/fhir/gpas \
+  --set anonymizer.env.FHIR_SOURCE_URL=http://medanon-fhir-server:8080/fhir \
+  --set anonymizer.secrets.MEDANON_HASH_KEY=<hex-key> \
+  --set ui.anonymizerServiceName=medanon-anonymizer \
+  --set ui.fhirServerServiceName=medanon-fhir-server \
+  --set gpas.secrets.WF_ADMIN_PASS=<password> \
+  --set gpas.db.secrets.rootPassword=<password> \
+  --namespace medanon --create-namespace
+```
+
+Or use the Makefile:
 
 ```bash
 make helm-install \
   REGISTRY=registry.example.com \
-  GPAS_URL=http://medanon-gpas:8080/ttp-fhir/fhir/gpas \
-  FHIR_SOURCE_URL=http://medanon-fhir-server:8080/fhir
+  GPAS_URL=http://medanon-gpas:8080/ttp-fhir/fhir/gpas
 ```
 
-Or directly with Helm for full control:
-
-```bash
-helm upgrade --install medanon ./helm/medanon \
-  --set registry=registry.example.com \
-  --set anonymizer.env.GPAS_URL=http://medanon-gpas:8080/ttp-fhir/fhir/gpas \
-  --set anonymizer.env.MEDANON_HASH_KEY=<hex-key> \
-  --set gpas.env.GPAS_BASIC_PASS=<password> \
-  --namespace medanon \
-  --create-namespace
-```
-
-### Step 4 — Verify
+### Step 4: Verify
 
 ```bash
 kubectl get pods -n medanon
 kubectl get svc -n medanon
 
-# Port-forward to test locally
+# Port-forward to test
 kubectl port-forward svc/medanon-anonymizer 8000:8000 -n medanon
 curl http://localhost:8000/health
 ```
 
-### Chart structure
+### Chart Structure
 
 ```
 helm/
-├── medanon/              Umbrella chart
+├── medanon/                     Umbrella chart
 │   ├── Chart.yaml
-│   ├── values.yaml       Global defaults (registry, imagePullPolicy, ingress)
+│   ├── values.yaml              Global defaults (registry, ingress, UI proxy)
 │   └── templates/
-│       └── ingress.yaml  Optional ingress (set ingress.enabled: true)
+│       └── ingress.yaml         Optional ingress (set ingress.enabled: true)
 └── charts/
-    ├── anonymizer/       Anonymizer sub-chart (Deployment, Service, ConfigMap, Secret)
-    ├── fhir-server/      HAPI FHIR sub-chart (Deployment, Service, ConfigMap)
-    └── gpas/             gPAS sub-chart (Deployment, StatefulSet for MySQL, Services, Secrets)
+    ├── anonymizer/              Deployment, Service, ConfigMap, Secret
+    ├── fhir-server/             Deployment, Service, ConfigMap
+    ├── gpas/                    Deployment, StatefulSet (MySQL), Services, Secrets
+    └── ui/                      Deployment, Service, ConfigMap (nginx), NetworkPolicy
 ```
 
-### Kubernetes-specific notes
+### Kubernetes-Specific Notes
 
-- **gPAS startup**: An initContainer (`busybox` + `nc -z`) waits for MySQL TCP before WildFly starts — mirrors Docker `depends_on: condition: service_healthy`.
-- **gPAS readOnly filesystem**: Intentionally **not** enabled for gPAS/WildFly. WildFly writes to `standalone/log`, `standalone/tmp`, `/tmp` at runtime. Enabling `readOnlyRootFilesystem` requires per-image testing and emptyDir volume mounts.
-- **Secret checksums**: Deployment annotations include `checksum/secret: sha256(secret.yaml)` — pods automatically roll when secrets change.
-- **Network policies**: Each sub-chart ships a `NetworkPolicy` restricting ingress to only the expected callers.
-- **Non-root containers**: Anonymizer runs as UID 1000 (`appuser`). gPAS runs as UID 1000 (`runAsNonRoot: true`).
-- **MySQL persistence**: gPAS MySQL uses a `StatefulSet` with a `PersistentVolumeClaim`. Data survives pod restarts. To wipe: `kubectl delete pvc -l app.kubernetes.io/component=gpas-db -n medanon`.
+- **gPAS startup:** initContainer waits for MySQL TCP before WildFly starts.
+- **Secret checksums:** Deployment annotations include `checksum/secret` so pods roll when secrets change.
+- **Network policies:** Each sub-chart restricts ingress to expected callers only.
+- **Non-root:** Anonymizer runs as UID 1000. gPAS runs with `runAsNonRoot: true`.
+- **MySQL persistence:** StatefulSet with PVC. Data survives pod restarts. To wipe: `kubectl delete pvc -l app.kubernetes.io/component=gpas-db -n medanon`.
+- **Ingress paths:** `/` -> React UI, `/api` -> anonymizer (direct), `/fhir` -> HAPI FHIR, `/gpas-web` and `/ttp-fhir` -> gPAS.
+- **Prometheus:** All pods have scrape annotations (`prometheus.io/scrape: "true"`).
+
+### Optional Components
+
+Enable in `values.yaml`:
+
+```yaml
+ingress:
+  enabled: true
+  host: medanon.example.com
+  tls:
+    enabled: true
+    secretName: medanon-tls
+```
+
+### K3s Deployment (Single-Node / Edge)
+
+K3s is a lightweight Kubernetes distribution — no changes to the Helm charts are needed. Three
+environment differences require a values override file, provided at `helm/k3s-values.yaml`.
+
+#### K3s vs. full Kubernetes: what differs
+
+| Topic | Full K8s | K3s |
+|---|---|---|
+| Ingress controller | nginx-ingress (you install) | Traefik (built-in) |
+| Default StorageClass | Cloud PV / manual | `local-path` (built-in) |
+| Image source | External registry | Local import via `k3s ctr` |
+| NetworkPolicies | Enforced (Calico/Cilium) | Not enforced by default (Flannel) |
+
+#### Step 1: Install K3s
+
+```bash
+# Minimal single-node install (Traefik + local-path included by default)
+curl -sfL https://get.k3s.io | sh -
+
+# Verify
+sudo k3s kubectl get nodes
+```
+
+To also enforce NetworkPolicies, install with Cilium instead of Flannel:
+
+```bash
+curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="--flannel-backend=none --disable-network-policy" sh -
+# Then follow Cilium quick-install: https://docs.cilium.io/en/stable/gettingstarted/k3s/
+```
+
+#### Step 2: Install Helm (if not already installed)
+
+```bash
+curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+```
+
+Configure kubectl to use the K3s kubeconfig:
+
+```bash
+export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+# Or copy it to ~/.kube/config for permanent access
+sudo cp /etc/rancher/k3s/k3s.yaml ~/.kube/config
+sudo chown $USER ~/.kube/config
+```
+
+#### Step 3: Build and Import Images
+
+K3s uses its own containerd store, separate from Docker. Import built images directly:
+
+```bash
+# Build the anonymizer image
+make build
+
+# Import into k3s containerd (run as root or with sudo)
+docker save medanon:latest      | sudo k3s ctr images import -
+docker save medanon-ui:latest   | sudo k3s ctr images import -
+
+# Verify
+sudo k3s ctr images ls | grep medanon
+```
+
+Upstream images (HAPI FHIR, gPAS, MySQL, busybox) are pulled automatically from Docker Hub
+because `imagePullPolicy: Never` only applies to images with `global.registry` prefix in the
+Helm values — those entries are left with an empty registry and will still pull normally.
+
+> **Tip:** For a team setup, run a local registry (e.g. `registry:2` container) and push there.
+> Set `global.registry: localhost:5000` in `k3s-values.yaml` and remove `imagePullPolicy: Never`.
+
+#### Step 4: Generate Secrets
+
+```bash
+export HASH_KEY=$(openssl rand -hex 32)
+export WF_PASS=$(openssl rand -base64 24)
+export MYSQL_PASS=$(openssl rand -base64 24)
+```
+
+#### Step 5: Deploy
+
+```bash
+helm upgrade --install medanon ./helm/medanon \
+  -f helm/k3s-values.yaml \
+  --set anonymizer.secrets.MEDANON_HASH_KEY="$HASH_KEY" \
+  --set gpas.secrets.WF_ADMIN_PASS="$WF_PASS" \
+  --set gpas.db.secrets.rootPassword="$MYSQL_PASS" \
+  --namespace medanon --create-namespace
+```
+
+#### Step 6: Add Local DNS Entry
+
+For local access via the `medanon.local` hostname defined in `k3s-values.yaml`:
+
+```bash
+# Get the node IP
+NODE_IP=$(sudo k3s kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
+
+# Add to /etc/hosts
+echo "$NODE_IP  medanon.local" | sudo tee -a /etc/hosts
+```
+
+#### Step 7: Verify
+
+```bash
+sudo k3s kubectl get pods -n medanon     # all pods Running
+sudo k3s kubectl get ingress -n medanon  # ADDRESS populated by Traefik
+
+curl http://medanon.local/health         # {"status":"ok"}
+curl http://medanon.local/fhir/metadata  # HAPI FHIR CapabilityStatement
+```
+
+Port-forward if Traefik is not yet routing:
+
+```bash
+sudo k3s kubectl port-forward svc/medanon-anonymizer 8000:8000 -n medanon
+curl http://localhost:8000/health
+```
+
+#### NetworkPolicy Note
+
+K3s uses Flannel by default, which does **not** enforce `NetworkPolicy` resources. The chart
+applies them without error, but they have no effect. This means all pods can communicate freely
+within the cluster. For production or regulated environments, switch to Cilium (see Step 1).
 
 ---
 
 ## 6. Resource Requirements
 
-Measured at idle after full startup. Scale up for production workloads.
+Measured at idle after full startup:
 
-| Container | CPU (idle) | CPU (limit) | RAM (idle) | RAM (limit) |
+| Service | RAM (idle) | RAM (limit) | CPU (idle) | CPU (limit) |
 |---|---|---|---|---|
-| `medanon-ui` | ~0.05 | 0.5 | ~150 MB | 512 MB |
-| `medanon` | ~0.05 | 1.0 | ~300 MB | 1 GB |
-| `hapi-fhir` | ~0.1 | 2.0 | ~1.2 GB | 3 GB |
-| `gpas-wildfly` | ~0.1 | 2.0 | ~1.5 GB | 6 GB |
-| `gpas-mysql` | ~0.1 | 1.0 | ~0.5 GB | 4 GB |
-| **Total** | **~0.5** | **6.5** | **~3.7 GB** | **14.5 GB** |
+| `ui` | ~15 MB | 128 MB | ~0.01 | 0.5 |
+| `anonymizer` | ~300 MB | 2 GB | ~0.05 | 1.0 |
+| `fhir-server` | ~1.2 GB | 3 GB | ~0.1 | 2.0 |
+| `gpas` | ~1.5 GB | 6 GB | ~0.1 | 2.0 |
+| `gpas-db` | ~500 MB | 4 GB | ~0.1 | 1.0 |
+| **Total** | **~3.65 GB** | **~15.5 GB** | **~0.4** | **6.5** |
 
-Minimum host RAM for the full stack: **8 GB** (comfortable: 12 GB+).
+**Minimum host RAM:** 8 GB. **Recommended:** 12 GB+.
+
+If NLP (spaCy `en_core_web_lg`) is loaded in the anonymizer, add ~800 MB to the anonymizer idle figure.
 
 ---
 
 ## 7. Production Hardening
 
-### Network
+### TLS Termination
 
-- All Docker Compose host port bindings are already on `127.0.0.1` (loopback only).
-- For remote access, place a **reverse proxy** (nginx, Caddy, Traefik) in front and terminate TLS there.
-- Expose only port 8501 (UI) and optionally 8000 (API) through the proxy. Do not expose 8080 (gPAS) or 8081 (HAPI) externally.
-
-Example nginx snippet:
+All Docker Compose host ports bind to `127.0.0.1` (loopback only). For remote access, place a reverse proxy in front:
 
 ```nginx
 server {
@@ -329,6 +499,7 @@ server {
     ssl_certificate     /etc/ssl/certs/medanon.crt;
     ssl_certificate_key /etc/ssl/private/medanon.key;
 
+    # Web UI
     location / {
         proxy_pass http://127.0.0.1:8501;
         proxy_set_header Host $host;
@@ -338,31 +509,40 @@ server {
         proxy_set_header Connection "upgrade";
     }
 
+    # Anonymizer API
     location /api/ {
         proxy_pass http://127.0.0.1:8000/;
-        proxy_set_header X-API-Key $http_x_api_key;
+        proxy_set_header X-Request-ID $request_id;
     }
 }
 ```
 
-### Authentication layers
+Expose only ports 8501 (UI) and 8000 (API) through the proxy. Never expose 8080 (gPAS) or HAPI FHIR externally.
 
-| Layer | Mechanism | Status |
+### Authentication
+
+| Layer | Mechanism |
+|---|---|
+| API | Optional API key (`X-API-Key`) | Configurable |
+| UI | Inherits API key from env | Automatic |
+| gPAS API | gRAS basic auth |
+
+For production:
+1. Set `MEDANON_API_KEY` for authenticated access
+2. Change all default passwords (gPAS, MySQL)
+
+### GDPR Compliance Features
+
+| Feature | Variable | Purpose |
 |---|---|---|
-| Streamlit UI | `streamlit-authenticator` (planned) | Future |
-| Anonymizer API | `MEDANON_API_KEY` → `X-API-Key` header | Configurable |
-| gPAS FHIR API | gRAS basic auth | Enabled by default |
-| HAPI FHIR | Spring Security (add to `application.yaml`) | Not configured |
+| Transformation manifest | `MEDANON_MANIFEST_ENABLED=true` | GDPR Art. 30: track what transformations were applied |
+| Audit logging | `MEDANON_AUDIT_LOG_*` | Who accessed what, when, with which auth method |
+| Key path validation | `MEDANON_KEY_ALLOWED_DIRS` | Prevent path traversal to unauthorized key files |
+| Circuit breaker | `GPAS_CB_*` | Prevent cascade failures |
 
-Set `MEDANON_API_KEY` to a random 32-byte value for any non-local deployment:
+### HAPI FHIR Persistence
 
-```bash
-export MEDANON_API_KEY=$(openssl rand -hex 16)
-```
-
-### HAPI FHIR persistence
-
-The default H2 in-memory database **loses all data on container restart**. For production, switch to PostgreSQL:
+The default H2 in-memory database loses all data on restart. For production, switch to PostgreSQL:
 
 ```yaml
 # services/fhir-server/config/application.yaml
@@ -374,61 +554,32 @@ spring:
     driverClassName: org.postgresql.Driver
 ```
 
-Add the PostgreSQL container or external DB to `docker-compose.yml` and set `HAPI_DB_PASS` in `.env`.
+### Logging
 
-### gPAS password rotation
-
-Change the default `ttp-tools` password before any deployment that is reachable beyond localhost:
-
-1. Update `GPAS_BASIC_PASS` in `.env`.
-2. Connect to MySQL and run:
-   ```sql
-   USE gras;
-   CALL changePassword('user', 'new-strong-password');
-   CALL changePassword('admin', 'another-strong-password');
-   ```
-3. Restart the anonymizer to pick up the new credential:
-   ```bash
-   docker compose restart anonymizer
-   ```
-
-### Log level
-
-Keep `LOG_LEVEL=INFO` in production. `DEBUG` mode logs full FHIR resource content which may expose PHI.
+Set `LOG_LEVEL=INFO` in production. `DEBUG` mode may log FHIR resource content containing PHI.
 
 ---
 
 ## 8. Upgrading
 
-### Anonymizer / UI code changes
+### Code Changes (Anonymizer / UI)
 
 ```bash
 git pull
-make build      # rebuild affected images
-make up         # recreate containers with new images (zero-downtime on single-node if replicas > 1)
+make build    # rebuild images
+make up       # recreate containers with new images
 ```
 
-### gPAS
+### gPAS Version Upgrade
 
-gPAS upgrades require:
-1. Update `mosaicgreifswald/wildfly` tag in `docker-compose.yml`.
-2. Update WAR/EAR files in `services/gpas/deployments/`.
-3. Re-run `make build` and `make up`.
-
-> Back up the `gpas-db-data` Docker volume before any gPAS upgrade — pseudonym mappings are stored there.
-
-```bash
-# Backup MySQL volume
-docker run --rm \
-  -v gpas-db-data:/data \
-  -v $(pwd)/backup:/backup \
-  busybox tar czf /backup/gpas-db-$(date +%Y%m%d).tar.gz -C /data .
-```
+1. Back up MySQL volume (see RUNBOOK.md)
+2. Update the WildFly image tag in `docker-compose.yml`
+3. Update WAR/EAR files in `services/gpas/deployments/`
+4. Run `make build && make up`
 
 ### Helm (Kubernetes)
 
 ```bash
-git pull
 docker build --target prod -t registry.example.com/medanon:<new-tag> services/anonymizer/
 docker push registry.example.com/medanon:<new-tag>
 
@@ -441,72 +592,64 @@ helm upgrade medanon ./helm/medanon \
 
 ## 9. Health Verification
 
-### Quick check (all services)
+### All Services at Once
+
+```bash
+docker compose ps    # health status for all containers
+```
+
+### Individual Checks
 
 ```bash
 # Anonymizer
 curl -s http://localhost:8000/health | python3 -m json.tool
-
-# Anonymizer readiness (includes gPAS + FHIR connectivity)
 curl -s http://localhost:8000/ready | python3 -m json.tool
 
 # HAPI FHIR
-curl -s http://localhost:8081/fhir/metadata | python3 -m json.tool | head -20
+curl -s http://localhost:8081/fhir/metadata | head -5
 
 # gPAS
-curl -s http://localhost:8080/ttp-fhir/fhir/gpas/metadata | python3 -m json.tool | head -10
+curl -s http://localhost:8080/ttp-fhir/fhir/gpas/metadata | head -5
 
-# Streamlit UI
-curl -s http://localhost:8501/_stcore/health
+# Web UI
+curl -s http://localhost:8501/healthz
 ```
 
-### Docker healthcheck status
+### End-to-End Smoke Test
 
 ```bash
-docker compose ps      # shows health status for each container
-docker inspect --format='{{.State.Health.Status}}' medanon
-docker inspect --format='{{.State.Health.Status}}' hapi-fhir
-docker inspect --format='{{.State.Health.Status}}' gpas-wildfly
-docker inspect --format='{{.State.Health.Status}}' gpas-mysql
-```
-
-### End-to-end smoke test
-
-```bash
-# 1. De-identify a sample patient
+# De-identify a sample patient
 curl -s -X POST http://localhost:8000/process \
   -H "Content-Type: application/json" \
   -d '{"resourceType":"Patient","id":"smoke-001","name":[{"family":"Test"}],"birthDate":"1990-01-01"}' \
   | python3 -m json.tool
 
-# Expected: Patient returned, id replaced with pseudonym, name absent/redacted, birthDate generalized
-
-# 2. Confirm the pseudonym was stored in gPAS
-curl -s http://localhost:8080/gpas-web/   # login and check domain entries
+# Expected: id replaced, name absent/redacted, birthDate generalized to year
 ```
 
 ---
 
 ## 10. Uninstalling
 
-### Docker Compose — keep data
+### Docker Compose: Keep Data
 
 ```bash
-make down          # stops and removes containers; volumes are preserved
+make down    # stops containers; Docker volumes preserved
 ```
 
-### Docker Compose — remove everything including data
+### Docker Compose: Remove Everything
 
 ```bash
-docker compose down -v   # removes containers AND named volumes (gpas-db-data, hapi-data)
+docker compose down -v    # removes containers AND named volumes (gpas-db-data, hapi-data)
 ```
 
 ### Helm (Kubernetes)
 
 ```bash
 helm uninstall medanon --namespace medanon
-# PVCs are NOT deleted automatically — check before wiping:
+
+# PVCs are NOT deleted automatically:
 kubectl get pvc -n medanon
-kubectl delete pvc -n medanon --all   # only if you want to lose all data
+kubectl delete pvc -n medanon --all    # only if you want to lose all data
 kubectl delete namespace medanon
 ```

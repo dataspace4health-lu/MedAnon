@@ -69,6 +69,11 @@ env:
   FHIR_TARGET_URL: ""
   FHIR_TARGET_TOKEN: ""
 
+  # Maximum concurrent job workers per anonymizer replica (default 3).
+  # When Redis is enabled, each replica runs this many workers picking jobs
+  # from the shared BLPOP queue. Raise for compute-heavy deployments.
+  MEDANON_JOB_WORKERS: "3"
+
 # ─── Secrets ──────────────────────────────────────────────────────────────────
 secrets:
   # HMAC-SHA3-256 key for the cryptohash action.
@@ -94,3 +99,23 @@ resources:
   limits:
     memory: "2Gi"
     cpu: "1000m"
+
+# ─── Redis sidecar (opt-in — shared cache + job queue) ────────────────────────
+# When enabled, a Redis sidecar is added to the anonymizer Pod and
+# MEDANON_REDIS_URL is injected pointing to localhost:6379. This activates:
+#   1. L2 gPAS pseudonym cache shared across all replicas.
+#   2. Scalable job queue (BLPOP event-driven worker replaces SQLite polling).
+#
+# The Redis sidecar is NOT a persistent store — data loss on Pod restart is expected.
+# For production HA deployments consider a standalone Redis cluster instead.
+redis:
+  enabled: false
+  image: redis:7-alpine
+  ttlSeconds: 3600
+  resources:
+    requests:
+      memory: "32Mi"
+      cpu: "50m"
+    limits:
+      memory: "128Mi"
+      cpu: "200m"

@@ -14,6 +14,7 @@ MedAnon, when to use each one, and how to create custom profiles.
 | **GDPR** | `config_gdpr_eu.yaml` | SHA3-256 HMAC | Redacted | Redacted | Regex + NLP | No | GDPR Art. 4(5), 25, 89 |
 | **HIPAA Safe Harbor** | `config_hipaa_safe_harbor.yaml` | Redacted | Year only | State + 3-digit zip | Regex + NLP | No | 45 CFR § 164.514(b) |
 | **Research Pseudonymous** | `config_research_pseudonymous.yaml` | SHA3-256 hash | Year-month | 3-digit zip prefix | Regex + NLP | No | IRB / Art. 89 GDPR |
+| **Structure Preserving** | `config_structure_preserving.yaml` | gPAS pseudonym (reversible) | Year only (birthDate) | Preserved | Regex + NLP | Yes | Structure-first / downstream consumers |
 
 ---
 
@@ -114,6 +115,19 @@ python3 tools/analyze_results.py \
   --config config/config_research_pseudonymous.yaml \
   --report-md evidence_report.md
 ```
+
+---
+
+### `config_structure_preserving.yaml` — Structure Preserving
+
+Use this profile when:
+- Downstream consumers require a complete, valid FHIR structure (no missing fields)
+- IDs must be pseudonymized for linkage but clinical data must remain intact
+- Feeding de-identified FHIR resources into systems that validate structure (e.g. validators, FHIR servers)
+
+**Key behaviour:** Fields are **never removed** — names, addresses, and telecom values are replaced with `[REDACTED]` via `substitute` (field stays present). IDs are pseudonymized via gPAS with `rewrite_references: true` to maintain referential integrity across bundles. Only `birthDate` is generalized (year-only). All clinical data (codes, values, observations, conditions) is untouched.
+
+**Requires gPAS.** Not suitable when gPAS is unavailable — use `config_research_pseudonymous.yaml` instead.
 
 ---
 

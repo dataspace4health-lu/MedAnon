@@ -5,7 +5,7 @@
 #   helm dependency update helm/medanon
 #   helm upgrade --install medanon helm/medanon -f my-values.yaml
 #
-# Keys under anonymizer.*, fhir-server.*, and gpas.* override the defaults
+# Keys under anonymizer.*, fhir-server.*, gpas.*, and ui.* override the defaults
 # in each sub-chart's own values.yaml.  Only list values that differ from
 # the sub-chart defaults.
 #
@@ -37,6 +37,13 @@ anonymizer:
     FHIR_SOURCE_TOKEN: ""
     FHIR_TARGET_URL: ""
     FHIR_TARGET_TOKEN: ""
+    # Opt-in microservice URLs. Leave empty to run analytics/NLP in-process.
+    # When analytics sub-chart is enabled, set to http://<release>-analytics:8100
+    ANALYTICS_SERVICE_URL: ""
+    # When NLP sub-chart is deployed (future), set to http://<release>-nlp:8200
+    NLP_SERVICE_URL: ""
+    # Redis URL for cross-replica gPAS cache. Leave empty for per-process LRU.
+    MEDANON_REDIS_URL: ""
 
   secrets:
     MEDANON_HASH_KEY: ""
@@ -63,13 +70,33 @@ gpas:
       # REQUIRED: set via --set or a sealed secret. Generate: openssl rand -base64 24
       rootPassword: ""
 
+# ─── Analytics microservice overrides (Phase 3 — opt-in) ─────────────────────
+# Deploy the analytics sub-chart by setting analytics.enabled=true.
+# When deployed, also set anonymizer.env.ANALYTICS_SERVICE_URL to
+# http://<release>-analytics:8100 so the anonymizer proxies to it.
+analytics:
+  enabled: false
+  env:
+    # Comma-separated CORS origins exposed by the analytics service.
+    MEDANON_CORS_ORIGINS: ""
+
+# ─── UI overrides ────────────────────────────────────────────────────────────
+# React SPA served via nginx. The nginx config proxies /api/ and /fhir/
+# to the anonymizer and fhir-server services using in-cluster DNS names.
+ui:
+  # In-cluster service names for nginx upstream proxy.
+  # Set to "<release>-anonymizer" and "<release>-fhir-server".
+  anonymizerServiceName: ""
+  fhirServerServiceName: ""
+
 # ─── Ingress (optional) ───────────────────────────────────────────────────────
 # Routes external traffic to the correct sub-chart service.
 # Service names are computed as: <release>-<chart-name>
-#   /           → <release>-anonymizer   :8000
-#   /fhir       → <release>-fhir-server  :8080
-#   /gpas-web   → <release>-gpas         :8080
-#   /ttp-fhir   → <release>-gpas         :8080
+#   /           → <release>-ui             :8501  (React SPA + nginx proxy)
+#   /api        → <release>-anonymizer     :8000  (direct API access)
+#   /fhir       → <release>-fhir-server    :8080
+#   /gpas-web   → <release>-gpas           :8080
+#   /ttp-fhir   → <release>-gpas           :8080
 #
 # NOTE: fullnameOverride is not supported for sub-charts when ingress is enabled,
 # as service names are derived from the release name.
@@ -85,3 +112,5 @@ ingress:
   tls:
     enabled: false
     secretName: "medanon-tls"
+
+

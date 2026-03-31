@@ -1,0 +1,30 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# MedAnon Analytics sub-chart — default values
+#
+# Enable from the umbrella chart: --set analytics.enabled=true
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Master switch — must be true for this chart to be deployed.
+enabled: false
+
+global:
+  registry: ""
+  imagePullPolicy: ""
+  imagePullSecrets: []
+
+registry: ""
+imagePullPolicy: IfNotPresent
+imagePullSecrets: []
+
+image: medanon-analytics
+tag: latest
+replicas: 1
+port: 8100
+
+resources:
+  requests:
+    memory: "64Mi"
+    cpu: "50m"
+  limits:
+    memory: "256Mi"
+    cpu: "500m"

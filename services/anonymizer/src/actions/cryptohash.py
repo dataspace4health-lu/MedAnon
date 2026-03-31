@@ -48,6 +48,19 @@ def _compute_hash(msg, params):
     if secret_key:
         return HMAC.new(str(secret_key).encode(), msg, digestmod=digestmod).hexdigest()
 
+    # Plain hashing without HMAC is dangerous — must be explicitly allowed
+    allow_plain = os.environ.get("MEDANON_HASH_ALLOW_PLAIN", "").strip().lower() in (
+        "1", "true", "yes",
+    )
+    if not allow_plain:
+        raise ValueError(
+            "No HMAC key configured (MEDANON_HASH_KEY is unset) and "
+            "MEDANON_HASH_ALLOW_PLAIN is not set to 'true'. "
+            "Plain hashing is not permitted in production. "
+            "Set MEDANON_HASH_KEY for HMAC-based pseudonymization, or set "
+            "MEDANON_HASH_ALLOW_PLAIN=true for local testing."
+        )
+
     global _warned_no_key
     if not _warned_no_key:
         _hash_log.warning(
@@ -66,7 +79,6 @@ def _hash_nodes(node, key, value, params):
         for idx in range(len(node)):
             _hash_nodes(node[idx], key, value, params)
     elif isinstance(node, dict) and (key in list(node.keys())):
-        #print(f'Found {key} in {node}')
         if isinstance(node[key], list):
             for idx, data in enumerate(node[key]):
                 if data == value:

@@ -1,9 +1,13 @@
+import os
 import unittest
 from utils.fhirpath import read_resource_from_file
 from pipeline.config import Settings
 from pipeline.processor import process_data
 import copy
 from rich import print
+
+_TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
+os.environ.setdefault("MEDANON_KEY_ALLOWED_DIRS", os.path.join(_TESTS_DIR, "keys"))
 
 
 class TestPseudonymize(unittest.TestCase):

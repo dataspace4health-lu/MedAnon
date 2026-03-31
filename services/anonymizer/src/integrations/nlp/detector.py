@@ -109,20 +109,44 @@ def _get_analyzer():
 # ---------------------------------------------------------------------------
 
 _GLOBAL_TOKEN_STATE: dict = {"next": {}, "map": {}, "reverse": {}}
+_GLOBAL_TOKEN_LOCK = threading.Lock()
+_TOKEN_STATE_MAX_ENTRIES = 100_000
 
 
 def reset_global_token_state() -> None:
     """Clear the global NLP token state. Call between batch runs to prevent unbounded growth."""
-    _GLOBAL_TOKEN_STATE["next"].clear()
-    _GLOBAL_TOKEN_STATE["map"].clear()
-    _GLOBAL_TOKEN_STATE["reverse"].clear()
+    with _GLOBAL_TOKEN_LOCK:
+        _GLOBAL_TOKEN_STATE["next"].clear()
+        _GLOBAL_TOKEN_STATE["map"].clear()
+        _GLOBAL_TOKEN_STATE["reverse"].clear()
 
 
-def _tokenize(value: str, entity_type: str, token_state: dict) -> str:
+def _evict_if_needed(token_state: dict, limit: int = _TOKEN_STATE_MAX_ENTRIES) -> None:
+    """Drop the oldest 25% of entries when the map exceeds *limit*."""
+    if len(token_state["map"]) <= limit:
+        return
+    evict_count = len(token_state["map"]) // 4
+    keys_to_drop = list(token_state["map"].keys())[:evict_count]
+    for key in keys_to_drop:
+        token = token_state["map"].pop(key, None)
+        if token:
+            token_state["reverse"].pop(token, None)
+
+
+def _tokenize(value: str, entity_type: str, token_state: dict, lock=None) -> str:
     """Return a deterministic surrogate token for *value*."""
+    if lock:
+        with lock:
+            return _tokenize_unlocked(value, entity_type, token_state)
+    return _tokenize_unlocked(value, entity_type, token_state)
+
+
+def _tokenize_unlocked(value: str, entity_type: str, token_state: dict) -> str:
+    """Internal helper for _tokenize — assumes lock is already held if needed."""
     key = (entity_type, value)
     if key in token_state["map"]:
         return token_state["map"][key]
+    _evict_if_needed(token_state)
     seq = token_state["next"].get(entity_type, 0) + 1
     token_state["next"][entity_type] = seq
     token = f"[[{entity_type}_{seq}]]"
@@ -142,6 +166,7 @@ def _analyze_and_replace(
     language: str,
     mode: str,
     token_state: dict,
+    token_lock=None,
 ) -> str:
     """Run Presidio NLP analysis on *text* and replace detected PHI spans."""
     if not text or not text.strip():
@@ -165,7 +190,7 @@ def _analyze_and_replace(
         if mode == "redact":
             replacement = f"[{hit.entity_type}]"
         else:
-            replacement = _tokenize(span, hit.entity_type, token_state)
+            replacement = _tokenize(span, hit.entity_type, token_state, token_lock)
         text = text[: hit.start] + replacement + text[hit.end :]
 
     return text
@@ -244,7 +269,11 @@ def nlp_detect_by_path(resource: dict, el: dict, params: dict) -> None:
     """Detect and replace PHI/PII using NLP in the field matched by *el*.
 
     Modifies *resource* in-place (same contract as all other actions).
+
+    When NLP_SERVICE_URL is set, delegates detection to the remote NLP
+    microservice. Otherwise runs Presidio locally (default behaviour).
     """
+    import os
     entities = _resolve_entities(params.get("entities", "healthcare"))
     threshold = float(params.get("threshold", 0.4))
     language = str(params.get("language", "en"))
@@ -254,9 +283,20 @@ def nlp_detect_by_path(resource: dict, el: dict, params: dict) -> None:
     # Pass params['_token_state'] = _GLOBAL_TOKEN_STATE explicitly for CLI batch
     # runs that require global_run token consistency.
     token_state = params.get("_token_state") or {"next": {}, "map": {}, "reverse": {}}
+    # Use lock when accessing global state for thread safety
+    token_lock = _GLOBAL_TOKEN_LOCK if token_state is _GLOBAL_TOKEN_STATE else None
 
-    def scrub_fn(text: str) -> str:
-        return _analyze_and_replace(text, entities, threshold, language, mode, token_state)
+    if os.environ.get("NLP_SERVICE_URL", ""):
+        # Remote path — delegate to NLP microservice
+        from integrations.nlp.remote_detector import analyze_and_replace_remote
+
+        def scrub_fn(text: str) -> str:
+            return analyze_and_replace_remote(
+                text, entities, threshold, language, mode, token_state
+            )
+    else:
+        def scrub_fn(text: str) -> str:
+            return _analyze_and_replace(text, entities, threshold, language, mode, token_state, token_lock)
 
     path = el["path"]
     parts = path.split(".")

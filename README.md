@@ -62,7 +62,7 @@ python3 -m src.cli.main process input.json output.json --config config/config.ya
 
 | Container | Image | Host port | Purpose |
 |---|---|---|---|
-| `medanon-ui` | Built from `client/Dockerfile` | `8501` | Streamlit browser UI (7 pages) |
+| `medanon-ui` | Built from `client/Dockerfile` | `8501` | React browser UI (nginx + SPA) |
 | `medanon` | Built from `services/anonymizer/Dockerfile` | `8000` | FHIR de-identification engine (FastAPI) |
 | `hapi-fhir` | `hapiproject/hapi:latest` | `8081` | HAPI FHIR R4 server (in-memory H2) |
 | `gpas-wildfly` | `mosaicgreifswald/wildfly:38` | `8080` | gPAS TTP pseudonymization service |
@@ -184,10 +184,10 @@ python3 -m pytest tests/ --cov=src --cov-report=term-missing
 ## Project Layout
 
 ```
-client/                  Streamlit browser UI (7 pages)
-│   ├── app.py               Home page
-│   ├── pages/               1_Patient_Browser … 6_Risk_Assessment
-│   └── utils/               API helpers, sidebar
+client/                  React browser UI (Vite + TypeScript + Shadcn/ui)
+│   ├── src/                 Source code (pages, components, API layer)
+│   ├── nginx.conf           Reverse proxy config
+│   └── Dockerfile           Multi-stage build (node → nginx)
 services/
 ├── anonymizer/          FastAPI app + CLI (Python 3.13)
 │   ├── Dockerfile

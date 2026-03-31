@@ -45,11 +45,14 @@ hapi:
         - ${MEDANON_CORS_ORIGINS:}
 
     # Bulk data / $export support
-    bulk_export_enabled: false
+    bulk_export_enabled: true
 
     # Narrative generation (disable for de-identified data)
     narrative_enabled: false
 
-    # Default page size for search results
-    default_page_size: 20
-    max_page_size: 200
+    # Page size — no artificial cap; the client controls page size via _count
+    # when FHIR_PAGE_SIZE env var is set, otherwise the server returns up to
+    # default_page_size resources per page.  Pagination (link[rel=next])
+    # handles datasets larger than a single page.
+    default_page_size: 2147483647
+    max_page_size: 2147483647

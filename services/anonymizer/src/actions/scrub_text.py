@@ -50,6 +50,7 @@ Optional params:
 """
 
 import re
+import threading
 from copy import deepcopy
 
 from utils.fhirpath import find_nodes
@@ -112,6 +113,38 @@ _PATTERNS = {
         ),
         '[IP]',
     ),
+    # IPv6 addresses: full, compressed (::), and IPv4-mapped (::ffff:x.x.x.x)
+    'ipv6': (
+        re.compile(
+            r'(?<![:\w])'
+            r'(?:'
+            # Full 8-group: 2001:0db8:85a3:0000:0000:8a2e:0370:7334
+            r'(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}'
+            r'|'
+            # Compressed with :: anywhere
+            r'(?:[0-9a-fA-F]{1,4}:){1,7}:'
+            r'|'
+            r'(?:[0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}'
+            r'|'
+            r'(?:[0-9a-fA-F]{1,4}:){1,5}(?::[0-9a-fA-F]{1,4}){1,2}'
+            r'|'
+            r'(?:[0-9a-fA-F]{1,4}:){1,4}(?::[0-9a-fA-F]{1,4}){1,3}'
+            r'|'
+            r'(?:[0-9a-fA-F]{1,4}:){1,3}(?::[0-9a-fA-F]{1,4}){1,4}'
+            r'|'
+            r'(?:[0-9a-fA-F]{1,4}:){1,2}(?::[0-9a-fA-F]{1,4}){1,5}'
+            r'|'
+            r'[0-9a-fA-F]{1,4}:(?::[0-9a-fA-F]{1,4}){1,6}'
+            r'|'
+            # :: alone or with trailing groups
+            r':(?::[0-9a-fA-F]{1,4}){1,7}'
+            r'|'
+            r'::(?:[fF]{4}:)?(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)'
+            r')'
+            r'(?![:\w])'
+        ),
+        '[IP]',
+    ),
     # MRN markers: "MRN: 123456", "MR#67890", "MRN123456"
     'mrn': (
         re.compile(r'\b(?:MRN|MR)\s*[:#]?\s*\d+\b', re.IGNORECASE),
@@ -165,9 +198,9 @@ _PATTERNS = {
         '[URL]',
     ),
     # US ZIP code: 12345 or 12345-6789
-    # Use a lookahead to avoid false-positives on arbitrary 5-digit numbers
+    # Negative lookbehind/lookahead prevents matching within longer numbers or decimals
     'zipcode': (
-        re.compile(r'\b\d{5}(?:-\d{4})?\b'),
+        re.compile(r'(?<![.\d])\b\d{5}(?:-\d{4})?\b(?!\d)'),
         '[ZIP]',
     ),
 }
@@ -183,13 +216,28 @@ _REDACTED_DIV = (
 )
 
 _GLOBAL_TOKEN_STATE = {'next': {}, 'map': {}, 'reverse': {}}
+_GLOBAL_TOKEN_LOCK = threading.Lock()
+_TOKEN_STATE_MAX_ENTRIES = 100_000
 
 
 def reset_global_token_state():
     """Clear the global token state. Call between batch runs to prevent unbounded growth."""
-    _GLOBAL_TOKEN_STATE['next'].clear()
-    _GLOBAL_TOKEN_STATE['map'].clear()
-    _GLOBAL_TOKEN_STATE['reverse'].clear()
+    with _GLOBAL_TOKEN_LOCK:
+        _GLOBAL_TOKEN_STATE['next'].clear()
+        _GLOBAL_TOKEN_STATE['map'].clear()
+        _GLOBAL_TOKEN_STATE['reverse'].clear()
+
+
+def _evict_if_needed(token_state, limit=_TOKEN_STATE_MAX_ENTRIES):
+    """Drop the oldest 25% of entries when the map exceeds *limit*."""
+    if len(token_state['map']) <= limit:
+        return
+    evict_count = len(token_state['map']) // 4
+    keys_to_drop = list(token_state['map'].keys())[:evict_count]
+    for key in keys_to_drop:
+        token = token_state['map'].pop(key, None)
+        if token:
+            token_state['reverse'].pop(token, None)
 
 
 # ---------------------------------------------------------------------------
@@ -222,6 +270,7 @@ def _token_prefix_for_pattern(pattern_key):
         'ssn': 'SSN',
         'email': 'EMAIL',
         'ip': 'IP',
+        'ipv6': 'IP',
         'mrn': 'MRN',
         'national_id': 'NID',
         'account': 'ACCOUNT',
@@ -233,12 +282,21 @@ def _token_prefix_for_pattern(pattern_key):
     }.get(pattern_key, pattern_key.upper())
 
 
-def _tokenize_value(value, token_prefix, token_state):
+def _tokenize_value(value, token_prefix, token_state, lock=None):
     """Return deterministic token for *value* and maintain reverse map."""
+    if lock:
+        with lock:
+            return _tokenize_value_unlocked(value, token_prefix, token_state)
+    return _tokenize_value_unlocked(value, token_prefix, token_state)
+
+
+def _tokenize_value_unlocked(value, token_prefix, token_state):
+    """Internal helper for _tokenize_value — assumes lock is already held if needed."""
     key = (token_prefix, value)
     if key in token_state['map']:
         return token_state['map'][key]
 
+    _evict_if_needed(token_state)
     current = token_state['next'].get(token_prefix, 0) + 1
     token_state['next'][token_prefix] = current
     token = f"[[{token_prefix}_{current}]]"
@@ -247,15 +305,15 @@ def _tokenize_value(value, token_prefix, token_state):
     return token
 
 
-def _scrub(text, pattern_keys, names, placeholder_overrides, tokenize, token_state):
+def _scrub(text, pattern_keys, names, placeholder_overrides, tokenize, token_state, token_lock=None):
     """Apply PHI regex patterns and name tokenization/redaction to *text*."""
     for key in pattern_keys:
         compiled, default_ph = _PATTERNS[key]
         if tokenize:
             token_prefix = _token_prefix_for_pattern(key)
 
-            def repl(match):
-                return _tokenize_value(match.group(0), token_prefix, token_state)
+            def repl(match, lock=token_lock):
+                return _tokenize_value(match.group(0), token_prefix, token_state, lock)
 
             text = compiled.sub(repl, text)
         else:
@@ -270,8 +328,8 @@ def _scrub(text, pattern_keys, names, placeholder_overrides, tokenize, token_sta
         if tokenize:
             regex = re.compile(re.escape(name), re.IGNORECASE)
 
-            def repl_name(match):
-                return _tokenize_value(match.group(0), 'NAME', token_state)
+            def repl_name(match, lock=token_lock):
+                return _tokenize_value(match.group(0), 'NAME', token_state, lock)
 
             text = regex.sub(repl_name, text)
         else:
@@ -398,6 +456,8 @@ def scrub_text_by_path(resource, el, params):
             f"Invalid mapping_scope {mapping_scope!r}. Must be one of: {sorted(_VALID_SCOPES)}"
         )
     token_state = _get_token_state(params, mapping_scope)
+    # Use lock when accessing global state for thread safety
+    token_lock = _GLOBAL_TOKEN_LOCK if mapping_scope == 'global_run' else None
 
     names = list(params.get('names', []))
     if params.get('extract_names', False):
@@ -411,6 +471,7 @@ def scrub_text_by_path(resource, el, params):
             placeholder_overrides,
             tokenize,
             token_state,
+            token_lock,
         )
 
     parent_nodes = find_nodes(resource, path[:-1], [])

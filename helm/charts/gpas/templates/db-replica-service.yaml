@@ -1,0 +1,22 @@
+{{- if .Values.db.replica.enabled -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "gpas.fullname" . }}-db-read
+  labels:
+    {{- include "gpas.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gpas-db-replica
+  annotations:
+    # Identifies this as the read-only endpoint. Clients that need a read
+    # replica (audit tools, backups) should point at this Service.
+    medanon.io/db-role: "replica"
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.db.port }}
+      targetPort: {{ .Values.db.port }}
+      protocol: TCP
+      name: mysql
+  selector:
+    {{- include "gpas.selectorLabels" (dict "Release" .Release "component" "gpas-db-replica") | nindent 4 }}
+{{- end }}

@@ -43,3 +43,16 @@ resources:
   limits:
     memory: "2Gi"
     cpu: "1000m"
+
+# Database backend.
+#   type: "h2"          — in-memory H2 (default; data lost on pod restart, dev/test only)
+#   type: "postgresql"  — external PostgreSQL (production)
+db:
+  type: h2
+  postgresql:
+    host: postgresql
+    port: 5432
+    database: hapi
+    username: hapi
+    password: ""
+    # existingSecret: ""   # K8s Secret name with keys "username" and "password"
