@@ -8,6 +8,7 @@ import {
   Shield,
   FlaskConical,
   BarChart3,
+  SlidersHorizontal,
 } from 'lucide-react';
 import { HealthBadge } from '@/components/shared/HealthBadge';
 import { useHealth } from '@/hooks/useHealth';
@@ -59,6 +60,12 @@ const NAV_SECTIONS: NavSection[] = [
     items: [
       { to: '/risk', label: 'Risk Assessment', icon: Shield, minRole: 'analyst' },
       { to: '/synthetic', label: 'Synthetic Data', icon: FlaskConical, minRole: 'analyst' },
+    ],
+  },
+  {
+    label: 'Configure',
+    items: [
+      { to: '/configs', label: 'Rule Configs', icon: SlidersHorizontal, minRole: 'viewer' },
     ],
   },
   {
