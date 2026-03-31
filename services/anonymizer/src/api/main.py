@@ -33,7 +33,7 @@ from api.deps import (
     get_settings,
     limiter,
 )
-from api.routers import analytics, dicom, fhir_bulk, fhir_server, hl7v2, jobs, process, synthetic
+from api.routers import analytics, configs, dicom, fhir_bulk, fhir_server, hl7v2, jobs, process, synthetic
 from api.routers import fhir_subscriptions, smart
 
 # Refresh fhir_bulk's module-level URL cache so that re-imports (e.g. during
@@ -96,6 +96,15 @@ async def _startup() -> None:
         logger.info("subscription_store started path=%s", sub_db)
     except Exception as exc:
         logger.warning("subscription_store_start_failed: %s", exc)
+
+    # Config metadata store (user-defined config profiles)
+    try:
+        from pipeline.config_store import init_config_store
+        config_store_db = os.environ.get("MEDANON_CONFIG_STORE_DB", "/output/config_store.db")
+        init_config_store(config_store_db)
+        logger.info("config_store started path=%s", config_store_db)
+    except Exception as exc:
+        logger.warning("config_store_start_failed: %s", exc)
 
 app.state.limiter = limiter
 if RateLimitExceeded is not None:
@@ -271,6 +280,7 @@ app.include_router(fhir_server.router, prefix="/v1")
 app.include_router(analytics.router, prefix="/v1")
 app.include_router(synthetic.router, prefix="/v1")
 app.include_router(jobs.router, prefix="/v1")
+app.include_router(configs.router, prefix="/v1")
 app.include_router(dicom.router, prefix="/v1")
 app.include_router(hl7v2.router, prefix="/v1")
 app.include_router(fhir_bulk.router, prefix="/fhir")

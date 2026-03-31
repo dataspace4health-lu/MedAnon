@@ -49,6 +49,8 @@ ENDPOINT_ROLES: dict[str, str] = {
     "/v1/process/bulk-export": "admin",
     "/v1/process/cohort": "analyst",
     "/v1/jobs": "analyst",
+    # Config profile management — list/read open to viewer; writes require admin
+    "/v1/configs": "viewer",
     # FHIR Bulk Data Access IG
     "/fhir/$export": "admin",
     "/fhir/Patient/$export": "analyst",
@@ -64,6 +66,7 @@ ENDPOINT_ROLE_PREFIXES: dict[str, str] = {
     "/v1/jobs/bulk-export": "admin",   # exact — listed first for priority
     "/v1/jobs/cohort": "analyst",
     "/v1/jobs/": "analyst",            # covers /v1/jobs/{id} and /v1/jobs/{id}/result
+    "/v1/configs/": "viewer",          # covers /v1/configs/{name} — writes enforce admin in router
     "/fhir/Group/": "admin",           # /fhir/Group/{id}/$export
     "/fhir/export-status/": "analyst", # /fhir/export-status/{job_id}
     "/fhir/Subscription/": "analyst",  # /fhir/Subscription/{id} CRUD
