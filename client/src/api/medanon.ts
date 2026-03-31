@@ -233,7 +233,7 @@ export function processEverything(
 export interface JobResponse {
   job_id: string;
   type: string;
-  status: "pending" | "running" | "done" | "error";
+  status: "pending" | "running" | "done" | "error" | "cancelled";
   created_at: string;
   updated_at: string;
   result_path: string | null;
@@ -318,6 +318,21 @@ export async function getJobResult(jobId: string): Promise<Blob> {
     );
   }
   return response.blob();
+}
+
+/** DELETE /api/v1/jobs/:jobId — cancel a pending or running job. */
+export async function cancelJob(jobId: string): Promise<JobResponse> {
+  const response = await fetch(
+    `/api/v1/jobs/${encodeURIComponent(jobId)}`,
+    { method: "DELETE", headers: getAuthHeaders() },
+  );
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(
+      `cancelJob failed (${response.status}): ${body?.detail ?? response.statusText}`,
+    );
+  }
+  return response.json() as Promise<JobResponse>;
 }
 
 // ---------------------------------------------------------------------------

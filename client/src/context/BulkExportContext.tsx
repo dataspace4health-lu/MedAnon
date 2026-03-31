@@ -7,11 +7,17 @@ import {
   useEffect,
 } from "react";
 import type { ReactNode } from "react";
-import { getJobStatus, getJobResult } from "@/api/medanon";
+import { getJobStatus, getJobResult, cancelJob as cancelJobApi } from "@/api/medanon";
 import type { JobResponse } from "@/api/medanon";
 
-export type ExportJobStatus = "submitting" | "pending" | "running" | "done" | "error";
+export type ExportJobStatus = "submitting" | "pending" | "running" | "done" | "error" | "cancelled";
 export type ExportJobPhase = "queued" | "fetching" | "processing" | "done";
+
+export interface ExportJobMeta {
+  source: "all" | "condition";
+  conditionName?: string;
+  configProfile: string;
+}
 
 export interface ExportJob {
   id: string;
@@ -23,6 +29,9 @@ export interface ExportJob {
   error: string | null;
   processed: number;
   startedAt: number;
+  source: "all" | "condition";
+  conditionName?: string;
+  configProfile: string;
 }
 
 interface BulkExportContextValue {
@@ -31,8 +40,10 @@ interface BulkExportContextValue {
     label: string,
     filename: string,
     onSubmit: () => Promise<JobResponse>,
+    meta: ExportJobMeta,
   ) => string;
   downloadResult: (id: string) => Promise<void>;
+  cancelJob: (id: string) => Promise<void>;
   dismissJob: (id: string) => void;
   clearCompleted: () => void;
 }
@@ -94,6 +105,9 @@ export function BulkExportProvider({ children }: { children: ReactNode }) {
               processed: job.processed,
               phase: job.phase,
             });
+          } else if (job.status === "cancelled") {
+            stopPolling(id);
+            updateJob(id, { status: "cancelled", phase: job.phase, processed: job.processed });
           } else {
             updateJob(id, {
               status: job.status as ExportJobStatus,
@@ -120,6 +134,7 @@ export function BulkExportProvider({ children }: { children: ReactNode }) {
       label: string,
       filename: string,
       onSubmit: () => Promise<JobResponse>,
+      meta: ExportJobMeta,
     ): string => {
       const id = `export-${nextId++}`;
       const newJob: ExportJob = {
@@ -132,6 +147,9 @@ export function BulkExportProvider({ children }: { children: ReactNode }) {
         error: null,
         processed: 0,
         startedAt: Date.now(),
+        source: meta.source,
+        conditionName: meta.conditionName,
+        configProfile: meta.configProfile,
       };
       setJobs((prev) => [...prev, newJob]);
 
@@ -172,6 +190,24 @@ export function BulkExportProvider({ children }: { children: ReactNode }) {
     [jobs],
   );
 
+  const cancelJob = useCallback(
+    async (id: string) => {
+      const job = jobs.find((j) => j.id === id);
+      if (!job?.jobId) return;
+      try {
+        await cancelJobApi(job.jobId);
+        stopPolling(id);
+        updateJob(id, { status: "cancelled" });
+      } catch (err) {
+        updateJob(id, {
+          status: "error",
+          error: err instanceof Error ? err.message : "Failed to cancel job",
+        });
+      }
+    },
+    [jobs, stopPolling, updateJob],
+  );
+
   const dismissJob = useCallback(
     (id: string) => {
       stopPolling(id);
@@ -186,7 +222,7 @@ export function BulkExportProvider({ children }: { children: ReactNode }) {
 
   return (
     <BulkExportContext.Provider
-      value={{ jobs, submitExport, downloadResult, dismissJob, clearCompleted }}
+      value={{ jobs, submitExport, downloadResult, cancelJob, dismissJob, clearCompleted }}
     >
       {children}
     </BulkExportContext.Provider>
