@@ -1,4 +1,5 @@
 import { NavLink } from 'react-router-dom';
+import { useState, useEffect } from 'react';
 import {
   Home,
   Users,
@@ -9,12 +10,14 @@ import {
   FlaskConical,
   BarChart3,
   SlidersHorizontal,
+  PackageOpen,
 } from 'lucide-react';
 import { HealthBadge } from '@/components/shared/HealthBadge';
 import { useHealth } from '@/hooks/useHealth';
 import { useAuth } from '@/context/AuthContext';
 import { useConfig } from '@/context/ConfigContext';
-import { CONFIG_PROFILES } from '@/config/constants';
+import { listConfigs } from '@/api/medanon';
+import type { ConfigMeta } from '@/api/medanon';
 import type { Role } from '@/config/constants';
 import {
   Select,
@@ -53,6 +56,7 @@ const NAV_SECTIONS: NavSection[] = [
     items: [
       { to: '/process', label: 'Process Resource', icon: Layers, minRole: 'analyst' },
       { to: '/batch', label: 'Batch Processing', icon: Activity, minRole: 'analyst' },
+      { to: '/bulk-deidentify', label: 'Bulk Jobs', icon: PackageOpen, minRole: 'analyst' },
     ],
   },
   {
@@ -113,6 +117,13 @@ export function Sidebar({ onNavigate }: SidebarProps) {
   const { hasRole } = useAuth();
   const { configProfile, setConfigProfile } = useConfig();
   const health = useHealth();
+  const [profiles, setProfiles] = useState<ConfigMeta[]>([]);
+
+  useEffect(() => {
+    listConfigs()
+      .then(setProfiles)
+      .catch(() => {/* fallback: dropdown shows only "Auto" */});
+  }, []);
 
   return (
     <div className="flex h-full flex-col">
@@ -168,9 +179,10 @@ export function Sidebar({ onNavigate }: SidebarProps) {
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {CONFIG_PROFILES.map((profile) => (
-              <SelectItem key={profile.key} value={profile.key}>
-                {profile.label}
+            <SelectItem value="auto">Auto</SelectItem>
+            {profiles.map((p) => (
+              <SelectItem key={p.name} value={p.name}>
+                {p.name}{!p.is_system && ' *'}
               </SelectItem>
             ))}
           </SelectContent>

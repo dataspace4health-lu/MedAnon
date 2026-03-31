@@ -24,7 +24,7 @@ export function BulkExportButton({
     <Button
       variant={variant}
       size="sm"
-      onClick={() => submitExport(label, filename, onSubmit)}
+      onClick={() => submitExport(label, filename, onSubmit, { source: "all", configProfile: "auto" })}
       disabled={disabled}
     >
       <PackageOpen className="h-4 w-4" />

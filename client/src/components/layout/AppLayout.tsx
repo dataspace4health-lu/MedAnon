@@ -1,11 +1,13 @@
 import { useState } from 'react';
-import { Outlet } from 'react-router-dom';
+import { Outlet, useLocation } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
 import { BulkExportTracker } from '@/components/shared/BulkExportTracker';
 import { Menu, X, ShieldCheck } from 'lucide-react';
 
 export function AppLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const location = useLocation();
+  const showTracker = !location.pathname.startsWith('/bulk-deidentify');
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -58,7 +60,7 @@ export function AppLayout() {
       </main>
 
       {/* Global bulk export progress tracker */}
-      <BulkExportTracker />
+      {showTracker && <BulkExportTracker />}
     </div>
   );
 }

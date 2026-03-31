@@ -210,14 +210,10 @@ export default function ConditionBrowserPage() {
           search_params: buildExportSearchParams(),
           config_profile: configProfile,
         }),
+      { source: 'condition', conditionName: label, configProfile },
     );
     navigate('/bulk-deidentify', {
-      state: {
-        source: 'condition',
-        conditionName: label,
-        exportId,
-        configProfile,
-      },
+      state: { autoSelectId: exportId },
     });
   };
 
@@ -318,7 +314,7 @@ export default function ConditionBrowserPage() {
           <Button
             variant="outline"
             className="gap-1.5"
-            disabled={!fhirConnected || conditions.length === 0}
+            disabled={!fhirConnected || selectedCodes.size === 0}
             onClick={handleBulkExport}
           >
             <PackageOpen className="h-4 w-4" />
