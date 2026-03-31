@@ -4,6 +4,7 @@ Wires together middleware, health/status endpoints, and the four endpoint router
 Business logic lives in api/routers/; shared dependencies in api/deps.py.
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -38,8 +39,6 @@ from api.routers import fhir_subscriptions, smart
 # Refresh fhir_bulk's module-level URL cache so that re-imports (e.g. during
 # TestClient construction with patched env) capture the current FHIR_SOURCE_URL.
 fhir_bulk._FHIR_SOURCE_URL = os.environ.get("FHIR_SOURCE_URL", "").strip()
-
-import asyncio
 
 setup_logging(os.environ.get("LOG_LEVEL", "INFO"))
 logger = logging.getLogger("medanon")
