@@ -1,10 +1,11 @@
 """Async job queue endpoints.
 
-    POST /jobs/bulk-export  — queue a bulk export job, returns 202
-    POST /jobs/cohort       — queue a cohort export job, returns 202
-    GET  /jobs              — list jobs with optional filtering
-    GET  /jobs/{job_id}     — poll job status
-    GET  /jobs/{job_id}/result — download completed NDJSON result
+    POST   /jobs/bulk-export     — queue a bulk export job, returns 202
+    POST   /jobs/cohort          — queue a cohort export job, returns 202
+    GET    /jobs                 — list jobs with optional filtering
+    GET    /jobs/{job_id}        — poll job status
+    DELETE /jobs/{job_id}        — cancel a pending or running job
+    GET    /jobs/{job_id}/result — download completed NDJSON result
 """
 
 from __future__ import annotations
@@ -96,6 +97,22 @@ async def get_job_status(job_id: str):
     """Return current status and metadata for the given job."""
     try:
         return _service.get_status(job_id)
+    except JobStoreUnavailable:
+        raise HTTPException(status_code=503, detail="Job store not initialised")
+    except JobNotFound:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+
+@router.delete("/jobs/{job_id}", status_code=200)
+async def cancel_job(job_id: str):
+    """Cancel a pending or running job.
+
+    - Returns the updated job dict with ``status=cancelled``.
+    - 404 if the job does not exist.
+    - Jobs already in ``done`` or ``error`` state are returned as-is (no error).
+    """
+    try:
+        return _service.cancel_job(job_id)
     except JobStoreUnavailable:
         raise HTTPException(status_code=503, detail="Job store not initialised")
     except JobNotFound:

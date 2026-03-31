@@ -150,6 +150,21 @@ class SqliteJobStore:
     def notify_new_job(self, job_id: str) -> None:
         """No-op for SQLite — the worker polls."""
 
+    def cancel(self, job_id: str) -> bool:
+        """Mark a pending or running job as cancelled.
+
+        Returns True if the status was updated, False if the job was already
+        in a terminal state (done, error, cancelled) or not found.
+        """
+        updated_at = datetime.now(timezone.utc).isoformat()
+        with self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE jobs SET status='cancelled', updated_at=? "
+                "WHERE id=? AND status IN ('pending', 'running')",
+                (updated_at, job_id),
+            )
+            return cur.rowcount > 0
+
 
 # Backward-compat alias
 JobStore = SqliteJobStore

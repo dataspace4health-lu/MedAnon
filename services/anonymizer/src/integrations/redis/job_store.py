@@ -153,6 +153,24 @@ class RedisJobStore:
         """Push job_id onto the notification list for BLPOP-based workers."""
         self._client.rpush(_QUEUE_KEY, job_id)
 
+    def cancel(self, job_id: str) -> bool:
+        """Mark a pending or running job as cancelled.
+
+        Returns True if the status was updated, False if the job was already
+        in a terminal state (done, error, cancelled) or not found.
+        """
+        key = self._job_key(job_id)
+        old_status = self._client.hget(key, "status")
+        if old_status not in ("pending", "running"):
+            return False
+        updated_at = datetime.now(timezone.utc).isoformat()
+        pipe = self._client.pipeline()
+        pipe.hset(key, mapping={"status": "cancelled", "updated_at": updated_at})
+        pipe.srem(f"{_STATUS_PREFIX}{old_status}", job_id)
+        pipe.sadd(f"{_STATUS_PREFIX}cancelled", job_id)
+        pipe.execute()
+        return True
+
     def update_checkpoint(self, job_id: str, data: dict) -> None:
         """Persist only checkpoint_data for an in-progress job."""
         key = self._job_key(job_id)

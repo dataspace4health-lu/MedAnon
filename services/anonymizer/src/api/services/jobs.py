@@ -89,3 +89,13 @@ class JobService:
             status=status, job_type=job_type, limit=limit, offset=offset
         )
         return [self._job_to_dict(j) for j in jobs]
+
+    def cancel_job(self, job_id: str) -> dict:
+        """Cancel a pending or running job. Returns the updated job dict."""
+        store = self._get_store()
+        job = store.get(job_id)
+        if job is None:
+            raise JobNotFound()
+        store.cancel(job_id)
+        job = store.get(job_id)
+        return self._job_to_dict(job)
