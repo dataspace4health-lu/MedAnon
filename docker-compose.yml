@@ -56,6 +56,7 @@ services:
       - MEDANON_AUDIT_LOG_FILE=/output/audit.log
       - MEDANON_REDIS_URL=${MEDANON_REDIS_URL:-redis://redis:6379/0}
       - MEDANON_JOB_WORKERS=${MEDANON_JOB_WORKERS:-3}
+      - MEDANON_MANIFEST_ENABLED=true
     volumes:
       - ./data:/data:ro
       - ./output:/output
