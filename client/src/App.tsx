@@ -11,6 +11,8 @@ const BatchPage = lazy(() => import('@/pages/BatchPage'));
 const RiskAssessmentPage = lazy(() => import('@/pages/RiskAssessmentPage'));
 const SyntheticDataPage = lazy(() => import('@/pages/SyntheticDataPage'));
 const StatusPage = lazy(() => import('@/pages/StatusPage'));
+const ConfigsPage = lazy(() => import('@/pages/ConfigsPage'));
+const ConfigBuilderPage = lazy(() => import('@/pages/ConfigBuilderPage'));
 
 function PageLoader() {
   return (
@@ -34,6 +36,9 @@ export default function App() {
           <Route path="risk" element={<RiskAssessmentPage />} />
           <Route path="synthetic" element={<SyntheticDataPage />} />
           <Route path="status" element={<StatusPage />} />
+          <Route path="configs" element={<ConfigsPage />} />
+          <Route path="configs/new" element={<ConfigBuilderPage />} />
+          <Route path="configs/:name/edit" element={<ConfigBuilderPage />} />
         </Route>
       </Routes>
     </Suspense>
