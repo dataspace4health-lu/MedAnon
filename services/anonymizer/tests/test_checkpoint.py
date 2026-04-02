@@ -6,7 +6,7 @@ import tempfile
 import pytest
 
 from medanon_core.domain import Job, JobStatus
-from pipeline.checkpoint import CHECKPOINT_INTERVAL, load_checkpoint, save_checkpoint
+from pipeline.jobs.checkpoint import CHECKPOINT_INTERVAL, load_checkpoint, save_checkpoint
 from pipeline.jobs import SqliteJobStore
 
 
@@ -97,7 +97,7 @@ class TestWorkerStartupRecovery:
         job.status = JobStatus.RUNNING
         store.update(job)
 
-        import pipeline.worker as worker_mod
+        import pipeline.jobs.worker as worker_mod
         original_store = worker_mod._store
         worker_mod._store = store
         try:
@@ -111,7 +111,7 @@ class TestWorkerStartupRecovery:
     def test_pending_jobs_not_touched(self, store):
         store.create("bulk-export", {"server_url": "http://"})
 
-        import pipeline.worker as worker_mod
+        import pipeline.jobs.worker as worker_mod
         original_store = worker_mod._store
         worker_mod._store = store
         try:
@@ -127,7 +127,7 @@ class TestWorkerStartupRecovery:
         job.result_path = "/output/result.ndjson"
         store.update(job)
 
-        import pipeline.worker as worker_mod
+        import pipeline.jobs.worker as worker_mod
         original_store = worker_mod._store
         worker_mod._store = store
         try:
@@ -144,7 +144,7 @@ class TestWorkerStartupRecovery:
             job.status = JobStatus.RUNNING
             store.update(job)
 
-        import pipeline.worker as worker_mod
+        import pipeline.jobs.worker as worker_mod
         original_store = worker_mod._store
         worker_mod._store = store
         try:
@@ -157,7 +157,7 @@ class TestWorkerStartupRecovery:
             assert j.status == JobStatus.PENDING
 
     def test_no_store_returns_zero(self):
-        import pipeline.worker as worker_mod
+        import pipeline.jobs.worker as worker_mod
         original_store = worker_mod._store
         worker_mod._store = None
         try:
@@ -177,14 +177,15 @@ class TestBulkExportCheckpointResume:
 
     def test_resumes_from_checkpoint_skips_written_lines(self, store, tmp_path, monkeypatch):
         """Executor with checkpoint{"lines_written": 2} skips first 2 resources."""
-        import pipeline.worker as worker_mod
+        import pipeline.jobs.worker as worker_mod
 
         output_dir = str(tmp_path / "out")
         os.makedirs(output_dir, exist_ok=True)
         monkeypatch.setattr(worker_mod, "_OUTPUT_DIR", output_dir)
         monkeypatch.setattr(worker_mod, "_store", store)
 
-        job = store.create("bulk-export", {"server_url": "http://fhir"})
+        # Use resource_type param so the worker takes the simple single-type path
+        job = store.create("bulk-export", {"server_url": "http://fhir", "resource_type": "Patient"})
         # Simulate 2 resources already written to output file
         output_path = os.path.join(output_dir, f"{job.id}.ndjson")
         with open(output_path, "w") as fh:
@@ -200,24 +201,23 @@ class TestBulkExportCheckpointResume:
 
         written_ids: list = []
 
-        def _fake_bulk_export(*a, **kw):
-            return iter(resources)
+        def _fake_fetch_all(*a, **kw):
+            for r in resources:
+                yield (r["resourceType"], r)
 
-        def _fake_process(resource, settings):
-            written_ids.append(resource["id"])
-            return resource
-
-        from pipeline import config as _cfg
-        monkeypatch.setattr("integrations.fhir.client.bulk_export", _fake_bulk_export, raising=False)
-        monkeypatch.setattr("pipeline.processor.process_data", _fake_process, raising=False)
+        def _fake_process_batch(resources, settings, pseudonymizer=None):
+            for resource in resources:
+                written_ids.append(resource["id"])
+            return resources
 
         try:
             import integrations.fhir.client as fhir_client
             import pipeline.processor as proc
-            import pipeline.config_service as cs
+            import pipeline.config.service as cs
 
-            monkeypatch.setattr(fhir_client, "bulk_export", _fake_bulk_export)
-            monkeypatch.setattr(proc, "process_data", _fake_process)
+            monkeypatch.setattr(fhir_client, "fetch_all_resource_types", _fake_fetch_all)
+            monkeypatch.setattr(worker_mod, "process_data_batch", _fake_process_batch)
+            monkeypatch.setattr(proc, "_get_default_pseudonymizer", lambda: None)
             monkeypatch.setattr(cs, "get_settings", lambda p: object())
         except Exception:
             pytest.skip("FHIR/processor not importable in this environment")

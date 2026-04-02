@@ -405,7 +405,7 @@ class TestConfigServiceCache(unittest.TestCase):
     _LOCAL_CONFIG_DIR = os.path.join(os.path.dirname(__file__), "..", "config")
 
     def setUp(self):
-        import pipeline.config_service as cs
+        import pipeline.config.service as cs
         self._cs = cs
         # Point to the local config directory so calls don't need Docker (/code/config).
         self._orig_config_dir = cs._CONFIG_DIR

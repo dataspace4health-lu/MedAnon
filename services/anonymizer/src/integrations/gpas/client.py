@@ -84,50 +84,6 @@ def gpas_pseudonymize_batch(values, params):
     return result
 
 
-def gpas_pseudonymize_value(original_value, params):
-    """Pseudonymize a single value via gPAS and return the pseudonym string.
-
-    This is a lower-level helper used by the reference-rewriting pass.
-    It shares the same cache as the path-based action handlers.
-    """
-    mapping = gpas_pseudonymize_batch([str(original_value)], params)
-    return mapping.get(str(original_value))
-
-
-# ---------------------------------------------------------------------------
-# Path-based action handlers
-# ---------------------------------------------------------------------------
-# Follow the shared SPE-FHIR-BlackBox action signature:
-#   action_by_path(resource, el, params)
-# where el = {'path': 'Patient.id', 'value': 'some-value'}
-
-def gpas_pseudonymize_by_path(resource, el, params):
-    """Pseudonymize a single matched value via gPAS $pseudonymizeAllowCreate.
-
-    Required params:
-        gpas_url: gPAS base URL (e.g. https://host:port/ttp-fhir/fhir/gpas)
-        gpas_domain: gPAS domain name (e.g. "MIRACUM")
-
-    Optional params:
-        gpas_operation: "pseudonymizeAllowCreate" (default) or "pseudonymize"
-        gpas_token / GPAS_TOKEN env: Bearer token for auth
-        gpas_timeout_sec: HTTP timeout (default 30)
-    """
-    original_value = str(el['value']) if not isinstance(el['value'], dict) else json.dumps(el['value'])
-    mapping = gpas_pseudonymize_batch([original_value], params)
-    pseudonym = mapping.get(original_value)
-
-    if pseudonym is None:
-        raise ValueError(f'gPAS did not return a pseudonym for value (path={el["path"]})')
-
-    path = el['path'].split('.')[1:]
-    if len(path) == 0:
-        resource.clear()
-        return
-    ret = find_nodes(resource, path[:-1], [])
-    _substitute_nodes(ret, path[-1], el['value'], pseudonym)
-
-
 def gpas_depseudonymize_by_path(resource, el, params):
     """De-pseudonymize a single matched value via gPAS $dePseudonymize.
 

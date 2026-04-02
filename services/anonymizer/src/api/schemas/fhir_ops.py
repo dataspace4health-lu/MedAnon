@@ -39,6 +39,13 @@ class AndUploadRequest(BaseModel):
     resource: dict[str, Any]
     target_token: str | None = None
     timeout: float = 30.0
+    config_profile: str | None = Field(
+        default=None,
+        description=(
+            "De-identification profile to apply before upload. "
+            "Defaults to MEDANON_TARGET_CONFIG_PROFILE env var (structural)."
+        ),
+    )
 
 
 class RoundTripRequest(BaseModel):
@@ -51,6 +58,13 @@ class RoundTripRequest(BaseModel):
     source_token: str | None = None
     target_token: str | None = None
     timeout: float = 30.0
+    config_profile: str | None = Field(
+        default=None,
+        description=(
+            "De-identification profile to apply before upload. "
+            "Defaults to MEDANON_TARGET_CONFIG_PROFILE env var (structural)."
+        ),
+    )
 
 
 class BulkExportRequest(BaseModel):
@@ -73,4 +87,16 @@ class CohortRequest(BaseModel):
     search_params: dict[str, Any] = Field(default_factory=dict)
     everything_params: dict[str, Any] = Field(default_factory=dict)
     token: str | None = None
+    timeout: float = 30.0
+
+
+class UploadToTargetRequest(BaseModel):
+    """Request body for POST /upload-to-target."""
+
+    resources: list[dict[str, Any]]
+    target_server_url: str | None = Field(
+        default=None,
+        description="Target FHIR server URL. Defaults to FHIR_TARGET_URL env var.",
+    )
+    target_token: str | None = None
     timeout: float = 30.0

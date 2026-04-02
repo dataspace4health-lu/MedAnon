@@ -167,7 +167,7 @@ def _validate_and_write(name: str, description: str, rules: list[RuleIn], genera
 
 
 def _get_store():
-    from pipeline.config_store import _config_store
+    from pipeline.config.store import _config_store
     if _config_store is None:
         raise HTTPException(status_code=503, detail="Config store not initialised.")
     return _config_store

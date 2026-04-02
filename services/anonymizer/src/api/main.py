@@ -70,7 +70,7 @@ async def _startup() -> None:
     max_concurrent = int(os.environ.get("MEDANON_JOB_WORKERS", "3"))
     try:
         from pipeline.jobs import init_job_store
-        from pipeline import worker as _worker
+        from pipeline.jobs import worker as _worker
 
         job_store = None
         if redis_url:
@@ -83,6 +83,20 @@ async def _startup() -> None:
 
         store = init_job_store(store=job_store)
         _worker.init_worker(store, max_concurrent=max_concurrent)
+
+        # Staging store — two-phase large-scale export (opt-in via MEDANON_STAGING_DB_URL)
+        staging_url = os.environ.get("MEDANON_STAGING_DB_URL", "").strip()
+        if staging_url:
+            try:
+                from integrations.staging.store import StagingStore
+                retention_days = int(os.environ.get("MEDANON_STAGING_RETENTION_DAYS", "30"))
+                staging_store = StagingStore(staging_url, retention_days=retention_days)
+                staging_store.ensure_schema()
+                _worker.init_staging(staging_store)
+                logger.info("staging_store=postgres retention_days=%d", retention_days)
+            except Exception as exc:
+                logger.warning("staging_store_setup_failed falling_back=streaming: %s", exc)
+
         asyncio.create_task(_worker.worker_loop())
         logger.info("job_worker started max_concurrent=%d", max_concurrent)
     except Exception as exc:
@@ -99,12 +113,25 @@ async def _startup() -> None:
 
     # Config metadata store (user-defined config profiles)
     try:
-        from pipeline.config_store import init_config_store
+        from pipeline.config.store import init_config_store
         config_store_db = os.environ.get("MEDANON_CONFIG_STORE_DB", "/output/config_store.db")
         init_config_store(config_store_db)
         logger.info("config_store started path=%s", config_store_db)
     except Exception as exc:
         logger.warning("config_store_start_failed: %s", exc)
+
+    # Pre-warm the NLP adapter (Presidio + spaCy) in the background so the
+    # first user request is not blocked by the 3-second model load.
+    async def _prewarm_nlp() -> None:
+        try:
+            loop = asyncio.get_event_loop()
+            from pipeline.deidentify import _get_nlp_adapter
+            await loop.run_in_executor(None, _get_nlp_adapter)
+            logger.info("nlp_prewarm complete")
+        except Exception as exc:
+            logger.debug("nlp_prewarm skipped: %s", exc)
+
+    asyncio.create_task(_prewarm_nlp())
 
 app.state.limiter = limiter
 if RateLimitExceeded is not None:

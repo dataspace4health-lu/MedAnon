@@ -6,7 +6,7 @@ unittest.TestCase, helper functions, no fixtures, stdlib only.
 import re
 import unittest
 
-from analytics.synthetic import (
+from medanon_core.analytics.synthetic import (
     generate_synthetic_patients,
     generate_synthetic_conditions,
     _extract_distributions,

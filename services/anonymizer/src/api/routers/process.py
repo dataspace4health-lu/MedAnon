@@ -148,8 +148,9 @@ async def process_batch(
     - ``application/json`` / ``application/fhir+json`` — single resource or Bundle
     - ``application/xml`` / ``application/fhir+xml`` — single resource or Bundle
 
-    Bundles are automatically unwrapped: each ``entry.resource`` is processed
-    individually.  Returns a streaming NDJSON response.
+    Bundles are processed as a whole to preserve cross-resource reference
+    rewriting, then each entry resource is streamed as NDJSON.
+    Non-Bundle inputs are unwrapped and streamed individually.
     """
     body = await request.body()
     if len(body) > MAX_BODY_BYTES:
@@ -163,15 +164,26 @@ async def process_batch(
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"Could not parse input: {exc}") from exc
 
-    resources = _unwrap_to_resources(payload)
     runtime_settings = _runtime_settings(settings)
 
+    # Bundles are processed as a whole so cross-resource reference rewriting
+    # (pre/post ID snapshot + _rewrite_references) is preserved.
+    is_bundle = isinstance(payload, dict) and payload.get("resourceType") == "Bundle"
+
     async def _generate():
-        async for line in _service.process_resource_stream(resources, runtime_settings):
-            if await request.is_disconnected():
-                logger.info("process_batch: client disconnected")
-                break
-            yield line + "\n"
+        if is_bundle:
+            async for line in _service.process_bundle_stream(payload, runtime_settings):
+                if await request.is_disconnected():
+                    logger.info("process_batch: client disconnected")
+                    break
+                yield line + "\n"
+        else:
+            resources = _unwrap_to_resources(payload)
+            async for line in _service.process_resource_stream(resources, runtime_settings):
+                if await request.is_disconnected():
+                    logger.info("process_batch: client disconnected")
+                    break
+                yield line + "\n"
 
     return StreamingResponse(_generate(), media_type="application/x-ndjson")
 

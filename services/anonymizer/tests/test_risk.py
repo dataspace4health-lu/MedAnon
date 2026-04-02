@@ -7,7 +7,7 @@ from pathlib import Path
 # Allow running from repo root or services/anonymizer/
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from analytics.risk import (
+from medanon_core.analytics.risk import (
     assess_risk,
     build_conditions_map,
     compute_k_anonymity,

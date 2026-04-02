@@ -18,6 +18,11 @@ class BulkExportJobRequest(BaseModel):
     token: str | None = None
     timeout: float = 30.0
     config_profile: str = "auto"
+    target_url: str | None = Field(
+        default=None,
+        description="Target FHIR server URL. De-identified resources are PUT here after processing. Defaults to FHIR_TARGET_URL env var when set.",
+    )
+    target_token: str | None = None
 
 
 class CohortJobRequest(BaseModel):
@@ -30,3 +35,24 @@ class CohortJobRequest(BaseModel):
     token: str | None = None
     timeout: float = 30.0
     config_profile: str = "auto"
+    target_url: str | None = Field(
+        default=None,
+        description="Target FHIR server URL. De-identified resources are PUT here after processing. Defaults to FHIR_TARGET_URL env var when set.",
+    )
+    target_token: str | None = None
+
+
+class PatientExportJobRequest(BaseModel):
+    """Request body for POST /v1/jobs/patient-export."""
+
+    server_url: str | None = None
+    patient_id: str
+    patient_name: str | None = None
+    token: str | None = None
+    timeout: float = 30.0
+    config_profile: str = "auto"
+    target_url: str | None = Field(
+        default=None,
+        description="Target FHIR server URL. De-identified resources are PUT here after processing. Defaults to FHIR_TARGET_URL env var when set.",
+    )
+    target_token: str | None = None

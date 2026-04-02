@@ -28,6 +28,7 @@ if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 
 from integrations.fhir import client as fhir_client
+from integrations.fhir import _transport as _fhir_transport
 
 
 # ---------------------------------------------------------------------------
@@ -47,6 +48,22 @@ def _mock_response(status=200, body=None, headers=None):
     else:
         resp.data = json.dumps(body).encode("utf-8")
     resp.headers = headers or {}
+    return resp
+
+
+def _mock_streaming_response(status=200, body=b""):
+    """Create a mock urllib3 response for urlopen(preload_content=False) streaming.
+
+    The response exposes ``.status``, ``.stream(chunk_size)``, and
+    ``.release_conn()`` — the interface used by _download_bulk_ndjson.
+    """
+    resp = MagicMock()
+    resp.status = status
+    if isinstance(body, str):
+        body = body.encode("utf-8")
+    elif not isinstance(body, bytes):
+        body = json.dumps(body).encode("utf-8")
+    resp.stream.return_value = iter([body])
     return resp
 
 
@@ -101,9 +118,23 @@ class TestValidation(unittest.TestCase):
     # -- resource ID ---------------------------------------------------------
 
     def test_valid_resource_ids(self):
-        for rid in ("123", "abc-def", "patient.1", "A_B-C.0"):
+        # FHIR R4 allows [A-Za-z0-9\-.]{1,64} — underscores are NOT valid
+        for rid in ("123", "abc-def", "patient.1", "A-B-C.0"):
             result = fhir_client._validate_resource_id(rid)
             self.assertEqual(result, rid)
+
+    def test_underscore_id_rejected(self):
+        """FHIR R4 §2.1.0.1: underscore is not in the id grammar."""
+        with self.assertRaises(ValueError):
+            fhir_client._validate_resource_id("A_B-C.0")
+
+    def test_sanitise_resource_id_replaces_underscores(self):
+        self.assertEqual(fhir_client._sanitise_resource_id("rid_1234567890"), "rid-1234567890")
+        self.assertEqual(fhir_client._sanitise_resource_id("pat_0987654321"), "pat-0987654321")
+
+    def test_sanitise_resource_id_truncates_to_64(self):
+        long_id = "a" * 70
+        self.assertEqual(len(fhir_client._sanitise_resource_id(long_id)), 64)
 
     def test_resource_id_with_slash_rejected(self):
         with self.assertRaises(ValueError):
@@ -459,7 +490,7 @@ class TestFetchResourceType(unittest.TestCase):
         bundle_with_next = _bundle([patient], next_url="http://fhir:8080/fhir/Patient?page=next")
         mock_resp = _mock_response(200, bundle_with_next)
 
-        with patch.object(fhir_client, "_FHIR_MAX_PAGES", 3):
+        with patch.object(_fhir_transport, "_FHIR_MAX_PAGES", 3):
             with patch.object(fhir_client._pool, "request", return_value=mock_resp):
                 result = list(fhir_client.fetch_resource_type(
                     "http://fhir:8080/fhir", "Patient",
@@ -507,7 +538,7 @@ class TestFetchResourceType(unittest.TestCase):
         """When FHIR_PAGE_SIZE is 0 (default), no _count param is sent."""
         bundle = _bundle([])
         mock_resp = _mock_response(200, bundle)
-        with patch.object(fhir_client, "_FHIR_PAGE_SIZE", 0):
+        with patch.object(_fhir_transport, "_FHIR_PAGE_SIZE", 0):
             with patch.object(fhir_client._pool, "request", return_value=mock_resp) as mock_req:
                 list(fhir_client.fetch_resource_type(
                     "http://fhir:8080/fhir", "Patient",
@@ -519,7 +550,7 @@ class TestFetchResourceType(unittest.TestCase):
         """When FHIR_PAGE_SIZE > 0, _count param is included."""
         bundle = _bundle([])
         mock_resp = _mock_response(200, bundle)
-        with patch.object(fhir_client, "_FHIR_PAGE_SIZE", 500):
+        with patch.object(_fhir_transport, "_FHIR_PAGE_SIZE", 500):
             with patch.object(fhir_client._pool, "request", return_value=mock_resp) as mock_req:
                 list(fhir_client.fetch_resource_type(
                     "http://fhir:8080/fhir", "Patient",
@@ -628,7 +659,7 @@ class TestFetchEverything(unittest.TestCase):
         """When FHIR_PAGE_SIZE is 0, $everything URL has no _count."""
         bundle = _bundle([])
         mock_resp = _mock_response(200, bundle)
-        with patch.object(fhir_client, "_FHIR_PAGE_SIZE", 0):
+        with patch.object(_fhir_transport, "_FHIR_PAGE_SIZE", 0):
             with patch.object(fhir_client._pool, "request", return_value=mock_resp) as mock_req:
                 list(fhir_client.fetch_everything(
                     "http://fhir:8080/fhir", "Patient", "p1",
@@ -641,7 +672,7 @@ class TestFetchEverything(unittest.TestCase):
         """When FHIR_PAGE_SIZE > 0, $everything includes _count."""
         bundle = _bundle([])
         mock_resp = _mock_response(200, bundle)
-        with patch.object(fhir_client, "_FHIR_PAGE_SIZE", 1000):
+        with patch.object(_fhir_transport, "_FHIR_PAGE_SIZE", 1000):
             with patch.object(fhir_client._pool, "request", return_value=mock_resp) as mock_req:
                 list(fhir_client.fetch_everything(
                     "http://fhir:8080/fhir", "Patient", "p1",
@@ -663,7 +694,7 @@ class TestFetchEverything(unittest.TestCase):
         bundle_with_next = _bundle([patient], next_url="http://fhir:8080/fhir?_getpages=x&page=next")
         mock_resp = _mock_response(200, bundle_with_next)
 
-        with patch.object(fhir_client, "_FHIR_MAX_PAGES", 2):
+        with patch.object(_fhir_transport, "_FHIR_MAX_PAGES", 2):
             with patch.object(fhir_client._pool, "request", return_value=mock_resp):
                 result = list(fhir_client.fetch_everything(
                     "http://fhir:8080/fhir", "Patient", "p1",
@@ -788,41 +819,59 @@ class TestUploadResources(unittest.TestCase):
             {"resourceType": "Patient", "id": "p1"},
             {"resourceType": "Observation", "id": "o1"},
         ]
-        # Each post_resource call returns the resource
-        resp1 = _mock_response(200, {"resourceType": "Patient", "id": "p1"})
-        resp2 = _mock_response(200, {"resourceType": "Observation", "id": "o1"})
-        with patch.object(fhir_client._pool, "request", side_effect=[resp1, resp2]):
+        # upload_resources sends a single batch Bundle; mock the batch-response
+        batch_resp = {
+            "resourceType": "Bundle", "type": "batch-response",
+            "entry": [
+                {"response": {"status": "200 OK", "location": "Patient/p1/_history/1"}},
+                {"response": {"status": "200 OK", "location": "Observation/o1/_history/1"}},
+            ],
+        }
+        with patch.object(fhir_client._pool, "request", return_value=_mock_response(200, batch_resp)):
             results = list(fhir_client.upload_resources(
                 "http://fhir:8080/fhir", resources,
             ))
         self.assertEqual(len(results), 2)
-        self.assertTrue(results[0]["success"])
-        self.assertEqual(results[0]["resourceType"], "Patient")
-        self.assertEqual(results[0]["source_id"], "p1")
-        self.assertEqual(results[0]["server_id"], "p1")
-        self.assertIsNone(results[0]["error"])
-        self.assertTrue(results[1]["success"])
+        # Patient is tier-0, sorted first
+        patient = next(r for r in results if r["resourceType"] == "Patient")
+        self.assertTrue(patient["success"])
+        self.assertEqual(patient["source_id"], "p1")
+        self.assertEqual(patient["server_id"], "p1")
+        self.assertIsNone(patient["error"])
+        obs = next(r for r in results if r["resourceType"] == "Observation")
+        self.assertTrue(obs["success"])
 
     def test_captures_errors_without_raising(self):
         resources = [
             {"resourceType": "Patient", "id": "p1"},
             {"resourceType": "Patient", "id": "p2"},
         ]
-        # First succeeds, second fails with 500
-        resp_ok = _mock_response(200, {"resourceType": "Patient", "id": "p1"})
-        resp_fail = _mock_response(500, {"error": "internal"})
-        with patch.object(fhir_client._pool, "request", side_effect=[resp_ok, resp_fail]):
+        # Batch response: first entry 200, second entry 422 with OperationOutcome
+        batch_resp = {
+            "resourceType": "Bundle", "type": "batch-response",
+            "entry": [
+                {"response": {"status": "200 OK", "location": "Patient/p1/_history/1"}},
+                {"response": {
+                    "status": "422 Unprocessable Entity",
+                    "outcome": {
+                        "resourceType": "OperationOutcome",
+                        "issue": [{"severity": "error", "diagnostics": "invalid resource"}],
+                    },
+                }},
+            ],
+        }
+        with patch.object(fhir_client._pool, "request", return_value=_mock_response(200, batch_resp)):
             results = list(fhir_client.upload_resources(
                 "http://fhir:8080/fhir", resources,
             ))
         self.assertEqual(len(results), 2)
-        # First resource succeeded
-        self.assertTrue(results[0]["success"])
-        self.assertEqual(results[0]["server_id"], "p1")
-        # Second resource failed but did not raise
-        self.assertFalse(results[1]["success"])
-        self.assertIsNone(results[1]["server_id"])
-        self.assertIn("FHIR server error", results[1]["error"])
+        ok = next(r for r in results if r["source_id"] == "p1")
+        self.assertTrue(ok["success"])
+        self.assertEqual(ok["server_id"], "p1")
+        fail = next(r for r in results if r["source_id"] == "p2")
+        self.assertFalse(fail["success"])
+        self.assertIsNone(fail["server_id"])
+        self.assertIn("HTTP 422", fail["error"])
 
     def test_empty_resources_yields_nothing(self):
         results = list(fhir_client.upload_resources(
@@ -838,13 +887,76 @@ class TestUploadResources(unittest.TestCase):
         ))
         self.assertEqual(len(results), 1)
         self.assertFalse(results[0]["success"])
-        self.assertIn("error", results[0]["error"].lower())
+        self.assertIn("missing", results[0]["error"].lower())
+
+    def test_numeric_id_prefix_rewrites_references(self):
+        """Encounter references Organization/403631247; org is stored as p-403631247.
+        upload_resources must rewrite the Encounter reference before upload."""
+        resources = [
+            {"resourceType": "Organization", "id": "403631247", "name": "General"},
+            {
+                "resourceType": "Encounter", "id": "enc1",
+                "serviceProvider": {"reference": "Organization/403631247"},
+            },
+        ]
+        # Two resources → one batch; response has 2 entries
+        batch_resp = {
+            "resourceType": "Bundle", "type": "batch-response",
+            "entry": [
+                {"response": {"status": "200 OK", "location": "Organization/p-403631247/_history/1"}},
+                {"response": {"status": "200 OK", "location": "Encounter/enc1/_history/1"}},
+            ],
+        }
+        with patch.object(fhir_client._pool, "request", return_value=_mock_response(200, batch_resp)) as mock_req:
+            results = list(fhir_client.upload_resources("http://fhir:8080/fhir", resources))
+        # Verify the Encounter entry sent to HAPI has the rewritten reference
+        call_body = json.loads(mock_req.call_args[1]["body"])
+        enc_entry = next(e for e in call_body["entry"] if e["resource"]["resourceType"] == "Encounter")
+        self.assertEqual(
+            enc_entry["resource"]["serviceProvider"]["reference"],
+            "Organization/p-403631247",
+        )
+        self.assertEqual(len(results), 2)
+        self.assertTrue(all(r["success"] for r in results))
+
+    def test_compute_id_map_returns_changed_ids_only(self):
+        """_compute_id_map only includes IDs that are actually transformed."""
+        resources = [
+            {"resourceType": "Patient", "id": "123456789"},      # numeric → p-123456789
+            {"resourceType": "Organization", "id": "normal-id"}, # unchanged
+            {"resourceType": "Practitioner", "id": "rid_abc"},   # underscore → rid-abc
+        ]
+        id_map = fhir_client._compute_id_map(resources)
+        self.assertIn(("Patient", "123456789"), id_map)
+        self.assertEqual(id_map[("Patient", "123456789")], "p-123456789")
+        self.assertIn(("Practitioner", "rid_abc"), id_map)
+        self.assertEqual(id_map[("Practitioner", "rid_abc")], "rid-abc")
+        self.assertNotIn(("Organization", "normal-id"), id_map)
+
+    def test_rewrite_references_plain(self):
+        """_rewrite_references rewrites plain Type/id references."""
+        id_map = {("Organization", "403631247"): "p-403631247"}
+        resource = {"serviceProvider": {"reference": "Organization/403631247"}}
+        result = fhir_client._rewrite_references(resource, id_map)
+        self.assertEqual(result["serviceProvider"]["reference"], "Organization/p-403631247")
+
+    def test_rewrite_references_versioned_unchanged(self):
+        """_rewrite_references leaves versioned references (Type/id/_history/N) alone."""
+        id_map = {("Patient", "123"): "p-123"}
+        resource = {"subject": {"reference": "Patient/123/_history/1"}}
+        result = fhir_client._rewrite_references(resource, id_map)
+        self.assertEqual(result["subject"]["reference"], "Patient/123/_history/1")
 
     def test_server_assigns_new_id(self):
-        """When resource has no id, server assigns one via POST."""
+        """When resource has no id, server assigns one via POST; id comes from Location header."""
         resources = [{"resourceType": "Patient", "gender": "male"}]
-        resp = _mock_response(200, {"resourceType": "Patient", "id": "server-new-1"})
-        with patch.object(fhir_client._pool, "request", return_value=resp):
+        batch_resp = {
+            "resourceType": "Bundle", "type": "batch-response",
+            "entry": [
+                {"response": {"status": "201 Created", "location": "Patient/server-new-1/_history/1"}},
+            ],
+        }
+        with patch.object(fhir_client._pool, "request", return_value=_mock_response(200, batch_resp)):
             results = list(fhir_client.upload_resources(
                 "http://fhir:8080/fhir", resources,
             ))
@@ -1077,17 +1189,17 @@ class TestPollBulkStatus(unittest.TestCase):
 
     @patch("time.sleep")
     def test_clamps_retry_after(self, mock_sleep):
-        """Retry-After > 120 gets clamped."""
+        """Retry-After > 10 gets clamped."""
         pending = _mock_response(202, "", headers={"Retry-After": "999"})
         manifest = {"output": []}
         done = _mock_response(200, manifest)
         with patch.object(fhir_client._pool, "request", side_effect=[pending, done]):
             fhir_client._poll_bulk_status("http://fhir:8080/status/1")
-        mock_sleep.assert_called_with(120)
+        mock_sleep.assert_called_with(10)
 
     def test_timeout_exceeded_raises(self):
         pending = _mock_response(202, "")
-        with patch.object(fhir_client, "_FHIR_BULK_POLL_TIMEOUT", 0):
+        with patch.object(_fhir_transport, "_FHIR_BULK_POLL_TIMEOUT", 0):
             with patch.object(fhir_client._pool, "request", return_value=pending):
                 with self.assertRaises(ValueError) as ctx:
                     fhir_client._poll_bulk_status("http://fhir:8080/status/1")
@@ -1116,8 +1228,8 @@ class TestDownloadBulkNdjson(unittest.TestCase):
             '{"resourceType":"Patient","id":"p2"}\n'
             '{"resourceType":"Observation","id":"o1"}\n'
         )
-        mock_resp = _mock_response(200, ndjson)
-        with patch.object(fhir_client._pool, "request", return_value=mock_resp):
+        mock_resp = _mock_streaming_response(200, ndjson)
+        with patch.object(fhir_client._pool, "urlopen", return_value=mock_resp):
             result = list(fhir_client._download_bulk_ndjson("http://fhir:8080/binary/1"))
         self.assertEqual(len(result), 3)
         self.assertEqual(result[0]["id"], "p1")
@@ -1125,21 +1237,21 @@ class TestDownloadBulkNdjson(unittest.TestCase):
 
     def test_skips_empty_lines(self):
         ndjson = '{"resourceType":"Patient","id":"p1"}\n\n\n{"resourceType":"Patient","id":"p2"}\n'
-        mock_resp = _mock_response(200, ndjson)
-        with patch.object(fhir_client._pool, "request", return_value=mock_resp):
+        mock_resp = _mock_streaming_response(200, ndjson)
+        with patch.object(fhir_client._pool, "urlopen", return_value=mock_resp):
             result = list(fhir_client._download_bulk_ndjson("http://fhir:8080/binary/1"))
         self.assertEqual(len(result), 2)
 
     def test_http_error_raises(self):
-        mock_resp = _mock_response(404, {})
-        with patch.object(fhir_client._pool, "request", return_value=mock_resp):
+        mock_resp = _mock_streaming_response(404, b"")
+        with patch.object(fhir_client._pool, "urlopen", return_value=mock_resp):
             with self.assertRaises(ValueError):
                 list(fhir_client._download_bulk_ndjson("http://fhir:8080/binary/1"))
 
     def test_malformed_json_raises(self):
         ndjson = '{"valid":"json"}\nnot valid json\n'
-        mock_resp = _mock_response(200, ndjson)
-        with patch.object(fhir_client._pool, "request", return_value=mock_resp):
+        mock_resp = _mock_streaming_response(200, ndjson)
+        with patch.object(fhir_client._pool, "urlopen", return_value=mock_resp):
             with self.assertRaises(ValueError) as ctx:
                 list(fhir_client._download_bulk_ndjson("http://fhir:8080/binary/1"))
             self.assertIn("Malformed NDJSON", str(ctx.exception))
@@ -1170,13 +1282,16 @@ class TestBulkExport(unittest.TestCase):
     def test_system_level_full_flow(self, _sleep):
         """System-level export: kickoff → poll → download → cleanup → yields resources."""
         resources = [{"resourceType": "Patient", "id": "p1"}, {"resourceType": "Patient", "id": "p2"}]
-        responses = [
+        ndjson = "\n".join(json.dumps(r) for r in resources)
+        request_responses = [
             self._kickoff_resp(),                                    # kickoff
             self._manifest_resp(["http://fhir:8080/binary/1"]),     # poll
-            self._ndjson_resp(resources),                            # download
             self._delete_resp(),                                     # cleanup
         ]
-        with patch.object(fhir_client._pool, "request", side_effect=responses):
+        with (
+            patch.object(fhir_client._pool, "request", side_effect=request_responses),
+            patch.object(fhir_client._pool, "urlopen", return_value=_mock_streaming_response(200, ndjson)),
+        ):
             result = list(fhir_client.bulk_export("http://fhir:8080/fhir"))
         self.assertEqual(len(result), 2)
         self.assertEqual(result[0]["id"], "p1")
@@ -1242,14 +1357,19 @@ class TestBulkExport(unittest.TestCase):
     @patch("time.sleep")
     def test_multiple_output_files(self, _sleep):
         """All output files are downloaded and resources from each are yielded."""
-        responses = [
+        request_responses = [
             self._kickoff_resp(),
             self._manifest_resp(["http://fhir:8080/binary/1", "http://fhir:8080/binary/2"]),
-            self._ndjson_resp([{"resourceType": "Patient", "id": "p1"}]),
-            self._ndjson_resp([{"resourceType": "Observation", "id": "o1"}]),
             self._delete_resp(),
         ]
-        with patch.object(fhir_client._pool, "request", side_effect=responses):
+        download_responses = [
+            _mock_streaming_response(200, json.dumps({"resourceType": "Patient", "id": "p1"})),
+            _mock_streaming_response(200, json.dumps({"resourceType": "Observation", "id": "o1"})),
+        ]
+        with (
+            patch.object(fhir_client._pool, "request", side_effect=request_responses),
+            patch.object(fhir_client._pool, "urlopen", side_effect=download_responses),
+        ):
             result = list(fhir_client.bulk_export("http://fhir:8080/fhir"))
         self.assertEqual(len(result), 2)
         self.assertEqual(result[0]["resourceType"], "Patient")
@@ -1258,13 +1378,16 @@ class TestBulkExport(unittest.TestCase):
     @patch("time.sleep")
     def test_cleanup_failure_does_not_raise(self, _sleep):
         """DELETE failure during cleanup should not propagate."""
-        responses = [
+        request_responses = [
             self._kickoff_resp(),
             self._manifest_resp(["http://fhir:8080/binary/1"]),
-            self._ndjson_resp([{"resourceType": "Patient", "id": "p1"}]),
             _mock_response(500, {}),  # delete fails
         ]
-        with patch.object(fhir_client._pool, "request", side_effect=responses):
+        with (
+            patch.object(fhir_client._pool, "request", side_effect=request_responses),
+            patch.object(fhir_client._pool, "urlopen",
+                         return_value=_mock_streaming_response(200, json.dumps({"resourceType": "Patient", "id": "p1"}))),
+        ):
             result = list(fhir_client.bulk_export("http://fhir:8080/fhir"))
         self.assertEqual(len(result), 1)
 
@@ -1312,6 +1435,71 @@ class TestDeleteBulkExport(unittest.TestCase):
         with patch.object(fhir_client._pool, "request", return_value=mock_resp):
             # Should not raise
             fhir_client.delete_bulk_export("http://fhir:8080/status/1")
+
+
+# ===========================================================================
+# TestStripManifestTags
+# ===========================================================================
+
+class TestStripManifestTags(unittest.TestCase):
+    """_strip_manifest_tags removes MedAnon manifest tags before FHIR upload."""
+
+    def test_strips_manifest_tag(self):
+        resource = {
+            "resourceType": "Patient",
+            "id": "p1",
+            "meta": {
+                "tag": [
+                    {"system": "https://medanon.local/transformation-manifest",
+                     "code": "transformation-manifest",
+                     "display": '[{"rule":"redact patient name","action":"redact"}]'},
+                    {"system": "http://example.com", "code": "keep-me"},
+                ],
+            },
+        }
+        result = fhir_client._strip_manifest_tags(resource)
+        self.assertEqual(len(result["meta"]["tag"]), 1)
+        self.assertEqual(result["meta"]["tag"][0]["code"], "keep-me")
+        # Original unchanged
+        self.assertEqual(len(resource["meta"]["tag"]), 2)
+
+    def test_no_manifest_tag_returns_same_object(self):
+        resource = {
+            "resourceType": "Patient",
+            "meta": {"tag": [{"system": "http://example.com", "code": "ok"}]},
+        }
+        result = fhir_client._strip_manifest_tags(resource)
+        self.assertIs(result, resource)
+
+    def test_no_meta_returns_same_object(self):
+        resource = {"resourceType": "Patient", "id": "p1"}
+        result = fhir_client._strip_manifest_tags(resource)
+        self.assertIs(result, resource)
+
+    def test_post_resource_strips_manifest_before_upload(self):
+        """post_resource should strip manifest tags so HAPI varchar(200) is safe."""
+        long_display = json.dumps([{"rule": f"rule_{i}", "action": "redact"} for i in range(50)])
+        resource = {
+            "resourceType": "Patient",
+            "id": "p1",
+            "meta": {
+                "tag": [
+                    {"system": "https://medanon.local/transformation-manifest",
+                     "code": "transformation-manifest",
+                     "display": long_display},
+                ],
+            },
+        }
+        server_resp = {"resourceType": "Patient", "id": "p1"}
+        mock_resp = _mock_response(200, server_resp)
+        with patch.object(fhir_client._pool, "request", return_value=mock_resp) as mock_req:
+            fhir_client.post_resource("http://fhir:8080/fhir", resource)
+        # Verify the body sent to the server has no manifest tag
+        called_body = mock_req.call_args[1].get("body")
+        sent = json.loads(called_body)
+        tags = sent.get("meta", {}).get("tag", [])
+        manifest_tags = [t for t in tags if t.get("system") == "https://medanon.local/transformation-manifest"]
+        self.assertEqual(len(manifest_tags), 0)
 
 
 if __name__ == "__main__":

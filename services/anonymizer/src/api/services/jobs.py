@@ -1,5 +1,6 @@
 """Job queue service — manages async job lifecycle."""
 
+import json
 import logging
 import os
 
@@ -17,13 +18,15 @@ class JobService:
     """Manages async job creation, status queries, and result retrieval."""
 
     def _get_store(self):
-        from pipeline.jobs import _job_store
-        if _job_store is None:
+        import pipeline.jobs.store as _store_mod
+        if _store_mod._job_store is None:
             raise JobStoreUnavailable("Job store not initialised")
-        return _job_store
+        return _store_mod._job_store
 
     def _job_to_dict(self, job) -> dict:
         checkpoint = job.checkpoint_data or {}
+        # Support both old-style (lines_written) and staged (processed) checkpoint keys
+        processed = checkpoint.get("processed", checkpoint.get("lines_written", 0))
         return {
             "job_id": job.id,
             "type": job.type,
@@ -32,7 +35,8 @@ class JobService:
             "updated_at": job.updated_at,
             "result_path": job.result_path,
             "error": job.error,
-            "processed": checkpoint.get("lines_written", 0),
+            "processed": processed,
+            "staged_count": checkpoint.get("staged_count"),
             "phase": checkpoint.get("phase", "queued"),
         }
 
@@ -47,6 +51,13 @@ class JobService:
         """Create a cohort job. Returns the job dict."""
         store = self._get_store()
         job = store.create("cohort", {"server_url": server_url, **params})
+        store.notify_new_job(job.id)
+        return self._job_to_dict(job)
+
+    def submit_patient_export(self, server_url: str, params: dict) -> dict:
+        """Create a patient $everything export job. Returns the job dict."""
+        store = self._get_store()
+        job = store.create("patient-export", {"server_url": server_url, **params})
         store.notify_new_job(job.id)
         return self._job_to_dict(job)
 
@@ -99,3 +110,73 @@ class JobService:
         store.cancel(job_id)
         job = store.get(job_id)
         return self._job_to_dict(job)
+
+    def submit_reprocess(self, source_job_id: str, config_profile: str = "auto") -> dict:
+        """Queue a reprocess job that re-runs de-identification on staged rows.
+
+        Raises JobNotFound if the source job does not exist.
+        Raises JobStoreUnavailable if the job store is not initialised.
+        """
+        store = self._get_store()
+        if store.get(source_job_id) is None:
+            raise JobNotFound()
+        job = store.create("reprocess", {
+            "source_job_id": source_job_id,
+            "config_profile": config_profile,
+        })
+        store.notify_new_job(job.id)
+        return self._job_to_dict(job)
+
+    def upload_job_to_target(self, job_id: str, target_url: str, target_token: str | None = None, timeout: float = 30.0) -> dict:
+        """Read a completed job's NDJSON result and upload resources to target FHIR server.
+
+        Uses idempotent PUT (via upload_resources) so repeated calls are safe.
+        Returns {job_id, uploaded, errors, total}.
+        """
+        result_path = self.get_result_path(job_id)  # raises JobNotFound / JobNotComplete / JobResultMissing
+
+        from integrations.fhir.client import upload_resources
+
+        resources: list[dict] = []
+        with open(result_path, "r") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    resource = json.loads(line)
+                    if isinstance(resource, dict) and resource.get("resourceType") and "error" not in resource:
+                        resources.append(resource)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+        uploaded = 0
+        errors = 0
+        for result in upload_resources(target_url, resources, token=target_token, timeout=timeout):
+            if result["success"]:
+                uploaded += 1
+            else:
+                errors += 1
+
+        logger.info("upload_job_to_target job=%s uploaded=%d errors=%d target=%s", job_id, uploaded, errors, target_url)
+        return {"job_id": job_id, "uploaded": uploaded, "errors": errors, "total": uploaded + errors}
+
+    def get_staged_stats(self, job_id: str) -> dict:
+        """Return staging row counts for a bulk-export or cohort job.
+
+        Raises JobNotFound if the source job does not exist.
+        Raises JobStoreUnavailable otherwise.
+        Returns a dict with pending/done/error/total counts, or
+        ``{"staging": "unavailable"}`` when staging is not configured.
+        """
+        store = self._get_store()
+        if store.get(job_id) is None:
+            raise JobNotFound()
+
+        from pipeline.jobs import worker as _worker
+        staging = _worker._staging
+        if staging is None:
+            return {"job_id": job_id, "staging": "unavailable"}
+
+        counts = staging.count_by_status(job_id)
+        return {"job_id": job_id, **counts}

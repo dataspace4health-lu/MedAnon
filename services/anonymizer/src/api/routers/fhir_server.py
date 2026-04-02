@@ -23,6 +23,7 @@ from api.schemas.fhir_ops import (
     EverythingRequest,
     FromServerRequest,
     RoundTripRequest,
+    UploadToTargetRequest,
 )
 
 router = APIRouter()
@@ -136,7 +137,6 @@ async def process_everything(
 async def process_and_upload(
     request: Request,
     req: AndUploadRequest = Body(...),
-    settings: config.Settings = Depends(get_settings_dep),
 ):
     """De-identify a FHIR resource (or Bundle) and upload the result to a FHIR server.
 
@@ -146,6 +146,7 @@ async def process_and_upload(
       "target_server_url": "http://hapi-fhir:8080/fhir",
       "resource": { ...FHIR resource or Bundle... },
       "target_token": "optional-bearer-token",
+      "config_profile": "structural",
       "timeout": 30
     }
     ```
@@ -155,6 +156,13 @@ async def process_and_upload(
     { "uploaded": 2, "errors": 0, "results": [...] }
     ```
     """
+    from pipeline.config.service import get_settings as _get_settings
+    profile = (
+        req.config_profile
+        or os.environ.get("MEDANON_TARGET_CONFIG_PROFILE", "structural")
+    )
+    settings = _get_settings(profile)
+
     target_url = await _get_url_from_request_or_env(
         req.target_server_url, "FHIR_TARGET_URL", "target_server_url"
     )
@@ -184,7 +192,6 @@ async def process_and_upload(
 async def process_round_trip(
     request: Request,
     req: RoundTripRequest = Body(...),
-    settings: config.Settings = Depends(get_settings_dep),
 ):
     """Fetch from a source FHIR server, de-identify, and upload to a target server.
 
@@ -197,6 +204,7 @@ async def process_round_trip(
       "params":            {"_count": 100},
       "source_token":      "optional",
       "target_token":      "optional",
+      "config_profile":    "structural",
       "timeout":           30
     }
     ```
@@ -206,6 +214,13 @@ async def process_round_trip(
 
     Returns streaming NDJSON — one status line per resource.
     """
+    from pipeline.config.service import get_settings as _get_settings
+    profile = (
+        req.config_profile
+        or os.environ.get("MEDANON_TARGET_CONFIG_PROFILE", "structural")
+    )
+    settings = _get_settings(profile)
+
     source_url = await _get_url_from_request_or_env(
         req.source_server_url, "FHIR_SOURCE_URL", "source_server_url"
     )
@@ -322,4 +337,46 @@ async def process_cohort(
             yield line + "\n"
 
     return StreamingResponse(_generate(), media_type="application/x-ndjson")
+
+
+@router.post("/upload-to-target")
+@limiter.limit("20/minute")
+async def upload_to_target(
+    request: Request,
+    req: UploadToTargetRequest = Body(...),
+):
+    """Upload already-de-identified FHIR resources to the target FHIR server.
+
+    No re-processing is performed — resources are uploaded as-is via idempotent PUT.
+    Use this after reviewing de-identified results in the UI.
+
+    - Falls back to ``FHIR_TARGET_URL`` env when ``target_server_url`` is not provided.
+    - 400 if no target URL is available.
+    """
+    from api.deps import _validate_server_url
+
+    if req.target_server_url:
+        await _validate_server_url(req.target_server_url)
+        target_url = req.target_server_url.rstrip("/")
+    else:
+        target_url = os.environ.get("FHIR_TARGET_URL", "").rstrip("/")
+    if not target_url:
+        raise HTTPException(status_code=400, detail="No target URL provided and FHIR_TARGET_URL env var is not set")
+
+    target_token = req.target_token or os.environ.get("FHIR_TARGET_TOKEN") or None
+
+    from integrations.fhir.client import upload_resources
+
+    uploaded = 0
+    errors = 0
+    results = []
+    for result in upload_resources(target_url, req.resources, token=target_token, timeout=req.timeout):
+        if result["success"]:
+            uploaded += 1
+        else:
+            errors += 1
+        results.append(result)
+
+    logger.info("upload_to_target: uploaded=%d errors=%d target=%s", uploaded, errors, target_url)
+    return {"uploaded": uploaded, "errors": errors, "total": uploaded + errors, "results": results}
 

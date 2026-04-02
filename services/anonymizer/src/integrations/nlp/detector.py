@@ -90,6 +90,14 @@ def _get_analyzer():
                 nlp_configuration={
                     "nlp_engine_name": "spacy",
                     "models": [{"lang_code": "en", "model_name": "en_core_web_lg"}],
+                    "ner_model_configuration": {
+                        # Non-PHI spaCy entity types — suppress Presidio mapping warnings
+                        "labels_to_ignore": [
+                            "CARDINAL", "ORDINAL", "QUANTITY", "PERCENT",
+                            "MONEY", "PRODUCT", "WORK_OF_ART", "LAW",
+                            "LANGUAGE", "FAC", "EVENT",
+                        ],
+                    },
                 }
             )
             _ANALYZER = AnalyzerEngine(nlp_engine=provider.create_engine())
@@ -111,6 +119,46 @@ def _get_analyzer():
 _GLOBAL_TOKEN_STATE: dict = {"next": {}, "map": {}, "reverse": {}}
 _GLOBAL_TOKEN_LOCK = threading.Lock()
 _TOKEN_STATE_MAX_ENTRIES = 100_000
+
+# ---------------------------------------------------------------------------
+# Entity detection cache — avoid repeated spaCy inference for identical texts
+# ---------------------------------------------------------------------------
+
+_DETECTION_CACHE: dict = {}
+_DETECTION_CACHE_MAX = 20_000
+_DETECTION_CACHE_LOCK = threading.Lock()
+
+
+def _detect_entities_cached(text: str, entities: tuple, threshold: float, language: str) -> list:
+    """Run Presidio entity detection, caching results by text content.
+
+    The expensive spaCy NER pass is performed at most once per unique (text,
+    entities, threshold, language) combination.  Repeated occurrences — e.g.
+    templated FHIR narratives or identical coded-concept texts — skip
+    re-inference entirely.
+
+    Returns a list of ``(start, end, entity_type)`` tuples sorted descending
+    by start position, ready for right-to-left span replacement.
+    """
+    cache_key = (text, entities, threshold, language)
+    result = _DETECTION_CACHE.get(cache_key)
+    if result is not None:
+        return result
+
+    analyzer = _get_analyzer()
+    presidio_results = analyzer.analyze(text=text, entities=list(entities), language=language)
+    hits = sorted(
+        [(r.start, r.end, r.entity_type) for r in presidio_results if r.score >= threshold],
+        key=lambda h: h[0],
+        reverse=True,
+    )
+    with _DETECTION_CACHE_LOCK:
+        if len(_DETECTION_CACHE) >= _DETECTION_CACHE_MAX:
+            evict_count = _DETECTION_CACHE_MAX // 5
+            for key in list(_DETECTION_CACHE.keys())[:evict_count]:
+                del _DETECTION_CACHE[key]
+        _DETECTION_CACHE[cache_key] = hits
+    return hits
 
 
 def reset_global_token_state() -> None:
@@ -168,30 +216,29 @@ def _analyze_and_replace(
     token_state: dict,
     token_lock=None,
 ) -> str:
-    """Run Presidio NLP analysis on *text* and replace detected PHI spans."""
+    """Run Presidio NLP analysis on *text* and replace detected PHI spans.
+
+    Entity detection (the expensive spaCy pass) is cached by text content so
+    repeated identical strings — common in templated FHIR narratives — skip
+    re-inference.  Only the cheap replacement step runs on each call.
+    """
     if not text or not text.strip():
         return text
 
-    analyzer = _get_analyzer()
-    results = analyzer.analyze(text=text, entities=entities, language=language)
+    # Cached detection: (start, end, entity_type) tuples, sorted right-to-left.
+    hits = _detect_entities_cached(text, tuple(entities), threshold, language)
+    if not hits:
+        return text
 
-    # Sort descending by start position to replace from right-to-left
-    # so that earlier span offsets are not invalidated by replacements.
-    hits = sorted(
-        [r for r in results if r.score >= threshold],
-        key=lambda r: r.start,
-        reverse=True,
-    )
-
-    for hit in hits:
-        span = text[hit.start : hit.end]
+    for start, end, entity_type in hits:
+        span = text[start:end]
         if not span.strip():
             continue
         if mode == "redact":
-            replacement = f"[{hit.entity_type}]"
+            replacement = f"[{entity_type}]"
         else:
-            replacement = _tokenize(span, hit.entity_type, token_state, token_lock)
-        text = text[: hit.start] + replacement + text[hit.end :]
+            replacement = _tokenize(span, entity_type, token_state, token_lock)
+        text = text[:start] + replacement + text[end:]
 
     return text
 

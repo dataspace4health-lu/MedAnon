@@ -188,8 +188,8 @@ class TestProcess(unittest.TestCase):
 class TestFetch(unittest.TestCase):
     """Tests for the fetch subcommand: FHIR resource download."""
 
-    @patch("cli.main.get_capability_statement")
-    @patch("cli.main.fetch_all_resource_types")
+    @patch("cli.fetch.get_capability_statement")
+    @patch("cli.fetch.fetch_all_resource_types")
     def test_fetch_calls_fhir_client(self, mock_fetch_all, mock_cap):
         """fetch discovers types via /metadata and writes NDJSON output."""
         mock_cap.return_value = ["Patient"]
@@ -211,8 +211,8 @@ class TestFetch(unittest.TestCase):
             self.assertEqual(json.loads(lines[0])["id"], "test-1")
             self.assertEqual(json.loads(lines[1])["id"], "test-2")
 
-    @patch("cli.main.get_capability_statement")
-    @patch("cli.main.fetch_all_resource_types")
+    @patch("cli.fetch.get_capability_statement")
+    @patch("cli.fetch.fetch_all_resource_types")
     def test_fetch_server_flag(self, mock_fetch_all, mock_cap):
         """--server URL is forwarded to fetch_all_resource_types."""
         mock_cap.return_value = ["Patient"]
@@ -226,7 +226,7 @@ class TestFetch(unittest.TestCase):
             args, kwargs = mock_fetch_all.call_args
             self.assertEqual(args[0], "http://custom:8080/fhir")
 
-    @patch("cli.main.fetch_all_resource_types")
+    @patch("cli.fetch.fetch_all_resource_types")
     def test_fetch_explicit_resource_type(self, mock_fetch_all):
         """--resource-type bypasses /metadata discovery."""
         mock_fetch_all.return_value = iter([("Observation", _SIMPLE_OBSERVATION)])
@@ -242,7 +242,7 @@ class TestFetch(unittest.TestCase):
             # Second positional arg is the list of resource types
             self.assertEqual(args[1], ["Observation"])
 
-    @patch("cli.main.get_capability_statement")
+    @patch("cli.fetch.get_capability_statement")
     def test_fetch_discover_only(self, mock_cap):
         """--discover-only calls get_capability_statement and returns."""
         mock_cap.return_value = ["Patient", "Observation", "Condition"]
@@ -284,7 +284,7 @@ class TestFetch(unittest.TestCase):
 class TestEverything(unittest.TestCase):
     """Tests for the everything subcommand: FHIR $everything operation."""
 
-    @patch("cli.main.fetch_everything")
+    @patch("cli.everything.fetch_everything")
     def test_everything_calls_fetch_everything(self, mock_fetch_ev):
         """everything subcommand calls fetch_everything with correct args."""
         mock_fetch_ev.return_value = iter([
@@ -311,7 +311,7 @@ class TestEverything(unittest.TestCase):
             lines = output_path.read_text(encoding="utf-8").strip().splitlines()
             self.assertEqual(len(lines), 2)
 
-    @patch("cli.main.fetch_everything")
+    @patch("cli.everything.fetch_everything")
     def test_everything_writes_ndjson(self, mock_fetch_ev):
         """Output file contains one JSON object per line."""
         mock_fetch_ev.return_value = iter([_SIMPLE_PATIENT])
@@ -390,7 +390,7 @@ class TestEverything(unittest.TestCase):
 class TestPush(unittest.TestCase):
     """Tests for the push subcommand: upload resources to a FHIR server."""
 
-    @patch("cli.main.upload_resources")
+    @patch("cli.push.upload_resources")
     def test_push_reads_file_and_uploads(self, mock_upload):
         """push reads a JSON file and uploads its resources."""
         captured_resources = []
@@ -423,7 +423,7 @@ class TestPush(unittest.TestCase):
             self.assertEqual(captured_resources[0]["resourceType"], "Patient")
             self.assertEqual(captured_resources[0]["id"], "test-1")
 
-    @patch("cli.main.upload_resources")
+    @patch("cli.push.upload_resources")
     def test_push_ndjson_file(self, mock_upload):
         """push reads an NDJSON file and uploads multiple resources."""
         captured_resources = []
@@ -456,7 +456,7 @@ class TestPush(unittest.TestCase):
             self.assertEqual(captured_resources[0]["id"], "test-1")
             self.assertEqual(captured_resources[1]["id"], "obs-1")
 
-    @patch("cli.main.upload_resources")
+    @patch("cli.push.upload_resources")
     def test_push_server_flag(self, mock_upload):
         """--server URL is forwarded to upload_resources."""
         mock_upload.return_value = iter([
@@ -477,7 +477,7 @@ class TestPush(unittest.TestCase):
             args, kwargs = mock_upload.call_args
             self.assertEqual(args[0], "http://custom:9090/fhir")
 
-    @patch("cli.main.upload_resources")
+    @patch("cli.push.upload_resources")
     def test_push_handles_errors(self, mock_upload):
         """push handles upload error results without crashing."""
         mock_upload.return_value = iter([

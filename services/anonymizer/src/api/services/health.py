@@ -30,6 +30,14 @@ class HealthCheckService:
         if fhir_url:
             checks["fhir"] = self._probe_fhir(fhir_url, timeout)
 
+        fhir_target_url = os.environ.get("FHIR_TARGET_URL", "")
+        if fhir_target_url:
+            checks["fhir_target"] = self._probe_fhir(fhir_target_url, timeout)
+
+        redis_url = os.environ.get("MEDANON_REDIS_URL", "").strip()
+        if redis_url:
+            checks["redis"] = self._probe_redis(redis_url, timeout)
+
         nlp_model = os.environ.get("MEDANON_NLP_MODEL", "")
         if nlp_model:
             checks["nlp"] = self._probe_nlp()
@@ -38,7 +46,13 @@ class HealthCheckService:
 
     def _probe_gpas(self, url: str, timeout: float) -> str:
         try:
-            _ureq.urlopen(url.rstrip("/"), timeout=timeout)
+            # GPAS_URL is the FHIR operation base (e.g. http://host:port/ttp-fhir/fhir/gpas).
+            # Strip the trailing /gpas segment to reach the FHIR server root and probe
+            # /metadata — avoids the "Unknown resource type 'gpas'" WARN logged by WildFly
+            # when the old /gpas/gpasService?wsdl suffix was appended to the FHIR path.
+            fhir_base = url.rstrip("/").rsplit("/", 1)[0]
+            probe = f"{fhir_base}/metadata"
+            _ureq.urlopen(probe, timeout=timeout)
             return "ok"
         except urllib.error.HTTPError:
             # Any HTTP response (400, 401, etc.) means the service is reachable
@@ -53,6 +67,19 @@ class HealthCheckService:
             return "ok"
         except Exception as exc:
             logger.debug("readiness: fhir unreachable: %s", exc)
+            return "error"
+
+    def _probe_redis(self, url: str, timeout: float) -> str:
+        try:
+            import redis as _redis
+
+            client = _redis.StrictRedis.from_url(
+                url, socket_connect_timeout=timeout, socket_timeout=timeout
+            )
+            client.ping()
+            return "ok"
+        except Exception as exc:
+            logger.debug("readiness: redis unreachable: %s", exc)
             return "error"
 
     def _probe_nlp(self) -> str:

@@ -6,7 +6,7 @@ import re
 import unittest
 
 try:
-    from analytics.synthetic_sdv import (
+    from medanon_core.analytics.synthetic_sdv import (
         SDV_AVAILABLE,
         _flatten_patient,
         _flatten_condition,

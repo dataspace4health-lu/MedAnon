@@ -97,10 +97,15 @@ def _build_rule_index(rules: list) -> dict[str, list]:
 def _get_rules_for_resource(resource: dict, settings) -> list:
     """Return only the rules applicable to this resource's type."""
     rules = getattr(settings, "rules", [])
-    rules_id = id(rules)
-    if rules_id not in _rule_index_cache:
-        _rule_index_cache[rules_id] = _build_rule_index(rules)
-    index = _rule_index_cache[rules_id]
+    # Use a stable cache key — id(rules) can collide after GC frees the old
+    # object and allocates a new one at the same address.
+    rules_key = getattr(settings, "filename", None)
+    if rules_key and rules_key in _rule_index_cache:
+        index = _rule_index_cache[rules_key]
+    else:
+        index = _build_rule_index(rules)
+        if rules_key:
+            _rule_index_cache[rules_key] = index
 
     resource_type = resource.get("resourceType", "") if isinstance(resource, dict) else ""
     applicable = list(index.get(resource_type, []))

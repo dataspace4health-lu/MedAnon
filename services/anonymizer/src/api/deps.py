@@ -16,7 +16,7 @@ from pydantic import ValidationError as _ValidationError
 from api.schemas.processing import DynamicSettings as _DynamicSettings
 
 import pipeline.config as config
-from pipeline.config_service import get_settings  # noqa: F401 — re-exported for router imports
+from pipeline.config.service import get_settings  # noqa: F401 — re-exported for router imports
 
 # ---------------------------------------------------------------------------
 # Rate limiting (slowapi dependency)
@@ -177,12 +177,15 @@ def get_settings_dep(
 def _runtime_settings(base_settings, dynamic_settings=None):
     """Build a lightweight runtime settings object merging base config + dynamic overrides."""
     from api.schemas.processing import RuntimeSettings
+    # Propagate filename so the rule_matcher index cache can use a stable key.
+    filename = getattr(base_settings, 'filename', None)
     return RuntimeSettings(
         rules=getattr(base_settings, 'rules', []),
         processing_errors=getattr(base_settings, 'processing_errors', 'raise'),
         rewrite_references=getattr(base_settings, 'rewrite_references', False),
         rewrite_text_ids=getattr(base_settings, 'rewrite_text_ids', False),
         dynamic_rule_settings=dynamic_settings or {},
+        filename=filename,
     )
 
 

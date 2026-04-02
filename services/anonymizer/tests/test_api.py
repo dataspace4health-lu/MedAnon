@@ -53,7 +53,7 @@ def _get_client(**env_overrides):
             if mod in sys.modules:
                 del sys.modules[mod]
         from api.main import app
-        from pipeline.config_service import clear_settings_cache
+        from pipeline.config.service import clear_settings_cache
         # Clear the config cache so it reads from the test config dir
         clear_settings_cache()
         return TestClient(app, raise_server_exceptions=False)

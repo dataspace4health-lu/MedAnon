@@ -385,17 +385,16 @@ class TestPushIntegration(unittest.TestCase):
     @patch("integrations.fhir.client._pool.request")
     def test_push_processes_then_uploads(self, mock_http):
         """Verify push de-identifies THEN uploads to FHIR server."""
-        # Mock successful upload responses
-        def _upload_response(resource_id):
-            return _mock_response(201, {
-                "resourceType": "Patient",
-                "id": resource_id,
-            })
-
-        mock_http.side_effect = [
-            _upload_response("server-assigned-1"),
-            _upload_response("server-assigned-2"),
-        ]
+        # Mock a successful batch-response Bundle (upload_resources uses batch Bundles)
+        batch_response = {
+            "resourceType": "Bundle",
+            "type": "batch-response",
+            "entry": [
+                {"response": {"status": "201 Created", "location": "Patient/server-assigned-1"}},
+                {"response": {"status": "201 Created", "location": "Patient/server-assigned-2"}},
+            ],
+        }
+        mock_http.return_value = _mock_response(200, batch_response)
 
         # Create input with two patients with names
         input_path = self.tmpdir / "input.ndjson"
@@ -414,14 +413,20 @@ rules:
               "--server", "http://fhir:8080/fhir",
               "--config", str(config_path)])
 
-        # Verify 2 uploads happened
-        self.assertEqual(mock_http.call_count, 2)
+        # Verify 1 batch upload happened (batch Bundle with 2 entries)
+        self.assertEqual(mock_http.call_count, 1)
+
+        # Verify the batch Bundle contains 2 de-identified resources
+        uploaded_body = mock_http.call_args[1]["body"]
+        uploaded_bundle = json.loads(uploaded_body)
+        self.assertEqual(uploaded_bundle["resourceType"], "Bundle")
+        self.assertEqual(uploaded_bundle["type"], "batch")
+        self.assertEqual(len(uploaded_bundle["entry"]), 2)
 
         # Verify uploaded resources had names redacted
-        for call in mock_http.call_args_list:
-            uploaded_body = call[1]["body"]
-            uploaded_resource = json.loads(uploaded_body)
-            self.assertNotIn("name", uploaded_resource)  # Redaction applied before upload!
+        for entry in uploaded_bundle["entry"]:
+            resource = entry["resource"]
+            self.assertNotIn("name", resource)  # Redaction applied before upload!
 
     @patch("integrations.fhir.client._pool.request")
     def test_push_handles_upload_403(self, mock_http):

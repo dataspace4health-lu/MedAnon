@@ -11,7 +11,7 @@ from pipeline.subscriptions import (
     get_subscription_store,
 )
 from api.services.subscriptions import SubscriptionService, SubscriptionValidationError
-from pipeline.subscription_dispatcher import (
+from pipeline.subscriptions.dispatcher import (
     _matches_criteria,
     _build_notification_bundle,
     dispatch_subscriptions,

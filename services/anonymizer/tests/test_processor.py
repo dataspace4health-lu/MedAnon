@@ -68,7 +68,11 @@ class TestProcessor(unittest.TestCase):
         resource = read_resource_from_file(resource_filename)
         settings = Settings(config_filename)
 
-        ret = process_data(resource, settings)
+        with patch.dict(os.environ, {
+            'MEDANON_HASH_KEY': '',
+            'MEDANON_HASH_ALLOW_PLAIN': 'true',
+        }, clear=False):
+            ret = process_data(resource, settings)
 
         # Patient.name is redacted in default config — just verify resource type intact
         self.assertEqual(ret['resourceType'], 'Patient')
@@ -100,7 +104,11 @@ class TestProcessor(unittest.TestCase):
         }
         settings = Settings(config_filename)
 
-        ret = process_data(resource, settings)
+        with patch.dict(os.environ, {
+            'MEDANON_HASH_KEY': '',
+            'MEDANON_HASH_ALLOW_PLAIN': 'true',
+        }, clear=False):
+            ret = process_data(resource, settings)
 
         self.assertEqual(ret['resourceType'], 'Bundle')
         # Patient.name is redacted in default config — the key should be gone
@@ -127,7 +135,11 @@ class TestProcessor(unittest.TestCase):
             ]
         }
 
-        ret = process_data(resource, settings)
+        with patch.dict(os.environ, {
+            'MEDANON_HASH_KEY': '',
+            'MEDANON_HASH_ALLOW_PLAIN': 'true',
+        }, clear=False):
+            ret = process_data(resource, settings)
 
         self.assertNotEqual(ret['entry'][0]['resource']['id'], 'p-1')
         self.assertNotEqual(ret['entry'][1]['resource']['id'], 'o-1')
@@ -150,7 +162,11 @@ class TestProcessor(unittest.TestCase):
             ]
         }
 
-        ret = process_data(resource, settings)
+        with patch.dict(os.environ, {
+            'MEDANON_HASH_KEY': '',
+            'MEDANON_HASH_ALLOW_PLAIN': 'true',
+        }, clear=False):
+            ret = process_data(resource, settings)
 
         self.assertNotEqual(ret['identifier'][0]['value'], 'ABC123')
         self.assertNotEqual(ret['identifier'][1]['value'], '999-11-2222')
@@ -455,21 +471,25 @@ class TestProcessor(unittest.TestCase):
         def _fake_urlopen(req, timeout=30):
             _call_counter[0] += 1
             sent = json.loads(req.data)
-            original_value = None
-            for p in sent['parameter']:
-                if p['name'] == 'original':
-                    original_value = p['valueString']
-            pseudonym = _pseudo_map.get(original_value, f'psn_{original_value}')
-            resp = {
-                "resourceType": "Parameters",
-                "parameter": [{
+            # Handle both single-value and multi-value batch requests
+            original_values = [
+                p['valueString'] for p in sent.get('parameter', [])
+                if p['name'] == 'original'
+            ]
+            parameter_entries = []
+            for original_value in original_values:
+                pseudonym = _pseudo_map.get(original_value, f'psn_{original_value}')
+                parameter_entries.append({
                     "name": "pseudonym",
                     "part": [
                         {"name": "target", "valueIdentifier": {"system": "https://ths-greifswald.de/gpas", "value": "TESTDOMAIN"}},
                         {"name": "original", "valueIdentifier": {"system": "https://ths-greifswald.de/gpas", "value": original_value}},
                         {"name": "pseudonym", "valueIdentifier": {"system": "https://ths-greifswald.de/gpas", "value": pseudonym}},
                     ]
-                }]
+                })
+            resp = {
+                "resourceType": "Parameters",
+                "parameter": parameter_entries,
             }
             return _FakeResponse(json.dumps(resp).encode('utf-8'))
 
@@ -527,8 +547,8 @@ class TestProcessor(unittest.TestCase):
         # Name untouched (no rule for it)
         self.assertEqual(ret['entry'][0]['resource']['name'][0]['family'], 'Smith')
 
-        # Two gPAS calls were made (one per resource)
-        self.assertEqual(_call_counter[0], 2)
+        # One gPAS batch call for all resources combined (cross-resource batching)
+        self.assertEqual(_call_counter[0], 1)
 
         print(f"Checking bundle reference rewriting...\t\t:thumbs_up:")
 
