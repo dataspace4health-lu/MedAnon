@@ -1,8 +1,0 @@
-# Substitute Patient.name with 'foo'
-general:
-  appname: SPE-FHIR-BlackBox
-rules:
-  - match: Patient.name.family
-    action: substitute
-    params:
-      substitute_with: foo
