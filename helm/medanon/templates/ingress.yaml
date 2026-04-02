@@ -43,12 +43,20 @@ spec:
                 name: {{ printf "%s-anonymizer" .Release.Name | trunc 63 | trimSuffix "-" }}
                 port:
                   name: http
-          # HAPI FHIR server
+          # HAPI FHIR server (identified data source)
           - path: /fhir
             pathType: Prefix
             backend:
               service:
                 name: {{ printf "%s-fhir-server" .Release.Name | trunc 63 | trimSuffix "-" }}
+                port:
+                  name: http
+          # HAPI FHIR target server (de-identified data store)
+          - path: /fhir-target
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ printf "%s-fhir-target" .Release.Name | trunc 63 | trimSuffix "-" }}
                 port:
                   name: http
           # gPAS web UI

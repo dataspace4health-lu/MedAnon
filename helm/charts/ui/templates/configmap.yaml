@@ -28,13 +28,23 @@ data:
             proxy_read_timeout 120s;
         }
 
-        # Proxy FHIR calls to HAPI server
+        # Proxy FHIR calls to HAPI server (identified data source)
         location /fhir/ {
             proxy_pass http://{{ .Values.fhirServerServiceName }}:{{ .Values.fhirServerPort }}/fhir/;
             proxy_set_header Host $host;
             proxy_set_header X-Real-IP $remote_addr;
             proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         }
+
+        {{- if .Values.fhirTargetServiceName }}
+        # Proxy FHIR calls to target HAPI server (de-identified data store)
+        location /fhir-target/ {
+            proxy_pass http://{{ .Values.fhirTargetServiceName }}:{{ .Values.fhirTargetPort }}/fhir/;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        }
+        {{- end }}
 
         # Health check
         location /healthz {

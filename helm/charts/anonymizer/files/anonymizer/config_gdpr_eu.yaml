@@ -181,3 +181,108 @@ rules:
   # custom profiles derived from HumanName)
   - match: "*.name"
     action: cryptohash
+
+  # Subject/patient reference strings link clinical resources back to the patient
+  # — must be redacted to break re-identification via reference strings.
+  - match: "*.subject.reference"
+    action: redact
+
+  - match: "*.patient.reference"
+    action: redact
+
+  - match: "*.subject.display"
+    action: redact
+
+  - match: "*.display"
+    action: redact
+
+  # Actor references (performer, recorder, etc.) identify treating clinicians
+  - match: "*.performer.reference"
+    action: redact
+
+  - match: "*.recorder.reference"
+    action: redact
+
+  # ---------------------------------------------------------------------------
+  # TEXT SCRUBBING (narrative and CodeableConcept fields)
+  # Dual-pass: regex catches structured PHI (dates, phones, SSN);
+  # NLP catches unstructured names and locations.
+  # ---------------------------------------------------------------------------
+
+  # FHIR Narrative (XHTML) — safe-harbor tokenization preserving structure
+  - match: "*.text"
+    action: scrub_text
+    params:
+      mode: html_tokenize
+      patterns: all
+
+  - match: "*.text"
+    action: nlp_detect
+    params:
+      mode: tokenize
+      html: true
+      threshold: 0.4
+
+  # Clinical notes — plain text
+  - match: "*.note.text"
+    action: scrub_text
+    params:
+      mode: text
+      patterns: all
+
+  - match: "*.note.text"
+    action: nlp_detect
+    params:
+      mode: tokenize
+      threshold: 0.4
+
+  # Nested CodeableConcept text fields — NLP only (preserves clinical terms,
+  # catches embedded patient names/IDs inserted by EHR systems)
+  - match: "*.code.text"
+    action: nlp_detect
+    params:
+      mode: tokenize
+      threshold: 0.4
+
+  - match: "*.substance.text"
+    action: nlp_detect
+    params:
+      mode: tokenize
+      threshold: 0.4
+
+  - match: "*.valueCodeableConcept.text"
+    action: nlp_detect
+    params:
+      mode: tokenize
+      threshold: 0.4
+
+  - match: "*.medicationCodeableConcept.text"
+    action: nlp_detect
+    params:
+      mode: tokenize
+      threshold: 0.4
+
+  # Dosage and reaction free-text — regex scrub for dates/numbers
+  - match: "*.dosage.text"
+    action: scrub_text
+    params:
+      mode: text
+      patterns: all
+
+  - match: "*.dosage.patientInstruction"
+    action: scrub_text
+    params:
+      mode: text
+      patterns: all
+
+  - match: "*.reaction.description"
+    action: scrub_text
+    params:
+      mode: text
+      patterns: all
+
+  - match: "*.comment"
+    action: scrub_text
+    params:
+      mode: text
+      patterns: all

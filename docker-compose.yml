@@ -15,7 +15,8 @@ networks:
 volumes:
   gpas-db-data:
   gpas-db-replica-data:
-  hapi-data:
+  hapi-pg-data:
+  hapi-target-pg-data:
   redis-data:
 
 # ── Services ──────────────────────────────────────────────────────────────────
@@ -51,12 +52,16 @@ services:
       - MEDANON_HASH_KEY=${MEDANON_HASH_KEY:-}
       - FHIR_SOURCE_URL=${FHIR_SOURCE_URL:-}
       - FHIR_SOURCE_TOKEN=${FHIR_SOURCE_TOKEN:-}
-      - FHIR_TARGET_URL=${FHIR_TARGET_URL:-}
+      - FHIR_TARGET_URL=${FHIR_TARGET_URL:-http://hapi-fhir-target:8080/fhir}
       - FHIR_TARGET_TOKEN=${FHIR_TARGET_TOKEN:-}
+      - MEDANON_TARGET_CONFIG_PROFILE=${MEDANON_TARGET_CONFIG_PROFILE:-structural}
       - MEDANON_AUDIT_LOG_FILE=/output/audit.log
       - MEDANON_REDIS_URL=${MEDANON_REDIS_URL:-redis://redis:6379/0}
       - MEDANON_JOB_WORKERS=${MEDANON_JOB_WORKERS:-3}
-      - MEDANON_MANIFEST_ENABLED=true
+      - MEDANON_MANIFEST_ENABLED=${MEDANON_MANIFEST_ENABLED:-true}
+      - MEDANON_STAGING_DB_URL=${MEDANON_STAGING_DB_URL:-}
+      - MEDANON_STAGING_RETENTION_DAYS=${MEDANON_STAGING_RETENTION_DAYS:-30}
+      - MEDANON_STAGING_BATCH_SIZE=${MEDANON_STAGING_BATCH_SIZE:-500}
     volumes:
       - ./data:/data:ro
       - ./output:/output
@@ -67,7 +72,11 @@ services:
         condition: service_healthy
       fhir-server:
         condition: service_healthy
+      fhir-target:
+        condition: service_healthy
       redis:
+        condition: service_healthy
+      hapi-db:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/ready')"]
@@ -91,7 +100,7 @@ services:
     tmpfs:
       - /tmp:size=100M
 
-  # ── 2. HAPI FHIR server (embedded H2 database) ────────────────────────────
+  # ── 2. HAPI FHIR server (PostgreSQL backend) ──────────────────────────────
   fhir-server:
     image: hapiproject/hapi:v7.6.0
     container_name: hapi-fhir
@@ -101,13 +110,18 @@ services:
     environment:
       - hapi.fhir.fhir_version=${HAPI_FHIR_VERSION:-R4}
       - HAPI_SERVER_ADDRESS=${HAPI_SERVER_ADDRESS:-http://localhost:8080/fhir}
+      - HAPI_DB_USER=${HAPI_DB_USER:-hapi}
+      - HAPI_DB_PASSWORD=${HAPI_DB_PASSWORD}
+      - HAPI_DB_NAME=${HAPI_DB_NAME:-hapi}
       - JAVA_TOOL_OPTIONS=-Xmx2g
     volumes:
       - ./services/fhir-server/config/application.yaml:/app/config/application.yaml:ro
       - ./services/fhir-server/healthcheck:/healthcheck:ro
-      - hapi-data:/data/h2
     networks:
       - fhir-net
+    depends_on:
+      hapi-db:
+        condition: service_healthy
     healthcheck:
       # HealthCheck.class must be compiled targeting the same Java version as this
       # image (currently Java 17). Run `make build-healthcheck` to recompile, or
@@ -126,7 +140,100 @@ services:
           cpus: "0.5"
           memory: 512M
 
-  # ── 3. gPAS MySQL database ────────────────────────────────────────────────
+  # ── 3. HAPI FHIR PostgreSQL database ──────────────────────────────────────
+  hapi-db:
+    image: postgres:16-alpine
+    container_name: hapi-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${HAPI_DB_USER:-hapi}
+      POSTGRES_PASSWORD: ${HAPI_DB_PASSWORD}
+      POSTGRES_DB: ${HAPI_DB_NAME:-hapi}
+    volumes:
+      - hapi-pg-data:/var/lib/postgresql/data
+    networks:
+      - fhir-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${HAPI_DB_USER:-hapi}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+
+  # ── 3b. HAPI FHIR target PostgreSQL database (de-identified data) ──────────
+  hapi-target-db:
+    image: postgres:16-alpine
+    container_name: hapi-target-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${HAPI_TARGET_DB_USER:-hapi}
+      POSTGRES_PASSWORD: ${HAPI_TARGET_DB_PASSWORD}
+      POSTGRES_DB: ${HAPI_TARGET_DB_NAME:-hapi_target}
+    volumes:
+      - hapi-target-pg-data:/var/lib/postgresql/data
+    networks:
+      - fhir-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${HAPI_TARGET_DB_USER:-hapi} -d ${HAPI_TARGET_DB_NAME:-hapi_target}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+
+  # ── 2b. HAPI FHIR target server (de-identified data store) ────────────────
+  fhir-target:
+    image: hapiproject/hapi:v7.6.0
+    container_name: hapi-fhir-target
+    restart: unless-stopped
+    ports:
+      - "${HAPI_TARGET_PORT:-8082}:8080"
+    environment:
+      - hapi.fhir.fhir_version=${HAPI_FHIR_VERSION:-R4}
+      - HAPI_SERVER_ADDRESS=${HAPI_TARGET_SERVER_ADDRESS:-http://localhost:8082/fhir}
+      - HAPI_DB_USER=${HAPI_TARGET_DB_USER:-hapi}
+      - HAPI_DB_PASSWORD=${HAPI_TARGET_DB_PASSWORD}
+      - HAPI_DB_NAME=${HAPI_TARGET_DB_NAME:-hapi_target}
+      - JAVA_TOOL_OPTIONS=-Xmx2g
+    volumes:
+      - ./services/fhir-target/config/application.yaml:/app/config/application.yaml:ro
+      - ./services/fhir-server/healthcheck:/healthcheck:ro
+    networks:
+      - fhir-net
+    depends_on:
+      hapi-target-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "java", "-cp", "/healthcheck", "HealthCheck"]
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 90s
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 3G
+        reservations:
+          cpus: "0.5"
+          memory: 512M
+
+  # ── 4. gPAS MySQL database ────────────────────────────────────────────────
   gpas-db:
     # Pin to 8.0 (LTS). mysql_native_password flag ensures WildFly's JDBC connector
     # can authenticate without needing caching_sha2_password support (which hangs
@@ -159,7 +266,7 @@ services:
           cpus: "0.25"
           memory: 512M
 
-  # ── 4. gPAS TTP pseudonymisation service (official mosaicgreifswald) ───────
+  # ── 5. gPAS TTP pseudonymisation service (official mosaicgreifswald) ───────
   gpas:
     image: mosaicgreifswald/wildfly:38
     container_name: gpas-wildfly
@@ -200,7 +307,7 @@ services:
           cpus: "0.5"
           memory: 1G
 
-  # ── 5. Analytics microservice (opt-in — start with: docker compose --profile analytics up) ─
+  # ── 6. Analytics microservice (opt-in — start with: docker compose --profile analytics up) ─
   analytics:
     build:
       context: .
@@ -232,7 +339,7 @@ services:
     cap_drop:
       - ALL
 
-  # ── 6. NLP microservice (opt-in — start with: docker compose --profile nlp up) ────────────
+  # ── 7. NLP microservice (opt-in — start with: docker compose --profile nlp up) ────────────
   nlp:
     build:
       context: .
@@ -264,7 +371,7 @@ services:
     cap_drop:
       - ALL
 
-  # ── 7. gPAS MySQL read replica (opt-in HA — start with: docker compose --profile ha up) ───
+  # ── 8. gPAS MySQL read replica (opt-in HA — start with: docker compose --profile ha up) ───
   # The replica mirrors the primary gpas-db using MySQL binary replication.
   # gPAS (WildFly) always writes to the primary; the replica is read-only and
   # is useful for audit queries, backups, and reducing read load.
@@ -315,7 +422,7 @@ services:
           cpus: "0.1"
           memory: 256M
 
-  # ── 8. React UI ──────────────────────────────────────────────────────────
+  # ── 9. React UI ──────────────────────────────────────────────────────────
   ui:
     build:
       context: client
@@ -349,7 +456,7 @@ services:
     cap_drop:
       - ALL
 
-  # ── 9. Redis (shared cache + job queue) ──────────────────────────────────
+  # ── 10. Redis (shared cache + job queue) ──────────────────────────────────
   redis:
     image: redis:7-alpine
     container_name: medanon-redis

@@ -1,6 +1,25 @@
+# =============================================================================
+# MedAnon gPAS Production Pseudonymization Profile
+# =============================================================================
+# Version: 1.0
+# Use case: Production pseudonymization with reversible patient identifiers
+# Strategy: gPAS server-managed pseudonymization + generalization + NLP scrubbing
+# Applicable resources: All FHIR resources (IDs rewritten and cross-referenced)
+# Dependencies: gPAS server (set GPAS_URL and GPAS_DOMAIN environment variables)
+# Legal basis: Varies by jurisdiction — pair with config_gdpr_eu.yaml or
+#              config_hipaa_safe_harbor.yaml for full regulatory compliance
+#
+# Required env vars:
+#   GPAS_URL          — gPAS server base URL (e.g. http://gpas:8080/ttp-fhir/fhir)
+#   GPAS_DOMAIN       — pseudonym domain name configured in gPAS
+#   GPAS_BASIC_USER   — HTTP Basic Auth username (default: user)
+#   GPAS_BASIC_PASS   — HTTP Basic Auth password
+# =============================================================================
+
 general:
   appname: SPE-FHIR-BlackBox
   rewrite_references: true
+  rewrite_text_ids: true
 
 rules:
 
@@ -45,7 +64,23 @@ rules:
 - match: Patient.communication
   action: redact
 
-- match: Patient.extension
+# Patient Extensions - specific PHI handling instead of blanket redaction
+- match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-race')
+  action: redact
+
+- match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-ethnicity')
+  action: redact
+
+- match: Patient.extension.where(url='http://hl7.org/fhir/StructureDefinition/patient-mothersMaidenName')
+  action: redact
+
+- match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-birthsex')
+  action: redact
+
+- match: Patient.extension.where(url='http://hl7.org/fhir/StructureDefinition/patient-birthPlace')
+  action: redact
+
+- match: Patient.extension.where(url.startsWith('http://synthetichealth.github.io/synthea/'))
   action: redact
 
 # ==========================================================
@@ -173,14 +208,22 @@ rules:
   action: redact
 
 # ==========================================================
-# 8. DISPLAY FIELDS (HUMAN READABLE NAMES)
+# 8. DISPLAY FIELDS AND SUBJECT/PATIENT REFERENCES
 # ==========================================================
 
-- match: "*.display"
-  action: redact
+#- match: "*.display"
+# action: redact
 
-- match: "*.subject.display"
-  action: redact
+#- match: "*.subject.display"
+#  action: redact
+
+- match: "*.subject.reference"
+  action: gpas_pseudonymize
+  params: *gpas
+
+- match: "*.patient.reference"
+  action: gpas_pseudonymize
+  params: *gpas
 
 # ==========================================================
 # 9. DOCUMENTS / ATTACHMENTS
@@ -224,6 +267,54 @@ rules:
   params:
     mode: tokenize
     threshold: 0.4
+
+- match: "*.code.text"
+  action: nlp_detect
+  params:
+    mode: tokenize
+    threshold: 0.4
+
+- match: "*.substance.text"
+  action: nlp_detect
+  params:
+    mode: tokenize
+    threshold: 0.4
+
+- match: "*.valueCodeableConcept.text"
+  action: nlp_detect
+  params:
+    mode: tokenize
+    threshold: 0.4
+
+- match: "*.medicationCodeableConcept.text"
+  action: nlp_detect
+  params:
+    mode: tokenize
+    threshold: 0.4
+
+- match: "*.dosage.text"
+  action: scrub_text
+  params:
+    mode: text
+    patterns: all
+
+- match: "*.dosage.patientInstruction"
+  action: scrub_text
+  params:
+    mode: text
+    patterns: all
+
+- match: "*.reaction.description"
+  action: scrub_text
+  params:
+    mode: text
+    patterns: all
+
+- match: "*.comment"
+  action: scrub_text
+  params:
+    mode: text
+    patterns: all
 
 # ==========================================================
 # 11. COMMUNICATION / MESSAGES

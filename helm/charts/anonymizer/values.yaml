@@ -74,6 +74,10 @@ env:
   # from the shared BLPOP queue. Raise for compute-heavy deployments.
   MEDANON_JOB_WORKERS: "3"
 
+  # Include transformation manifest in meta.tag (default off — opt-in).
+  # Set to "true" to embed a per-resource transformation log for audit/UI use.
+  MEDANON_MANIFEST_ENABLED: "false"
+
 # ─── Secrets ──────────────────────────────────────────────────────────────────
 secrets:
   # HMAC-SHA3-256 key for the cryptohash action.

@@ -20,6 +20,10 @@ dependencies:
   - name: fhir-server
     version: "0.1.0"
     repository: "file://../charts/fhir-server"
+  - name: fhir-server
+    version: "0.1.0"
+    repository: "file://../charts/fhir-server"
+    alias: fhir-target
   - name: gpas
     version: "0.1.0"
     repository: "file://../charts/gpas"

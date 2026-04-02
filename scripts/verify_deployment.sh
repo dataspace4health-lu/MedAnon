@@ -39,7 +39,7 @@ echo ""
 # ── 1. Docker container health ──────────────────────────────────────────────
 echo "1. Container health"
 ALL_HEALTHY=true
-for svc in medanon hapi-fhir gpas-wildfly gpas-mysql medanon-ui; do
+for svc in medanon hapi-fhir hapi-fhir-target hapi-postgres hapi-target-postgres gpas-wildfly gpas-mysql medanon-redis medanon-ui; do
     STATUS=$(docker inspect --format='{{.State.Health.Status}}' "$svc" 2>/dev/null || echo "not_found")
     case "$STATUS" in
         healthy)   pass "$svc: healthy" ;;
@@ -106,6 +106,25 @@ fi
 
 # Actuator health (used by Docker health check)
 HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${HAPI_PORT}/actuator/health" 2>/dev/null || echo "000")
+if [ "$HTTP_CODE" = "200" ]; then
+    pass "/actuator/health -> 200"
+else
+    fail "/actuator/health -> $HTTP_CODE (health check will fail!)"
+fi
+echo ""
+
+# ── 3b. HAPI FHIR target server (de-identified data) ─────────────────────
+HAPI_TARGET_PORT="${HAPI_TARGET_PORT:-8082}"
+echo "3b. HAPI FHIR target server (port $HAPI_TARGET_PORT)"
+HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${HAPI_TARGET_PORT}/fhir/metadata" 2>/dev/null || echo "000")
+if [ "$HTTP_CODE" = "200" ]; then
+    FHIR_VER=$(curl -s "http://localhost:${HAPI_TARGET_PORT}/fhir/metadata" 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('fhirVersion','?'))" 2>/dev/null || echo "?")
+    pass "/fhir/metadata -> 200 (FHIR $FHIR_VER)"
+else
+    fail "/fhir/metadata -> $HTTP_CODE"
+fi
+
+HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${HAPI_TARGET_PORT}/actuator/health" 2>/dev/null || echo "000")
 if [ "$HTTP_CODE" = "200" ]; then
     pass "/actuator/health -> 200"
 else

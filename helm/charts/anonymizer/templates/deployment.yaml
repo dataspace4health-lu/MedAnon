@@ -94,6 +94,18 @@ spec:
               mountPath: /code/config/config_gdpr_eu.yaml
               subPath: config_gdpr_eu.yaml
               readOnly: true
+            - name: config
+              mountPath: /code/config/config_hipaa_safe_harbor.yaml
+              subPath: config_hipaa_safe_harbor.yaml
+              readOnly: true
+            - name: config
+              mountPath: /code/config/config_research_pseudonymous.yaml
+              subPath: config_research_pseudonymous.yaml
+              readOnly: true
+            - name: config
+              mountPath: /code/config/config_structure_preserving.yaml
+              subPath: config_structure_preserving.yaml
+              readOnly: true
             {{- if and .Values.secrets.rsaPublicKey .Values.secrets.rsaPrivateKey }}
             # RSA keys mounted at /code/keys/
             - name: rsa-keys

@@ -16,7 +16,6 @@
 general:
   appname: SPE-FHIR-BlackBox
   hash_type: sha3_256
-  rewrite_text_ids: true
 
 rules:
 

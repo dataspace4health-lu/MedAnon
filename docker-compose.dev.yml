@@ -17,11 +17,6 @@ services:
       - ./services/anonymizer/config:/code/config
       - ./output:/output
 
-  fhir-server:
-    # Use in-memory H2 in dev (data resets on restart)
-    environment:
-      - spring.datasource.url=jdbc:h2:mem:test_mem
-
   gpas:
     # Expose WildFly management console for manual testing.
     # Management port is bound to 127.0.0.1 only — do not expose on 0.0.0.0

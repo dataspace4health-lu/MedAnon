@@ -37,6 +37,10 @@ anonymizerServiceName: "anonymizer"
 anonymizerPort: 8000
 fhirServerServiceName: "fhir-server"
 fhirServerPort: 8080
+# Target FHIR server (de-identified data) — leave empty to disable the /fhir-target/ proxy.
+# When using the umbrella chart, set to "<release>-fhir-target".
+fhirTargetServiceName: ""
+fhirTargetPort: 8080
 
 # ─── Resources ──────────────────────────────────────────────────────────────
 resources:

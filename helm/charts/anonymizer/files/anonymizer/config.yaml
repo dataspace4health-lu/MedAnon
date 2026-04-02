@@ -1,9 +1,16 @@
 # =============================================================================
-# Default config — local de-identification profile
-# (no gPAS dependency; uses cryptographic hashing and regex text scrubbing)
+# MedAnon Default De-identification Profile
+# =============================================================================
+# Version: 1.0
+# Use case: Local development, testing, and basic de-identification
+# Strategy: SHA3-256 cryptographic hash for IDs; regex + NLP text scrubbing
+# Applicable resources: All FHIR resources
+# Dependencies: None (no external services required)
+# Not suitable for: Production clinical data sharing without proper key management
 #
 # For production pseudonymization with a gPAS server, use config_gpas.yaml.
-# For a pure GDPR HMAC profile, use config_gdpr_eu.yaml.
+# For EU GDPR compliance, use config_gdpr_eu.yaml.
+# For HIPAA Safe Harbor compliance, use config_hipaa_safe_harbor.yaml.
 # =============================================================================
 
 general:
@@ -38,7 +45,23 @@ rules:
   - match: Patient.identifier.value
     action: cryptohash
 
-  - match: Patient.extension
+  # Patient Extensions - specific PHI handling instead of blanket redaction
+  - match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-race')
+    action: redact
+
+  - match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-ethnicity')
+    action: redact
+
+  - match: Patient.extension.where(url='http://hl7.org/fhir/StructureDefinition/patient-mothersMaidenName')
+    action: redact
+
+  - match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-birthsex')
+    action: redact
+
+  - match: Patient.extension.where(url='http://hl7.org/fhir/StructureDefinition/patient-birthPlace')
+    action: redact
+
+  - match: Patient.extension.where(url.startsWith('http://synthetichealth.github.io/synthea/'))
     action: redact
 
   - match: Patient.gender
@@ -210,13 +233,21 @@ rules:
     action: redact
 
   # ===========================================================================
-  # 9. DISPLAY FIELDS (HUMAN READABLE NAMES)
+  # 9. DISPLAY FIELDS AND SUBJECT/PATIENT REFERENCES
   # ===========================================================================
 
   - match: "*.display"
     action: redact
 
   - match: "*.subject.display"
+    action: redact
+
+  # subject.reference / patient.reference link clinical resources back to the
+  # patient — must be redacted to break re-identification via reference strings
+  - match: "*.subject.reference"
+    action: redact
+
+  - match: "*.patient.reference"
     action: redact
 
   # ===========================================================================
@@ -262,6 +293,56 @@ rules:
     params:
       mode: tokenize
       threshold: 0.4
+
+  # CodeableConcept.text fields — may contain embedded names/IDs alongside
+  # clinical terminology. NLP pass detects PHI; regex pass catches dates/phones.
+  - match: "*.code.text"
+    action: nlp_detect
+    params:
+      mode: tokenize
+      threshold: 0.4
+
+  - match: "*.substance.text"
+    action: nlp_detect
+    params:
+      mode: tokenize
+      threshold: 0.4
+
+  - match: "*.valueCodeableConcept.text"
+    action: nlp_detect
+    params:
+      mode: tokenize
+      threshold: 0.4
+
+  - match: "*.medicationCodeableConcept.text"
+    action: nlp_detect
+    params:
+      mode: tokenize
+      threshold: 0.4
+
+  - match: "*.dosage.text"
+    action: scrub_text
+    params:
+      mode: text
+      patterns: all
+
+  - match: "*.dosage.patientInstruction"
+    action: scrub_text
+    params:
+      mode: text
+      patterns: all
+
+  - match: "*.reaction.description"
+    action: scrub_text
+    params:
+      mode: text
+      patterns: all
+
+  - match: "*.comment"
+    action: scrub_text
+    params:
+      mode: text
+      patterns: all
 
   # ===========================================================================
   # 12. COMMUNICATION / MESSAGES

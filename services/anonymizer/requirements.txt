@@ -17,6 +17,9 @@ urllib3==2.3.0             # FHIR client connection pooling
 # Redis — L2 gPAS cache + scalable job queue (BLPOP event-driven worker)
 redis==5.2.1
 
+# PostgreSQL — staging table for large-scale bulk export/cohort processing
+psycopg2-binary>=2.9
+
 # HL7 v2 message parsing
 hl7==0.4.5
 
