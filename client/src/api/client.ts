@@ -13,7 +13,7 @@ import { ApiError } from "./types";
 
 const API_KEY_STORAGE_KEY = "medanon_api_key";
 
-export function getApiKey(): string | null {
+function getApiKey(): string | null {
   try {
     return localStorage.getItem(API_KEY_STORAGE_KEY);
   } catch {
@@ -34,7 +34,7 @@ export function getAuthHeaders(): Record<string, string> {
 // MedAnon API fetch wrapper
 // ---------------------------------------------------------------------------
 
-export interface FetchApiOptions extends Omit<RequestInit, "signal"> {
+interface FetchApiOptions extends Omit<RequestInit, "signal"> {
   /** Request timeout in milliseconds (default: 60 000). */
   timeout?: number;
   /** External AbortSignal for cancellation. */
@@ -163,6 +163,53 @@ export async function fetchFhir<T>(
   const timeoutId = setTimeout(() => controller.abort(), timeout);
 
   let url = `/fhir${path}`;
+  if (params) {
+    const searchParams = new URLSearchParams(params);
+    url += `?${searchParams.toString()}`;
+  }
+
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        Accept: "application/fhir+json",
+      },
+    });
+
+    if (!response.ok) {
+      let detail: string;
+      try {
+        const body = await response.json();
+        detail =
+          body?.issue?.[0]?.diagnostics ?? body?.detail ?? response.statusText;
+      } catch {
+        detail = response.statusText;
+      }
+      throw new ApiError(response.status, detail);
+    }
+
+    return (await response.json()) as T;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+/**
+ * Typed fetch wrapper for the de-identified HAPI FHIR target server.
+ *
+ * - Prefixes `path` with `/fhir-target`
+ * - Sets Accept: application/fhir+json
+ * - 15 s timeout by default
+ */
+export async function fetchFhirTarget<T>(
+  path: string,
+  params?: Record<string, string>,
+): Promise<T> {
+  const timeout = 15_000;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
+
+  let url = `/fhir-target${path}`;
   if (params) {
     const searchParams = new URLSearchParams(params);
     url += `?${searchParams.toString()}`;

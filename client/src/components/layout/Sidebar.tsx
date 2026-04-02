@@ -11,6 +11,7 @@ import {
   BarChart3,
   SlidersHorizontal,
   PackageOpen,
+  ShieldCheck,
 } from 'lucide-react';
 import { HealthBadge } from '@/components/shared/HealthBadge';
 import { useHealth } from '@/hooks/useHealth';
@@ -49,6 +50,7 @@ const NAV_SECTIONS: NavSection[] = [
     items: [
       { to: '/patients', label: 'Patient Browser', icon: Users, minRole: 'viewer' },
       { to: '/conditions', label: 'Condition Browser', icon: FileText, minRole: 'viewer' },
+      { to: '/target-browser', label: 'Target FHIR Browser', icon: ShieldCheck, minRole: 'viewer' },
     ],
   },
   {
@@ -196,6 +198,9 @@ export function Sidebar({ onNavigate }: SidebarProps) {
         </p>
         <p className="text-xs text-muted-foreground">
           FHIR: <span className="font-mono">/fhir</span>
+        </p>
+        <p className="text-xs text-muted-foreground">
+          Target: <span className="font-mono">/fhir-target</span>
         </p>
       </div>
     </div>

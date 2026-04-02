@@ -105,13 +105,26 @@ export interface ResourceTypeCount {
   count: number;
 }
 
+// Module-level cache — survives SPA navigation, lives for the browser session.
+// Re-fetches after TTL_MS so counts stay reasonably fresh without hammering HAPI.
+const _COUNTS_TTL_MS = 5 * 60 * 1000; // 5 minutes
+let _countsCache: ResourceTypeCount[] | null = null;
+let _countsCacheAt = 0;
+
 /**
  * Discover resource types from the CapabilityStatement, then probe each
  * with `?_summary=count&_count=0` in parallel.
  *
+ * Results are cached for 5 minutes so navigating back to the Patient Browser
+ * does not re-fire 100+ parallel FHIR count queries on every visit.
+ *
  * Returns only types with count > 0, sorted by count descending.
  */
 export async function fetchResourceTypeCounts(): Promise<ResourceTypeCount[]> {
+  if (_countsCache && Date.now() - _countsCacheAt < _COUNTS_TTL_MS) {
+    return _countsCache;
+  }
+
   const types = await discoverResourceTypes();
 
   const results = await Promise.allSettled(
@@ -124,13 +137,17 @@ export async function fetchResourceTypeCounts(): Promise<ResourceTypeCount[]> {
     }),
   );
 
-  return results
+  const counts = results
     .filter(
       (r): r is PromiseFulfilledResult<ResourceTypeCount> =>
         r.status === "fulfilled" && r.value.count > 0,
     )
     .map((r) => r.value)
     .sort((a, b) => b.count - a.count);
+
+  _countsCache = counts;
+  _countsCacheAt = Date.now();
+  return counts;
 }
 
 // ---------------------------------------------------------------------------

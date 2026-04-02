@@ -2,11 +2,11 @@
 // PII detection: combines backend manifest + client-side field diff
 // ---------------------------------------------------------------------------
 
-import { extractFields } from "./fhirFields";
+import { extractFieldsDeep } from "./fhirFields";
 
 const MANIFEST_SYSTEM = "https://medanon.local/transformation-manifest";
 
-export interface PiiFieldEntry {
+interface PiiFieldEntry {
   fieldPath: string;
   action: string;
   count: number;
@@ -43,17 +43,34 @@ function parseManifestEntries(
 }
 
 /**
- * Simplify a FHIRPath manifest path to a top-level field key.
- * e.g. "Patient.name[0].family" → "name"
- *      "Observation.effectiveDateTime" → "effectiveDateTime"
+ * Strip the resourceType prefix from a manifest FHIRPath, preserving sub-paths.
+ * "Patient.name.family"        → "name.family"
+ * "Observation.effectiveDateTime" → "effectiveDateTime"
+ * "Patient.name[0].family"     → "name.family"  (array indices removed)
  */
 function simplifyPath(fullPath: string): string {
-  // Strip resourceType prefix
   const dotIdx = fullPath.indexOf(".");
   const rest = dotIdx >= 0 ? fullPath.slice(dotIdx + 1) : fullPath;
-  // Take the first segment (before any . or [)
-  const match = rest.match(/^([^.[]+)/);
-  return match?.[1] ?? rest;
+  // Remove array indices like [0], [1]
+  return rest.replace(/\[\d+\]/g, "");
+}
+
+/** Return the top-level key of a dotted path: "name.family" → "name". */
+function parentKey(path: string): string {
+  const dot = path.indexOf(".");
+  return dot >= 0 ? path.slice(0, dot) : path;
+}
+
+/**
+ * Look up an action for a field path in a manifest map.
+ * Tries exact match first, then falls back to the parent key so that
+ * a manifest entry for "name" covers deep paths like "name.family".
+ */
+function resolveAction(
+  manifestByField: Map<string, string>,
+  field: string,
+): string | undefined {
+  return manifestByField.get(field) ?? manifestByField.get(parentKey(field));
 }
 
 /**
@@ -61,16 +78,15 @@ function simplifyPath(fullPath: string): string {
  *
  * Strategy:
  * 1. Parse manifest entries from the de-identified resource (authoritative).
- * 2. Diff extracted fields to find changed/removed fields (fallback).
+ * 2. Diff deep-extracted fields to find changed/removed sub-fields.
  * 3. For each changed field, prefer the manifest action label; if no manifest
- *    entry covers that field, label it "modified".
+ *    entry covers that field or its parent, label it "modified".
  * 4. Aggregate by (resourceType, fieldPath, action) and count occurrences.
  */
 export function buildPiiDetectionMap(
   originals: Record<string, unknown>[],
   deidentified: Record<string, unknown>[],
 ): PiiDetectionMap {
-  // Aggregate: resourceType → (fieldPath::action → count)
   const agg = new Map<string, Map<string, number>>();
 
   const len = Math.min(originals.length, deidentified.length);
@@ -84,22 +100,20 @@ export function buildPiiDetectionMap(
 
     // Parse manifest (may be empty when MEDANON_MANIFEST_ENABLED is off)
     const manifestEntries = parseManifestEntries(deid);
-    const manifestByField = new Map<string, string>(); // simplified field → action
+    const manifestByField = new Map<string, string>();
     for (const entry of manifestEntries) {
       const simple = simplifyPath(entry.path);
-      // Keep first action seen per field (rules are ordered by priority)
       if (!manifestByField.has(simple)) {
         manifestByField.set(simple, entry.action);
       }
     }
 
-    // Diff extracted fields
-    const origFields = extractFields(orig);
-    const deidFields = extractFields(deid);
+    // Diff deep-extracted fields
+    const origFields = extractFieldsDeep(orig);
+    const deidFields = extractFieldsDeep(deid);
     const origMap = new Map(origFields.map((r) => [r.field, r.value]));
     const deidMap = new Map(deidFields.map((r) => [r.field, r.value]));
 
-    // Collect all fields that differ
     const changedFields = new Set<string>();
     for (const [field, val] of origMap) {
       const deidVal = deidMap.get(field);
@@ -109,7 +123,7 @@ export function buildPiiDetectionMap(
       if (!origMap.has(field)) changedFields.add(field);
     }
 
-    // Also include manifest-only fields not captured by the shallow diff
+    // Also include manifest-only paths not captured by the field diff
     for (const field of manifestByField.keys()) {
       changedFields.add(field);
     }
@@ -120,21 +134,28 @@ export function buildPiiDetectionMap(
     const typeAgg = agg.get(resourceType)!;
 
     for (const field of changedFields) {
-      const action = manifestByField.get(field) ?? "modified";
+      const action =
+        resolveAction(manifestByField, field) ??
+        classifyValue(deidMap.get(field) ?? "") ??
+        (origMap.has(field) && !deidMap.has(field) ? "redact" : null) ??
+        "modified";
       const key = `${field}::${action}`;
       typeAgg.set(key, (typeAgg.get(key) ?? 0) + 1);
     }
   }
 
-  // Convert to sorted PiiDetectionMap
   const result: PiiDetectionMap = {};
   for (const [resourceType, fields] of agg) {
     const entries: PiiFieldEntry[] = [];
     for (const [key, count] of fields) {
-      const [fieldPath, action] = key.split("::");
+      const sep = key.indexOf("::");
+      const fieldPath = key.slice(0, sep);
+      const action = key.slice(sep + 2);
       entries.push({ fieldPath, action, count });
     }
-    entries.sort((a, b) => b.count - a.count || a.fieldPath.localeCompare(b.fieldPath));
+    entries.sort(
+      (a, b) => b.count - a.count || a.fieldPath.localeCompare(b.fieldPath),
+    );
     result[resourceType] = entries;
   }
 
@@ -149,16 +170,18 @@ export function buildPiiDetectionMap(
 
 const HEX_64 = /^[0-9a-f]{64}$/;
 const TOKEN_PATTERN = /\[\[[A-Z_]+_\d+]]/;
-/** Year-month only, e.g. "2024-03" (from research_pseudonymous generalize) */
 const YEAR_MONTH = /^\d{4}-\d{2}$/;
+const REDACTED_RE = /^\[REDACTED]$/;
 
 function classifyValue(value: string): string | null {
-  if (value === "[REDACTED]" || value === "REDACTED") return "redact";
+  if (!value) return null;
+  // Handle comma-joined array values like "[REDACTED], [REDACTED]"
+  const parts = value.split(", ");
+  if (parts.every((p) => REDACTED_RE.test(p.trim()) || p.trim() === "REDACTED"))
+    return "redact";
   if (HEX_64.test(value)) return "cryptohash";
   if (TOKEN_PATTERN.test(value)) return "scrub_text";
-  // Year-only date (generalize date_year)
   if (/^\d{4}$/.test(value)) return "generalize";
-  // Year-month (generalize date_year_month)
   if (YEAR_MONTH.test(value)) return "generalize";
   return null;
 }
@@ -169,9 +192,8 @@ function classifyValue(value: string): string | null {
  * Used by the Bulk De-identify page where original resources are not available.
  * Strategy:
  * 1. Parse the manifest from meta.tag — authoritative when present.
- * 2. Also scan extracted field values for PII signatures to catch
- *    post-processing changes not tracked in the manifest
- *    (reference rewriting, text-ID replacement, display field deletion).
+ * 2. Also scan deep-extracted field values for PII signatures to catch
+ *    post-processing changes not tracked in the manifest.
  * 3. Aggregate by (resourceType, fieldPath, action).
  */
 export function buildPiiFromDeidentifiedOnly(
@@ -184,7 +206,6 @@ export function buildPiiFromDeidentifiedOnly(
     if (!agg.has(resourceType)) agg.set(resourceType, new Map());
     const typeAgg = agg.get(resourceType)!;
 
-    // Collect manifest entries (authoritative for rule-matched actions)
     const manifestEntries = parseManifestEntries(resource);
     const manifestFields = new Set<string>();
     if (manifestEntries.length > 0) {
@@ -200,12 +221,15 @@ export function buildPiiFromDeidentifiedOnly(
       }
     }
 
-    // Also run heuristic scan on fields NOT already covered by manifest
-    // to catch post-processing changes (reference rewriting, text-ID replacement)
-    const fields = extractFields(resource);
+    // Heuristic scan on deep fields not covered by manifest or their parent
+    const fields = extractFieldsDeep(resource);
     for (const { field, value } of fields) {
-      if (field === "resourceType" || field === "id" && manifestFields.has("id")) continue;
-      if (manifestFields.has(field)) continue;
+      if (field === "resourceType") continue;
+      if (
+        manifestFields.has(field) ||
+        manifestFields.has(parentKey(field))
+      )
+        continue;
       const action = classifyValue(value);
       if (action) {
         const key = `${field}::${action}`;
@@ -214,15 +238,18 @@ export function buildPiiFromDeidentifiedOnly(
     }
   }
 
-  // Convert to sorted PiiDetectionMap
   const result: PiiDetectionMap = {};
   for (const [resourceType, fields] of agg) {
     const entries: PiiFieldEntry[] = [];
     for (const [key, count] of fields) {
-      const [fieldPath, action] = key.split("::");
+      const sep = key.indexOf("::");
+      const fieldPath = key.slice(0, sep);
+      const action = key.slice(sep + 2);
       entries.push({ fieldPath, action, count });
     }
-    entries.sort((a, b) => b.count - a.count || a.fieldPath.localeCompare(b.fieldPath));
+    entries.sort(
+      (a, b) => b.count - a.count || a.fieldPath.localeCompare(b.fieldPath),
+    );
     result[resourceType] = entries;
   }
 
@@ -233,22 +260,19 @@ export function buildPiiFromDeidentifiedOnly(
 // Full field summary (all fields across all resources, PII fields highlighted)
 // ---------------------------------------------------------------------------
 
-export interface FieldSummaryEntry {
+interface FieldSummaryEntry {
   fieldPath: string;
   count: number;
   /** Set to the PII action when this field was transformed. */
   action?: string;
 }
 
-/** All fields per resource type, sorted by occurrence count descending. */
 export type FieldSummaryMap = Record<string, FieldSummaryEntry[]>;
 
 /**
  * Build a full field summary map with PII actions overlaid.
- *
- * @param allFieldCounts  Occurrence counts for every field across ALL resources.
- *                        Shape: resType → field → count.
- * @param piiData         PII detection map built from the sample.
+ * Action lookup tries exact match first, then parent key fallback so that
+ * a "name" entry covers deep paths like "name.family", "name.given".
  */
 export function buildFieldSummary(
   allFieldCounts: Record<string, Record<string, number>>,
@@ -266,9 +290,35 @@ export function buildFieldSummary(
       .map(([fieldPath, count]) => ({
         fieldPath,
         count,
-        action: piiActions[fieldPath],
+        action:
+          piiActions[fieldPath] ?? piiActions[parentKey(fieldPath)],
       }))
-      .sort((a, b) => b.count - a.count || a.fieldPath.localeCompare(b.fieldPath));
+      .sort(
+        (a, b) => b.count - a.count || a.fieldPath.localeCompare(b.fieldPath),
+      );
   }
   return result;
+}
+
+/**
+ * Strip the transformation manifest tag from a resource's meta.tag array.
+ * Returns a shallow clone with the manifest removed so the output/download
+ * views don't expose internal bookkeeping.
+ */
+export function stripManifestTag(
+  resource: Record<string, unknown>,
+): Record<string, unknown> {
+  const meta = resource.meta as Record<string, unknown> | undefined;
+  if (!meta) return resource;
+  const tags = meta.tag as Array<Record<string, unknown>> | undefined;
+  if (!Array.isArray(tags)) return resource;
+  const filtered = tags.filter((t) => t.system !== MANIFEST_SYSTEM);
+  if (filtered.length === tags.length) return resource;
+  const newMeta = { ...meta, tag: filtered.length > 0 ? filtered : undefined };
+  const metaKeys = Object.values(newMeta).filter((v) => v !== undefined);
+  if (metaKeys.length === 0) {
+    const { meta: _, ...rest } = resource;
+    return rest;
+  }
+  return { ...resource, meta: newMeta };
 }
