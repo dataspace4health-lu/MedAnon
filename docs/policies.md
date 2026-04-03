@@ -1,220 +1,167 @@
-# MedAnon De-identification Policy Guide
+# MedAnon — De-identification Policy Guide
 
-This document describes the five built-in configuration profiles bundled with
-MedAnon, when to use each one, and how to create custom profiles.
+## Profile comparison
 
----
-
-## Profile Comparison
-
-| Profile | File | ID handling | Date resolution | Geographic | Text scrubbing | Requires gPAS | Primary legal basis |
+| Profile | File | ID handling | Dates | Geographic | Text scrubbing | Requires gPAS | Legal basis |
 |---|---|---|---|---|---|---|---|
-| **Default** | `config.yaml` | SHA3-256 hash | Year only | Zip prefix (3 digits) | Regex + NLP | No | Internal / testing |
-| **gPAS Production** | `config_gpas.yaml` | gPAS pseudonym (reversible) | Year only | Zip prefix (3 digits) | Regex + NLP | Yes | Jurisdiction-specific |
-| **GDPR** | `config_gdpr_eu.yaml` | SHA3-256 HMAC | Redacted | Redacted | Regex + NLP | No | GDPR Art. 4(5), 25, 89 |
+| **Default** | `config.yaml` | SHA3-256 hash | Year only | Zip prefix (3-digit) | Regex + NLP | No | Testing only |
+| **gPAS Production** | `config_gpas.yaml` | gPAS pseudonym (reversible) | Year only | Zip prefix (3-digit) | Regex + NLP | Yes | Jurisdiction-specific |
+| **GDPR** | `config_gdpr_eu.yaml` | HMAC SHA3-256 | Redacted | Redacted | Regex + NLP | No | GDPR Art. 4(5), 25, 89 |
 | **HIPAA Safe Harbor** | `config_hipaa_safe_harbor.yaml` | Redacted | Year only | State + 3-digit zip | Regex + NLP | No | 45 CFR § 164.514(b) |
-| **Research Pseudonymous** | `config_research_pseudonymous.yaml` | SHA3-256 hash | Year-month | 3-digit zip prefix | Regex + NLP | No | IRB / Art. 89 GDPR |
-| **Structure Preserving** | `config_structure_preserving.yaml` | gPAS pseudonym (reversible) | Year only (birthDate) | Preserved | Regex + NLP | Yes | Structure-first / downstream consumers |
+| **Research** | `config_research_pseudonymous.yaml` | SHA3-256 hash | Year-month | 3-digit zip prefix | Regex + NLP | No | IRB / GDPR Art. 89 |
+| **Structure Preserving** | `config_structure_preserving.yaml` | gPAS pseudonym (reversible) | Year (birthDate only) | Preserved | Regex + NLP | Yes | Structure-first |
 
 ---
 
-## When to Use Each Profile
+## When to use each profile
 
-### `config.yaml` — Default (Local Dev / Testing)
+### `config.yaml` — Default (Local dev / Testing)
 
-Use this profile when:
-- Running local tests or CI pipelines without external dependencies
-- Exploring the de-identification pipeline for the first time
-- Processing synthetic or public datasets with no real patient data
-
-**Not suitable for:** production clinical data, regulatory submissions, or
-any data sharing with third parties.
-
----
+Use when running local tests or CI pipelines without external dependencies. Uses plain SHA3-256 hash without an HMAC key — hashes are reversible via rainbow tables. **Not suitable for real patient data or any data sharing.**
 
 ### `config_gpas.yaml` — gPAS Production
 
-Use this profile when:
-- Operating in a production clinical environment with a gPAS server
-- You need **reversible pseudonymization** (ability to re-link records under
-  controlled conditions, e.g. follow-up studies, adverse event investigation)
-- Your institution uses the MosaicGrieveswald TP/TT gPAS pseudonym service
+Use when you need **reversible pseudonymization**: the ability to re-link records to original patients under controlled conditions (e.g. adverse event investigation, follow-up studies). Requires a live gPAS server. Pseudonyms are managed by gPAS and can be decoded by authorized users through the TTP gateway.
 
-Pair this profile with `config_gdpr_eu.yaml` or `config_hipaa_safe_harbor.yaml`
-for the appropriate jurisdiction-level rule set.
+Required env: `GPAS_URL`, `GPAS_DOMAIN`, `GPAS_BASIC_USER`, `GPAS_BASIC_PASS`.
 
-**Required environment variables:**
+### `config_gdpr_eu.yaml` — GDPR Art. 4(5)
 
-| Variable | Description |
-|---|---|
-| `GPAS_URL` | gPAS server FHIR endpoint (e.g. `http://gpas:8080/ttp-fhir/fhir`) |
-| `GPAS_DOMAIN` | Pseudonym domain name configured in gPAS |
-| `GPAS_BASIC_USER` | HTTP Basic Auth username (default: `user`) |
-| `GPAS_BASIC_PASS` | HTTP Basic Auth password |
+Use for EU/EEA patient data. All direct identifiers are HMAC-SHA3-256 hashed — this satisfies GDPR Art. 4(5) pseudonymization (data cannot be attributed to a person without the key). Dates are fully redacted. Geographic data redacted.
 
----
-
-### `config_gdpr_eu.yaml` — EU GDPR Compliance
-
-Use this profile when:
-- Processing personal data of EU/EEA residents
-- You need to demonstrate compliance with GDPR data minimisation (Art. 5(1))
-  and pseudonymisation requirements (Art. 4(5))
-- The legal basis for processing is Art. 89 (scientific/statistical research)
-
-**Key behaviour:** All direct identifiers are SHA3-256 hashed (not redacted),
-which satisfies Art. 4(5) pseudonymisation. Dates are fully redacted.
-
-**Key management (GDPR Art. 32):** Set `MEDANON_HASH_KEY` in your environment
-for HMAC-keyed hashing. Do not store the key in the config file.
-
----
+**Key requirement:** Set `MEDANON_HASH_KEY` in the environment. Do not store the key in the config file. Losing this key makes re-linkage impossible. Per GDPR Art. 32, the key is itself a security-relevant asset — store it in a secrets manager and rotate according to your data retention policy.
 
 ### `config_hipaa_safe_harbor.yaml` — HIPAA Safe Harbor
 
-Use this profile when:
-- Processing US patient data governed by HIPAA
-- You require a documented Safe Harbor de-identification method under
-  45 CFR § 164.514(b)
-- Preparing datasets for research, publication, or third-party analysis
+Use for US patient data under HIPAA. Removes all 18 PHI identifier categories per 45 CFR § 164.514(b):
+- Names, contact information, all geographic data below state level
+- All dates except year (birth year retained)
+- Phone, fax, email, SSN, MRN, account numbers, certificate numbers
+- Device identifiers, URLs, IP addresses, biometrics, photos
+- Any unique identifying number or code
 
-**What is removed:** All 18 PHI identifier categories listed in the regulation
-(names, contact details, geographic data below state level, dates except year,
-biometric data, photos, identifiers, and any unique codes).
+**What is retained:** State, 3-digit zip prefix, birth year, gender, all clinical codes (Conditions, Observations, Medications, Procedures, diagnoses).
 
-**What is retained:** State, 3-digit zip prefix, birth year, gender, and all
-clinical codes (Condition, Observation, Medication, Procedure).
-
-**Limitation:** Ages ≥ 90 — HIPAA Safe Harbor requires additional handling
-(full birth date removal). This profile generalizes to year for all ages;
-organisations with patients ≥ 90 should additionally redact `Patient.birthDate`
-or use the `age_bracket` strategy in a custom profile.
-
----
+**Limitation:** HIPAA Safe Harbor additionally requires that ages ≥ 90 be further de-identified (the year alone is still identifying at extreme ages). This profile generalizes all birth dates to year. Organizations with patients ≥ 90 should additionally redact `Patient.birthDate` or use the `age_bracket` strategy in a custom profile.
 
 ### `config_research_pseudonymous.yaml` — Research Pseudonymous
 
-Use this profile when:
-- Preparing a dataset for internal clinical research under IRB approval
-- Temporal analysis requires month-level date precision
-- Longitudinal studies need stable pseudonymised IDs across multiple exports
+Use for internal clinical research under IRB approval where temporal analysis requires month-level precision. Key differences from HIPAA Safe Harbor:
+- Dates generalized to **year-month** (not year-only) — preserves seasonal patterns for epidemiology
+- Patient IDs are **cryptohashed** (not redacted) — preserves referential integrity for longitudinal linkage across multiple export runs (same patient ID → same hash)
+- City/district redacted, state and 3-digit zip retained
 
-**Key differences from HIPAA Safe Harbor:**
-- Dates generalized to **year-month** (not year-only)
-- Patient IDs are **cryptohashed** (not redacted), preserving referential integrity
-- City/district redacted, but state and 3-digit zip prefix retained
-
-**Not suitable for:** external data sharing, regulatory submissions, or any
-context where HIPAA Safe Harbor compliance is required.
-
-**Governance:** Document operator name and config hash in every evidence report:
-```bash
-python3 tools/analyze_results.py \
-  --input input.ndjson --output output.ndjson \
-  --operator "Your Name" \
-  --config config/config_research_pseudonymous.yaml \
-  --report-md evidence_report.md
-```
-
----
+**Not suitable for:** external data sharing, regulatory submissions, or contexts requiring HIPAA Safe Harbor compliance.
 
 ### `config_structure_preserving.yaml` — Structure Preserving
 
-Use this profile when:
-- Downstream consumers require a complete, valid FHIR structure (no missing fields)
-- IDs must be pseudonymized for linkage but clinical data must remain intact
-- Feeding de-identified FHIR resources into systems that validate structure (e.g. validators, FHIR servers)
+Use when downstream consumers require a **complete, valid FHIR structure** with no missing fields — for example, feeding de-identified data into a FHIR validator, another FHIR server, or a system that validates cardinality constraints.
 
-**Key behaviour:** Fields are **never removed** — names, addresses, and telecom values are replaced with `[REDACTED]` via `substitute` (field stays present). IDs are pseudonymized via gPAS with `rewrite_references: true` to maintain referential integrity across bundles. Only `birthDate` is generalized (year-only). All clinical data (codes, values, observations, conditions) is untouched.
+Key behaviour:
+- Fields are **never removed** — names, addresses, telecom replaced with `[REDACTED]` via `substitute` (field stays present and valid)
+- All IDs pseudonymized via gPAS with `rewrite_references: true` — referential integrity maintained across bundles
+- Only `birthDate` is generalized (year-only); all other dates preserved
+- All clinical data (codes, values, observations, conditions) untouched
 
-**Requires gPAS.** Not suitable when gPAS is unavailable — use `config_research_pseudonymous.yaml` instead.
+**Gender fields:** `Patient.gender` and `Practitioner.gender` use `substitute_with: "unknown"` — NOT `[REDACTED]`. This is because FHIR R4 binds these fields to the `AdministrativeGender` value set (`male | female | other | unknown`). Any other value causes HAPI to reject the resource with HAPI-1821. `unknown` is the correct FHIR-compliant substitute.
+
+**Requires gPAS.** Use `config_research_pseudonymous.yaml` if gPAS is unavailable.
 
 ---
 
-## Creating a Custom Profile
+## Upload ordering and reference integrity
 
-All config files follow the same YAML structure:
+When de-identified resources are uploaded to a FHIR server, referenced resources must exist before the resources that reference them. The uploader computes a topological sort:
+
+```
+Organization  (tier 0 — no outbound references)
+Practitioner  (tier 0 — no outbound references)
+Patient       (tier 0 — no outbound references)
+Encounter     (tier 1 — references Patient, Practitioner, Organization)
+Observation   (tier 2 — references Encounter)
+DiagnosticReport (tier 3 — references Observation)
+```
+
+Resources in the same tier upload together in a FHIR batch Bundle. This ordering is computed automatically from the `reference` fields in the actual data — it is not hardcoded.
+
+Additionally, HAPI rejects purely numeric resource IDs (HAPI-0960). The uploader prefixes them with `p-` and rewrites all `reference` fields that pointed to those IDs.
+
+---
+
+## Creating a custom profile
 
 ```yaml
 general:
   appname: MyOrg-Custom
-  hash_type: sha3_256          # sha3_256 | sha256 | sha512
-  rewrite_references: true     # rewrite FHIR references after ID changes
-  rewrite_text_ids: true       # replace pseudonymised IDs in text fields
+  hash_type: sha3_256
+  rewrite_references: true     # required if IDs change and resources reference each other
+  rewrite_text_ids: true       # replace changed IDs that appear in text fields
 
 rules:
-  - match: Patient.name        # FHIRPath expression
-    action: redact             # action name
+  - name: "redact name"
+    match: "Patient.name"
+    action: redact
 
-  - match: Patient.birthDate
+  - name: "pseudonymize id"
+    match: "Patient.id"
+    action: gpas_pseudonymize
+
+  - name: "generalize birthdate"
+    match: "Patient.birthDate"
     action: generalize
     params:
-      strategy: date_year      # date_year | date_year_month | zip_prefix | age_bracket
+      strategy: date_year
+
+  # Apply to all resource types
+  - name: "remove narrative"
+    match: "*.text.div"
+    action: redact
 ```
 
-### Available Actions
-
-| Action | Description | Key params |
-|---|---|---|
-| `redact` | Replace field value with `""` / `null` | `replacement` |
-| `cryptohash` | SHA3-256 (or HMAC) hash of the value | `hash_type`, `secret_key_env` |
-| `generalize` | Coarsen the value | `strategy`: `date_year`, `date_year_month`, `zip_prefix`, `age_bracket`, `number_round`, `category` |
-| `substitute` | Replace with a fixed value | `value` |
-| `perturb` | Add random noise to numeric values | `range`, `distribution` |
-| `scrub_text` | Regex-based PHI removal in free text | `mode`, `patterns` |
-| `nlp_detect` | NLP-based entity detection (Presidio) | `mode`, `threshold` |
-| `encrypt` | RSA encryption | `public_key_path` |
-| `gpas_pseudonymize` | gPAS server pseudonymization | `gpas_url`, `domain`, `operation` |
-
-### FHIRPath Wildcards
-
-Use `"*.fieldName"` to apply a rule to that field across all resource types.
-Use `Patient.fieldName` to target only Patient resources. Rules are evaluated
-in order — place more specific rules before wildcards.
+**Important constraints when writing rules:**
+- `Patient.gender` and `Practitioner.gender` must use `substitute` with a valid AdministrativeGender code (`male | female | other | unknown`), never `redact` or arbitrary text
+- `rewrite_references: true` is required whenever IDs change (cryptohash or gPAS) — otherwise cross-resource references will point to non-existent IDs on the target server
+- Rules are applied in order — more specific rules (`Patient.name`) should appear before wildcards (`*.name`)
 
 ---
 
-## Key Management
+## Key management
 
-For all profiles using `cryptohash` in production:
+For production use of `cryptohash`:
 
-1. Set `MEDANON_HASH_KEY` environment variable (do not store in config):
-   ```bash
-   export MEDANON_HASH_KEY="$(openssl rand -hex 32)"
-   ```
+```bash
+# Generate
+openssl rand -hex 32
 
-2. Reference in the config rule:
-   ```yaml
-   - match: Patient.id
-     action: cryptohash
-     params:
-       secret_key_env: MEDANON_HASH_KEY
-   ```
+# Set in .env — never in the YAML config
+MEDANON_HASH_KEY=<value>
 
-3. Rotate keys according to your data retention policy. After rotation, old
-   pseudonymised outputs **cannot** be re-linked to new outputs without the
-   original key.
+# Reference in rule params
+params:
+  secret_key_env: MEDANON_HASH_KEY
+```
+
+Key rotation consequences:
+- Old de-identified datasets: hashes will no longer match new outputs for the same patient
+- Longitudinal studies using stable pseudonymous IDs: rotation breaks linkage
+- Rotate intentionally and document the rotation date with the dataset
 
 ---
 
-## Evidence and Audit
+## Evidence and audit
 
-After each de-identification run, generate an evidence report:
+Generate an evidence report after each de-identification run:
 
 ```bash
 python3 services/anonymizer/tools/analyze_results.py \
-  --input  original_patients.ndjson \
-  --output deid_patients.ndjson \
+  --input  original.ndjson \
+  --output deid.ndjson \
   --operator "Alice Smith" \
   --config  services/anonymizer/config/config_hipaa_safe_harbor.yaml \
   --report-json evidence.json \
   --report-md   evidence.md
 ```
 
-The report includes:
-- Operator name and ISO timestamp
-- Config file name and SHA-256 hash
-- Resource counts before/after, ID change count, reference rewrites
-- NLP token counts (confirms text scrubbing ran)
+Report includes: operator name, ISO timestamp, config SHA-256, resource counts, ID change count, reference rewrite count, NLP token counts per entity type.
 
-Use `docs/EVIDENCE_REPORT_TEMPLATE.md` as the basis for formal audit submissions.
+Enable `MEDANON_MANIFEST_ENABLED=true` to tag each de-identified resource with the rules that fired (required for the UI Resource Summary view and for GDPR Art. 30 record-keeping of processing activities).
