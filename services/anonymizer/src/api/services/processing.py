@@ -1,10 +1,11 @@
 """Processing service — business logic for FHIR de-identification endpoints."""
 
 import asyncio
-import json
 import logging
 import os
 from typing import AsyncIterator
+
+from utils.json_fast import loads as _json_loads, dumps as _json_dumps
 
 from pipeline.processor import process_data, process_data_batch, _BATCH_SIZE
 from integrations.gpas.circuit_breaker import GpasUnavailableError
@@ -101,12 +102,12 @@ class ProcessingService:
             if not line or line.startswith("//"):
                 continue
             try:
-                resource = json.loads(line)
+                resource = _json_loads(line)
                 slots.append(("valid", len(valid_resources)))
                 valid_resources.append(resource)
-            except json.JSONDecodeError as exc:
+            except (ValueError, TypeError) as exc:
                 logger.warning("NDJSON line %d: JSON parse error — %s", lineno, exc)
-                slots.append(("error", json.dumps(
+                slots.append(("error", _json_dumps(
                     {"error": f"line {lineno}: invalid JSON — {exc}"}
                 )))
 
@@ -123,7 +124,7 @@ class ProcessingService:
             try:
                 results = await asyncio.to_thread(process_data_batch, chunk, settings)
                 for i, r in enumerate(results):
-                    valid_results[chunk_start + i] = json.dumps(r)
+                    valid_results[chunk_start + i] = _json_dumps(r)
             except GpasUnavailableError as exc:
                 logger.error("ndjson_stream: gPAS unavailable at chunk %d: %s", chunk_start, exc, exc_info=False)
                 # Yield everything ready so far, then fatal error
@@ -143,7 +144,7 @@ class ProcessingService:
                     vi = chunk_start + idx
                     try:
                         r = await asyncio.to_thread(process_data_batch, [res], settings)
-                        valid_results[vi] = json.dumps(r[0])
+                        valid_results[vi] = _json_dumps(r[0])
                     except GpasUnavailableError as gexc:
                         logger.error("ndjson_stream: gPAS unavailable: %s", gexc, exc_info=False)
                         for si in range(emit_cursor, len(slots)):
@@ -158,7 +159,7 @@ class ProcessingService:
                         return
                     except Exception as exc2:
                         logger.error("NDJSON resource: processing error: %s", type(exc2).__name__, exc_info=False)
-                        valid_results[vi] = json.dumps({"error": "processing error"})
+                        valid_results[vi] = _json_dumps({"error": "processing error"})
 
             # Yield all contiguous ready slots from the cursor
             while emit_cursor < len(slots):
@@ -195,10 +196,10 @@ class ProcessingService:
             try:
                 results = await asyncio.to_thread(process_data_batch, chunk, settings)
                 for result in results:
-                    yield json.dumps(result)
+                    yield _json_dumps(result)
             except GpasUnavailableError as exc:
                 logger.error("batch_stream: gPAS unavailable at resource %d: %s", chunk_start, exc, exc_info=False)
-                yield json.dumps({
+                yield _json_dumps({
                     "error": "gPAS service unavailable — stream halted to prevent partial results",
                     "fatal": True,
                     "stopped_at_resource": chunk_start,
@@ -209,7 +210,7 @@ class ProcessingService:
                 for idx, res in enumerate(chunk):
                     try:
                         result = await asyncio.to_thread(process_data_batch, [res], settings)
-                        yield json.dumps(result[0])
+                        yield _json_dumps(result[0])
                     except GpasUnavailableError as gexc:
                         logger.error("batch_stream: gPAS unavailable: %s", gexc, exc_info=False)
                         yield GPAS_FATAL_JSON
@@ -221,7 +222,7 @@ class ProcessingService:
                             type(exc2).__name__,
                             exc_info=False,
                         )
-                        yield json.dumps({"error": f"resource {chunk_start + idx}: processing error"})
+                        yield _json_dumps({"error": f"resource {chunk_start + idx}: processing error"})
 
     async def process_bundle_stream(
         self, bundle: dict, settings
@@ -239,7 +240,7 @@ class ProcessingService:
             return
         except Exception as exc:
             logger.error("bundle_stream: %s", type(exc).__name__, exc_info=False)
-            yield json.dumps({"error": "bundle processing error"})
+            yield _json_dumps({"error": "bundle processing error"})
             return
 
         # Emit each processed entry resource as an NDJSON line
@@ -247,4 +248,4 @@ class ProcessingService:
         for entry in entries:
             r = entry.get("resource") if isinstance(entry, dict) else None
             if isinstance(r, dict):
-                yield json.dumps(r)
+                yield _json_dumps(r)

@@ -14,8 +14,8 @@ Supported job types:
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
+from utils.json_fast import loads as _json_loads, dumps as _json_dumps
 import os
 from pathlib import Path
 
@@ -78,7 +78,7 @@ def _process_stream_chunked(gen, settings, pseudonymizer, fh, start_count, store
         try:
             results = process_data_batch(chunk, settings, pseudonymizer)
             for result in results:
-                line = json.dumps(result)
+                line = _json_dumps(result)
                 fh.write(line + "\n")
                 count += 1
         except Exception:
@@ -86,12 +86,12 @@ def _process_stream_chunked(gen, settings, pseudonymizer, fh, start_count, store
             for resource in chunk:
                 try:
                     result = process_data_batch([resource], settings, pseudonymizer)[0]
-                    line = json.dumps(result)
+                    line = _json_dumps(result)
                     fh.write(line + "\n")
                 except Exception as exc2:
                     rtype = resource.get("resourceType", "Unknown") if isinstance(resource, dict) else "Unknown"
                     _worker_log.error("%s job=%s resource_type=%s error=%s", label, job.id, rtype, exc2)
-                    fh.write(json.dumps({"error": "processing error", "resourceType": rtype}) + "\n")
+                    fh.write(_json_dumps({"error": "processing error", "resourceType": rtype}) + "\n")
                 count += 1
 
         # Flush after every chunk to guarantee NDJSON integrity on crash
@@ -397,8 +397,8 @@ def _execute_bulk_import(job: Job) -> None:
             if not line:
                 continue
             try:
-                obj = json.loads(line)
-            except json.JSONDecodeError:
+                obj = _json_loads(line)
+            except (ValueError, TypeError):
                 continue
             if isinstance(obj, dict) and obj.get("resourceType") and "error" not in obj:
                 resources.append(obj)

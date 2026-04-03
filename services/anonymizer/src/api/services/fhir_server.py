@@ -1,10 +1,11 @@
 """FHIR server integration service — fetch, process, upload orchestration."""
 
 import asyncio
-import json
 import logging
 import os
 from typing import AsyncIterator
+
+from utils.json_fast import dumps as _json_dumps
 
 from api.services import GPAS_FATAL_JSON
 
@@ -53,7 +54,7 @@ class FhirServerService:
         try:
             results = await asyncio.to_thread(process_data_batch, chunk, settings)
             for result in results:
-                yield json.dumps(result)
+                yield _json_dumps(result)
         except GpasUnavailableError as exc:
             logger.error("%s: gPAS unavailable: %s", label, exc, exc_info=False)
             yield GPAS_FATAL_JSON
@@ -63,7 +64,7 @@ class FhirServerService:
             for res in chunk:
                 try:
                     result = await asyncio.to_thread(process_data_batch, [res], settings)
-                    yield json.dumps(result[0])
+                    yield _json_dumps(result[0])
                 except GpasUnavailableError as gexc:
                     logger.error("%s: gPAS unavailable: %s", label, gexc, exc_info=False)
                     yield GPAS_FATAL_JSON
@@ -74,7 +75,7 @@ class FhirServerService:
                         "%s: error processing resource type=%s: %s",
                         label, rtype, type(exc2).__name__, exc_info=False,
                     )
-                    yield json.dumps({"error": "processing error", "resourceType": rtype})
+                    yield _json_dumps({"error": "processing error", "resourceType": rtype})
 
     async def _stream_and_batch(
         self, gen, settings, *, label: str = "stream"
@@ -320,14 +321,14 @@ class FhirServerService:
                         all_deidentified.extend(results)
                         chunk = []
                         if fatal:
-                            yield json.dumps({"status": "error", "error": "gPAS unavailable"})
+                            yield _json_dumps({"status": "error", "error": "gPAS unavailable"})
                             return
 
                 if chunk:
                     results, fatal = await _deidentify(chunk)
                     all_deidentified.extend(results)
                     if fatal:
-                        yield json.dumps({"status": "error", "error": "gPAS unavailable"})
+                        yield _json_dumps({"status": "error", "error": "gPAS unavailable"})
                         return
             except Exception:
                 producer_task.cancel()
@@ -353,14 +354,14 @@ class FhirServerService:
                     all_deidentified.extend(results)
                     chunk = []
                     if fatal:
-                        yield json.dumps({"status": "error", "error": "gPAS unavailable"})
+                        yield _json_dumps({"status": "error", "error": "gPAS unavailable"})
                         return
 
             if chunk:
                 results, fatal = await _deidentify(chunk)
                 all_deidentified.extend(results)
                 if fatal:
-                    yield json.dumps({"status": "error", "error": "gPAS unavailable"})
+                    yield _json_dumps({"status": "error", "error": "gPAS unavailable"})
                     return
 
         # Phase 2: upload — _infer_upload_tiers needs the full list for
@@ -378,13 +379,13 @@ class FhirServerService:
             if r is _UP_SENTINEL:
                 break
             if r["success"]:
-                yield json.dumps({
+                yield _json_dumps({
                     "resourceType": r["resourceType"], "target_id": r.get("server_id"),
                     "status": "ok",
                 })
             else:
                 logger.error("round_trip upload error type=%s: %s", r["resourceType"], r.get("error"))
-                yield json.dumps({
+                yield _json_dumps({
                     "resourceType": r["resourceType"], "status": "error",
                     "error": r.get("error", "upload error"),
                 })
@@ -415,7 +416,7 @@ class FhirServerService:
             )
         except Exception as exc:
             logger.error("bulk-export kick-off error: %s", exc, exc_info=False)
-            yield json.dumps({"error": f"bulk export kick-off error: {type(exc).__name__}"})
+            yield _json_dumps({"error": f"bulk export kick-off error: {type(exc).__name__}"})
             return
 
         # Phase 2: Poll with asyncio.sleep (no thread held)
@@ -441,7 +442,7 @@ class FhirServerService:
                 yield line
         except Exception as exc:
             logger.error("bulk-export error: %s", exc, exc_info=False)
-            yield json.dumps({"error": f"bulk export error: {type(exc).__name__}"})
+            yield _json_dumps({"error": f"bulk export error: {type(exc).__name__}"})
         finally:
             try:
                 await asyncio.to_thread(delete_bulk_export, status_url, token, timeout)
@@ -464,4 +465,4 @@ class FhirServerService:
                 yield line
         except Exception as exc:
             logger.error("cohort error: %s", exc, exc_info=False)
-            yield json.dumps({"error": f"cohort error: {type(exc).__name__}"})
+            yield _json_dumps({"error": f"cohort error: {type(exc).__name__}"})

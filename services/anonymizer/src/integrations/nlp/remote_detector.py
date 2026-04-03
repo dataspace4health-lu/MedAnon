@@ -7,7 +7,7 @@ remains unchanged; the choice of local vs. remote is made at call time.
 
 from __future__ import annotations
 
-import json
+from utils.json_fast import dumps_bytes as _json_dumps_bytes
 import logging
 import os
 import threading
@@ -121,14 +121,14 @@ def analyze_and_replace_remote(
         )
         return text
 
-    payload = json.dumps({
+    payload = _json_dumps_bytes({
         "text": text,
         "entities": entities,
         "threshold": threshold,
         "language": language,
         "mode": mode,
         "token_state": token_state,
-    }).encode("utf-8")
+    })
 
     url = _nlp_service_url("/v1/detect")
     try:
@@ -169,7 +169,7 @@ def analyze_and_replace_batch_remote(
         )
         return list(texts)
 
-    payload = json.dumps({
+    payload = _json_dumps_bytes({
         "items": [
             {
                 "text": t,
@@ -181,7 +181,7 @@ def analyze_and_replace_batch_remote(
             for t in texts
         ],
         "token_state": token_state,
-    }).encode("utf-8")
+    })
 
     url = _nlp_service_url("/v1/detect/batch")
     try:

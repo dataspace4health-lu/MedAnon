@@ -5,8 +5,8 @@ status polling with Retry-After, NDJSON file download, and best-effort
 server-side cleanup.
 """
 
-import json
 import os
+from utils.json_fast import loads as _json_loads
 import queue as _queue
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -55,7 +55,7 @@ def _poll_bulk_status_single(status_url, token=None, timeout=30):
     resp = _do_raw_request("GET", status_url, headers, timeout, operation="bulk_poll")
 
     if resp.status == 200:
-        return True, json.loads(resp.data.decode("utf-8"))
+        return True, _json_loads(resp.data.decode("utf-8"))
 
     if resp.status == 202:
         progress = resp.headers.get("X-Progress", "")
@@ -124,8 +124,8 @@ def _download_bulk_ndjson(file_url, token=None, timeout=60):
                 line = line.strip()
                 if line:
                     try:
-                        yield json.loads(line)
-                    except json.JSONDecodeError as exc:
+                        yield _json_loads(line)
+                    except (ValueError, TypeError) as exc:
                         raise ValueError(
                             f"Malformed NDJSON line from {file_url}: {exc}"
                         ) from exc
@@ -133,8 +133,8 @@ def _download_bulk_ndjson(file_url, token=None, timeout=60):
         line = buf.strip()
         if line:
             try:
-                yield json.loads(line)
-            except json.JSONDecodeError as exc:
+                yield _json_loads(line)
+            except (ValueError, TypeError) as exc:
                 raise ValueError(
                     f"Malformed NDJSON line from {file_url}: {exc}"
                 ) from exc

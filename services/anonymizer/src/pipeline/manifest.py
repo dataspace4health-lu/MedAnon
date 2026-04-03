@@ -7,8 +7,8 @@ FHIRPath — no PHI values).
 
 from __future__ import annotations
 
-import json
 import os
+from utils.json_fast import dumps as _json_dumps
 
 _MANIFEST_ENABLED: bool = os.environ.get(
     "MEDANON_MANIFEST_ENABLED", "false"
@@ -22,7 +22,7 @@ def _build_manifest_tag(manifest_entries: list[dict]) -> dict:
     return {
         "system": MANIFEST_SYSTEM,
         "code": "transformation-manifest",
-        "display": json.dumps(manifest_entries, separators=(",", ":")),
+        "display": _json_dumps(manifest_entries),
     }
 
 

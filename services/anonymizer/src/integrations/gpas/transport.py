@@ -6,8 +6,8 @@ Depends on:
 """
 
 import html
-import json
 import logging
+from utils.json_fast import loads as _json_loads, dumps_bytes as _json_dumps_bytes
 import os
 import random
 import re
@@ -196,7 +196,7 @@ def _call_gpas_operation(base_url, operation, fhir_params, params):
 
     url = f"{base_url}/${operation}"
     timeout_sec = float(params.get('gpas_timeout_sec', 30))
-    payload = json.dumps(fhir_params).encode('utf-8')
+    payload = _json_dumps_bytes(fhir_params)
 
     gpas_log.info("calling %s with %d parameter(s)", url,
                   len(fhir_params.get("parameter", [])))
@@ -222,7 +222,7 @@ def _call_gpas_operation(base_url, operation, fhir_params, params):
                 detail = resp.data[:500].decode('utf-8', errors='replace') if resp.data else ""
                 try:
                     diagnostics = []
-                    outcome = json.loads(detail)
+                    outcome = _json_loads(detail)
                     for issue in outcome.get('issue', []):
                         if issue.get('diagnostics'):
                             diagnostics.append(issue['diagnostics'][:100])
@@ -248,7 +248,7 @@ def _call_gpas_operation(base_url, operation, fhir_params, params):
             GPAS_LATENCY.labels(operation=operation).observe(time.perf_counter() - t0)
             GPAS_CALL_COUNT.labels(operation=operation, status='ok').inc()
             _gpas_circuit_breaker.record_success()
-            return json.loads(body)
+            return _json_loads(body)
         except (urllib3.exceptions.HTTPError, OSError) as exc:
             if attempt < retry_count:
                 time.sleep(retry_backoff * (2 ** attempt) * (0.5 + random.random()))

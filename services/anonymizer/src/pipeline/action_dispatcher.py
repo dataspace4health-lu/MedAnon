@@ -7,8 +7,8 @@ accumulates gPAS work items for the batch Pass 2.
 
 from __future__ import annotations
 
-import json
 import logging
+from utils.json_fast import dumps as _json_dumps
 from dataclasses import dataclass, field
 
 from utils.fhirpath import not_implemented
@@ -144,7 +144,7 @@ def dispatch_pass1(
 
             if action in GPAS_PSEUDO_ACTIONS:
                 val = el["value"]
-                serialized = str(val) if not isinstance(val, dict) else json.dumps(val)
+                serialized = str(val) if not isinstance(val, dict) else _json_dumps(val)
                 gpas_work.append(BatchWork(
                     rule=rule, element=el, params=params,
                     serialized_value=serialized,

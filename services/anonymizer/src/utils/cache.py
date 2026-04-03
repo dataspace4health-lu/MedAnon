@@ -11,7 +11,7 @@ FastAPI startup event when ``MEDANON_REDIS_URL`` is set.
 
 from __future__ import annotations
 
-import json
+from utils.json_fast import dumps as _json_dumps
 import logging
 import threading
 from typing import Protocol, runtime_checkable
@@ -90,7 +90,7 @@ class RedisCache:
         self._prefix = key_prefix
 
     def _make_key(self, key: tuple) -> str:
-        return self._prefix + json.dumps(key, ensure_ascii=False)
+        return self._prefix + _json_dumps(key)
 
     def get(self, key: tuple) -> str | None:
         try:

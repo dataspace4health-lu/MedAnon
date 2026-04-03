@@ -1,6 +1,6 @@
 from utils.fhirpath import find_nodes
 from Crypto.Hash import SHA3_256, SHA256, HMAC
-import json
+import json as _json_stdlib
 import logging
 import os
 
@@ -11,7 +11,9 @@ _warned_no_key = False
 def _normalized_node_str(value):
     if isinstance(value, dict):
         # Keep historical serialization behavior for backward-compatible hashes.
-        return json.dumps(value)
+        # Must use stdlib json.dumps (with spaces) — changing separators changes
+        # the hash output and breaks all existing pseudonymized data.
+        return _json_stdlib.dumps(value)
     return str(value)
 
 

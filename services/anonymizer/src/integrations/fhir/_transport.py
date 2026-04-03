@@ -4,8 +4,8 @@ Provides the urllib3 PoolManager, configuration constants, input validators,
 and low-level HTTP helper functions used by reader, writer, and bulk modules.
 """
 
-import json
 import logging
+from utils.json_fast import loads as _json_loads, dumps_bytes as _json_dumps_bytes
 import os
 import random
 import re
@@ -151,7 +151,7 @@ def _do_request(method, url, headers, timeout, body=None, operation="request"):
                 FHIR_CALL_COUNT.labels(operation=operation, status="error").inc()
                 body_snippet = resp.data[:400].decode("utf-8", errors="replace") if resp.data else ""
                 raise ValueError(f"FHIR server HTTP {resp.status} for {url}: {body_snippet}")
-            result = json.loads(resp.data.decode("utf-8"))
+            result = _json_loads(resp.data.decode("utf-8"))
             FHIR_LATENCY.labels(operation=operation).observe(time.perf_counter() - t0)
             FHIR_CALL_COUNT.labels(operation=operation, status="ok").inc()
             return result
@@ -254,6 +254,6 @@ def _get_json(url, token=None, timeout=30, operation="get"):
 
 def _write_json(url, payload, method, token=None, timeout=30, operation="write", target: bool = False):
     """POST or PUT JSON payload to a FHIR server URL; returns parsed response dict."""
-    body = json.dumps(payload).encode("utf-8")
+    body = _json_dumps_bytes(payload)
     headers = _make_post_headers(token, target=target)
     return _do_request(method, url, headers, timeout, body=body, operation=operation)

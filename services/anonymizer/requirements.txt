@@ -5,6 +5,7 @@ pydantic==2.12.5
 uvicorn==0.42.0
 gunicorn==23.0.0
 python-multipart==0.0.22    # required for Form fields (SMART /oauth2/introspect)
+orjson==3.10.18            # Rust-based JSON — 3-10x faster than stdlib (hot paths)
 PyYAML==6.0.3              # CVE history in older versions — always pin exactly
 fhirpathpy==0.1.0
 rich==14.3.3

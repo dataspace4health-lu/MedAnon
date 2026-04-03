@@ -15,8 +15,8 @@ Backward-compat:   Activated only when ``MEDANON_STAGING_DB_URL`` is set.  The
 
 from __future__ import annotations
 
-import json
 import logging
+from utils.json_fast import loads as _json_loads, dumps as _json_dumps
 import os
 from pathlib import Path
 
@@ -59,7 +59,7 @@ def _process_batch(
     resources: list[dict] = []
     for row in batch_rows:
         rj = row["resource_json"]
-        resources.append(rj if isinstance(rj, dict) else json.loads(rj))
+        resources.append(rj if isinstance(rj, dict) else _json_loads(rj))
 
     return process_data_batch(resources, settings, pseudonymizer)
 
@@ -92,7 +92,7 @@ def _process_batch_with_fallback(
         results = _process_batch(batch_rows, settings, pseudonymizer, processing_mode)
         done_ids: list[int] = []
         for row, result in zip(batch_rows, results):
-            fh.write(json.dumps(result) + "\n")
+            fh.write(_json_dumps(result) + "\n")
             done_ids.append(row["id"])
             succeeded += 1
         fh.flush()
@@ -101,11 +101,11 @@ def _process_batch_with_fallback(
         # Per-resource fallback: process each resource individually
         for row in batch_rows:
             rj = row["resource_json"]
-            resource = rj if isinstance(rj, dict) else json.loads(rj)
+            resource = rj if isinstance(rj, dict) else _json_loads(rj)
             rtype = resource.get("resourceType", "Unknown") if isinstance(resource, dict) else "Unknown"
             try:
                 result = process_data_batch([resource], settings, pseudonymizer)[0]
-                fh.write(json.dumps(result) + "\n")
+                fh.write(_json_dumps(result) + "\n")
                 staging.mark_done(job_id, [row["id"]])
                 succeeded += 1
             except Exception as exc:
@@ -113,7 +113,7 @@ def _process_batch_with_fallback(
                     "%s job=%s resource_type=%s row_id=%d error=%s",
                     label, job_id, rtype, row["id"], exc,
                 )
-                fh.write(json.dumps({"error": "processing error", "resourceType": rtype}) + "\n")
+                fh.write(_json_dumps({"error": "processing error", "resourceType": rtype}) + "\n")
                 try:
                     staging.mark_error(job_id, row["id"], str(exc))
                 except Exception:

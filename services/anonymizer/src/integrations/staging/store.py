@@ -10,7 +10,7 @@ Provides an intermediate table so that Phase 1 (FHIR fetch) and Phase 2
 
 from __future__ import annotations
 
-import json
+from utils.json_fast import dumps as _json_dumps
 import logging
 from typing import Iterable
 
@@ -109,7 +109,7 @@ class StagingStore:
             rtype = resource.get("resourceType", "Unknown")
             rid = resource.get("id")
             resource_id = f"{rtype}/{rid}" if rid else f"{rtype}/auto-{idx}"
-            rows.append((job_id, resource_id, rtype, json.dumps(resource)))
+            rows.append((job_id, resource_id, rtype, _json_dumps(resource)))
 
         conn = self._get_conn()
         try:

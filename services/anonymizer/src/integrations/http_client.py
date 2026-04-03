@@ -6,7 +6,7 @@ Provides a pooled urllib3 client with retry + jitter, replacing
 
 from __future__ import annotations
 
-import json
+from utils.json_fast import loads as _json_loads
 import logging
 import os
 import random
@@ -73,7 +73,7 @@ def proxy_post_json(url: str, body: bytes, content_type: str = "application/json
                     timeout: float = 60) -> dict:
     """POST body to URL, return parsed JSON response dict."""
     resp = proxy_request("POST", url, body=body, headers={"Content-Type": content_type}, timeout=timeout)
-    return json.loads(resp.data.decode("utf-8"))
+    return _json_loads(resp.data.decode("utf-8"))
 
 
 def proxy_post_raw(url: str, body: bytes, content_type: str = "application/json",
