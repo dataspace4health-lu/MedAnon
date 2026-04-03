@@ -12,17 +12,29 @@ import threading
 from copy import deepcopy
 from functools import lru_cache
 
-import fhirpathpy
-
 audit_log = logging.getLogger("medanon.audit")
 
 # ---------------------------------------------------------------------------
 # FHIRPath expression cache — compile once, reuse across resources
 # ---------------------------------------------------------------------------
 
+_fhirpathpy_log_registered = False
+
+
 @lru_cache(maxsize=512)
 def _compile_fhirpath(expression: str):
-    """Compile a FHIRPath expression (LRU-bounded, thread-safe)."""
+    """Compile a FHIRPath expression (LRU-bounded, thread-safe).
+
+    Lazy-imports ``fhirpathpy`` so the heavy antlr4 grammar only loads when
+    a truly complex expression is encountered (not on module import).
+    """
+    global _fhirpathpy_log_registered
+    import fhirpathpy
+    if not _fhirpathpy_log_registered:
+        fhirpathpy.engine.invocations["log"] = {
+            "fn": lambda ctx, els: [{"path": x.path, "value": x.data} for x in els]
+        }
+        _fhirpathpy_log_registered = True
     return fhirpathpy.compile(expression)
 
 
@@ -49,13 +61,182 @@ def _classify_match(expression: str) -> str:
     Returns:
         ``"simple"``   — typed dot-path (e.g. ``Patient.name``)
         ``"wildcard"`` — wildcard dot-path (e.g. ``*.meta.lastUpdated``)
+        ``"where"``    — ``.where(url=...)`` expression handled natively
         ``"fhirpath"`` — complex expression requiring the full FHIRPath engine
     """
     if _SIMPLE_PATH_RE.match(expression):
         return "simple"
     if _WILDCARD_PATH_RE.match(expression):
         return "wildcard"
+    if _parse_where_plan(expression) is not None:
+        return "where"
     return "fhirpath"
+
+
+# ---------------------------------------------------------------------------
+# Native .where(url=...) evaluator — eliminates fhirpathpy for extensions
+# ---------------------------------------------------------------------------
+
+# Matches segments like: .where(url='...') or .where(url.startsWith('...'))
+_WHERE_SEGMENT_RE = _re.compile(
+    r"\.where\("
+    r"(?:"
+    r"url='([^']+)'"                          # group 1: exact url value
+    r"|"
+    r"url\.startsWith\('([^']+)'\)"           # group 2: prefix value
+    r")"
+    r"\)"
+)
+
+
+@lru_cache(maxsize=128)
+def _parse_where_plan(expression: str):
+    """Parse a ``.where(url=...)``-containing expression into a traversal plan.
+
+    Returns a tuple ``(resource_type, segments, trailing)`` where:
+      - *resource_type* is the leading FHIR type (e.g. ``"Patient"``)
+      - *segments* is a tuple of ``(path_keys, filter_value, filter_mode)``
+      - *trailing* is a tuple of remaining dot-path keys after the last ``.where()``
+
+    Returns ``None`` if the expression cannot be decomposed.
+    """
+    # Must start with ResourceType
+    if not expression or not expression[0].isupper():
+        return None
+    # Must contain at least one .where(
+    if ".where(" not in expression:
+        return None
+
+    # Split into parts around .where(...) segments
+    remaining = expression
+    segments: list[tuple] = []
+
+    # Extract resource type
+    dot = remaining.find(".")
+    if dot < 1:
+        return None
+    resource_type = remaining[:dot]
+    if not _re.match(r'^[A-Z][a-zA-Z]+$', resource_type):
+        return None
+    remaining = remaining[dot:]
+
+    while remaining:
+        # Find the next .where(
+        where_match = _WHERE_SEGMENT_RE.search(remaining)
+        if where_match is None:
+            break
+
+        # Path keys before this .where()
+        pre = remaining[:where_match.start()]
+        if pre:
+            path_keys = tuple(k for k in pre.split(".") if k)
+        else:
+            path_keys = ()
+
+        # Determine filter
+        exact_val = where_match.group(1)
+        prefix_val = where_match.group(2)
+        if exact_val is not None:
+            segments.append((path_keys, exact_val, "eq"))
+        elif prefix_val is not None:
+            segments.append((path_keys, prefix_val, "startsWith"))
+        else:
+            return None
+
+        remaining = remaining[where_match.end():]
+
+    if not segments:
+        return None
+
+    # Trailing path after the last .where()
+    if remaining:
+        trailing = tuple(k for k in remaining.split(".") if k)
+    else:
+        trailing = ()
+
+    return (resource_type, tuple(segments), trailing)
+
+
+def _evaluate_where_path(resource: dict, expression: str) -> list:
+    """Evaluate a ``.where()``-containing expression via native dict traversal.
+
+    Returns elements in the same ``[{"path": ..., "value": ...}]`` format
+    that ``fhirpathpy + .log()`` produces, so callers see no difference.
+    """
+    plan = _parse_where_plan(expression)
+    if plan is None:
+        return []
+
+    resource_type, segments, trailing = plan
+
+    # Check resource type
+    if not isinstance(resource, dict):
+        return []
+    if resource.get("resourceType") != resource_type:
+        return []
+
+    nodes = [resource]
+    path_prefix = resource_type
+
+    for path_keys, filter_value, filter_mode in segments:
+        # Traverse dot-path to reach the array to filter
+        for key in path_keys:
+            path_prefix = f"{path_prefix}.{key}"
+            next_nodes = []
+            for node in nodes:
+                if not isinstance(node, dict):
+                    continue
+                child = node.get(key)
+                if child is None:
+                    continue
+                if isinstance(child, list):
+                    next_nodes.extend(child)
+                else:
+                    next_nodes.append(child)
+            nodes = next_nodes
+            if not nodes:
+                return []
+
+        # Apply .where(url=...) filter
+        filtered = []
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            val = node.get("url")
+            if filter_mode == "eq" and val == filter_value:
+                filtered.append(node)
+            elif filter_mode == "startsWith" and isinstance(val, str) and val.startswith(filter_value):
+                filtered.append(node)
+        nodes = filtered
+        if not nodes:
+            return []
+
+    # Traverse trailing path keys
+    for key in trailing:
+        path_prefix = f"{path_prefix}.{key}"
+        next_nodes = []
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            child = node.get(key)
+            if child is None:
+                continue
+            if isinstance(child, list):
+                next_nodes.extend(child)
+            else:
+                next_nodes.append(child)
+        nodes = next_nodes
+        if not nodes:
+            return []
+
+    # Return in fhirpathpy .log() format
+    results = []
+    for node in nodes:
+        if isinstance(node, list):
+            results.extend({"path": path_prefix, "value": item} for item in node)
+        else:
+            results.append({"path": path_prefix, "value": node})
+    return results
 
 
 def _evaluate_simple_path(resource: dict, expression: str) -> list:
@@ -118,41 +299,27 @@ def _traverse(node, path_parts: list[str], prefix: str) -> list:
 # Match candidate expansion
 # ---------------------------------------------------------------------------
 
-_candidates_cache: dict[tuple, list] = {}
-_CANDIDATES_CACHE_MAX = 512
-_cache_lock = threading.Lock()
-
-
-def _build_match_candidates(match_expr: str, resource: dict) -> list[str]:
-    """Expand a match expression into concrete FHIRPath candidates for this resource.
-
-    Handles ``*.field`` wildcards and ``{resourceType}`` placeholders.
-    """
-    resource_type = resource.get("resourceType") if isinstance(resource, dict) else None
-    cache_key = (match_expr, resource_type)
-    with _cache_lock:
-        cached = _candidates_cache.get(cache_key)
-    if cached is not None:
-        return cached
-
+@lru_cache(maxsize=512)
+def _build_match_candidates_cached(match_expr: str, resource_type: str | None) -> tuple:
+    """Expand match expression into concrete candidates (LRU-cached, thread-safe)."""
     if not isinstance(match_expr, str):
-        with _cache_lock:
-            _candidates_cache[cache_key] = []
-        return []
-
+        return ()
     candidates = [match_expr]
     if resource_type:
         if match_expr.startswith("*."):
             candidates.append(f"{resource_type}{match_expr[1:]}")
         if "{resourceType}" in match_expr:
             candidates.append(match_expr.replace("{resourceType}", resource_type))
+    return tuple(dict.fromkeys(candidates))
 
-    result = list(dict.fromkeys(candidates))
-    with _cache_lock:
-        if len(_candidates_cache) >= _CANDIDATES_CACHE_MAX:
-            _candidates_cache.clear()
-        _candidates_cache[cache_key] = result
-    return result
+
+def _build_match_candidates(match_expr: str, resource: dict) -> tuple:
+    """Expand a match expression into concrete FHIRPath candidates for this resource.
+
+    Handles ``*.field`` wildcards and ``{resourceType}`` placeholders.
+    """
+    resource_type = resource.get("resourceType") if isinstance(resource, dict) else None
+    return _build_match_candidates_cached(match_expr, resource_type)
 
 
 # ---------------------------------------------------------------------------
@@ -162,6 +329,7 @@ def _build_match_candidates(match_expr: str, resource: dict) -> list[str]:
 _rule_index_cache: dict = {}
 _per_type_cache: dict[tuple, list] = {}
 _PER_TYPE_CACHE_MAX = 256
+_cache_lock = threading.Lock()
 
 
 def _get_rule_resource_type(rule: dict) -> str:
@@ -191,30 +359,32 @@ def _build_rule_index(rules: list) -> dict[str, list]:
 def _get_rules_for_resource(resource: dict, settings) -> list:
     """Return only the rules applicable to this resource's type."""
     rules = getattr(settings, "rules", [])
-    # Use a stable cache key — id(rules) can collide after GC frees the old
-    # object and allocates a new one at the same address.
     rules_key = getattr(settings, "filename", None)
-    with _cache_lock:
-        if rules_key and rules_key in _rule_index_cache:
-            index = _rule_index_cache[rules_key]
-        else:
-            index = _build_rule_index(rules)
-            if rules_key:
-                _rule_index_cache[rules_key] = index
+
+    # Rule index: lock-free read, lock only on miss (double-check)
+    if rules_key and rules_key in _rule_index_cache:
+        index = _rule_index_cache[rules_key]
+    else:
+        with _cache_lock:
+            if rules_key and rules_key in _rule_index_cache:
+                index = _rule_index_cache[rules_key]
+            else:
+                index = _build_rule_index(rules)
+                if rules_key:
+                    _rule_index_cache[rules_key] = index
 
     resource_type = resource.get("resourceType", "") if isinstance(resource, dict) else ""
 
-    # Second-level cache: avoid rebuilding the same list for every resource of the same type
+    # Per-type cache: lock-free read, lock only on miss
     per_type_key = (rules_key, resource_type)
-    with _cache_lock:
-        cached_applicable = _per_type_cache.get(per_type_key)
+    cached_applicable = _per_type_cache.get(per_type_key)
     if cached_applicable is not None:
         return cached_applicable
 
     applicable = list(index.get(resource_type, []))
     applicable.extend(index.get("*", []))
-    with _cache_lock:
-        if rules_key:
+    if rules_key:
+        with _cache_lock:
             if len(_per_type_cache) >= _PER_TYPE_CACHE_MAX:
                 _per_type_cache.clear()
             _per_type_cache[per_type_key] = applicable
@@ -225,8 +395,9 @@ def clear_rule_caches() -> None:
     """Clear all module-level rule caches (called when config profiles change)."""
     _compile_fhirpath.cache_clear()
     _classify_match.cache_clear()
+    _build_match_candidates_cached.cache_clear()
+    _parse_where_plan.cache_clear()
     with _cache_lock:
-        _candidates_cache.clear()
         _rule_index_cache.clear()
         _per_type_cache.clear()
 

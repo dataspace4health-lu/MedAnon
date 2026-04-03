@@ -18,6 +18,7 @@ from pipeline.rule_matcher import (
     _classify_match,
     _evaluate_fhirpath_cached,
     _evaluate_simple_path,
+    _evaluate_where_path,
     _resolve_rule_params,
 )
 from pipeline.deidentify import (
@@ -86,6 +87,8 @@ def dispatch_pass1(
             match_class = _classify_match(candidate)
             if match_class in ("simple", "wildcard"):
                 matched_elements.extend(_evaluate_simple_path(resource, candidate))
+            elif match_class == "where":
+                matched_elements.extend(_evaluate_where_path(resource, candidate))
             else:
                 try:
                     matched = _evaluate_fhirpath_cached(resource, candidate + ".log()")

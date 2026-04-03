@@ -27,8 +27,6 @@ import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
 
-import fhirpathpy
-
 from pipeline.manifest import _MANIFEST_ENABLED, _attach_manifest
 from pipeline.rule_matcher import _get_rules_for_resource
 from pipeline.action_dispatcher import dispatch_pass1
@@ -50,11 +48,8 @@ from integrations.gpas.circuit_breaker import GpasUnavailableError
 
 audit_log = logging.getLogger("medanon.audit")
 
-# Register the FHIRPath log() invocation once at module level to avoid
-# repeated global mutation on every rule evaluation (thread-safety fix).
-fhirpathpy.engine.invocations["log"] = {
-    "fn": lambda ctx, els: [{"path": x.path, "value": x.data} for x in els]
-}
+# The .log() FHIRPath invocation is registered lazily inside
+# rule_matcher._compile_fhirpath() on first use — no eager import needed.
 
 _BATCH_SIZE = int(os.environ.get("MEDANON_BATCH_SIZE", "300"))
 _PARALLEL_WORKERS = int(os.environ.get("MEDANON_PARALLEL_WORKERS", "0"))

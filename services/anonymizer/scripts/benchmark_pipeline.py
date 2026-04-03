@@ -71,6 +71,17 @@ def _make_patient(i: int) -> dict:
         ],
         "generalPractitioner": [{"reference": f"Practitioner/prac-{i % 50:04d}", "display": f"Dr. {i}"}],
         "managingOrganization": {"reference": "Organization/org-001"},
+        "extension": [
+            {"url": "http://hl7.org/fhir/us/core/StructureDefinition/us-core-race",
+             "extension": [
+                 {"url": "ombCategory", "valueCoding": {"code": "2106-3", "display": "White"}},
+                 {"url": "text", "valueString": "White"},
+             ]},
+            {"url": "http://hl7.org/fhir/StructureDefinition/patient-mothersMaidenName",
+             "valueString": f"Maiden{i}"},
+            {"url": f"http://synthetichealth.github.io/synthea/disability-adjusted-life-years",
+             "valueDecimal": 65.2},
+        ],
     }
 
 
@@ -138,6 +149,8 @@ class BenchSettings:
         {"name": "redact_meta",       "match": "*.meta.lastUpdated", "action": "redact", "params": {}},
         {"name": "redact_display",    "match": "*.subject.display",  "action": "redact", "params": {}},
         {"name": "redact_performer",  "match": "*.performer.display","action": "redact", "params": {}},
+        {"name": "redact_race_ext",  "match": "Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-race')", "action": "redact", "params": {}},
+        {"name": "redact_synthea",   "match": "Patient.extension.where(url.startsWith('http://synthetichealth.github.io/synthea/'))", "action": "redact", "params": {}},
     ]
 
 
@@ -179,7 +192,7 @@ def _print_bar(label, value, max_val, width=40):
 # ---------------------------------------------------------------------------
 
 def bench_fhirpath():
-    from pipeline.rule_matcher import _classify_match, _evaluate_simple_path
+    from pipeline.rule_matcher import _classify_match, _evaluate_simple_path, _evaluate_where_path
 
     expressions = [
         # Simple (typed dot-paths) — fast-path eligible
@@ -191,6 +204,14 @@ def bench_fhirpath():
         # Complex FHIRPath — NOT fast-path eligible
         "Patient.name.where(use='official')",
         "Observation.value.ofType(Quantity)",
+    ]
+
+    # .where(url=...) expressions — native evaluator
+    where_expressions = [
+        "Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-race')",
+        "Patient.extension.where(url='http://hl7.org/fhir/StructureDefinition/patient-mothersMaidenName').valueString",
+        "Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-race').extension.where(url='text').valueString",
+        "Patient.extension.where(url.startsWith('http://synthetichealth.github.io/synthea/'))",
     ]
 
     # Classify all expressions
@@ -247,6 +268,22 @@ def bench_fhirpath():
     print(f"  fast-path (dict traversal): {fast_total:>10,} evals in {fast_elapsed:.3f}s = {fast_rate:>12,.0f} evals/sec")
     print(f"  fhirpathpy (interpreter)  : {slow_total:>10,} evals in {slow_elapsed:.3f}s = {slow_rate:>12,.0f} evals/sec")
     print(f"  >>> Fast-path is {speedup:.0f}x faster (on {len(compiled)} shared expressions)")
+
+    # --- Native .where(url=...) evaluator ---
+    where_native = [e for e in where_expressions if _classify_match(e) == "where"]
+    if where_native:
+        N_WHERE = 20_000
+        start = time.perf_counter()
+        for _ in range(N_WHERE):
+            for expr in where_native:
+                _evaluate_where_path(resource, expr)
+        where_elapsed = time.perf_counter() - start
+        where_total = N_WHERE * len(where_native)
+        where_rate = where_total / where_elapsed
+        print(f"  native .where() evaluator : {where_total:>10,} evals in {where_elapsed:.3f}s = {where_rate:>12,.0f} evals/sec")
+    else:
+        where_rate = 0
+        print("  native .where() evaluator : no expressions classified as 'where'")
 
     return fast_fair_rate, slow_rate
 
