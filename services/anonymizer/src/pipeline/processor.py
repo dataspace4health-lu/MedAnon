@@ -22,9 +22,10 @@ All existing callers that omit the parameter continue to work unchanged.
 
 from __future__ import annotations
 
+import copy
 import logging
 import os
-import re
+from concurrent.futures import ThreadPoolExecutor
 
 import fhirpathpy
 
@@ -38,8 +39,9 @@ from pipeline.gpas_orchestrator import (
     _extract_gpas_params,
 )
 from pipeline.post_processor import (
+    _build_text_id_matcher,
     _deep_rewrite_references_gpas,
-    _apply_reference_pseudonyms,
+    _post_process_resource,
     _rewrite_references,
     _rewrite_text_ids,
     _collect_reference_ids,
@@ -55,6 +57,7 @@ fhirpathpy.engine.invocations["log"] = {
 }
 
 _BATCH_SIZE = int(os.environ.get("MEDANON_BATCH_SIZE", "200"))
+_PARALLEL_WORKERS = int(os.environ.get("MEDANON_PARALLEL_WORKERS", "0"))
 
 
 def _get_default_pseudonymizer():
@@ -80,6 +83,7 @@ def _finalize_resource(
     precomputed_mapping: dict | None = None,
     precompiled_text_id_regex=None,
     precomputed_ref_mapping: dict | None = None,
+    prebuilt_text_id_automaton=None,
 ) -> dict:
     """Run Pass 2 (gPAS) + post-processing for one resource.
 
@@ -100,26 +104,46 @@ def _finalize_resource(
     else:
         batch_mapping = run_gpas_batch(resource, gpas_work, processing_mode, pseudonymizer)
 
-    # Post-processing: pseudonymize FHIR references
-    if getattr(settings, "rewrite_references", False):
-        if precomputed_ref_mapping is not None:
-            # N>1 path: mapping pre-computed by batch, skip redundant deep walk
-            _apply_reference_pseudonyms(resource, precomputed_ref_mapping)
-        else:
-            gpas_params = _extract_gpas_params(settings)
-            if gpas_params:
-                _deep_rewrite_references_gpas(resource, gpas_params, pseudonymizer)
+    # Post-processing: determine what needs rewriting
+    do_refs = getattr(settings, "rewrite_references", False)
+    do_text_ids = getattr(settings, "rewrite_text_ids", False) and batch_mapping
 
-    # Post-processing: replace bare IDs embedded in free-text fields
-    if getattr(settings, "rewrite_text_ids", False) and batch_mapping:
+    id_text_map = None
+    if do_text_ids:
         id_text_map = {
             k: v
             for k, v in batch_mapping.items()
             if k and v and k != v and not k.startswith("{")
         }
+        if not id_text_map:
+            id_text_map = None
+        else:
+            audit_log.debug("rewriting_text_ids count=%d", len(id_text_map))
+
+    # Merged single-walk path: when we have a pre-computed ref mapping
+    # (N>1 batch) we can do both ref pseudonymization + text-ID replacement
+    # in one tree walk instead of two.
+    if precomputed_ref_mapping is not None and do_refs:
+        _post_process_resource(
+            resource,
+            ref_mapping=precomputed_ref_mapping,
+            id_map=id_text_map,
+            automaton=prebuilt_text_id_automaton,
+            compiled=precompiled_text_id_regex,
+        )
+    else:
+        # N=1 path or no precomputed mapping — separate walks
+        if do_refs:
+            gpas_params = _extract_gpas_params(settings)
+            if gpas_params:
+                _deep_rewrite_references_gpas(resource, gpas_params, pseudonymizer)
+
         if id_text_map:
-            audit_log.info("rewriting_text_ids count=%d", len(id_text_map))
-            _rewrite_text_ids(resource, id_text_map, compiled=precompiled_text_id_regex)
+            _rewrite_text_ids(
+                resource, id_text_map,
+                compiled=precompiled_text_id_regex,
+                automaton=prebuilt_text_id_automaton,
+            )
 
     # Attach transformation manifest (when enabled)
     if _MANIFEST_ENABLED and manifest_entries:
@@ -131,6 +155,26 @@ def _finalize_resource(
 # ---------------------------------------------------------------------------
 # Batch processing (unified)
 # ---------------------------------------------------------------------------
+
+def _pass1_single(resource, settings, processing_mode):
+    """Run Pass 1 for a single resource — suitable for thread pool dispatch.
+
+    In ``skip`` mode, snapshots the resource before mutation so that a
+    partially de-identified resource is never emitted (PHI leak prevention).
+    """
+    snapshot = copy.deepcopy(resource) if processing_mode == "skip" else None
+    try:
+        rules = _get_rules_for_resource(resource, settings)
+        manifest_entries: list[dict] = []
+        gpas_work = dispatch_pass1(resource, rules, settings, manifest_entries, processing_mode)
+        return resource, gpas_work, manifest_entries
+    except Exception:
+        if snapshot is not None:
+            # Restore original resource to prevent emitting partial de-identification
+            resource.clear()
+            resource.update(snapshot)
+        raise
+
 
 def process_data_batch(
     resources: list[dict],
@@ -194,50 +238,70 @@ def process_data_batch(
     all_gpas_works: list[list] = []
     all_manifest_entries: list[list] = []
 
-    # Step 1: Pass 1 on all resources
-    for resource in resources:
-        try:
-            rules = _get_rules_for_resource(resource, settings)
-            manifest_entries_: list[dict] = []
-            gpas_work = dispatch_pass1(
-                resource, rules, settings, manifest_entries_, processing_mode
-            )
-        except Exception as exc:
-            rtype = resource.get("resourceType", "Unknown") if isinstance(resource, dict) else "Unknown"
-            audit_log.error("batch_pass1_error resource_type=%s: %s", rtype, exc)
-            if processing_mode != "skip":
-                raise
-            parsed.append(None)
-            all_gpas_works.append([])
-            all_manifest_entries.append([])
-            continue
+    # Step 1: Pass 1 on all resources (optionally parallel)
+    if _PARALLEL_WORKERS > 0:
+        with ThreadPoolExecutor(max_workers=_PARALLEL_WORKERS) as pool:
+            futures = [
+                pool.submit(_pass1_single, resource, settings, processing_mode)
+                for resource in resources
+            ]
+            for future in futures:
+                try:
+                    resource, gpas_work, manifest_entries_ = future.result()
+                    parsed.append(resource)
+                    all_gpas_works.append(gpas_work)
+                    all_manifest_entries.append(manifest_entries_)
+                except Exception as exc:
+                    audit_log.error("batch_pass1_error: %s", exc)
+                    if processing_mode != "skip":
+                        raise
+                    parsed.append(None)
+                    all_gpas_works.append([])
+                    all_manifest_entries.append([])
+    else:
+        for resource in resources:
+            try:
+                resource, gpas_work, manifest_entries_ = _pass1_single(
+                    resource, settings, processing_mode
+                )
+            except Exception as exc:
+                rtype = resource.get("resourceType", "Unknown") if isinstance(resource, dict) else "Unknown"
+                audit_log.error("batch_pass1_error resource_type=%s: %s", rtype, exc)
+                if processing_mode != "skip":
+                    raise
+                parsed.append(None)
+                all_gpas_works.append([])
+                all_manifest_entries.append([])
+                continue
 
-        parsed.append(resource)
-        all_gpas_works.append(gpas_work)
-        all_manifest_entries.append(manifest_entries_)
+            parsed.append(resource)
+            all_gpas_works.append(gpas_work)
+            all_manifest_entries.append(manifest_entries_)
 
     # Step 2: ONE gPAS HTTP call for all unique values across all resources
     shared_mapping = run_gpas_batch_for_batch(all_gpas_works, processing_mode, pseudonymizer, gpas_params)
 
-    # Pre-compile the text-ID regex once for the whole batch so each resource
-    # doesn't call re.compile() independently on the same pattern.
+    # Pre-compile the text-ID matcher once for the whole batch so each resource
+    # doesn't rebuild independently on the same pattern.
+    # Prefer Aho-Corasick (O(N+M)) when available; fall back to regex.
     _batch_text_id_regex = None
+    _batch_text_id_automaton = None
     if getattr(settings, "rewrite_text_ids", False) and shared_mapping:
         _batch_id_text_map = {
             k: v for k, v in shared_mapping.items()
             if k and v and k != v and not k.startswith("{")
         }
         if _batch_id_text_map:
-            parts = [re.escape(k) for k in _batch_id_text_map if k]
-            if parts:
-                _batch_text_id_regex = re.compile(r"\b(" + "|".join(parts) + r")\b")
+            _batch_text_id_automaton, _batch_text_id_regex = _build_text_id_matcher(
+                _batch_id_text_map
+            )
 
     # Pre-compute reference pseudonym mapping for the entire batch.
     # ONE collect pass + ONE gPAS call, then pass the mapping to each resource
     # so _finalize_resource skips the redundant per-resource deep walk.
     _batch_ref_mapping: dict | None = None
     if getattr(settings, "rewrite_references", False):
-        _ref_gpas_params = _extract_gpas_params(settings)
+        _ref_gpas_params = gpas_params
         if _ref_gpas_params:
             _all_ref_ids: set[str] = set()
             for _r in parsed:
@@ -256,27 +320,32 @@ def process_data_batch(
 
     # Step 3+4: Per-resource finalize (write-back from shared mapping, zero HTTP)
     results: list[dict] = []
-    for resource, gpas_work, manifest_entries_ in zip(
+    for i, (resource, gpas_work, manifest_entries_) in enumerate(zip(
         parsed, all_gpas_works, all_manifest_entries
-    ):
+    )):
         if resource is None:
             results.append({"error": "pass1 error", "resourceType": "Unknown"})
-            continue
-        try:
-            result = _finalize_resource(
-                resource, settings, pseudonymizer,
-                gpas_work, manifest_entries_, processing_mode,
-                precomputed_mapping=shared_mapping,
-                precompiled_text_id_regex=_batch_text_id_regex,
-                precomputed_ref_mapping=_batch_ref_mapping,
-            )
-            results.append(result)
-        except Exception as exc:
-            rtype = resource.get("resourceType", "Unknown") if isinstance(resource, dict) else "Unknown"
-            audit_log.error("batch_process_error resource_type=%s: %s", rtype, exc)
-            if processing_mode != "skip":
-                raise
-            results.append({"error": "processing error", "resourceType": rtype})
+        else:
+            try:
+                result = _finalize_resource(
+                    resource, settings, pseudonymizer,
+                    gpas_work, manifest_entries_, processing_mode,
+                    precomputed_mapping=shared_mapping,
+                    precompiled_text_id_regex=_batch_text_id_regex,
+                    precomputed_ref_mapping=_batch_ref_mapping,
+                    prebuilt_text_id_automaton=_batch_text_id_automaton,
+                )
+                results.append(result)
+            except Exception as exc:
+                rtype = resource.get("resourceType", "Unknown") if isinstance(resource, dict) else "Unknown"
+                audit_log.error("batch_process_error resource_type=%s: %s", rtype, exc)
+                if processing_mode != "skip":
+                    raise
+                results.append({"error": "processing error", "resourceType": rtype})
+        # Free intermediate data for this resource to reduce peak memory
+        parsed[i] = None
+        all_gpas_works[i] = []
+        all_manifest_entries[i] = []
 
     return results
 
@@ -304,10 +373,14 @@ def _process_bundle(resource: dict, settings, pseudonymizer) -> dict:
         else:
             pre_ids.append((None, None))
 
-    # Batch-process all inner resources at once
+    # Batch-process inner resources in chunks to limit peak memory
     if inner_resources:
-        processed = process_data_batch(inner_resources, settings, pseudonymizer)
-        for idx, result in zip(entry_indices, processed):
+        all_processed: list[dict] = []
+        for chunk_start in range(0, len(inner_resources), _BATCH_SIZE):
+            chunk = inner_resources[chunk_start:chunk_start + _BATCH_SIZE]
+            processed_chunk = process_data_batch(chunk, settings, pseudonymizer)
+            all_processed.extend(processed_chunk)
+        for idx, result in zip(entry_indices, all_processed):
             entries[idx]["resource"] = result
 
     # Build reference mapping from IDs that changed during processing
@@ -336,7 +409,7 @@ def _process_bundle(resource: dict, settings, pseudonymizer) -> dict:
             if old_id and new_id and old_id != new_id:
                 id_text_map[old_id] = new_id
         if id_text_map:
-            audit_log.info("rewriting_text_ids count=%d", len(id_text_map))
+            audit_log.debug("rewriting_text_ids count=%d", len(id_text_map))
             _rewrite_text_ids(resource, id_text_map)
 
     return resource
@@ -365,3 +438,33 @@ def process_data(resource, settings, pseudonymizer=None):
     if isinstance(resource, dict) and resource.get("resourceType") == "Bundle":
         return _process_bundle(resource, settings, pseudonymizer)
     return process_data_batch([resource], settings, pseudonymizer)[0]
+
+
+def process_data_stream(resources_iter, settings, pseudonymizer=None, chunk_size=None):
+    """Generator that de-identifies resources from *resources_iter* in chunks.
+
+    Yields one processed resource dict at a time.  Memory usage is bounded by
+    ``chunk_size × avg_resource_size`` instead of growing with the total input.
+
+    Args:
+        resources_iter: Iterable of FHIR resource dicts (not Bundles).
+        settings:       Loaded Settings instance.
+        pseudonymizer:  Optional PseudonymizerPort override.
+        chunk_size:     Resources per batch (default: ``_BATCH_SIZE``).
+
+    Yields:
+        Processed resource dicts, one at a time.
+    """
+    if pseudonymizer is None:
+        pseudonymizer = _get_default_pseudonymizer()
+    if chunk_size is None:
+        chunk_size = _BATCH_SIZE
+
+    chunk: list[dict] = []
+    for resource in resources_iter:
+        chunk.append(resource)
+        if len(chunk) >= chunk_size:
+            yield from process_data_batch(chunk, settings, pseudonymizer)
+            chunk = []
+    if chunk:
+        yield from process_data_batch(chunk, settings, pseudonymizer)

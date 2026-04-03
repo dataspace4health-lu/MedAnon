@@ -8,7 +8,6 @@ actions.
 
 from __future__ import annotations
 
-import json
 import logging
 
 from utils.fhirpath import find_nodes
@@ -24,21 +23,28 @@ audit_log = logging.getLogger("medanon.audit")
 # gPAS params cache — avoid re-scanning rules on every resource
 # ---------------------------------------------------------------------------
 
-_gpas_params_cache: dict = {}
+_SENTINEL = object()
+_gpas_params_lru: dict = {}
 
 
 def _extract_gpas_params(settings) -> dict | None:
     """Return the params dict from the first ``gpas_pseudonymize`` rule, or *None*."""
     rules = getattr(settings, "rules", [])
-    rules_key = getattr(settings, "filename", None) or id(rules)
-    if rules_key in _gpas_params_cache:
-        return _gpas_params_cache[rules_key]
+    rules_key = getattr(settings, "filename", None)
+    if rules_key is not None:
+        cached = _gpas_params_lru.get(rules_key, _SENTINEL)
+        if cached is not _SENTINEL:
+            return cached
     result = None
     for rule in rules:
         if isinstance(rule, dict) and rule.get("action") == "gpas_pseudonymize":
             result = _resolve_rule_params(rule, settings)
             break
-    _gpas_params_cache[rules_key] = result
+    if rules_key is not None:
+        _gpas_params_lru[rules_key] = result
+        if len(_gpas_params_lru) > 64:
+            oldest = next(iter(_gpas_params_lru))
+            _gpas_params_lru.pop(oldest, None)
     return result
 
 
@@ -74,9 +80,7 @@ def run_gpas_batch(
     # Serialise each element's value to a stable string key
     values_to_pseudonymize = []
     for item in gpas_work:
-        val = item.element["value"]
-        original_value = str(val) if not isinstance(val, dict) else json.dumps(val)
-        values_to_pseudonymize.append(original_value)
+        values_to_pseudonymize.append(item.serialized_value)
 
     # Batch call — GpasUnavailableError always propagates (gPAS is down, no partial results).
     # Other exceptions respect processing_mode: 'skip' falls back to redaction, 'raise' propagates.
@@ -105,8 +109,7 @@ def run_gpas_batch(
 
     # Write each pseudonym back into the resource
     for item in gpas_work:
-        val = item.element["value"]
-        original_value = str(val) if not isinstance(val, dict) else json.dumps(val)
+        original_value = item.serialized_value
         pseudonym = batch_mapping.get(original_value)
 
         if pseudonym is None:
@@ -154,8 +157,7 @@ def write_back_gpas_batch(
         return batch_mapping
 
     for item in gpas_work:
-        val = item.element["value"]
-        original_value = str(val) if not isinstance(val, dict) else json.dumps(val)
+        original_value = item.serialized_value
         pseudonym = batch_mapping.get(original_value)
 
         if pseudonym is None:
@@ -212,8 +214,7 @@ def run_gpas_batch_for_batch(
     all_values: list[str] = []
     for work_list in gpas_works:
         for item in work_list:
-            val = item.element["value"]
-            all_values.append(str(val) if not isinstance(val, dict) else json.dumps(val))
+            all_values.append(item.serialized_value)
 
     if not all_values:
         return {}

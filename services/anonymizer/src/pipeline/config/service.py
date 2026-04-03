@@ -87,6 +87,12 @@ def clear_settings_cache() -> None:
     global _last_clear
     _load_settings.cache_clear()
     _last_clear = time.monotonic()
+    # Also clear rule matcher caches that depend on config content
+    try:
+        from pipeline.rule_matcher import clear_rule_caches
+        clear_rule_caches()
+    except ImportError:
+        pass
 
 
 def get_settings(profile: str = 'auto') -> Settings:

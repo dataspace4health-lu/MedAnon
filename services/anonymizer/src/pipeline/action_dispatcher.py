@@ -7,14 +7,17 @@ accumulates gPAS work items for the batch Pass 2.
 
 from __future__ import annotations
 
+import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from utils.fhirpath import not_implemented
 from pipeline.manifest import _MANIFEST_ENABLED
 from pipeline.rule_matcher import (
     _build_match_candidates,
+    _classify_match,
     _evaluate_fhirpath_cached,
+    _evaluate_simple_path,
     _resolve_rule_params,
 )
 from pipeline.deidentify import (
@@ -48,6 +51,7 @@ class BatchWork:
     rule: dict
     element: dict   # FHIRPath node with ``path`` and ``value`` keys
     params: dict
+    serialized_value: str = field(default="", repr=False)
 
 
 # ---------------------------------------------------------------------------
@@ -79,16 +83,20 @@ def dispatch_pass1(
         # Evaluate FHIRPath match candidates, collecting node elements
         matched_elements: list[dict] = []
         for candidate in _build_match_candidates(rule["match"], resource):
-            try:
-                matched = _evaluate_fhirpath_cached(resource, candidate + ".log()")
-                matched_elements.extend(matched)
-            except Exception:
-                audit_log.debug(
-                    "fhirpath_eval_failed expression=%s resource_type=%s",
-                    candidate.replace("\n", " ").replace("\r", " "),
-                    resource.get("resourceType", "unknown") if isinstance(resource, dict) else "unknown",
-                )
-                continue
+            match_class = _classify_match(candidate)
+            if match_class in ("simple", "wildcard"):
+                matched_elements.extend(_evaluate_simple_path(resource, candidate))
+            else:
+                try:
+                    matched = _evaluate_fhirpath_cached(resource, candidate + ".log()")
+                    matched_elements.extend(matched)
+                except Exception:
+                    audit_log.debug(
+                        "fhirpath_eval_failed expression=%s resource_type=%s",
+                        candidate.replace("\n", " ").replace("\r", " "),
+                        resource.get("resourceType", "unknown") if isinstance(resource, dict) else "unknown",
+                    )
+                    continue
 
         # Determine action category for duplicate-path filtering
         if action in DEIDENT_ACTIONS:
@@ -135,7 +143,12 @@ def dispatch_pass1(
                 })
 
             if action in GPAS_PSEUDO_ACTIONS:
-                gpas_work.append(BatchWork(rule=rule, element=el, params=params))
+                val = el["value"]
+                serialized = str(val) if not isinstance(val, dict) else json.dumps(val)
+                gpas_work.append(BatchWork(
+                    rule=rule, element=el, params=params,
+                    serialized_value=serialized,
+                ))
                 continue
 
             try:

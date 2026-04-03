@@ -259,7 +259,13 @@ def serialize_payload(payload, out_format='json', pretty=False):
         return json.dumps(payload, separators=(',', ':')) + '\n', 'application/fhir+json'
     if out_format == 'ndjson':
         if isinstance(payload, list):
-            text = ''.join(json.dumps(item, separators=(',', ':')) + '\n' for item in payload)
+            # Build NDJSON line-by-line to avoid holding the full serialized string
+            # in memory alongside the payload list.  For very large lists the caller
+            # should stream instead, but this prevents the 2× peak from .join().
+            parts = []
+            for item in payload:
+                parts.append(json.dumps(item, separators=(',', ':')) + '\n')
+            text = ''.join(parts)
         else:
             text = json.dumps(payload, separators=(',', ':')) + '\n'
         return text, 'application/x-ndjson'
