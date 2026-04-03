@@ -7,6 +7,7 @@ and low-level HTTP helper functions used by reader, writer, and bulk modules.
 import json
 import logging
 import os
+import random
 import re
 import time
 import urllib3
@@ -36,10 +37,11 @@ __all__ = [
 # Connection pool (reuses TCP/TLS connections across requests)
 # ---------------------------------------------------------------------------
 
+_FHIR_POOL_SIZE = int(os.environ.get("FHIR_POOL_SIZE", "10"))
 _pool = urllib3.PoolManager(
-    num_pools=4,       # distinct host:port combos to keep pools for
-    maxsize=10,        # connections per pool
-    retries=False,     # we handle retries ourselves
+    num_pools=4,
+    maxsize=_FHIR_POOL_SIZE,
+    retries=False,
 )
 
 log = logging.getLogger("medanon.fhir_server")
@@ -143,7 +145,7 @@ def _do_request(method, url, headers, timeout, body=None, operation="request"):
                         "FHIR request %s HTTP %d — retrying (%d/%d)",
                         url, resp.status, attempt + 1, retry_count,
                     )
-                    time.sleep(retry_backoff * (2 ** attempt))
+                    time.sleep(retry_backoff * (2 ** attempt) * (0.5 + random.random()))
                     continue
                 FHIR_LATENCY.labels(operation=operation).observe(time.perf_counter() - t0)
                 FHIR_CALL_COUNT.labels(operation=operation, status="error").inc()
@@ -159,7 +161,7 @@ def _do_request(method, url, headers, timeout, body=None, operation="request"):
                     "FHIR request %s connection error — retrying (%d/%d)",
                     url, attempt + 1, retry_count,
                 )
-                time.sleep(retry_backoff * (2 ** attempt))
+                time.sleep(retry_backoff * (2 ** attempt) * (0.5 + random.random()))
                 continue
             FHIR_LATENCY.labels(operation=operation).observe(time.perf_counter() - t0)
             FHIR_CALL_COUNT.labels(operation=operation, status="error").inc()
@@ -192,7 +194,7 @@ def _do_raw_request(method, url, headers, timeout, body=None, operation="request
                         "FHIR raw request %s HTTP %d — retrying (%d/%d)",
                         url, resp.status, attempt + 1, retry_count,
                     )
-                    time.sleep(retry_backoff * (2 ** attempt))
+                    time.sleep(retry_backoff * (2 ** attempt) * (0.5 + random.random()))
                     continue
                 FHIR_LATENCY.labels(operation=operation).observe(time.perf_counter() - t0)
                 FHIR_CALL_COUNT.labels(operation=operation, status="error").inc()
@@ -206,7 +208,7 @@ def _do_raw_request(method, url, headers, timeout, body=None, operation="request
                     "FHIR raw request %s connection error — retrying (%d/%d)",
                     url, attempt + 1, retry_count,
                 )
-                time.sleep(retry_backoff * (2 ** attempt))
+                time.sleep(retry_backoff * (2 ** attempt) * (0.5 + random.random()))
                 continue
             FHIR_LATENCY.labels(operation=operation).observe(time.perf_counter() - t0)
             FHIR_CALL_COUNT.labels(operation=operation, status="error").inc()

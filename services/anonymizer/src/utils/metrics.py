@@ -8,7 +8,7 @@ Counters/histograms are only registered once per process, so importing this
 module multiple times is safe.
 """
 
-from prometheus_client import Counter, Histogram
+from prometheus_client import Counter, Gauge, Histogram
 
 # ── HTTP request metrics ──────────────────────────────────────────────────────
 
@@ -60,4 +60,11 @@ FHIR_LATENCY = Histogram(
     "medanon_fhir_duration_seconds",
     "FHIR server HTTP call latency in seconds",
     ["operation"],
+)
+
+# ── Async job queue metrics ───────────────────────────────────────────────────
+
+JOB_QUEUE_DEPTH = Gauge(
+    "medanon_job_queue_pending",
+    "Number of pending messages in the Redis Streams job queue (medanon:job_stream).",
 )

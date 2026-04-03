@@ -4,6 +4,9 @@ All functions use the shared transport layer from ``_transport`` for HTTP
 communication, pagination, and input validation.
 """
 
+import os
+import queue as _queue
+from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlencode
 
 from integrations.fhir import _transport as _t
@@ -23,6 +26,13 @@ __all__ = [
     "fetch_all_resource_types",
     "fetch_cohort",
 ]
+
+_FHIR_FETCH_PARALLEL = int(os.environ.get("MEDANON_FHIR_FETCH_PARALLEL", "4"))
+_COHORT_PARALLEL = int(os.environ.get("MEDANON_COHORT_PARALLEL", "4"))
+
+# Timeout for queue.get() in parallel consumer loops.  Prevents permanent
+# thread hangs when a producer thread crashes without pushing its sentinel.
+_QUEUE_GET_TIMEOUT_SEC = int(os.environ.get("MEDANON_QUEUE_GET_TIMEOUT_SEC", "300"))
 
 
 # ---------------------------------------------------------------------------
@@ -203,10 +213,52 @@ def fetch_everything(base_url, resource_type, resource_id, params=None, token=No
 
 
 def fetch_all_resource_types(base_url, resource_types, params=None, token=None, timeout=30):
-    """Generator that yields (resource_type, resource_dict) for all given types."""
-    for rt in resource_types:
-        for resource in fetch_resource_type(base_url, rt, params=params, token=token, timeout=timeout):
-            yield rt, resource
+    """Generator that yields (resource_type, resource_dict) for all given types.
+
+    When ``MEDANON_FHIR_FETCH_PARALLEL`` > 1, resource types are fetched
+    concurrently — each type runs in its own thread — and results are merged
+    via a thread-safe queue.  Order across types is non-deterministic but all
+    resources for each type are yielded in pagination order.
+    """
+    if _FHIR_FETCH_PARALLEL <= 1 or len(resource_types) <= 1:
+        for rt in resource_types:
+            for resource in fetch_resource_type(base_url, rt, params=params, token=token, timeout=timeout):
+                yield rt, resource
+        return
+
+    _SENTINEL = object()
+    result_q: _queue.Queue = _queue.Queue(maxsize=_FHIR_FETCH_PARALLEL * 200)
+    error_q: _queue.Queue = _queue.Queue()
+    total = len(resource_types)
+
+    def _fetch_one(rt):
+        try:
+            for resource in fetch_resource_type(base_url, rt, params=params, token=token, timeout=timeout):
+                result_q.put((rt, resource))
+        except Exception as exc:
+            error_q.put(exc)
+        finally:
+            result_q.put(_SENTINEL)
+
+    with ThreadPoolExecutor(max_workers=_FHIR_FETCH_PARALLEL) as pool:
+        for rt in resource_types:
+            pool.submit(_fetch_one, rt)
+        finished = 0
+        while finished < total:
+            try:
+                item = result_q.get(timeout=_QUEUE_GET_TIMEOUT_SEC)
+            except _queue.Empty:
+                raise ValueError(
+                    f"FHIR fetch stalled: no data received for "
+                    f"{_QUEUE_GET_TIMEOUT_SEC}s — possible thread crash"
+                )
+            if item is _SENTINEL:
+                finished += 1
+                continue
+            yield item
+
+    if not error_q.empty():
+        raise error_q.get_nowait()
 
 
 def fetch_cohort(base_url, search_type, search_params, everything_params=None,
@@ -245,10 +297,68 @@ def fetch_cohort(base_url, search_type, search_params, everything_params=None,
         return
 
     # Phase 2: $everything for each patient
-    for i, pid in enumerate(sorted(patient_ids), 1):
-        log.info("cohort $everything %d/%d: Patient/%s", i, len(patient_ids), pid)
-        for resource in fetch_everything(
-            base_url, "Patient", pid,
-            params=everything_params, token=token, timeout=timeout,
-        ):
-            yield resource
+    # De-duplicate resources shared across patients (e.g. Practitioner referenced
+    # by multiple patients appears once instead of N times).
+    seen: set[tuple[str, str]] = set()
+
+    def _dedup(resource):
+        """Return True if this resource should be yielded (not a duplicate)."""
+        if not isinstance(resource, dict):
+            return True
+        rt = resource.get("resourceType", "")
+        rid = resource.get("id", "")
+        if rt and rid:
+            key = (rt, rid)
+            if key in seen:
+                return False
+            seen.add(key)
+        return True
+
+    if _COHORT_PARALLEL <= 1 or len(patient_ids) <= 1:
+        for i, pid in enumerate(sorted(patient_ids), 1):
+            log.info("cohort $everything %d/%d: Patient/%s", i, len(patient_ids), pid)
+            for resource in fetch_everything(
+                base_url, "Patient", pid,
+                params=everything_params, token=token, timeout=timeout,
+            ):
+                if _dedup(resource):
+                    yield resource
+    else:
+        _SENTINEL = object()
+        result_q: _queue.Queue = _queue.Queue(maxsize=_COHORT_PARALLEL * 200)
+        sorted_pids = sorted(patient_ids)
+        n_patients = len(sorted_pids)
+        error_q: _queue.Queue = _queue.Queue()
+
+        def _fetch_patient(pid):
+            try:
+                for resource in fetch_everything(
+                    base_url, "Patient", pid,
+                    params=everything_params, token=token, timeout=timeout,
+                ):
+                    result_q.put(resource)
+            except Exception as exc:
+                error_q.put(exc)
+            finally:
+                result_q.put(_SENTINEL)
+
+        with ThreadPoolExecutor(max_workers=_COHORT_PARALLEL) as pool:
+            for pid in sorted_pids:
+                pool.submit(_fetch_patient, pid)
+            finished = 0
+            while finished < n_patients:
+                try:
+                    item = result_q.get(timeout=_QUEUE_GET_TIMEOUT_SEC)
+                except _queue.Empty:
+                    raise ValueError(
+                        f"Cohort fetch stalled: no data received for "
+                        f"{_QUEUE_GET_TIMEOUT_SEC}s — possible thread crash"
+                    )
+                if item is _SENTINEL:
+                    finished += 1
+                    continue
+                if _dedup(item):
+                    yield item
+
+        if not error_q.empty():
+            raise error_q.get_nowait()

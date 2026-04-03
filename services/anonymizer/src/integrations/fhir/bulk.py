@@ -6,8 +6,10 @@ server-side cleanup.
 """
 
 import json
+import os
+import queue as _queue
 import time
-
+from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlencode
 
 from integrations.fhir import _transport as _t
@@ -19,10 +21,20 @@ from ._transport import (
     log,
 )
 
+_BULK_DOWNLOAD_PARALLEL = int(os.environ.get("MEDANON_BULK_DOWNLOAD_PARALLEL", "1"))
+
+# Timeout for queue.get() in parallel download consumer loops.
+# Prevents permanent thread hangs when a producer thread crashes without
+# pushing its sentinel.  5 minutes is generous — a single NDJSON file
+# download that takes >5 min of zero output is effectively dead.
+_QUEUE_GET_TIMEOUT_SEC = int(os.environ.get("MEDANON_QUEUE_GET_TIMEOUT_SEC", "300"))
+
 __all__ = [
     "_poll_bulk_status",
+    "_poll_bulk_status_single",
     "_download_bulk_ndjson",
     "bulk_export",
+    "bulk_export_kick_off",
     "delete_bulk_export",
 ]
 
@@ -31,13 +43,51 @@ __all__ = [
 # Bulk Data Export ($export)
 # ---------------------------------------------------------------------------
 
+def _poll_bulk_status_single(status_url, token=None, timeout=30):
+    """Execute a single poll request against a Bulk Data Export status URL.
+
+    Returns a tuple ``(done, manifest_or_delay)``:
+      - ``(True, manifest_dict)`` — export complete, manifest with ``output[]``
+      - ``(False, delay_seconds)`` — still in progress, caller should wait
+    Raises ``ValueError`` on unexpected HTTP status or connection errors.
+    """
+    headers = _make_headers(token)
+    resp = _do_raw_request("GET", status_url, headers, timeout, operation="bulk_poll")
+
+    if resp.status == 200:
+        return True, json.loads(resp.data.decode("utf-8"))
+
+    if resp.status == 202:
+        progress = resp.headers.get("X-Progress", "")
+        if progress:
+            log.info("bulk export in progress: %s", progress)
+        # Honor Retry-After if present, clamp to [1, 10]
+        retry_after = resp.headers.get("Retry-After")
+        if retry_after:
+            try:
+                delay = max(1, min(10, int(retry_after)))
+            except (ValueError, TypeError):
+                delay = _t._FHIR_BULK_POLL_INTERVAL
+        else:
+            delay = _t._FHIR_BULK_POLL_INTERVAL
+        return False, delay
+
+    raise ValueError(
+        f"Unexpected status {resp.status} while polling bulk export at {status_url}"
+    )
+
+
 def _poll_bulk_status(status_url, token=None, timeout=30):
     """Poll a Bulk Data Export status URL until completion or timeout.
 
     Returns the completed export manifest dict (JSON with ``output[]`` etc.).
     Raises ``ValueError`` on HTTP errors or if ``_FHIR_BULK_POLL_TIMEOUT`` is exceeded.
+
+    Note: This synchronous version uses ``time.sleep()`` and is suitable for
+    thread-pool execution.  For async callers that need to avoid blocking a
+    thread during long polls, use ``_poll_bulk_status_single()`` in a loop
+    with ``asyncio.sleep()`` instead.
     """
-    headers = _make_headers(token)
     deadline = time.monotonic() + _t._FHIR_BULK_POLL_TIMEOUT
 
     while True:
@@ -45,30 +95,10 @@ def _poll_bulk_status(status_url, token=None, timeout=30):
             raise ValueError(
                 f"Bulk export poll timeout ({_t._FHIR_BULK_POLL_TIMEOUT}s) exceeded for {status_url}"
             )
-        resp = _do_raw_request("GET", status_url, headers, timeout, operation="bulk_poll")
-
-        if resp.status == 200:
-            return json.loads(resp.data.decode("utf-8"))
-
-        if resp.status == 202:
-            progress = resp.headers.get("X-Progress", "")
-            if progress:
-                log.info("bulk export in progress: %s", progress)
-            # Honor Retry-After if present, clamp to [1, 10]
-            retry_after = resp.headers.get("Retry-After")
-            if retry_after:
-                try:
-                    delay = max(1, min(10, int(retry_after)))
-                except (ValueError, TypeError):
-                    delay = _t._FHIR_BULK_POLL_INTERVAL
-            else:
-                delay = _t._FHIR_BULK_POLL_INTERVAL
-            time.sleep(delay)
-            continue
-
-        raise ValueError(
-            f"Unexpected status {resp.status} while polling bulk export at {status_url}"
-        )
+        done, result = _poll_bulk_status_single(status_url, token=token, timeout=timeout)
+        if done:
+            return result
+        time.sleep(result)
 
 
 def _download_bulk_ndjson(file_url, token=None, timeout=60):
@@ -112,25 +142,14 @@ def _download_bulk_ndjson(file_url, token=None, timeout=60):
         resp.release_conn()
 
 
-def bulk_export(base_url, level="system", resource_type=None, type_filter=None,
-                since=None, token=None, timeout=30):
-    """Generator: initiate a FHIR Bulk Data Export and yield resource dicts.
+def bulk_export_kick_off(base_url, level="system", resource_type=None,
+                         type_filter=None, since=None, token=None, timeout=30):
+    """Initiate a FHIR Bulk Data Export and return the status URL.
 
-    Implements the full Bulk Data Export protocol:
-    kick-off -> poll -> download NDJSON files -> cleanup.
+    This is the first phase of the bulk export protocol.  Returns the
+    ``Content-Location`` URL that should be polled for completion.
 
-    Args:
-        base_url:      FHIR server base URL, e.g. ``http://host:8080/fhir``
-        level:         ``"system"`` for ``/$export`` or ``"type"`` for ``/{Type}/$export``
-        resource_type: Required when ``level="type"``.  For system-level, used as
-                       the ``_type`` param when ``type_filter`` is not set.
-        type_filter:   Comma-separated resource types for the ``_type`` param
-                       (system-level only; overrides ``resource_type``).
-        since:         ``_since`` instant, e.g. ``"2024-01-01T00:00:00Z"``
-        token:         Optional Bearer token (overrides ``FHIR_SOURCE_TOKEN`` env).
-        timeout:       HTTP timeout per individual request in seconds.
-
-    Yields individual FHIR resource dicts from exported NDJSON files.
+    Raises ``ValueError`` on kick-off failure or missing headers.
     """
     base = base_url.rstrip("/")
 
@@ -165,20 +184,25 @@ def bulk_export(base_url, level="system", resource_type=None, type_filter=None,
         raise ValueError("Bulk export kick-off missing Content-Location header")
 
     log.info("bulk export status URL: %s", status_url)
+    return status_url
 
-    # -- Poll until complete --
-    try:
-        manifest = _poll_bulk_status(status_url, token=token, timeout=timeout)
 
-        # Log any errors reported in the manifest
-        for err_entry in manifest.get("error", []):
-            err_url = err_entry.get("url", "")
-            log.warning("bulk export reported error file: %s", err_url)
+def _download_manifest_files(manifest, token=None, timeout=60):
+    """Generator: download NDJSON files from a completed bulk export manifest.
 
-        # -- Download each output NDJSON file --
-        output_files = manifest.get("output", [])
-        log.info("bulk export complete: %d output file(s)", len(output_files))
-        total = 0
+    Yields individual FHIR resource dicts from each output file.
+    """
+    # Log any errors reported in the manifest
+    for err_entry in manifest.get("error", []):
+        err_url = err_entry.get("url", "")
+        log.warning("bulk export reported error file: %s", err_url)
+
+    output_files = manifest.get("output", [])
+    log.info("bulk export complete: %d output file(s)", len(output_files))
+    total = 0
+
+    if _BULK_DOWNLOAD_PARALLEL <= 1 or len(output_files) <= 1:
+        # Sequential download
         for file_entry in output_files:
             file_url = file_entry.get("url")
             if not file_url:
@@ -188,7 +212,78 @@ def bulk_export(base_url, level="system", resource_type=None, type_filter=None,
             for resource in _download_bulk_ndjson(file_url, token=token, timeout=timeout):
                 total += 1
                 yield resource
-        log.info("bulk export: yielded %d resource(s) total", total)
+    else:
+        # Parallel download: each file downloaded in its own thread
+        _SENTINEL = object()
+        result_q: _queue.Queue = _queue.Queue(maxsize=_BULK_DOWNLOAD_PARALLEL * 200)
+        valid_files = [fe for fe in output_files if fe.get("url")]
+        n_files = len(valid_files)
+        error_q: _queue.Queue = _queue.Queue()
+
+        def _download_one(file_entry):
+            try:
+                for resource in _download_bulk_ndjson(
+                    file_entry["url"], token=token, timeout=timeout
+                ):
+                    result_q.put(resource)
+            except Exception as exc:
+                error_q.put(exc)
+            finally:
+                result_q.put(_SENTINEL)
+
+        with ThreadPoolExecutor(max_workers=_BULK_DOWNLOAD_PARALLEL) as pool:
+            for fe in valid_files:
+                pool.submit(_download_one, fe)
+            finished = 0
+            while finished < n_files:
+                try:
+                    item = result_q.get(timeout=_QUEUE_GET_TIMEOUT_SEC)
+                except _queue.Empty:
+                    raise ValueError(
+                        f"Bulk download stalled: no data received for "
+                        f"{_QUEUE_GET_TIMEOUT_SEC}s — possible thread crash"
+                    )
+                if item is _SENTINEL:
+                    finished += 1
+                    continue
+                total += 1
+                yield item
+
+        if not error_q.empty():
+            raise error_q.get_nowait()
+
+    log.info("bulk export: yielded %d resource(s) total", total)
+
+
+def bulk_export(base_url, level="system", resource_type=None, type_filter=None,
+                since=None, token=None, timeout=30):
+    """Generator: initiate a FHIR Bulk Data Export and yield resource dicts.
+
+    Implements the full Bulk Data Export protocol:
+    kick-off -> poll -> download NDJSON files -> cleanup.
+
+    Args:
+        base_url:      FHIR server base URL, e.g. ``http://host:8080/fhir``
+        level:         ``"system"`` for ``/$export`` or ``"type"`` for ``/{Type}/$export``
+        resource_type: Required when ``level="type"``.  For system-level, used as
+                       the ``_type`` param when ``type_filter`` is not set.
+        type_filter:   Comma-separated resource types for the ``_type`` param
+                       (system-level only; overrides ``resource_type``).
+        since:         ``_since`` instant, e.g. ``"2024-01-01T00:00:00Z"``
+        token:         Optional Bearer token (overrides ``FHIR_SOURCE_TOKEN`` env).
+        timeout:       HTTP timeout per individual request in seconds.
+
+    Yields individual FHIR resource dicts from exported NDJSON files.
+    """
+    status_url = bulk_export_kick_off(
+        base_url, level=level, resource_type=resource_type,
+        type_filter=type_filter, since=since, token=token, timeout=timeout,
+    )
+
+    # -- Poll until complete --
+    try:
+        manifest = _poll_bulk_status(status_url, token=token, timeout=timeout)
+        yield from _download_manifest_files(manifest, token=token, timeout=timeout)
     finally:
         # -- Cleanup: best-effort DELETE --
         delete_bulk_export(status_url, token=token, timeout=timeout)

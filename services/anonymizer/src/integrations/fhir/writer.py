@@ -4,11 +4,11 @@ Handles resource creation/update, manifest tag stripping, ID sanitisation,
 topological upload ordering, and cross-resource reference rewriting.
 """
 
-import json
+
+import os
 
 from ._transport import (
     _RESOURCE_TYPE_RE,
-    _make_post_headers,
     _sanitise_resource_id,
     _validate_resource_id,
     _validate_resource_type,
@@ -27,6 +27,7 @@ __all__ = [
     "_rewrite_references",
     "_build_batch_entry",
     "_parse_batch_response",
+    "_post_bundle_batch",
     "upload_resources",
 ]
 
@@ -113,7 +114,7 @@ def post_bundle(base_url, bundle, token=None, timeout=30):
     return _write_json(url, bundle, "POST", token=token, timeout=timeout, operation="bundle")
 
 
-_UPLOAD_BATCH_SIZE = 200  # resources per FHIR batch Bundle
+_UPLOAD_BATCH_SIZE = int(os.environ.get("MEDANON_UPLOAD_BATCH_SIZE", "200"))  # resources per FHIR batch Bundle
 
 
 def _infer_upload_tiers(resources: list[dict]) -> dict[str, int]:
@@ -351,14 +352,68 @@ def _parse_batch_response(resp_bundle: dict, meta_list: list) -> list:
     return results
 
 
-def upload_resources(base_url, resources, token=None, timeout=30):
+def _post_bundle_batch(base: str, chunk: list[dict], token, timeout) -> list[dict]:
+    """Build and POST one FHIR batch Bundle for *chunk*. Return a list of per-resource results.
+
+    Used by both the serial and parallel paths of :func:`upload_resources`.
+    Never raises — all errors are captured as per-resource result dicts.
+    """
+    entries = []
+    meta_list: list[tuple[str, str | None]] = []
+    results = []
+
+    for resource in chunk:
+        raw_rt = resource.get("resourceType") if resource else None
+        if not raw_rt or not _RESOURCE_TYPE_RE.match(str(raw_rt)):
+            source_id = resource.get("id") if resource else None
+            results.append({
+                "resourceType": str(raw_rt or "Unknown"), "source_id": source_id,
+                "server_id": None, "success": False,
+                "error": f"invalid or missing resourceType: {raw_rt!r}",
+            })
+            continue
+        entry, rt, source_id = _build_batch_entry(resource)
+        entries.append(entry)
+        meta_list.append((rt, source_id))
+
+    if not entries:
+        return results
+
+    bundle = {"resourceType": "Bundle", "type": "batch", "entry": entries}
+    try:
+        resp_bundle = _write_json(
+            base + "/", bundle, "POST", token=token, timeout=timeout,
+            operation="batch_upload", target=True,
+        )
+    except ValueError as exc:
+        log.warning("batch_upload chunk failed: %s", exc)
+        for rt, source_id in meta_list:
+            results.append({
+                "resourceType": rt, "source_id": source_id, "server_id": None,
+                "success": False, "error": str(exc),
+            })
+        return results
+
+    results.extend(_parse_batch_response(resp_bundle, meta_list))
+    return results
+
+
+def upload_resources(base_url, resources, token=None, timeout=30, parallel: int = 1):
     """Upload FHIR resources to a server using FHIR batch Bundles.
 
-    Collects *resources* into memory, sorts so base reference types (Patient,
-    Organization, etc.) go first, then sends them in chunks of
-    ``_UPLOAD_BATCH_SIZE`` (200) as FHIR batch Bundles.  Each chunk is a
-    single HTTP POST to ``{base_url}/``, reducing round-trips from N to
-    ceil(N/200) and providing per-entry OperationOutcome diagnostics.
+    Consumes *resources* in two passes:
+
+    1. **Tier inference pass**: Scans all resources to build a topological
+       dependency graph and an ID-sanitisation map.
+    2. **Upload pass**: Sorts by tier, rewrites cross-resource references,
+       then sends chunks of ``_UPLOAD_BATCH_SIZE`` resources as FHIR batch
+       Bundles via :func:`_post_bundle_batch`.
+
+    When *parallel* > 1, bundles **within each topological tier** are posted
+    concurrently via :class:`~concurrent.futures.ThreadPoolExecutor`.  Tiers
+    are still uploaded sequentially (tier 0 completes before tier 1 starts),
+    so FHIR referential integrity constraints are satisfied.  The default
+    ``parallel=1`` retains the original sequential behaviour.
 
     Resource IDs are sanitised to FHIR R4 ``[A-Za-z0-9\\-.]{1,64}`` before
     upload — gPAS pseudonym prefixes like ``rid_`` become ``rid-``.
@@ -366,16 +421,23 @@ def upload_resources(base_url, resources, token=None, timeout=30):
     Yields one result dict per resource:
         {
             "resourceType": str,
-            "source_id":    str | None,   # original id before sanitisation
-            "server_id":    str | None,   # id confirmed by server
+            "source_id":    str | None,
+            "server_id":    str | None,
             "success":      bool,
-            "error":        str | None,   # HTTP status + HAPI diagnostics on failure
+            "error":        str | None,
         }
 
     Never raises — errors are captured per-resource or per-chunk.
     """
     base = base_url.rstrip("/")
-    all_resources = list(resources)  # consume iterable; needed for sort + tier inference
+
+    if not isinstance(resources, list):
+        all_resources = list(resources)
+    else:
+        all_resources = resources
+
+    if not all_resources:
+        return
 
     # Compute topological upload order: tier 0 first (no deps), tier N last
     tiers = _infer_upload_tiers(all_resources)
@@ -384,7 +446,6 @@ def upload_resources(base_url, resources, token=None, timeout=30):
               {rt: t for rt, t in sorted(tiers.items(), key=lambda x: x[1])})
 
     # Rewrite cross-resource references so they match the sanitised server IDs.
-    # Must happen after sort (tier inference is read-only) and before chunking.
     id_map = _compute_id_map(all_resources)
     if id_map:
         log.debug("upload_resources: rewriting %d changed ids in references", len(id_map))
@@ -393,46 +454,44 @@ def upload_resources(base_url, resources, token=None, timeout=30):
     total = len(all_resources)
     done = 0
 
-    for i in range(0, total, _UPLOAD_BATCH_SIZE):
-        chunk = all_resources[i:i + _UPLOAD_BATCH_SIZE]
+    if parallel > 1:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
 
-        entries = []
-        meta_list: list[tuple[str, str | None]] = []
-        for resource in chunk:
-            raw_rt = resource.get("resourceType")
-            if not raw_rt or not _RESOURCE_TYPE_RE.match(str(raw_rt)):
-                # Invalid/missing resourceType — fail immediately, skip from batch
-                source_id = resource.get("id")
-                yield {
-                    "resourceType": str(raw_rt or "Unknown"), "source_id": source_id,
-                    "server_id": None, "success": False,
-                    "error": f"invalid or missing resourceType: {raw_rt!r}",
-                }
-                continue
-            entry, rt, source_id = _build_batch_entry(resource)
-            entries.append(entry)
-            meta_list.append((rt, source_id))
+        # Group resources into per-tier buckets (already sorted; order is preserved)
+        tier_levels = sorted(set(tiers.get(r.get("resourceType", ""), 0)
+                                 for r in all_resources if r is not None))
+        tier_buckets: dict[int, list[dict]] = {t: [] for t in tier_levels}
+        for r in all_resources:
+            if r is not None:
+                tier_buckets[tiers.get(r.get("resourceType", ""), 0)].append(r)
+        all_resources = None  # allow GC of sorted list; tier_buckets owns refs now
 
-        bundle = {"resourceType": "Bundle", "type": "batch", "entry": entries}
+        for tier_level in tier_levels:
+            tier_resources = tier_buckets.pop(tier_level)
+            batches = [tier_resources[i:i + _UPLOAD_BATCH_SIZE]
+                       for i in range(0, len(tier_resources), _UPLOAD_BATCH_SIZE)]
+            effective = min(parallel, len(batches))
+            with ThreadPoolExecutor(max_workers=effective) as pool:
+                futs = [pool.submit(_post_bundle_batch, base, b, token, timeout)
+                        for b in batches]
+                # as_completed yields futures as they finish; pool.__exit__ (shutdown wait=True)
+                # guarantees all tier-N futures complete before the next tier begins.
+                for fut in as_completed(futs):
+                    for result in fut.result():
+                        yield result
+                        done += 1
+                        if done % 1000 == 0 or done == total:
+                            log.info("upload_resources: %d/%d processed", done, total)
+    else:
+        for i in range(0, total, _UPLOAD_BATCH_SIZE):
+            chunk = all_resources[i:i + _UPLOAD_BATCH_SIZE]
+            # Free the consumed slice to reduce peak memory
+            for j in range(i, min(i + _UPLOAD_BATCH_SIZE, total)):
+                all_resources[j] = None
 
-        try:
-            resp_bundle = _write_json(
-                base + "/", bundle, "POST", token=token, timeout=timeout,
-                operation="batch_upload", target=True,
-            )
-        except ValueError as exc:
-            log.warning("batch_upload chunk [%d:%d] failed: %s", i, i + len(chunk), exc)
-            for rt, source_id in meta_list:
-                yield {
-                    "resourceType": rt, "source_id": source_id, "server_id": None,
-                    "success": False, "error": str(exc),
-                }
-            done += len(chunk)
-            continue
+            for result in _post_bundle_batch(base, chunk, token, timeout):
+                yield result
+                done += 1
 
-        for result in _parse_batch_response(resp_bundle, meta_list):
-            yield result
-
-        done += len(chunk)
-        if done % 1000 == 0 or done == total:
-            log.info("upload_resources: %d/%d processed", done, total)
+            if done % 1000 == 0 or done == total:
+                log.info("upload_resources: %d/%d processed", done, total)

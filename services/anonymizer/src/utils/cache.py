@@ -45,16 +45,22 @@ class LocalLruCache:
 
     def get(self, key: tuple) -> str | None:
         with self._lock:
-            return self._cache.get(key)
+            value = self._cache.get(key)
+            if value is not None:
+                # Promote to most-recently-used position (move to end)
+                del self._cache[key]
+                self._cache[key] = value
+            return value
 
     def set(self, key: tuple, value: str) -> None:
         with self._lock:
-            if len(self._cache) >= self._maxsize:
-                # Evict oldest 10% to avoid thundering herd on gPAS
-                evict_count = max(1, self._maxsize // 10)
-                keys_to_evict = list(self._cache.keys())[:evict_count]
-                for k in keys_to_evict:
-                    self._cache.pop(k, None)
+            if key in self._cache:
+                # Move existing key to end (most-recently-used position)
+                del self._cache[key]
+            elif len(self._cache) >= self._maxsize:
+                # Evict single oldest entry — O(1) via dict insertion order
+                oldest_key = next(iter(self._cache))
+                del self._cache[oldest_key]
             self._cache[key] = value
 
 
@@ -90,14 +96,39 @@ class RedisCache:
         try:
             return self._client.get(self._make_key(key))
         except Exception as exc:
-            _cache_log.debug("redis_get_failed falling_through: %s", exc)
+            _cache_log.warning("redis_get_failed falling_through: %s", exc)
             return None
 
     def set(self, key: tuple, value: str) -> None:
         try:
             self._client.set(self._make_key(key), value, ex=self._ttl)
         except Exception as exc:
-            _cache_log.debug("redis_set_failed skipping: %s", exc)
+            _cache_log.warning("redis_set_failed skipping: %s", exc)
+
+
+# ---------------------------------------------------------------------------
+# Tiered L1/L2 cache (local in front of Redis)
+# ---------------------------------------------------------------------------
+
+class TieredCache:
+    """L1 local LRU in front of L2 Redis — read: L1 → L2 → miss (promote on L2 hit), write: both."""
+
+    def __init__(self, l1: LocalLruCache, l2: RedisCache) -> None:
+        self._l1 = l1
+        self._l2 = l2
+
+    def get(self, key: tuple) -> str | None:
+        value = self._l1.get(key)
+        if value is not None:
+            return value
+        value = self._l2.get(key)
+        if value is not None:
+            self._l1.set(key, value)
+        return value
+
+    def set(self, key: tuple, value: str) -> None:
+        self._l1.set(key, value)
+        self._l2.set(key, value)
 
 
 # ---------------------------------------------------------------------------

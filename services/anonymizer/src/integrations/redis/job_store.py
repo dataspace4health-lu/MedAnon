@@ -1,7 +1,14 @@
-"""Redis-backed job store for scalable multi-worker deployments.
+"""Redis-backed job store — Redis Streams for guaranteed delivery.
 
-Uses Redis hashes for per-job storage, a list (BLPOP) for event-driven
-worker notification, and sorted sets for time-ordered listing.
+Uses Redis hashes for per-job storage, Redis Streams (XADD/XREADGROUP/XACK)
+for the worker notification queue, and sorted sets for time-ordered listing.
+
+Streams improvements over BLPOP:
+- Consumer groups guarantee at-least-once delivery: if a worker crashes after
+  popping a message but before ACKing it, the message stays in the Pending
+  Entry List (PEL) and is reclaimed by ``claim_stale_jobs()``.
+- ``XAUTOCLAIM`` replaces the fragile ``_recover_running_jobs()`` scan.
+- ``get_queue_depth()`` exposes pending message count for monitoring.
 """
 
 from __future__ import annotations
@@ -16,7 +23,8 @@ from medanon_core.domain import Job, JobStatus
 _log = logging.getLogger("medanon.jobs.redis")
 
 _KEY_PREFIX = "medanon:job:"
-_QUEUE_KEY = "medanon:job_queue"
+_STREAM_KEY = "medanon:job_stream"
+_STREAM_GROUP = "workers"
 _INDEX_KEY = "medanon:jobs_by_time"
 _STATUS_PREFIX = "medanon:jobs:status:"
 _TYPE_PREFIX = "medanon:jobs:type:"
@@ -24,16 +32,33 @@ _DEFAULT_TTL = 604800  # 7 days
 
 
 class RedisJobStore:
-    """Implements JobStorePort using Redis hashes + a BLPOP notification queue."""
+    """Implements JobStorePort using Redis hashes + Redis Streams job queue."""
 
     def __init__(self, redis_url: str, ttl: int = _DEFAULT_TTL) -> None:
         import redis as _redis
 
         self._client = _redis.StrictRedis.from_url(redis_url, decode_responses=True)
         self._ttl = ttl
+        self._consumer_id = f"worker-{uuid.uuid4().hex[:8]}"
         # Verify connectivity
         self._client.ping()
-        _log.info("redis_job_store_connected url=%s", redis_url.split("@")[-1])
+        # Create the consumer group (MKSTREAM also creates the stream if missing)
+        self._ensure_stream_group()
+        _log.info(
+            "redis_job_store_connected url=%s consumer=%s",
+            redis_url.split("@")[-1],
+            self._consumer_id,
+        )
+
+    def _ensure_stream_group(self) -> None:
+        """Idempotent consumer-group creation.  BUSYGROUP = already exists, ignore."""
+        try:
+            self._client.xgroup_create(
+                _STREAM_KEY, _STREAM_GROUP, id="$", mkstream=True
+            )
+        except Exception as exc:
+            if "BUSYGROUP" not in str(exc):
+                _log.warning("stream_group_init_error: %s", exc)
 
     def _job_key(self, job_id: str) -> str:
         return f"{_KEY_PREFIX}{job_id}"
@@ -103,13 +128,18 @@ class RedisJobStore:
         pipe.execute()
 
     def next_pending(self) -> Job | None:
-        """Return the oldest PENDING job (polling fallback)."""
+        """Return the oldest PENDING job (polling fallback for non-Streams callers)."""
         pending_ids = self._client.smembers(f"{_STATUS_PREFIX}pending")
         if not pending_ids:
             return None
+        # Batch ZSCORE via pipeline to avoid N round-trips
+        pipe = self._client.pipeline(transaction=False)
+        id_list = list(pending_ids)
+        for jid in id_list:
+            pipe.zscore(_INDEX_KEY, jid)
+        scores_raw = pipe.execute()
         scores = {}
-        for jid in pending_ids:
-            score = self._client.zscore(_INDEX_KEY, jid)
+        for jid, score in zip(id_list, scores_raw):
             if score is not None:
                 scores[jid] = score
         if not scores:
@@ -136,29 +166,134 @@ class RedisJobStore:
             candidates = self._client.smembers(f"{_TYPE_PREFIX}{job_type}")
         else:
             all_ids = self._client.zrevrange(_INDEX_KEY, offset, offset + limit - 1)
-            return [j for jid in all_ids if (j := self.get(jid)) is not None]
+            return self._batch_get_jobs(all_ids)
 
         if not candidates:
             return []
+        # Batch ZSCORE via pipeline
+        id_list = list(candidates)
+        pipe = self._client.pipeline(transaction=False)
+        for jid in id_list:
+            pipe.zscore(_INDEX_KEY, jid)
+        scores_raw = pipe.execute()
         scored = []
-        for jid in candidates:
-            score = self._client.zscore(_INDEX_KEY, jid)
+        for jid, score in zip(id_list, scores_raw):
             if score is not None:
                 scored.append((jid, score))
         scored.sort(key=lambda x: x[1], reverse=True)
         page = scored[offset : offset + limit]
-        return [j for jid, _ in page if (j := self.get(jid)) is not None]
+        return self._batch_get_jobs([jid for jid, _ in page])
+
+    def _batch_get_jobs(self, job_ids: list[str]) -> list[Job]:
+        """Fetch multiple jobs in a single pipeline round-trip."""
+        if not job_ids:
+            return []
+        pipe = self._client.pipeline(transaction=False)
+        for jid in job_ids:
+            pipe.hgetall(self._job_key(jid))
+        results = pipe.execute()
+        jobs = []
+        for data in results:
+            if data:
+                try:
+                    jobs.append(self._hash_to_job(data))
+                except (KeyError, ValueError):
+                    pass  # stale/corrupt hash — skip
+        return jobs
+
+    # -------------------------------------------------------------------------
+    # Stream-based notification (replaces RPUSH / BLPOP)
+    # -------------------------------------------------------------------------
 
     def notify_new_job(self, job_id: str) -> None:
-        """Push job_id onto the notification list for BLPOP-based workers."""
-        self._client.rpush(_QUEUE_KEY, job_id)
+        """Publish a job notification to the Redis Stream."""
+        self._client.xadd(_STREAM_KEY, {"job_id": job_id})
+
+    def wait_for_job(self, timeout: int = 5) -> tuple[str, str] | None:
+        """Block until a job message appears on the Stream.
+
+        Returns ``(job_id, message_id)`` or ``None`` on timeout.
+
+        Uses XREADGROUP for at-least-once delivery: messages remain in the
+        Pending Entry List until ``ack_job()`` is called.
+        """
+        try:
+            results = self._client.xreadgroup(
+                _STREAM_GROUP,
+                self._consumer_id,
+                {_STREAM_KEY: ">"},
+                count=1,
+                block=timeout * 1000,
+            )
+        except Exception as exc:
+            _log.warning("xreadgroup_error: %s — retrying", type(exc).__name__)
+            return None
+
+        if not results:
+            return None
+        _, messages = results[0]
+        if not messages:
+            return None
+        message_id, fields = messages[0]
+        job_id = fields.get("job_id", "")
+        if not job_id:
+            # Malformed message — ack it to unblock the queue
+            try:
+                self._client.xack(_STREAM_KEY, _STREAM_GROUP, message_id)
+            except Exception:
+                pass
+            return None
+        return job_id, message_id
+
+    def ack_job(self, message_id: str) -> None:
+        """Acknowledge a stream message after a job reaches a terminal state.
+
+        Removes the message from the Pending Entry List so it is never redelivered.
+        """
+        try:
+            self._client.xack(_STREAM_KEY, _STREAM_GROUP, message_id)
+        except Exception as exc:
+            _log.warning("xack_error message_id=%s: %s", message_id, exc)
+
+    def claim_stale_jobs(self, min_idle_ms: int = 90_000) -> list[str]:
+        """Claim stream messages idle for more than *min_idle_ms* milliseconds.
+
+        Returns the job_ids that were claimed.  The worker resets their status
+        from RUNNING to PENDING so they are retried.  Replaces the fragile
+        RUNNING-job scan used with BLPOP.
+        """
+        try:
+            # XAUTOCLAIM returns (next_start_id, [(msg_id, {fields})], deleted_ids)
+            result = self._client.xautoclaim(
+                _STREAM_KEY,
+                _STREAM_GROUP,
+                self._consumer_id,
+                min_idle_time=min_idle_ms,
+                start_id="0-0",
+                count=10,
+            )
+            _, claimed_messages, _ = result
+            job_ids = []
+            for message_id, fields in claimed_messages:
+                job_id = fields.get("job_id", "")
+                if job_id:
+                    job_ids.append(job_id)
+            if job_ids:
+                _log.info("stream_claimed_stale count=%d", len(job_ids))
+            return job_ids
+        except Exception as exc:
+            _log.warning("claim_stale_jobs_error: %s", type(exc).__name__)
+            return []
+
+    def get_queue_depth(self) -> int:
+        """Return the total number of messages in the stream."""
+        try:
+            return self._client.xlen(_STREAM_KEY)
+        except Exception:
+            return 0
 
     def cancel(self, job_id: str) -> bool:
-        """Mark a pending or running job as cancelled.
-
-        Returns True if the status was updated, False if the job was already
-        in a terminal state (done, error, cancelled) or not found.
-        """
+        """Mark a pending or running job as cancelled."""
         key = self._job_key(job_id)
         old_status = self._client.hget(key, "status")
         if old_status not in ("pending", "running"):
@@ -182,17 +317,6 @@ class RedisJobStore:
                 "updated_at": updated_at,
             },
         )
-
-    def wait_for_job(self, timeout: int = 5) -> str | None:
-        """Block until a job_id appears on the queue, or timeout.
-
-        Returns the job_id string, or None on timeout.
-        """
-        result = self._client.blpop(_QUEUE_KEY, timeout=timeout)
-        if result is None:
-            return None
-        _, job_id = result
-        return job_id
 
     @staticmethod
     def _hash_to_job(data: dict) -> Job:

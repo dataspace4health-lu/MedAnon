@@ -117,7 +117,7 @@ class StagingStore:
                 with conn.cursor() as cur:
                     psycopg2.extras.execute_values(
                         cur,
-                        f"""
+                        """
                         INSERT INTO medanon.staged_resources
                             (job_id, resource_id, resource_type, resource_json, expires_at)
                         VALUES %s
@@ -132,7 +132,7 @@ class StagingStore:
             self._put_conn(conn)
 
     def mark_done(self, job_id: str, staged_ids: list[int]) -> None:
-        """Mark a list of staged row IDs as processed."""
+        """Mark a list of staged row IDs as processed (processing → done)."""
         if not staged_ids:
             return
         conn = self._get_conn()
@@ -144,6 +144,7 @@ class StagingStore:
                         UPDATE medanon.staged_resources
                            SET status = 'done', processed_at = NOW()
                          WHERE job_id = %s AND id = ANY(%s)
+                           AND status = 'processing'
                         """,
                         (job_id, staged_ids),
                     )
@@ -172,10 +173,11 @@ class StagingStore:
     # ------------------------------------------------------------------
 
     def get_pending_batch(self, job_id: str, limit: int = 100) -> list[dict]:
-        """Return up to *limit* pending rows and lock them for processing.
+        """Return up to *limit* pending rows, atomically marking them 'processing'.
 
-        Uses SKIP LOCKED so that a second concurrent worker won't pick up
-        rows already being processed.
+        Uses a CTE with ``FOR UPDATE SKIP LOCKED`` to claim rows in one
+        statement — no window between SELECT and UPDATE where a crash could
+        leave rows invisible to other workers.
         """
         conn = self._get_conn()
         try:
@@ -183,12 +185,19 @@ class StagingStore:
                 with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                     cur.execute(
                         """
-                        SELECT id, resource_id, resource_type, resource_json
-                          FROM medanon.staged_resources
-                         WHERE job_id = %s AND status = 'pending'
-                         ORDER BY id
-                         LIMIT %s
-                         FOR UPDATE SKIP LOCKED
+                        WITH batch AS (
+                            SELECT id
+                              FROM medanon.staged_resources
+                             WHERE job_id = %s AND status = 'pending'
+                             ORDER BY id
+                             LIMIT %s
+                             FOR UPDATE SKIP LOCKED
+                        )
+                        UPDATE medanon.staged_resources sr
+                           SET status = 'processing'
+                          FROM batch
+                         WHERE sr.id = batch.id
+                        RETURNING sr.id, sr.resource_id, sr.resource_type, sr.resource_json
                         """,
                         (job_id, limit),
                     )
@@ -242,7 +251,12 @@ class StagingStore:
             self._put_conn(conn)
 
     def reset_pending(self, job_id: str) -> int:
-        """Reset all rows for a job back to 'pending' (for re-processing)."""
+        """Reset done/error rows for a job back to 'pending' (for re-processing).
+
+        Rows in ``processing`` state are left untouched to avoid interfering
+        with an active worker.  Use ``recover_stale_processing`` to reclaim
+        rows that have been stuck in ``processing`` for too long.
+        """
         conn = self._get_conn()
         try:
             with conn:
@@ -251,7 +265,7 @@ class StagingStore:
                         """
                         UPDATE medanon.staged_resources
                            SET status = 'pending', processed_at = NULL, error = NULL
-                         WHERE job_id = %s
+                         WHERE job_id = %s AND status != 'processing'
                         """,
                         (job_id,),
                     )
@@ -264,14 +278,70 @@ class StagingStore:
     # ------------------------------------------------------------------
 
     def cleanup_expired(self) -> int:
-        """Delete all rows whose ``expires_at`` has passed.  Returns deleted count."""
+        """Delete rows whose ``expires_at`` has passed, in batches.
+
+        Deletes up to 10 000 rows per transaction to avoid long-running
+        locks.  Loops until no more expired rows remain.  Returns total
+        deleted count.
+        """
+        total_deleted = 0
+        conn = self._get_conn()
+        try:
+            while True:
+                with conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            """
+                            DELETE FROM medanon.staged_resources
+                             WHERE id IN (
+                                SELECT id FROM medanon.staged_resources
+                                 WHERE expires_at < NOW()
+                                 LIMIT 10000
+                             )
+                            """
+                        )
+                        deleted = cur.rowcount
+                total_deleted += deleted
+                if deleted < 10000:
+                    break
+            return total_deleted
+        finally:
+            self._put_conn(conn)
+
+    def recover_stale_processing(self, timeout_minutes: int = 10) -> int:
+        """Reset rows stuck in ``processing`` for longer than *timeout_minutes*.
+
+        Rows that have been in ``processing`` state for too long indicate a
+        worker crash between ``get_pending_batch`` and ``mark_done``.
+        Resetting them to ``pending`` allows them to be picked up again.
+
+        Returns the number of rows recovered.
+        """
         conn = self._get_conn()
         try:
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
-                        "DELETE FROM medanon.staged_resources WHERE expires_at < NOW()"
+                        """
+                        UPDATE medanon.staged_resources
+                           SET status = 'pending'
+                         WHERE status = 'processing'
+                           AND fetched_at < NOW() - INTERVAL '%s minutes'
+                        """,
+                        (timeout_minutes,),
                     )
-                    return cur.rowcount
+                    recovered = cur.rowcount
+            if recovered:
+                logger.info("recovered %d stale processing rows (timeout=%dmin)", recovered, timeout_minutes)
+            return recovered
         finally:
             self._put_conn(conn)
+
+    def close(self) -> None:
+        """Close the connection pool."""
+        if self._pool:
+            try:
+                self._pool.closeall()
+            except Exception:
+                pass
+            self._pool = None

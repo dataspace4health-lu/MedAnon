@@ -43,3 +43,18 @@ class RemoteNlpAdapter:
         return analyze_and_replace_remote(
             text, entities, threshold, language, mode, token_state
         )
+
+    def analyze_and_replace_batch(
+        self,
+        texts: list[str],
+        entities: list[str],
+        threshold: float,
+        language: str,
+        mode: str,
+        token_state: dict,
+    ) -> list[str]:
+        from integrations.nlp.remote_detector import analyze_and_replace_batch_remote
+
+        return analyze_and_replace_batch_remote(
+            texts, entities, threshold, language, mode, token_state
+        )

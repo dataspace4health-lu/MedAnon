@@ -8,8 +8,9 @@ Internal implementation is split across focused sub-modules:
 All call sites import from this module; the sub-modules are internal.
 """
 
-import json
+import logging
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from utils.fhirpath import find_nodes
 from actions.substitute import _substitute_nodes
@@ -29,6 +30,9 @@ from .protocol import (
     _parse_pseudonymize_response,
     _parse_depseudonymize_response,
 )
+
+_GPAS_MAX_BATCH = int(os.environ.get("GPAS_MAX_BATCH_SIZE", "500"))
+_log = logging.getLogger("medanon.gpas")
 
 
 # ---------------------------------------------------------------------------
@@ -72,14 +76,73 @@ def gpas_pseudonymize_batch(values, params):
 
     if uncached:
         unique_uncached = list(dict.fromkeys(uncached))
-        fhir_request = _build_pseudonymize_params(domain, unique_uncached)
-        resp_json = _call_gpas_operation(base_url, operation, fhir_request, params)
-        mapping = _parse_pseudonymize_response(resp_json)
 
-        for orig, psn in mapping.items():
-            result[orig] = psn
-            if use_cache:
+        def _call_chunk(chunk):
+            fhir_request = _build_pseudonymize_params(domain, chunk)
+            resp_json = _call_gpas_operation(base_url, operation, fhir_request, params)
+            return _parse_pseudonymize_response(resp_json)
+
+        if len(unique_uncached) <= _GPAS_MAX_BATCH:
+            # Single batch — common fast path
+            mapping = _call_chunk(unique_uncached)
+        else:
+            # Split into sub-batches and run in parallel.
+            # Use submit + as_completed instead of pool.map so that:
+            #  1. Successful chunk results are preserved even if other chunks fail
+            #  2. Successful results are cached immediately per-chunk
+            #  3. Only truly-failed chunks are retried
+            chunks = [
+                unique_uncached[i:i + _GPAS_MAX_BATCH]
+                for i in range(0, len(unique_uncached), _GPAS_MAX_BATCH)
+            ]
+            mapping = {}
+            failed_chunks = []
+            with ThreadPoolExecutor(max_workers=min(len(chunks), 4)) as pool:
+                futures = {pool.submit(_call_chunk, c): c for c in chunks}
+                for future in as_completed(futures):
+                    try:
+                        partial = future.result()
+                        mapping.update(partial)
+                        # Cache successful results immediately (not deferred to
+                        # after the loop) so they survive even if later chunks fail.
+                        if use_cache:
+                            for orig, psn in partial.items():
+                                _cache_set(('pseudonymize', base_url, domain, operation, orig), psn)
+                    except GpasUnavailableError:
+                        # Circuit breaker open — re-raise immediately, no retry
+                        raise
+                    except Exception as exc:
+                        failed_chunk = futures[future]
+                        _log.warning(
+                            "gpas sub-batch failed (%d values): %s — will retry",
+                            len(failed_chunk), type(exc).__name__,
+                        )
+                        failed_chunks.append(failed_chunk)
+
+            # Retry failed chunks once (sequentially to avoid thundering herd)
+            for retry_chunk in failed_chunks:
+                try:
+                    partial = _call_chunk(retry_chunk)
+                    mapping.update(partial)
+                    if use_cache:
+                        for orig, psn in partial.items():
+                            _cache_set(('pseudonymize', base_url, domain, operation, orig), psn)
+                except GpasUnavailableError:
+                    raise
+                except Exception as exc:
+                    _log.error(
+                        "gpas sub-batch retry failed (%d values): %s",
+                        len(retry_chunk), type(exc).__name__,
+                    )
+                    raise
+
+        # Cache results from the single-batch fast path (multi-chunk results
+        # are already cached immediately per-chunk inside the parallel loop).
+        if use_cache and len(unique_uncached) <= _GPAS_MAX_BATCH:
+            for orig, psn in mapping.items():
                 _cache_set(('pseudonymize', base_url, domain, operation, orig), psn)
+
+        result.update(mapping)
 
     return result
 
