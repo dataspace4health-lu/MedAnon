@@ -32,6 +32,7 @@ from .protocol import (
 )
 
 _GPAS_MAX_BATCH = int(os.environ.get("GPAS_MAX_BATCH_SIZE", "500"))
+_GPAS_PARALLEL_BATCHES = int(os.environ.get("GPAS_PARALLEL_BATCHES", "8"))
 _log = logging.getLogger("medanon.gpas")
 
 
@@ -97,7 +98,7 @@ def gpas_pseudonymize_batch(values, params):
             ]
             mapping = {}
             failed_chunks = []
-            with ThreadPoolExecutor(max_workers=min(len(chunks), 4)) as pool:
+            with ThreadPoolExecutor(max_workers=min(len(chunks), _GPAS_PARALLEL_BATCHES)) as pool:
                 futures = {pool.submit(_call_chunk, c): c for c in chunks}
                 for future in as_completed(futures):
                     try:

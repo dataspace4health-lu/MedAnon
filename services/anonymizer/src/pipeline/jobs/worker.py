@@ -411,7 +411,9 @@ def _execute_bulk_import(job: Job) -> None:
         "bulk_import_start job=%s source=%s total=%d parallel=%d batch_size=%d",
         job.id, source_job_id or ndjson_path, total, parallel, batch_size,
     )
-    save_checkpoint(_store, job, {"phase": "uploading", "lines_written": 0})
+    # Include staged_count in every checkpoint so the API response exposes it.
+    # The service maps: processed = checkpoint["lines_written"], staged_count = checkpoint["staged_count"]
+    save_checkpoint(_store, job, {"phase": "uploading", "lines_written": 0, "staged_count": total})
 
     # Override the module-level batch size for this job
     import integrations.fhir.writer as _writer_mod
@@ -426,12 +428,21 @@ def _execute_bulk_import(job: Job) -> None:
             else:
                 errors += 1
             done_count = uploaded + errors
-            if done_count % 1000 == 0:
-                save_checkpoint(_store, job, {"phase": "uploading", "lines_written": done_count})
+            if done_count % 500 == 0:
+                save_checkpoint(_store, job, {
+                    "phase": "uploading",
+                    "lines_written": done_count,
+                    "staged_count": total,
+                })
     finally:
         _writer_mod._UPLOAD_BATCH_SIZE = _orig_batch_size
 
-    save_checkpoint(_store, job, {"phase": "done", "lines_written": uploaded + errors})
+    save_checkpoint(_store, job, {
+        "phase": "done",
+        "lines_written": uploaded + errors,
+        "staged_count": total,
+        "errors": errors,
+    })
     job.result_path = ndjson_path  # re-use source NDJSON; no new file written
     _store.update(job)
     _worker_log.info(
