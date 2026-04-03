@@ -51,7 +51,7 @@ log = logging.getLogger("medanon.fhir_server")
 # ---------------------------------------------------------------------------
 
 _FHIR_MAX_PAGES = int(os.environ.get("FHIR_MAX_PAGES", "1000"))
-_FHIR_PAGE_SIZE = int(os.environ.get("FHIR_PAGE_SIZE", "200"))  # default 200; set to 0 to let server decide
+_FHIR_PAGE_SIZE = int(os.environ.get("FHIR_PAGE_SIZE", "500"))  # default 500; set to 0 to let server decide
 _FHIR_BULK_POLL_INTERVAL = float(os.environ.get("FHIR_BULK_POLL_INTERVAL_SEC", "2"))
 _FHIR_BULK_POLL_TIMEOUT = float(os.environ.get("FHIR_BULK_POLL_TIMEOUT_SEC", "3600"))
 _RESOURCE_TYPE_RE = re.compile(r'^[A-Z][a-zA-Z]+$')

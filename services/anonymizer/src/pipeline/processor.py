@@ -56,7 +56,7 @@ fhirpathpy.engine.invocations["log"] = {
     "fn": lambda ctx, els: [{"path": x.path, "value": x.data} for x in els]
 }
 
-_BATCH_SIZE = int(os.environ.get("MEDANON_BATCH_SIZE", "200"))
+_BATCH_SIZE = int(os.environ.get("MEDANON_BATCH_SIZE", "300"))
 _PARALLEL_WORKERS = int(os.environ.get("MEDANON_PARALLEL_WORKERS", "0"))
 
 

@@ -27,7 +27,7 @@ from integrations.storage import store_result
 _log = logging.getLogger("medanon.staged_worker")
 
 _OUTPUT_DIR = os.environ.get("MEDANON_OUTPUT_DIR", "/output")
-_BATCH_SIZE = int(os.environ.get("MEDANON_STAGING_BATCH_SIZE", "500"))
+_BATCH_SIZE = int(os.environ.get("MEDANON_STAGING_BATCH_SIZE", "1000"))
 
 # Infrastructure resource types excluded from auto-discovery
 _INFRA = frozenset({

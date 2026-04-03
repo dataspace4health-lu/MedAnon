@@ -151,7 +151,7 @@ async def _startup() -> None:
                     else:
                         logger.warning("staging_store_setup_failed falling_back=streaming: %s", exc)
 
-        worker_enabled = os.environ.get("MEDANON_WORKER_ENABLED", "true").strip().lower() in ("true", "1", "yes")
+        worker_enabled = os.environ.get("MEDANON_WORKER_ENABLED", "false").strip().lower() in ("true", "1", "yes")
         if worker_enabled:
             asyncio.create_task(_supervised_worker_loop(_worker))
             logger.info("job_worker started max_concurrent=%d", max_concurrent)
@@ -184,7 +184,7 @@ async def _startup() -> None:
     # en_core_web_lg (~700 MB). Set MEDANON_NLP_PREWARM=false to skip prewarm
     # and load lazily on first request — saves N_workers × 700 MB at startup
     # cost of ~5 s cold-start on the first NLP request per worker.
-    if os.environ.get("MEDANON_NLP_PREWARM", "true").lower() not in ("false", "0", "no"):
+    if os.environ.get("MEDANON_NLP_PREWARM", "false").lower() not in ("false", "0", "no"):
         async def _prewarm_nlp() -> None:
             try:
                 loop = asyncio.get_event_loop()

@@ -80,11 +80,6 @@ def post_resource(base_url, resource, token=None, timeout=30):
 
     rid = resource.get("id")
     if rid:
-        # HAPI FHIR rejects purely numeric IDs on PUT (HAPI-0960).
-        # Prefix them so they contain at least one non-numeric character.
-        if rid.isdigit():
-            rid = f"p-{rid}"
-            resource = {**resource, "id": rid}
         _validate_resource_type(rt)
         _validate_resource_id(rid)
         url = f"{base_url.rstrip('/')}/{rt}/{rid}"
@@ -114,7 +109,7 @@ def post_bundle(base_url, bundle, token=None, timeout=30):
     return _write_json(url, bundle, "POST", token=token, timeout=timeout, operation="bundle")
 
 
-_UPLOAD_BATCH_SIZE = int(os.environ.get("MEDANON_UPLOAD_BATCH_SIZE", "200"))  # resources per FHIR batch Bundle
+_UPLOAD_BATCH_SIZE = int(os.environ.get("MEDANON_UPLOAD_BATCH_SIZE", "500"))  # resources per FHIR batch Bundle
 
 
 def _infer_upload_tiers(resources: list[dict]) -> dict[str, int]:
@@ -209,8 +204,7 @@ def _infer_upload_tiers(resources: list[dict]) -> dict[str, int]:
 def _compute_id_map(resources: list[dict]) -> dict[tuple[str, str], str]:
     """Build ``{(resourceType, originalId) -> sanitisedId}`` for resources whose ID changes.
 
-    Covers the two transformations applied by ``_build_batch_entry``:
-      - Purely-numeric IDs are prefixed with ``p-`` (HAPI-0960)
+    Covers ID sanitisation applied by ``_build_batch_entry``:
       - Invalid FHIR ID chars (e.g. underscores) are replaced with hyphens
 
     Only entries where the sanitised ID differs from the original are included,
@@ -222,10 +216,7 @@ def _compute_id_map(resources: list[dict]) -> dict[tuple[str, str], str]:
         original_id = r.get("id")
         if not rt or not original_id:
             continue
-        rid = original_id
-        if rid.isdigit():
-            rid = f"p-{rid}"
-        rid = _sanitise_resource_id(rid)
+        rid = _sanitise_resource_id(original_id)
         if rid != original_id:
             id_map[(rt, original_id)] = rid
     return id_map
@@ -279,9 +270,6 @@ def _build_batch_entry(resource: dict) -> tuple[dict, str, str | None]:
     request_url = rt if _RESOURCE_TYPE_RE.match(rt or "") else "Basic"
 
     if rid:
-        # Prefix purely-numeric IDs (HAPI-0960)
-        if rid.isdigit():
-            rid = f"p-{rid}"
         # Sanitise: replace invalid FHIR ID chars (e.g. underscores) with hyphens
         rid = _sanitise_resource_id(rid)
         if rid != source_id:
