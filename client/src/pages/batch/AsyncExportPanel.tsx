@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { toast } from 'sonner';
-import { Play, Loader2, Server, Download } from 'lucide-react';
+import { Play, Loader2, Server, Download, Upload, CheckCircle2, AlertCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Progress } from '@/components/ui/progress';
 import {
   Card,
   CardContent,
@@ -12,6 +13,7 @@ import {
 import { Badge } from '@/components/ui/badge';
 import {
   submitBulkExportJob,
+  submitBulkImport,
   getJobStatus,
   getJobResult,
 } from '@/api/medanon';
@@ -28,6 +30,9 @@ export function AsyncExportPanel({ configProfile }: { configProfile: string }) {
   const [job, setJob] = useState<JobResponse | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [importJob, setImportJob] = useState<JobResponse | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const importPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const stopPolling = useCallback(() => {
     if (pollRef.current !== null) {
@@ -37,6 +42,9 @@ export function AsyncExportPanel({ configProfile }: { configProfile: string }) {
   }, []);
 
   useEffect(() => () => stopPolling(), [stopPolling]);
+  useEffect(() => () => {
+    if (importPollRef.current !== null) clearInterval(importPollRef.current);
+  }, []);
 
   // Recover job from previous session on mount
   useEffect(() => {
@@ -125,6 +133,37 @@ export function AsyncExportPanel({ configProfile }: { configProfile: string }) {
       });
     }
   }, [job]);
+
+  const handleStartUpload = useCallback(async () => {
+    if (!job || importJob?.status === "running" || importJob?.status === "pending") return;
+    setUploadError(null);
+    setImportJob(null);
+    try {
+      const imp = await submitBulkImport({ job_id: job.job_id });
+      setImportJob(imp);
+      if (importPollRef.current !== null) clearInterval(importPollRef.current);
+      importPollRef.current = setInterval(async () => {
+        try {
+          const updated = await getJobStatus(imp.job_id);
+          setImportJob(updated);
+          if (updated.status === 'done' || updated.status === 'error' || updated.status === 'cancelled') {
+            clearInterval(importPollRef.current!);
+            importPollRef.current = null;
+            if (updated.status === 'done') {
+              toast.success('Upload complete — resources sent to target server.');
+            } else if (updated.status === 'error') {
+              toast.error('Upload failed.', { description: updated.error ?? undefined });
+            }
+          }
+        } catch {
+          clearInterval(importPollRef.current!);
+          importPollRef.current = null;
+        }
+      }, 2000);
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : 'Failed to start upload');
+    }
+  }, [job, importJob]);
 
   const statusColor: Record<string, string> = {
     pending: 'secondary',
@@ -224,10 +263,69 @@ export function AsyncExportPanel({ configProfile }: { configProfile: string }) {
               </p>
             )}
             {job.status === 'done' && (
-              <Button onClick={handleDownload} variant="outline">
-                <Download data-icon="inline-start" className="h-4 w-4" />
-                Download NDJSON result
-              </Button>
+              <div className="flex flex-col gap-3">
+                <Button onClick={handleDownload} variant="outline">
+                  <Download data-icon="inline-start" className="h-4 w-4" />
+                  Download NDJSON result
+                </Button>
+                <div className="border-t pt-3 flex flex-col gap-2">
+                  <Button
+                    variant="outline"
+                    onClick={handleStartUpload}
+                    disabled={importJob?.status === 'running' || importJob?.status === 'pending'}
+                  >
+                    {(importJob?.status === 'running' || importJob?.status === 'pending') ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Upload className="h-4 w-4" />
+                    )}
+                    {(importJob?.status === 'running' || importJob?.status === 'pending')
+                      ? 'Uploading…'
+                      : importJob?.status === 'done'
+                        ? 'Re-upload to Target'
+                        : 'Send to Target'}
+                  </Button>
+                  {/* Progress */}
+                  {(importJob?.status === 'running' || importJob?.status === 'pending') && (
+                    <div className="flex flex-col gap-1">
+                      {(importJob.staged_count ?? 0) > 0 ? (
+                        <>
+                          <Progress
+                            value={Math.round((importJob.processed / importJob.staged_count!) * 100)}
+                            className="h-1.5"
+                          />
+                          <p className="text-[10px] text-muted-foreground tabular-nums text-right">
+                            {importJob.processed.toLocaleString()} / {importJob.staged_count!.toLocaleString()} uploaded
+                            {' '}({Math.round((importJob.processed / importJob.staged_count!) * 100)}%)
+                          </p>
+                        </>
+                      ) : (
+                        <>
+                          <Progress value={100} className="h-1.5 [&>div]:animate-pulse" />
+                          <p className="text-[10px] text-muted-foreground">Loading resources…</p>
+                        </>
+                      )}
+                    </div>
+                  )}
+                  {/* Success */}
+                  {importJob?.status === 'done' && (
+                    <div className="flex items-center gap-2 text-sm">
+                      <CheckCircle2 className="h-4 w-4 text-green-600" />
+                      <span>
+                        Uploaded {importJob.processed.toLocaleString()} of{' '}
+                        {(importJob.staged_count ?? importJob.processed).toLocaleString()} resources to target
+                      </span>
+                    </div>
+                  )}
+                  {/* Error */}
+                  {(importJob?.status === 'error' || uploadError) && (
+                    <div className="flex items-center gap-2 text-sm text-destructive">
+                      <AlertCircle className="h-4 w-4 shrink-0" />
+                      {importJob?.error ?? uploadError ?? 'Upload failed'}
+                    </div>
+                  )}
+                </div>
+              </div>
             )}
           </CardContent>
         </Card>

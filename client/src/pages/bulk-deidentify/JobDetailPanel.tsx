@@ -3,7 +3,6 @@ import { useNavigate } from "react-router-dom";
 import { ResourceTypeSummary } from "@/components/shared/ResourceTypeSummary";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import {
   Select,
@@ -16,7 +15,8 @@ import {
   Loader2, AlertCircle, Download, CheckCircle2, Inbox, Square,
   RefreshCw, User, Stethoscope, Database, Upload,
 } from "lucide-react";
-import { getJobResult, uploadJobToTarget } from "@/api/medanon";
+import { getJobResult, getJobStatus, submitBulkImport } from "@/api/medanon";
+import type { JobResponse } from "@/api/medanon";
 import { useBulkExport } from "@/context/BulkExportContext";
 import type { ExportJob } from "@/context/BulkExportContext";
 import { buildPiiFromDeidentifiedOnly, buildFieldSummary, stripManifestTag } from "@/lib/piiDetection";
@@ -46,11 +46,16 @@ export function JobDetailPanel({ job }: { job: ExportJob }) {
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [stopping, setStopping] = useState(false);
   const [reprocessing, setReprocessing] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const [uploadResult, setUploadResult] = useState<{ uploaded: number; errors: number } | null>(null);
-  const [targetUrl, setTargetUrl] = useState("");
+  const [importJob, setImportJob] = useState<JobResponse | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const importPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // Cache parsed job ID to avoid re-parsing the same result
   const parsedJobIdRef = useRef<string | null>(null);
+
+  // Stop import polling on unmount
+  useEffect(() => () => {
+    if (importPollRef.current !== null) clearInterval(importPollRef.current);
+  }, []);
 
   // Fetch and parse result when job is done
   useEffect(() => {
@@ -174,19 +179,30 @@ export function JobDetailPanel({ job }: { job: ExportJob }) {
     navigate("/bulk-deidentify", { state: { autoSelectId: newId } });
   }
 
-  async function handleUploadToTarget() {
-    if (uploading || !job.jobId) return;
-    setUploading(true);
-    setUploadResult(null);
+  async function handleStartUpload() {
+    if (!job.jobId || importJob?.status === "running" || importJob?.status === "pending") return;
+    setUploadError(null);
+    setImportJob(null);
     try {
-      const url = targetUrl.trim() || undefined;
-      const result = await uploadJobToTarget(job.jobId, url);
-      setUploadResult({ uploaded: result.uploaded, errors: result.errors });
+      const imp = await submitBulkImport({ job_id: job.jobId });
+      setImportJob(imp);
+      // Start polling
+      if (importPollRef.current !== null) clearInterval(importPollRef.current);
+      importPollRef.current = setInterval(async () => {
+        try {
+          const updated = await getJobStatus(imp.job_id);
+          setImportJob(updated);
+          if (updated.status === "done" || updated.status === "error" || updated.status === "cancelled") {
+            clearInterval(importPollRef.current!);
+            importPollRef.current = null;
+          }
+        } catch {
+          clearInterval(importPollRef.current!);
+          importPollRef.current = null;
+        }
+      }, 2000);
     } catch (err) {
-      setUploadResult({ uploaded: 0, errors: -1 });
-      setFetchError(err instanceof Error ? err.message : "Upload failed");
-    } finally {
-      setUploading(false);
+      setUploadError(err instanceof Error ? err.message : "Failed to start upload");
     }
   }
 
@@ -380,35 +396,59 @@ export function JobDetailPanel({ job }: { job: ExportJob }) {
             </Button>
           </div>
           <div className="flex items-center gap-2">
-            <Input
-              placeholder="Target FHIR server URL (optional — uses FHIR_TARGET_URL if empty)"
-              value={targetUrl}
-              onChange={(e) => setTargetUrl(e.target.value)}
-              className="max-w-sm text-xs"
-              disabled={uploading}
-            />
             <Button
               variant="outline"
-              onClick={handleUploadToTarget}
-              disabled={uploading || !job.jobId}
+              onClick={handleStartUpload}
+              disabled={!job.jobId || importJob?.status === "running" || importJob?.status === "pending"}
             >
-              {uploading ? (
+              {(importJob?.status === "running" || importJob?.status === "pending") ? (
                 <Loader2 className="size-4 animate-spin" />
               ) : (
                 <Upload className="size-4" />
               )}
-              {uploading ? "Sending…" : "Send to Target"}
+              {(importJob?.status === "running" || importJob?.status === "pending")
+                ? "Uploading…"
+                : importJob?.status === "done"
+                  ? "Re-upload"
+                  : "Send to Target"}
             </Button>
           </div>
-          {uploadResult && uploadResult.errors !== -1 && (
+          {/* Upload progress bar */}
+          {(importJob?.status === "running" || importJob?.status === "pending") && (
+            <div className="flex flex-col gap-1">
+              {(importJob.staged_count ?? 0) > 0 ? (
+                <>
+                  <Progress
+                    value={Math.round((importJob.processed / importJob.staged_count!) * 100)}
+                    className="h-1.5"
+                  />
+                  <p className="text-[10px] text-muted-foreground tabular-nums text-right">
+                    {importJob.processed.toLocaleString()} / {importJob.staged_count!.toLocaleString()} uploaded
+                    {" "}({Math.round((importJob.processed / importJob.staged_count!) * 100)}%)
+                  </p>
+                </>
+              ) : (
+                <>
+                  <Progress value={100} className="h-1.5 [&>div]:animate-pulse" />
+                  <p className="text-[10px] text-muted-foreground">Loading resources…</p>
+                </>
+              )}
+            </div>
+          )}
+          {/* Upload success */}
+          {importJob?.status === "done" && (
             <div className="flex items-center gap-2 text-sm">
               <CheckCircle2 className="size-4 text-green-600" />
               <span>
-                Uploaded {uploadResult.uploaded} resource{uploadResult.uploaded !== 1 ? "s" : ""} to target server
-                {uploadResult.errors > 0 && (
-                  <span className="text-destructive"> ({uploadResult.errors} error{uploadResult.errors !== 1 ? "s" : ""})</span>
-                )}
+                Uploaded {importJob.processed.toLocaleString()} of {(importJob.staged_count ?? importJob.processed).toLocaleString()} resource{importJob.processed !== 1 ? "s" : ""} to target
               </span>
+            </div>
+          )}
+          {/* Upload error */}
+          {(importJob?.status === "error" || uploadError) && (
+            <div className="flex items-center gap-2 text-sm text-destructive">
+              <AlertCircle className="size-4 shrink-0" />
+              {importJob?.error ?? uploadError ?? "Upload failed"}
             </div>
           )}
         </div>

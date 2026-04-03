@@ -129,6 +129,29 @@ export async function reprocessJob(
   return response.json() as Promise<JobResponse>;
 }
 
+/** POST /api/v1/jobs/bulk-import — queue an async upload job, returns 202.
+ *  Source job result is uploaded to the target FHIR server in the background.
+ *  Poll getJobStatus; progress is reflected in job.processed / job.staged_count.
+ */
+export async function submitBulkImport(params: {
+  job_id?: string;
+  ndjson_path?: string;
+  target_url?: string;
+}): Promise<JobResponse> {
+  const response = await fetch("/api/v1/jobs/bulk-import", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    body: JSON.stringify(params),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(
+      `submitBulkImport failed (${response.status}): ${body?.detail ?? response.statusText}`,
+    );
+  }
+  return response.json() as Promise<JobResponse>;
+}
+
 /** GET /api/v1/jobs — list jobs with optional filters. */
 export async function listJobs(params?: {
   status?: string;
