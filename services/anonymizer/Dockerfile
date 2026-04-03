@@ -37,7 +37,9 @@ EXPOSE 8000
 FROM base AS prod
 WORKDIR /code/src
 USER appuser
-CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD gunicorn api.main:app -k uvicorn.workers.UvicornWorker \
+    --workers ${MEDANON_WORKERS:-4} --bind 0.0.0.0:8000 \
+    --timeout ${MEDANON_REQUEST_TIMEOUT_SEC:-300} --graceful-timeout 30
 
 # ── Development stage — used by docker-compose.dev.yml ───────────────────────
 FROM base AS dev
@@ -53,4 +55,6 @@ COPY services/anonymizer/requirements-sdv.txt /code/requirements-sdv.txt
 RUN pip install --no-cache-dir -r /code/requirements-sdv.txt
 WORKDIR /code/src
 USER appuser
-CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD gunicorn api.main:app -k uvicorn.workers.UvicornWorker \
+    --workers ${MEDANON_WORKERS:-4} --bind 0.0.0.0:8000 \
+    --timeout ${MEDANON_REQUEST_TIMEOUT_SEC:-300} --graceful-timeout 30

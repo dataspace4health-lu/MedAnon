@@ -76,6 +76,24 @@ class DetectResponse(BaseModel):
     token_state: dict[str, Any] = Field(default_factory=dict)
 
 
+class BatchDetectItem(BaseModel):
+    text: str
+    entities: list[str] | str = "healthcare"
+    threshold: float = 0.4
+    language: str = "en"
+    mode: str = "tokenize"
+
+
+class BatchDetectRequest(BaseModel):
+    items: list[BatchDetectItem]
+    token_state: dict[str, Any] | None = None
+
+
+class BatchDetectResponse(BaseModel):
+    results: list[str]
+    token_state: dict[str, Any] = Field(default_factory=dict)
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -112,3 +130,35 @@ def detect(req: DetectRequest):
 
     _inc_request("/v1/detect", 200)
     return DetectResponse(scrubbed_text=scrubbed, token_state=token_state)
+
+
+@app.post("/v1/detect/batch", response_model=BatchDetectResponse)
+def detect_batch(req: BatchDetectRequest):
+    """Run Presidio NER on multiple texts, sharing token state across them."""
+    from detector import _analyze_and_replace, _resolve_entities
+
+    token_state = req.token_state or {"next": {}, "map": {}, "reverse": {}}
+    results: list[str] = []
+
+    for item in req.items:
+        entities = _resolve_entities(item.entities)
+        try:
+            scrubbed = _analyze_and_replace(
+                item.text,
+                entities=entities,
+                threshold=item.threshold,
+                language=item.language,
+                mode=item.mode,
+                token_state=token_state,
+                token_lock=None,
+            )
+            results.append(scrubbed)
+        except RuntimeError as exc:
+            logger.error("presidio_not_ready: %s", exc, exc_info=False)
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except Exception as exc:
+            logger.error("detect_batch_error: %s", type(exc).__name__, exc_info=False)
+            raise HTTPException(status_code=500, detail="NLP detection error") from exc
+
+    _inc_request("/v1/detect/batch", 200)
+    return BatchDetectResponse(results=results, token_state=token_state)

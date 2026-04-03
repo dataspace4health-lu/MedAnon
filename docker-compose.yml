@@ -18,6 +18,7 @@ volumes:
   hapi-pg-data:
   hapi-target-pg-data:
   redis-data:
+  minio-data:
 
 # ── Services ──────────────────────────────────────────────────────────────────
 services:
@@ -61,7 +62,25 @@ services:
       - MEDANON_MANIFEST_ENABLED=${MEDANON_MANIFEST_ENABLED:-true}
       - MEDANON_STAGING_DB_URL=${MEDANON_STAGING_DB_URL:-}
       - MEDANON_STAGING_RETENTION_DAYS=${MEDANON_STAGING_RETENTION_DAYS:-30}
-      - MEDANON_STAGING_BATCH_SIZE=${MEDANON_STAGING_BATCH_SIZE:-500}
+      - MEDANON_STAGING_BATCH_SIZE=${MEDANON_STAGING_BATCH_SIZE:-1000}
+      - MEDANON_FHIR_FETCH_PARALLEL=${MEDANON_FHIR_FETCH_PARALLEL:-4}
+      - MEDANON_COHORT_PARALLEL=${MEDANON_COHORT_PARALLEL:-4}
+      - FHIR_PAGE_SIZE=${FHIR_PAGE_SIZE:-500}
+      - MEDANON_BATCH_SIZE=${MEDANON_BATCH_SIZE:-300}
+      - MEDANON_WORKERS=${MEDANON_WORKERS:-4}
+      - MEDANON_REQUEST_TIMEOUT_SEC=${MEDANON_REQUEST_TIMEOUT_SEC:-300}
+      - GPAS_MAX_BATCH_SIZE=${GPAS_MAX_BATCH_SIZE:-500}
+      - GPAS_POOL_SIZE=${GPAS_POOL_SIZE:-10}
+      - FHIR_POOL_SIZE=${FHIR_POOL_SIZE:-10}
+      - MEDANON_WORKER_ENABLED=${MEDANON_WORKER_ENABLED:-false}
+      - MEDANON_NLP_PREWARM=${MEDANON_NLP_PREWARM:-false}
+      - MEDANON_UPLOAD_BATCH_SIZE=${MEDANON_UPLOAD_BATCH_SIZE:-500}
+      - MEDANON_UPLOAD_PARALLEL=${MEDANON_UPLOAD_PARALLEL:-4}
+      - MEDANON_RESULT_STORAGE=${MEDANON_RESULT_STORAGE:-local}
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT:-minio:9000}
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER:-minioadmin}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-minioadmin}
+      - MINIO_BUCKET=${MINIO_BUCKET:-medanon-results}
     volumes:
       - ./data:/data:ro
       - ./output:/output
@@ -79,18 +98,89 @@ services:
       hapi-db:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/ready')"]
-      interval: 30s
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 90s
       timeout: 10s
       retries: 3
-      start_period: 20s
+      start_period: 5s
     deploy:
       resources:
         limits:
-          cpus: "1.0"
-          memory: 2G
+          cpus: "4.0"
+          memory: 6G
         reservations:
-          cpus: "0.25"
+          cpus: "1.0"
+          memory: 1G
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:size=100M
+
+  # ── 1b. Dedicated job worker (same image, no HTTP server) ────────────────
+  # Handles async jobs (bulk-export, cohort, patient-export, bulk-import, reprocess)
+  # independently from the web server. The anonymizer defaults to
+  # MEDANON_WORKER_ENABLED=false so jobs are only executed here.
+  worker:
+    image: ${ANONYMIZER_IMAGE:-medanon:latest}
+    container_name: medanon-worker
+    restart: unless-stopped
+    entrypoint: ["python", "-m", "pipeline.jobs.worker_main"]
+    env_file:
+      - .env
+    environment:
+      - GPAS_URL=${GPAS_URL}
+      - GPAS_DOMAIN=${GPAS_DOMAIN}
+      - GPAS_OPERATION=${GPAS_OPERATION}
+      - GPAS_TIMEOUT_SEC=${GPAS_TIMEOUT_SEC}
+      - GPAS_TOKEN=${GPAS_TOKEN:-}
+      - GPAS_BASIC_USER=${GPAS_BASIC_USER:-}
+      - GPAS_BASIC_PASS=${GPAS_BASIC_PASS:-}
+      - GPAS_CACHE_ENABLED=${GPAS_CACHE_ENABLED:-true}
+      - GPAS_RETRY_COUNT=${GPAS_RETRY_COUNT:-2}
+      - GPAS_RETRY_BACKOFF_SEC=${GPAS_RETRY_BACKOFF_SEC:-0.2}
+      - MEDANON_HASH_KEY=${MEDANON_HASH_KEY:-}
+      - MEDANON_MANIFEST_ENABLED=${MEDANON_MANIFEST_ENABLED:-true}
+      - MEDANON_REDIS_URL=${MEDANON_REDIS_URL:-redis://redis:6379/0}
+      - MEDANON_JOB_WORKERS=${MEDANON_JOB_WORKERS:-3}
+      - MEDANON_STAGING_DB_URL=${MEDANON_STAGING_DB_URL:-}
+      - MEDANON_STAGING_RETENTION_DAYS=${MEDANON_STAGING_RETENTION_DAYS:-30}
+      - MEDANON_STAGING_BATCH_SIZE=${MEDANON_STAGING_BATCH_SIZE:-1000}
+      - MEDANON_FHIR_FETCH_PARALLEL=${MEDANON_FHIR_FETCH_PARALLEL:-4}
+      - MEDANON_COHORT_PARALLEL=${MEDANON_COHORT_PARALLEL:-4}
+      - FHIR_PAGE_SIZE=${FHIR_PAGE_SIZE:-500}
+      - MEDANON_BATCH_SIZE=${MEDANON_BATCH_SIZE:-300}
+      - FHIR_SOURCE_URL=${FHIR_SOURCE_URL:-}
+      - FHIR_SOURCE_TOKEN=${FHIR_SOURCE_TOKEN:-}
+      - FHIR_TARGET_URL=${FHIR_TARGET_URL:-http://hapi-fhir-target:8080/fhir}
+      - FHIR_TARGET_TOKEN=${FHIR_TARGET_TOKEN:-}
+      - MEDANON_TARGET_CONFIG_PROFILE=${MEDANON_TARGET_CONFIG_PROFILE:-structural}
+      - GPAS_MAX_BATCH_SIZE=${GPAS_MAX_BATCH_SIZE:-500}
+      - GPAS_POOL_SIZE=${GPAS_POOL_SIZE:-10}
+      - FHIR_POOL_SIZE=${FHIR_POOL_SIZE:-10}
+      - MEDANON_UPLOAD_BATCH_SIZE=${MEDANON_UPLOAD_BATCH_SIZE:-500}
+      - MEDANON_UPLOAD_PARALLEL=${MEDANON_UPLOAD_PARALLEL:-4}
+      - MEDANON_RESULT_STORAGE=${MEDANON_RESULT_STORAGE:-local}
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT:-minio:9000}
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER:-minioadmin}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-minioadmin}
+      - MINIO_BUCKET=${MINIO_BUCKET:-medanon-results}
+    volumes:
+      - ./output:/output
+    networks:
+      - fhir-net
+    depends_on:
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "4.0"
+          memory: 4G
+        reservations:
+          cpus: "0.5"
           memory: 512M
     security_opt:
       - no-new-privileges:true
@@ -462,7 +552,7 @@ services:
     container_name: medanon-redis
     restart: unless-stopped
     user: redis
-    command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru --save ""
+    command: redis-server --maxmemory 1gb --maxmemory-policy allkeys-lru --save ""
     volumes:
       - redis-data:/data
     networks:
@@ -476,11 +566,51 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.5"
-          memory: 256M
+          cpus: "1.0"
+          memory: 1200M
         reservations:
-          cpus: "0.1"
-          memory: 64M
+          cpus: "0.25"
+          memory: 256M
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  # ── 11. MinIO object storage (opt-in: MEDANON_RESULT_STORAGE=s3) ──────────
+  # Stores job result NDJSON files off-pod so multi-replica deployments can
+  # serve results regardless of which replica processed the job.
+  # Enable by setting MEDANON_RESULT_STORAGE=s3 in .env and starting the stack
+  # with:  docker compose --profile s3 up
+  minio:
+    image: minio/minio:RELEASE.2024-11-07T00-52-20Z
+    container_name: medanon-minio
+    profiles: [s3]
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    volumes:
+      - minio-data:/data
+    ports:
+      - "${MINIO_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    networks:
+      - fhir-net
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 128M
     security_opt:
       - no-new-privileges:true
     cap_drop:
