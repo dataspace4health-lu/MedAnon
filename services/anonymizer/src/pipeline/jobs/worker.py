@@ -4,8 +4,11 @@ Call ``init_worker(store, max_concurrent)`` then
 ``asyncio.create_task(worker_loop())`` from the FastAPI startup event.
 
 Supported job types:
-    ``bulk-export`` — fetch + de-identify via gPAS bulk export, write NDJSON.
-    ``cohort``      — cohort export ($everything per matching patient), write NDJSON.
+    ``bulk-export``    — fetch + de-identify via gPAS bulk export, write NDJSON.
+    ``cohort``         — cohort export ($everything per matching patient), write NDJSON.
+    ``patient-export`` — patient $everything export, write NDJSON.
+    ``bulk-import``    — read a completed NDJSON and upload to a target FHIR server.
+    ``reprocess``      — re-run de-identification on staged rows with a new config profile.
 """
 
 from __future__ import annotations
@@ -31,6 +34,17 @@ _PROGRESS_INTERVAL: int = int(os.environ.get("MEDANON_PROGRESS_INTERVAL", "100")
 _STAGING_CLEANUP_INTERVAL_SEC: int = int(os.environ.get("MEDANON_STAGING_CLEANUP_INTERVAL_SEC", "3600"))
 
 
+def store_result(job_id: str, local_path: str) -> str:
+    """Upload *local_path* to the configured result storage and return the result key.
+
+    For local storage (default) the key is the path unchanged.
+    For S3 (``MEDANON_RESULT_STORAGE=s3``) the file is uploaded to MinIO and the
+    key is ``s3://<bucket>/<job_id>.ndjson``.
+    """
+    from integrations.storage import get_result_storage
+    return get_result_storage().write_from_path(job_id, local_path)
+
+
 def init_worker(store, max_concurrent: int = 3) -> None:
     """Bind the job store and configure concurrency before the worker loop starts."""
     global _store, _max_concurrent
@@ -49,14 +63,9 @@ def init_staging(staging_store) -> None:
 # Chunked batch processing helper
 # ---------------------------------------------------------------------------
 
-def _process_stream_chunked(gen, settings, pseudonymizer, fh, start_count, store, job, label,
-                            upload_fn=None):
+def _process_stream_chunked(gen, settings, pseudonymizer, fh, start_count, store, job, label):
     """Buffer resources from *gen* into chunks and process each via
-    :func:`process_data_batch`, writing results to *fh`.
-
-    When *upload_fn* is provided it is called with a list of successfully
-    de-identified FHIR resource dicts after each batch is written to disk.
-    Upload errors are logged but never abort the job.
+    :func:`process_data_batch`, writing results to *fh*.
 
     Returns ``(count, was_cancelled)`` where *count* is the total number of
     lines written (including *start_count*).
@@ -66,36 +75,29 @@ def _process_stream_chunked(gen, settings, pseudonymizer, fh, start_count, store
 
     def _flush():
         nonlocal count
-        processed: list[dict] = []
         try:
             results = process_data_batch(chunk, settings, pseudonymizer)
             for result in results:
-                fh.write(json.dumps(result) + "\n")
+                line = json.dumps(result)
+                fh.write(line + "\n")
                 count += 1
-                if isinstance(result, dict) and result.get("resourceType") and "error" not in result:
-                    processed.append(result)
         except Exception:
             # Per-resource fallback for the failed chunk
             for resource in chunk:
                 try:
                     result = process_data_batch([resource], settings, pseudonymizer)[0]
-                    fh.write(json.dumps(result) + "\n")
-                    if isinstance(result, dict) and result.get("resourceType") and "error" not in result:
-                        processed.append(result)
+                    line = json.dumps(result)
+                    fh.write(line + "\n")
                 except Exception as exc2:
                     rtype = resource.get("resourceType", "Unknown") if isinstance(resource, dict) else "Unknown"
                     _worker_log.error("%s job=%s resource_type=%s error=%s", label, job.id, rtype, exc2)
                     fh.write(json.dumps({"error": "processing error", "resourceType": rtype}) + "\n")
                 count += 1
 
-        if upload_fn is not None and processed:
-            try:
-                upload_fn(processed)
-            except Exception as exc:
-                _worker_log.warning("%s job=%s upload_error=%s", label, job.id, type(exc).__name__)
+        # Flush after every chunk to guarantee NDJSON integrity on crash
+        fh.flush()
 
         if count % _PROGRESS_INTERVAL < len(chunk):
-            fh.flush()
             save_checkpoint(store, job, {"phase": "processing", "lines_written": count})
 
         fresh = store.get(job.id)
@@ -146,23 +148,9 @@ def _execute_bulk_export(job: Job) -> None:
     token = params.get("token") or os.environ.get("FHIR_SOURCE_TOKEN")
     timeout = float(params.get("timeout", 30))
     profile = params.get("config_profile", "auto")
-    target_url = params.get("target_url")
-    target_token = params.get("target_token") or os.environ.get("FHIR_TARGET_TOKEN")
 
     settings = get_settings(profile)
     pseudonymizer = _get_default_pseudonymizer()
-
-    upload_fn = None
-    if target_url:
-        from integrations.fhir.client import upload_resources as _upload_resources
-        def upload_fn(resources):
-            ok = errs = 0
-            for r in _upload_resources(target_url, resources, token=target_token, timeout=timeout):
-                if r["success"]:
-                    ok += 1
-                else:
-                    errs += 1
-            _worker_log.info("upload_to_target job=%s ok=%d errors=%d", job.id, ok, errs)
 
     output_path = os.path.join(_OUTPUT_DIR, f"{job.id}.ndjson")
     Path(_OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
@@ -198,7 +186,7 @@ def _execute_bulk_export(job: Job) -> None:
     if not resource_types:
         _worker_log.info("bulk_export_empty job=%s — no resource types to export", job.id)
         Path(output_path).write_text("")
-        job.result_path = output_path
+        job.result_path = store_result(job.id, output_path)
         save_checkpoint(_store, job, {"phase": "done", "lines_written": 0})
         return
 
@@ -224,11 +212,10 @@ def _execute_bulk_export(job: Job) -> None:
         count, cancelled = _process_stream_chunked(
             _resources_only(), settings, pseudonymizer, fh,
             already_written, _store, job, "bulk_export",
-            upload_fn=upload_fn,
         )
 
     if not cancelled:
-        job.result_path = output_path
+        job.result_path = store_result(job.id, output_path)
         save_checkpoint(_store, job, {"phase": "done", "lines_written": count})
         _worker_log.info("bulk_export_done job=%s count=%d", job.id, count)
 
@@ -251,23 +238,9 @@ def _execute_cohort(job: Job) -> None:
     token = params.get("token") or os.environ.get("FHIR_SOURCE_TOKEN")
     timeout = float(params.get("timeout", 30))
     profile = params.get("config_profile", "auto")
-    target_url = params.get("target_url")
-    target_token = params.get("target_token") or os.environ.get("FHIR_TARGET_TOKEN")
 
     settings = get_settings(profile)
     pseudonymizer = _get_default_pseudonymizer()
-
-    upload_fn = None
-    if target_url:
-        from integrations.fhir.client import upload_resources as _upload_resources
-        def upload_fn(resources):
-            ok = errs = 0
-            for r in _upload_resources(target_url, resources, token=target_token, timeout=timeout):
-                if r["success"]:
-                    ok += 1
-                else:
-                    errs += 1
-            _worker_log.info("upload_to_target job=%s ok=%d errors=%d", job.id, ok, errs)
 
     output_path = os.path.join(_OUTPUT_DIR, f"{job.id}.ndjson")
     Path(_OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
@@ -284,7 +257,7 @@ def _execute_cohort(job: Job) -> None:
         if count == 0:
             _worker_log.info("cohort_empty job=%s — no %s resources found, skipping export", job.id, search_type)
             Path(output_path).write_text("")
-            job.result_path = output_path
+            job.result_path = store_result(job.id, output_path)
             save_checkpoint(_store, job, {"phase": "done", "lines_written": 0})
             return
 
@@ -309,11 +282,10 @@ def _execute_cohort(job: Job) -> None:
         count, cancelled = _process_stream_chunked(
             _resources_skip(gen), settings, pseudonymizer, fh,
             already_written, _store, job, "cohort",
-            upload_fn=upload_fn,
         )
 
     if not cancelled:
-        job.result_path = output_path
+        job.result_path = store_result(job.id, output_path)
         save_checkpoint(_store, job, {"phase": "done", "lines_written": count})
         _worker_log.info("cohort_done job=%s count=%d", job.id, count)
 
@@ -343,23 +315,9 @@ def _execute_patient_export(job: Job) -> None:
     token = params.get("token") or os.environ.get("FHIR_SOURCE_TOKEN")
     timeout = float(params.get("timeout", 30))
     profile = params.get("config_profile", "auto")
-    target_url = params.get("target_url")
-    target_token = params.get("target_token") or os.environ.get("FHIR_TARGET_TOKEN")
 
     settings = get_settings(profile)
     pseudonymizer = _get_default_pseudonymizer()
-
-    upload_fn = None
-    if target_url:
-        from integrations.fhir.client import upload_resources as _upload_resources
-        def upload_fn(resources):
-            ok = errs = 0
-            for r in _upload_resources(target_url, resources, token=target_token, timeout=timeout):
-                if r["success"]:
-                    ok += 1
-                else:
-                    errs += 1
-            _worker_log.info("upload_to_target job=%s ok=%d errors=%d", job.id, ok, errs)
 
     output_path = os.path.join(_OUTPUT_DIR, f"{job.id}.ndjson")
     Path(_OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
@@ -382,13 +340,104 @@ def _execute_patient_export(job: Job) -> None:
         count, cancelled = _process_stream_chunked(
             _resources_skip(gen), settings, pseudonymizer, fh,
             already_written, _store, job, "patient_export",
-            upload_fn=upload_fn,
         )
 
     if not cancelled:
-        job.result_path = output_path
+        job.result_path = store_result(job.id, output_path)
         save_checkpoint(_store, job, {"phase": "done", "lines_written": count})
         _worker_log.info("patient_export_done job=%s count=%d", job.id, count)
+
+
+def _execute_bulk_import(job: Job) -> None:
+    """Read a completed NDJSON result and upload resources to a target FHIR server.
+
+    Accepts job params:
+        ``job_id``       — source export Job whose result_path is used.
+        ``ndjson_path``  — explicit NDJSON path (local or s3://); used when job_id absent.
+        ``target_url``   — target FHIR server base URL (required).
+        ``target_token`` — bearer token for the target (optional).
+        ``timeout``      — per-request HTTP timeout in seconds (default 30).
+        ``parallel``     — concurrent FHIR batch Bundle POSTs per tier (default 4).
+        ``batch_size``   — resources per FHIR batch Bundle (default 500).
+
+    Writes the source NDJSON path as the job result_path so the result endpoint
+    can still serve the original de-identified file.
+    """
+    from integrations.fhir.writer import upload_resources
+    from integrations.storage import get_result_storage
+
+    params = job.params
+    source_job_id = params.get("job_id")
+    ndjson_path = params.get("ndjson_path")
+    target_url = params["target_url"]
+    target_token = params.get("target_token") or os.environ.get("FHIR_TARGET_TOKEN")
+    timeout = float(params.get("timeout", 30))
+    parallel = int(params.get("parallel", os.environ.get("MEDANON_UPLOAD_PARALLEL", "4")))
+    batch_size = int(params.get("batch_size", os.environ.get("MEDANON_UPLOAD_BATCH_SIZE", "500")))
+
+    # Resolve the NDJSON path from the source job if job_id was provided
+    if source_job_id:
+        src = _store.get(source_job_id)
+        if src is None or not src.result_path:
+            raise ValueError(f"Source job {source_job_id!r} not found or has no result")
+        ndjson_path = src.result_path
+
+    if not ndjson_path:
+        raise ValueError("bulk-import job requires 'job_id' or 'ndjson_path' in params")
+
+    save_checkpoint(_store, job, {"phase": "loading"})
+
+    storage = get_result_storage()
+    resources: list[dict] = []
+    stream = storage.open_stream(ndjson_path)
+    try:
+        for raw_line in stream:
+            line = raw_line.decode("utf-8") if isinstance(raw_line, (bytes, bytearray)) else raw_line
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(obj, dict) and obj.get("resourceType") and "error" not in obj:
+                resources.append(obj)
+    finally:
+        if hasattr(stream, "close"):
+            stream.close()
+
+    total = len(resources)
+    _worker_log.info(
+        "bulk_import_start job=%s source=%s total=%d parallel=%d batch_size=%d",
+        job.id, source_job_id or ndjson_path, total, parallel, batch_size,
+    )
+    save_checkpoint(_store, job, {"phase": "uploading", "lines_written": 0})
+
+    # Override the module-level batch size for this job
+    import integrations.fhir.writer as _writer_mod
+    _orig_batch_size = _writer_mod._UPLOAD_BATCH_SIZE
+    _writer_mod._UPLOAD_BATCH_SIZE = batch_size
+    try:
+        uploaded = errors = 0
+        for result in upload_resources(target_url, resources, token=target_token,
+                                       timeout=timeout, parallel=parallel):
+            if result.get("success"):
+                uploaded += 1
+            else:
+                errors += 1
+            done_count = uploaded + errors
+            if done_count % 1000 == 0:
+                save_checkpoint(_store, job, {"phase": "uploading", "lines_written": done_count})
+    finally:
+        _writer_mod._UPLOAD_BATCH_SIZE = _orig_batch_size
+
+    save_checkpoint(_store, job, {"phase": "done", "lines_written": uploaded + errors})
+    job.result_path = ndjson_path  # re-use source NDJSON; no new file written
+    _store.update(job)
+    _worker_log.info(
+        "bulk_import_done job=%s uploaded=%d errors=%d",
+        job.id, uploaded, errors,
+    )
 
 
 _EXECUTORS = {
@@ -396,6 +445,7 @@ _EXECUTORS = {
     "cohort": _execute_cohort,
     "reprocess": _execute_reprocess,
     "patient-export": _execute_patient_export,
+    "bulk-import": _execute_bulk_import,
 }
 
 
@@ -451,13 +501,20 @@ async def _run_job(job: Job) -> None:
     _store.update(job)
 
 
-async def _run_and_release(job: Job) -> None:
-    """Run a job and release the semaphore when done."""
+async def _run_and_release(job: Job, message_id: str | None = None) -> None:
+    """Run a job, release the semaphore, and ACK the stream message when done."""
     try:
         await _run_job(job)
     finally:
         if _semaphore is not None:
             _semaphore.release()
+        # ACK the Redis Streams message so it's removed from the Pending Entry List.
+        # Called after _run_job so a crash before this point causes redelivery (at-least-once).
+        if message_id and _store is not None and hasattr(_store, "ack_job"):
+            try:
+                await asyncio.to_thread(_store.ack_job, message_id)
+            except Exception as exc:
+                _worker_log.warning("stream_ack_failed message_id=%s: %s", message_id, exc)
 
 
 # ---------------------------------------------------------------------------
@@ -465,13 +522,34 @@ async def _run_and_release(job: Job) -> None:
 # ---------------------------------------------------------------------------
 
 def _recover_running_jobs() -> int:
-    """Reset jobs left in RUNNING state from a previous crashed process to PENDING.
+    """Reset RUNNING jobs from a crashed process back to PENDING.
+
+    For Redis Streams, claims ALL pending PEL messages at startup (min_idle_ms=0
+    is safe here because no other worker is running — we just started).  Also
+    scans the job-status index for any RUNNING jobs not covered by the stream
+    (e.g. migrated from BLPOP).
 
     Returns the count of recovered jobs.
     """
     if _store is None or not hasattr(_store, "list_jobs"):
         return 0
     recovered = 0
+    # Redis Streams: at startup, claim ALL pending messages (idle ≥ 0 ms).
+    # This reclaims work from any previous worker that crashed without ACKing.
+    if hasattr(_store, "claim_stale_jobs"):
+        try:
+            stale_ids = _store.claim_stale_jobs(min_idle_ms=0)
+            for job_id in stale_ids:
+                job = _store.get(job_id)
+                if job and job.status == JobStatus.RUNNING:
+                    job.status = JobStatus.PENDING
+                    job.error = None
+                    _store.update(job)
+                    recovered += 1
+        except Exception as exc:
+            _worker_log.warning("recovery_claim_failed: %s", type(exc).__name__)
+    # Also scan for RUNNING jobs in the status index — covers jobs queued via BLPOP
+    # before the Streams migration, and edge cases where the stream was reset.
     try:
         stuck = _store.list_jobs(status="running", limit=100)
         for job in stuck:
@@ -484,17 +562,33 @@ def _recover_running_jobs() -> int:
     return recovered
 
 
-async def _get_next_job(is_event_driven: bool) -> Job | None:
+async def _get_next_job(is_event_driven: bool) -> tuple[Job | None, str | None]:
+    """Fetch the next pending job.
+
+    Returns ``(job, message_id)`` where *message_id* is the Redis Stream
+    message ID (for ACKing) or ``None`` for SQLite / BLPOP stores.
+    """
     if is_event_driven:
-        job_id = await asyncio.to_thread(_store.wait_for_job, 5)
-        if job_id is None:
-            return None
+        result = await asyncio.to_thread(_store.wait_for_job, 5)
+        if result is None:
+            return None, None
+        # Redis Streams returns (job_id, message_id); legacy BLPOP returns just job_id
+        if isinstance(result, tuple):
+            job_id, message_id = result
+        else:
+            job_id, message_id = result, None
         job = _store.get(job_id)
         if job is None or job.status != JobStatus.PENDING:
-            return None
-        return job
+            # Phantom / stale message — ACK it immediately so it doesn't block the queue
+            if message_id and hasattr(_store, "ack_job"):
+                try:
+                    _store.ack_job(message_id)
+                except Exception:
+                    pass
+            return None, None
+        return job, message_id
     else:
-        return await asyncio.to_thread(_store.next_pending)
+        return await asyncio.to_thread(_store.next_pending), None
 
 
 async def worker_loop() -> None:
@@ -525,16 +619,25 @@ async def worker_loop() -> None:
         asyncio.create_task(_cleanup_loop())
         _worker_log.info("staging_cleanup scheduled interval_sec=%d", _STAGING_CLEANUP_INTERVAL_SEC)
 
+    _poll_count = 0
     while True:
         await _semaphore.acquire()
         try:
-            job = await _get_next_job(is_event_driven)
+            job, message_id = await _get_next_job(is_event_driven)
             if job is None:
                 _semaphore.release()
                 if not is_event_driven:
                     await asyncio.sleep(2)
                 continue
-            asyncio.create_task(_run_and_release(job))
+            asyncio.create_task(_run_and_release(job, message_id))
+            # Periodically update the queue depth metric (every 50 jobs)
+            _poll_count += 1
+            if _poll_count % 50 == 0 and hasattr(_store, "get_queue_depth"):
+                try:
+                    from utils.metrics import JOB_QUEUE_DEPTH
+                    JOB_QUEUE_DEPTH.set(_store.get_queue_depth())
+                except Exception:
+                    pass
         except Exception as exc:
             _semaphore.release()
             _worker_log.error("worker_loop_error: %s", exc)

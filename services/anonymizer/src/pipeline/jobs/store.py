@@ -61,6 +61,9 @@ class SqliteJobStore:
                 conn.execute("ALTER TABLE jobs ADD COLUMN checkpoint_data TEXT")
             except Exception:
                 pass  # Column already exists — nothing to do.
+            # Indexes for next_pending() and list_jobs() to avoid full table scans
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_status_created ON jobs(status, created_at)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_type_created ON jobs(type, created_at)")
 
     def create(self, job_type: str, params: dict) -> Job:
         """Persist a new PENDING job and return it."""

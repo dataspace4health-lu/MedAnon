@@ -22,6 +22,7 @@ from pathlib import Path
 
 from medanon_core.domain import JobStatus
 from pipeline.jobs.checkpoint import load_checkpoint, save_checkpoint
+from integrations.storage import store_result
 
 _log = logging.getLogger("medanon.staged_worker")
 
@@ -61,6 +62,66 @@ def _process_batch(
         resources.append(rj if isinstance(rj, dict) else json.loads(rj))
 
     return process_data_batch(resources, settings, pseudonymizer)
+
+
+def _process_batch_with_fallback(
+    batch_rows: list[dict],
+    settings,
+    pseudonymizer,
+    processing_mode: str,
+    fh,
+    staging,
+    job_id: str,
+    label: str,
+) -> tuple[int, int]:
+    """Process a staged batch with per-resource fallback on failure.
+
+    Tries the entire batch first.  On failure, falls back to processing
+    each resource individually so a single bad resource does not kill the
+    entire job.  Successful results are written to *fh*; failed rows are
+    marked via ``staging.mark_error``.
+
+    Returns ``(succeeded, failed)`` counts.
+    """
+    from pipeline.processor import process_data_batch
+
+    succeeded = 0
+    failed = 0
+
+    try:
+        results = _process_batch(batch_rows, settings, pseudonymizer, processing_mode)
+        done_ids: list[int] = []
+        for row, result in zip(batch_rows, results):
+            fh.write(json.dumps(result) + "\n")
+            done_ids.append(row["id"])
+            succeeded += 1
+        fh.flush()
+        staging.mark_done(job_id, done_ids)
+    except Exception:
+        # Per-resource fallback: process each resource individually
+        for row in batch_rows:
+            rj = row["resource_json"]
+            resource = rj if isinstance(rj, dict) else json.loads(rj)
+            rtype = resource.get("resourceType", "Unknown") if isinstance(resource, dict) else "Unknown"
+            try:
+                result = process_data_batch([resource], settings, pseudonymizer)[0]
+                fh.write(json.dumps(result) + "\n")
+                staging.mark_done(job_id, [row["id"]])
+                succeeded += 1
+            except Exception as exc:
+                _log.error(
+                    "%s job=%s resource_type=%s row_id=%d error=%s",
+                    label, job_id, rtype, row["id"], exc,
+                )
+                fh.write(json.dumps({"error": "processing error", "resourceType": rtype}) + "\n")
+                try:
+                    staging.mark_error(job_id, row["id"], str(exc))
+                except Exception:
+                    _log.warning("%s job=%s mark_error failed row_id=%d", label, job_id, row["id"])
+                failed += 1
+        fh.flush()
+
+    return succeeded, failed
 
 
 # ---------------------------------------------------------------------------
@@ -114,7 +175,7 @@ def execute_bulk_export_staged(job, store, staging) -> None:
     if not resource_types:
         _log.info("bulk_export_staged_empty job=%s", job.id)
         Path(output_path).write_text("")
-        job.result_path = output_path
+        job.result_path = store_result(job.id, output_path)
         save_checkpoint(store, job, {"phase": "done", "staged_count": 0, "processed": 0})
         return
 
@@ -188,22 +249,18 @@ def execute_bulk_export_staged(job, store, staging) -> None:
                 if not batch_rows:
                     break
 
-                results = _process_batch(batch_rows, settings, pseudonymizer, processing_mode)
-
-                done_ids: list[int] = []
-                for row, result in zip(batch_rows, results):
-                    fh.write(json.dumps(result) + "\n")
-                    done_ids.append(row["id"])
-                fh.flush()
-                staging.mark_done(job.id, done_ids)
-                processed += len(done_ids)
+                ok, bad = _process_batch_with_fallback(
+                    batch_rows, settings, pseudonymizer, processing_mode,
+                    fh, staging, job.id, "staged_bulk_export",
+                )
+                processed += ok + bad
                 save_checkpoint(store, job, {
                     "phase": "processing",
                     "staged_count": staged_count,
                     "processed": processed,
                 })
 
-        job.result_path = output_path
+        job.result_path = store_result(job.id, output_path)
         save_checkpoint(store, job, {"phase": "done", "staged_count": staged_count, "processed": processed})
         _log.info("staged_bulk_export_done job=%s processed=%d", job.id, processed)
 
@@ -240,7 +297,7 @@ def execute_cohort_staged(job, store, staging) -> None:
         if count == 0:
             _log.info("cohort_staged_empty job=%s", job.id)
             Path(output_path).write_text("")
-            job.result_path = output_path
+            job.result_path = store_result(job.id, output_path)
             save_checkpoint(store, job, {"phase": "done", "staged_count": 0, "processed": 0})
             return
 
@@ -302,22 +359,18 @@ def execute_cohort_staged(job, store, staging) -> None:
                 if not batch_rows:
                     break
 
-                results = _process_batch(batch_rows, settings, pseudonymizer, processing_mode)
-
-                done_ids: list[int] = []
-                for row, result in zip(batch_rows, results):
-                    fh.write(json.dumps(result) + "\n")
-                    done_ids.append(row["id"])
-                fh.flush()
-                staging.mark_done(job.id, done_ids)
-                processed += len(done_ids)
+                ok, bad = _process_batch_with_fallback(
+                    batch_rows, settings, pseudonymizer, processing_mode,
+                    fh, staging, job.id, "staged_cohort",
+                )
+                processed += ok + bad
                 save_checkpoint(store, job, {
                     "phase": "processing",
                     "staged_count": staged_count,
                     "processed": processed,
                 })
 
-        job.result_path = output_path
+        job.result_path = store_result(job.id, output_path)
         save_checkpoint(store, job, {"phase": "done", "staged_count": staged_count, "processed": processed})
         _log.info("staged_cohort_done job=%s processed=%d", job.id, processed)
 
@@ -402,22 +455,18 @@ def execute_patient_export_staged(job, store, staging) -> None:
                 if not batch_rows:
                     break
 
-                results = _process_batch(batch_rows, settings, pseudonymizer, processing_mode)
-
-                done_ids: list[int] = []
-                for row, result in zip(batch_rows, results):
-                    fh.write(json.dumps(result) + "\n")
-                    done_ids.append(row["id"])
-                fh.flush()
-                staging.mark_done(job.id, done_ids)
-                processed += len(done_ids)
+                ok, bad = _process_batch_with_fallback(
+                    batch_rows, settings, pseudonymizer, processing_mode,
+                    fh, staging, job.id, "staged_patient",
+                )
+                processed += ok + bad
                 save_checkpoint(store, job, {
                     "phase": "processing",
                     "staged_count": staged_count,
                     "processed": processed,
                 })
 
-        job.result_path = output_path
+        job.result_path = store_result(job.id, output_path)
         save_checkpoint(store, job, {"phase": "done", "staged_count": staged_count, "processed": processed})
         _log.info("staged_patient_export_done job=%s processed=%d", job.id, processed)
 
@@ -465,17 +514,13 @@ def execute_reprocess_staged(job, store, staging) -> None:
             if not batch_rows:
                 break
 
-            results = _process_batch(batch_rows, settings, pseudonymizer, processing_mode)
-
-            done_ids: list[int] = []
-            for row, result in zip(batch_rows, results):
-                fh.write(json.dumps(result) + "\n")
-                done_ids.append(row["id"])
-            fh.flush()
-            staging.mark_done(source_job_id, done_ids)
-            processed += len(done_ids)
+            ok, bad = _process_batch_with_fallback(
+                batch_rows, settings, pseudonymizer, processing_mode,
+                fh, staging, source_job_id, "staged_reprocess",
+            )
+            processed += ok + bad
             save_checkpoint(store, job, {"phase": "processing", "processed": processed})
 
-    job.result_path = output_path
+    job.result_path = store_result(job.id, output_path)
     save_checkpoint(store, job, {"phase": "done", "processed": processed})
     _log.info("staged_reprocess_done job=%s processed=%d", job.id, processed)
