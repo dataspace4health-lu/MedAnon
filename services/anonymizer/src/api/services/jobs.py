@@ -2,7 +2,6 @@
 
 import json
 import logging
-import os
 
 from medanon_core.domain import (  # noqa: F401 — re-exported for routers
     JobNotComplete,
@@ -70,12 +69,12 @@ class JobService:
         return self._job_to_dict(job)
 
     def get_result_path(self, job_id: str) -> str:
-        """Get the result file path.
+        """Get the result key (local path or ``s3://`` URI).
 
         Raises:
             JobNotFound: if the job does not exist.
             JobNotComplete: if the job is not yet done.
-            JobResultMissing: if the result file has been cleaned up.
+            JobResultMissing: if the result has been cleaned up.
         """
         store = self._get_store()
         job = store.get(job_id)
@@ -83,7 +82,10 @@ class JobService:
             raise JobNotFound()
         if job.status.value != "done":
             raise JobNotComplete(job.status.value)
-        if not job.result_path or not os.path.exists(job.result_path):
+        if not job.result_path:
+            raise JobResultMissing()
+        from integrations.storage import get_result_storage
+        if not get_result_storage().exists(job.result_path):
             raise JobResultMissing()
         return job.result_path
 
@@ -127,19 +129,38 @@ class JobService:
         store.notify_new_job(job.id)
         return self._job_to_dict(job)
 
+    def submit_bulk_import(self, params: dict) -> dict:
+        """Queue a bulk-import job that uploads a completed NDJSON to a target FHIR server.
+
+        *params* must contain at least one of ``job_id`` or ``ndjson_path``, plus
+        ``target_url``.  Optional keys: ``target_token``, ``timeout``,
+        ``parallel``, ``batch_size``.
+
+        Raises JobStoreUnavailable if the job store is not initialised.
+        """
+        store = self._get_store()
+        job = store.create("bulk-import", params)
+        store.notify_new_job(job.id)
+        return self._job_to_dict(job)
+
     def upload_job_to_target(self, job_id: str, target_url: str, target_token: str | None = None, timeout: float = 30.0) -> dict:
         """Read a completed job's NDJSON result and upload resources to target FHIR server.
 
         Uses idempotent PUT (via upload_resources) so repeated calls are safe.
         Returns {job_id, uploaded, errors, total}.
+        Supports both local-file and S3 result keys transparently.
         """
         result_path = self.get_result_path(job_id)  # raises JobNotFound / JobNotComplete / JobResultMissing
 
         from integrations.fhir.client import upload_resources
+        from integrations.storage import get_result_storage
 
         resources: list[dict] = []
-        with open(result_path, "r") as fh:
-            for line in fh:
+        stream = get_result_storage().open_stream(result_path)
+        try:
+            for line in stream:
+                if isinstance(line, (bytes, bytearray)):
+                    line = line.decode("utf-8")
                 line = line.strip()
                 if not line:
                     continue
@@ -149,6 +170,9 @@ class JobService:
                         resources.append(resource)
                 except (json.JSONDecodeError, TypeError):
                     pass
+        finally:
+            if hasattr(stream, "close"):
+                stream.close()
 
         uploaded = 0
         errors = 0

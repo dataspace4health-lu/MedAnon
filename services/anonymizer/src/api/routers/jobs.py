@@ -2,6 +2,8 @@
 
     POST   /jobs/bulk-export          — queue a bulk export job, returns 202
     POST   /jobs/cohort               — queue a cohort export job, returns 202
+    POST   /jobs/patient-export       — queue a patient $everything export job, returns 202
+    POST   /jobs/bulk-import          — upload a completed NDJSON to a target FHIR server (parallel), returns 202
     GET    /jobs                      — list jobs with optional filtering
     GET    /jobs/{job_id}             — poll job status
     DELETE /jobs/{job_id}             — cancel a pending or running job
@@ -17,10 +19,10 @@ import logging
 import os
 
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 
 from api.deps import _get_url_from_request_or_env, _validate_server_url
-from api.schemas.jobs import BulkExportJobRequest, CohortJobRequest, PatientExportJobRequest
+from api.schemas.jobs import BulkExportJobRequest, BulkImportJobRequest, CohortJobRequest, PatientExportJobRequest
 from api.services.jobs import (
     JobNotComplete,
     JobNotFound,
@@ -36,11 +38,28 @@ _service = JobService()
 
 
 async def _resolve_optional_target_url(user_url: str | None) -> str | None:
-    """Return a validated target URL or None (no upload).
+    """Validate and return a caller-supplied target URL, or None.
 
-    - User-provided URLs are SSRF-validated.
-    - Falls back to FHIR_TARGET_URL env var when no URL is in the request.
-    - Returns None when neither is set (NDJSON-only mode).
+    Unlike the old behaviour, this helper does NOT fall back to the
+    ``FHIR_TARGET_URL`` environment variable.  Export jobs (bulk-export,
+    cohort, patient-export) should only upload to a target when the caller
+    explicitly requests it — silent auto-injection caused unwanted uploads.
+
+    Use :func:`_resolve_import_target_url` for bulk-import jobs, which do
+    require a target and support the env-var fallback.
+    """
+    if user_url:
+        await _validate_server_url(user_url)
+        return user_url.rstrip("/")
+    return None
+
+
+async def _resolve_import_target_url(user_url: str | None) -> str | None:
+    """Return a validated target URL for bulk-import jobs.
+
+    Validates the caller-supplied URL when provided; falls back to the
+    ``FHIR_TARGET_URL`` environment variable when the caller omits it.
+    Returns ``None`` when neither is available (the endpoint will 400).
     """
     if user_url:
         await _validate_server_url(user_url)
@@ -125,6 +144,44 @@ async def submit_patient_export(req: PatientExportJobRequest):
     return JSONResponse(status_code=202, content=job_dict)
 
 
+@router.post("/jobs/bulk-import", status_code=202)
+async def submit_bulk_import(req: BulkImportJobRequest):
+    """Queue a bulk-import job that uploads a completed NDJSON to a target FHIR server.
+
+    Reads the source NDJSON identified by ``job_id`` (result of a completed
+    bulk-export / cohort / patient-export job) or an explicit ``ndjson_path``,
+    then uploads de-identified resources using parallel tier-aware FHIR batch
+    Bundles.  Returns 202 immediately.
+
+    Poll ``GET /v1/jobs/{job_id}`` for status.  When ``status=done`` the
+    response checkpoint contains ``uploaded`` and ``errors`` counts.
+
+    - Falls back to ``FHIR_TARGET_URL`` env when ``target_url`` is not in the request.
+    - 400 if no target URL is available at all.
+    - 503 if the job store is not initialised.
+    """
+    target_url = await _resolve_import_target_url(req.target_url)
+    if not target_url:
+        raise HTTPException(
+            status_code=400,
+            detail="No target URL provided and FHIR_TARGET_URL env var is not set",
+        )
+    target_token = req.target_token or os.environ.get("FHIR_TARGET_TOKEN") or None
+    try:
+        job_dict = _service.submit_bulk_import({
+            "job_id": req.job_id,
+            "ndjson_path": req.ndjson_path,
+            "target_url": target_url,
+            "target_token": target_token,
+            "timeout": req.timeout,
+            "parallel": req.parallel,
+            "batch_size": req.batch_size,
+        })
+    except JobStoreUnavailable:
+        raise HTTPException(status_code=503, detail="Job store not initialised")
+    return JSONResponse(status_code=202, content=job_dict)
+
+
 @router.get("/jobs")
 async def list_jobs(
     status: str | None = Query(None, description="Filter by status: pending, running, done, error"),
@@ -175,6 +232,7 @@ async def get_job_result(job_id: str):
     - 404 if the job does not exist.
     - 409 if the job is not yet ``done``.
     - 410 if the result file has been cleaned up.
+    - 307 redirect when result is stored in S3/MinIO (``MEDANON_RESULT_STORAGE=s3``).
     """
     try:
         result_path = _service.get_result_path(job_id)
@@ -186,6 +244,14 @@ async def get_job_result(job_id: str):
         raise HTTPException(status_code=409, detail=str(exc))
     except JobResultMissing:
         raise HTTPException(status_code=410, detail="Result file not available")
+
+    # S3 result: redirect the client to a presigned MinIO URL (HTTP 307).
+    # The client downloads directly from MinIO, bypassing the anonymizer.
+    if result_path.startswith("s3://"):
+        from integrations.storage import get_result_storage
+        url = get_result_storage().get_download_url(result_path)
+        return RedirectResponse(url=url, status_code=307)
+
     return FileResponse(
         result_path,
         media_type="application/x-ndjson",
@@ -223,7 +289,7 @@ async def upload_job_to_target(job_id: str, target_url: str | None = None, targe
     - 410 if the result file has been cleaned up.
     - 400 if no target URL is available.
     """
-    resolved_url = await _resolve_optional_target_url(target_url)
+    resolved_url = await _resolve_import_target_url(target_url)
     if not resolved_url:
         raise HTTPException(status_code=400, detail="No target URL provided and FHIR_TARGET_URL env var is not set")
     resolved_token = target_token or os.environ.get("FHIR_TARGET_TOKEN") or None

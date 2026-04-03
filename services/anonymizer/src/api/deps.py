@@ -134,7 +134,7 @@ async def _get_url_from_request_or_env(
 
 
 # ---------------------------------------------------------------------------
-# Dynamic settings validation — prevents SSRF via FHIR Parameters wrapper
+# settings validation — prevents SSRF via FHIR Parameters wrapper
 # ---------------------------------------------------------------------------
 
 async def _validate_dynamic_settings(dynamic_settings: dict) -> None:

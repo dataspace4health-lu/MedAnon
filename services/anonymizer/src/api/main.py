@@ -53,6 +53,43 @@ _ALLOWED_ORIGINS = [o.strip() for o in os.environ.get(
 
 app = FastAPI(title="MedAnon", version="2.0.0")
 
+# Whether the worker loop is healthy; checked by /ready.
+_worker_healthy = True
+
+
+async def _supervised_worker_loop(worker_module) -> None:
+    """Run the worker loop with automatic restart on crash.
+
+    Uses exponential backoff (1s, 2s, 4s, … max 30s) between restarts.
+    Sets ``_worker_healthy`` to False while in a restart cycle so /ready
+    can report the degraded state.
+    """
+    global _worker_healthy
+    backoff = 1.0
+    max_backoff = 30.0
+    consecutive_failures = 0
+
+    while True:
+        try:
+            _worker_healthy = True
+            consecutive_failures = 0
+            backoff = 1.0
+            await worker_module.worker_loop()
+            # worker_loop() should never return — if it does, restart.
+            logger.warning("worker_loop returned unexpectedly, restarting")
+        except asyncio.CancelledError:
+            logger.info("worker_loop cancelled (shutdown)")
+            return
+        except Exception as exc:
+            consecutive_failures += 1
+            _worker_healthy = False
+            logger.error(
+                "worker_loop crashed (attempt %d): %s — restarting in %.1fs",
+                consecutive_failures, exc, backoff,
+            )
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, max_backoff)
+
 
 @app.on_event("startup")
 async def _startup() -> None:
@@ -60,9 +97,11 @@ async def _startup() -> None:
     redis_url = os.environ.get("MEDANON_REDIS_URL", "").strip()
     if redis_url:
         try:
-            from utils.cache import RedisCache, configure_cache
-            configure_cache(RedisCache(redis_url))
-            logger.info("gpas_cache=redis")
+            from utils.cache import LocalLruCache, RedisCache, TieredCache, configure_cache
+            l1 = LocalLruCache()
+            l2 = RedisCache(redis_url)
+            configure_cache(TieredCache(l1, l2))
+            logger.info("gpas_cache=tiered(local+redis)")
         except Exception as exc:
             logger.warning("redis_cache_setup_failed falling_back=local: %s", exc)
 
@@ -87,18 +126,37 @@ async def _startup() -> None:
         # Staging store — two-phase large-scale export (opt-in via MEDANON_STAGING_DB_URL)
         staging_url = os.environ.get("MEDANON_STAGING_DB_URL", "").strip()
         if staging_url:
-            try:
-                from integrations.staging.store import StagingStore
-                retention_days = int(os.environ.get("MEDANON_STAGING_RETENTION_DAYS", "30"))
-                staging_store = StagingStore(staging_url, retention_days=retention_days)
-                staging_store.ensure_schema()
-                _worker.init_staging(staging_store)
-                logger.info("staging_store=postgres retention_days=%d", retention_days)
-            except Exception as exc:
-                logger.warning("staging_store_setup_failed falling_back=streaming: %s", exc)
+            staging_store = None
+            retries = 3
+            backoff = 2.0
+            for attempt in range(1, retries + 1):
+                try:
+                    from integrations.staging.store import StagingStore
+                    retention_days = int(os.environ.get("MEDANON_STAGING_RETENTION_DAYS", "30"))
+                    staging_store = StagingStore(staging_url, retention_days=retention_days)
+                    staging_store.ensure_schema()
+                    _worker.init_staging(staging_store)
+                    app.state.staging_store = staging_store
+                    logger.info("staging_store=postgres retention_days=%d", retention_days)
+                    break
+                except Exception as exc:
+                    if attempt < retries:
+                        logger.warning(
+                            "staging_store_setup_failed attempt=%d/%d: %s — retrying in %.0fs",
+                            attempt, retries, exc, backoff,
+                        )
+                        import time
+                        time.sleep(backoff)
+                        backoff *= 2
+                    else:
+                        logger.warning("staging_store_setup_failed falling_back=streaming: %s", exc)
 
-        asyncio.create_task(_worker.worker_loop())
-        logger.info("job_worker started max_concurrent=%d", max_concurrent)
+        worker_enabled = os.environ.get("MEDANON_WORKER_ENABLED", "true").strip().lower() in ("true", "1", "yes")
+        if worker_enabled:
+            asyncio.create_task(_supervised_worker_loop(_worker))
+            logger.info("job_worker started max_concurrent=%d", max_concurrent)
+        else:
+            logger.info("job_worker disabled (MEDANON_WORKER_ENABLED=false)")
     except Exception as exc:
         logger.warning("job_worker_start_failed: %s", exc)
 
@@ -122,16 +180,33 @@ async def _startup() -> None:
 
     # Pre-warm the NLP adapter (Presidio + spaCy) in the background so the
     # first user request is not blocked by the 3-second model load.
-    async def _prewarm_nlp() -> None:
-        try:
-            loop = asyncio.get_event_loop()
-            from pipeline.deidentify import _get_nlp_adapter
-            await loop.run_in_executor(None, _get_nlp_adapter)
-            logger.info("nlp_prewarm complete")
-        except Exception as exc:
-            logger.debug("nlp_prewarm skipped: %s", exc)
+    # With gunicorn multi-worker, each worker process loads its own copy of
+    # en_core_web_lg (~700 MB). Set MEDANON_NLP_PREWARM=false to skip prewarm
+    # and load lazily on first request — saves N_workers × 700 MB at startup
+    # cost of ~5 s cold-start on the first NLP request per worker.
+    if os.environ.get("MEDANON_NLP_PREWARM", "true").lower() not in ("false", "0", "no"):
+        async def _prewarm_nlp() -> None:
+            try:
+                loop = asyncio.get_event_loop()
+                from pipeline.deidentify import _get_nlp_adapter
+                await loop.run_in_executor(None, _get_nlp_adapter)
+                logger.info("nlp_prewarm complete")
+            except Exception as exc:
+                logger.debug("nlp_prewarm skipped: %s", exc)
 
-    asyncio.create_task(_prewarm_nlp())
+        asyncio.create_task(_prewarm_nlp())
+
+
+@app.on_event("shutdown")
+async def _shutdown() -> None:
+    staging_store = getattr(app.state, "staging_store", None)
+    if staging_store is not None:
+        try:
+            staging_store.close()
+            logger.info("staging_store closed")
+        except Exception as exc:
+            logger.warning("staging_store_close_failed: %s", exc)
+
 
 app.state.limiter = limiter
 if RateLimitExceeded is not None:
@@ -191,24 +266,24 @@ async def enforce_body_size(request: Request, call_next):
                 detail=f"Request body exceeds the {MAX_BODY_BYTES // (1024*1024)} MB limit",
             )
     elif request.method in ("POST", "PUT", "PATCH"):
-        # No Content-Length header (chunked transfer) — read incrementally
-        received = 0
-        chunks = []
-        async for chunk in request.stream():
-            received += len(chunk)
-            if received > MAX_BODY_BYTES:
+        # No Content-Length header (chunked transfer) — wrap the receive
+        # callable to count bytes as they flow through, without buffering
+        # the entire body in a parallel list (avoids 2× peak memory).
+        original_receive = request._receive
+        byte_counter = [0]
+
+        async def _counting_receive():
+            message = await original_receive()
+            chunk = message.get("body", b"")
+            byte_counter[0] += len(chunk)
+            if byte_counter[0] > MAX_BODY_BYTES:
                 raise HTTPException(
                     status_code=413,
                     detail=f"Request body exceeds the {MAX_BODY_BYTES // (1024*1024)} MB limit",
                 )
-            chunks.append(chunk)
-        # Reassemble and stash so downstream `await request.body()` still works
-        body = b"".join(chunks)
+            return message
 
-        async def receive():
-            return {"type": "http.request", "body": body}
-
-        request._receive = receive
+        request._receive = _counting_receive
     return await call_next(request)
 
 
@@ -282,6 +357,10 @@ def readiness(request: Request):
         caller_authenticated = False
 
     body: dict = {"ready": ready}
+    if not _worker_healthy:
+        body["ready"] = False
+        body["worker"] = "restarting"
+        ready = False
     if caller_authenticated:
         body["checks"] = checks
 
