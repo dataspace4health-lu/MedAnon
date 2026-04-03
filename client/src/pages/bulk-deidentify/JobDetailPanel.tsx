@@ -1,8 +1,9 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { ResourceTypeSummary } from "@/components/shared/ResourceTypeSummary";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import {
   Select,
@@ -18,7 +19,7 @@ import {
 import { getJobResult, uploadJobToTarget } from "@/api/medanon";
 import { useBulkExport } from "@/context/BulkExportContext";
 import type { ExportJob } from "@/context/BulkExportContext";
-import { buildPiiFromDeidentifiedOnly, buildFieldSummary } from "@/lib/piiDetection";
+import { buildPiiFromDeidentifiedOnly, buildFieldSummary, stripManifestTag } from "@/lib/piiDetection";
 import type { PiiDetectionMap, FieldSummaryMap } from "@/lib/piiDetection";
 import {
   PHASE_LABELS,
@@ -37,8 +38,7 @@ export function JobDetailPanel({ job }: { job: ExportJob }) {
   const [resourceCounts, setResourceCounts] = useState<Record<string, number>>({});
   const [piiData, setPiiData] = useState<PiiDetectionMap>({});
   const [fieldSummary, setFieldSummary] = useState<FieldSummaryMap>({});
-  const [allResources, setAllResources] = useState<Record<string, unknown>[]>([]);
-  const [rawNdjson, setRawNdjson] = useState("");
+  const [totalResources, setTotalResources] = useState(0);
   const [selectedFormat, setSelectedFormat] = useState<BulkFormat>("ndjson");
   const [parsing, setParsing] = useState(false);
   const [parsed, setParsed] = useState(false);
@@ -48,75 +48,106 @@ export function JobDetailPanel({ job }: { job: ExportJob }) {
   const [reprocessing, setReprocessing] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadResult, setUploadResult] = useState<{ uploaded: number; errors: number } | null>(null);
+  const [targetUrl, setTargetUrl] = useState("");
+  // Cache parsed job ID to avoid re-parsing the same result
+  const parsedJobIdRef = useRef<string | null>(null);
 
   // Fetch and parse result when job is done
   useEffect(() => {
-    if (!job.jobId || job.status !== "done" || parsed || parsing) return;
+    // Skip if already parsed for this exact job
+    if (!job.jobId || job.status !== "done" || parsing) return;
+    if (parsedJobIdRef.current === job.jobId) return;
     let cancelled = false;
     setParsing(true);
+    setFetchError(null);
     (async () => {
       try {
         const blob = await getJobResult(job.jobId!);
         if (cancelled) return;
-        const { counts, allFieldCounts, piiSample, allResources: ar, rawNdjson: raw } = await parseNdjsonBlob(blob);
+        // Yield a frame so the loading spinner renders before heavy parsing
+        await new Promise<void>((r) => setTimeout(r, 0));
+        const { counts, allFieldCounts, piiSample, totalResources: total } = await parseNdjsonBlob(blob);
         if (cancelled) return;
+        await new Promise<void>((r) => setTimeout(r, 0));
         const pii = buildPiiFromDeidentifiedOnly(piiSample);
         if (cancelled) return;
         setResourceCounts(counts);
         setPiiData(pii);
-        setFieldSummary(buildFieldSummary(allFieldCounts, pii));
-        setAllResources(ar);
-        setRawNdjson(raw);
+        setFieldSummary(buildFieldSummary(allFieldCounts, pii, counts));
+        setTotalResources(total);
         setParsed(true);
+        parsedJobIdRef.current = job.jobId;
       } catch (err) {
         if (!cancelled)
           setFetchError(err instanceof Error ? err.message : "Failed to fetch results");
       } finally {
-        setParsing(false);
+        if (!cancelled) setParsing(false);
       }
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [job.jobId, job.status, parsed]);
+  }, [job.jobId, job.status]);
 
   const handleDownload = useCallback(async () => {
-    if (downloading) return;
+    if (downloading || !job.jobId) return;
     setDownloading(true);
     const base = job.filename.replace(/\.ndjson$/, "");
     try {
-      // Yield one frame so the spinner renders before heavy serialization
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
-      switch (selectedFormat) {
-        case "ndjson":
-          // rawNdjson is pre-built and pre-stripped — fastest path
-          triggerDownload(rawNdjson, `${base}.ndjson`, "application/x-ndjson");
-          break;
-        case "bundle":
-          triggerDownload(
-            JSON.stringify({
-              resourceType: "Bundle", id: crypto.randomUUID(), type: "collection",
-              timestamp: new Date().toISOString(), total: allResources.length,
-              entry: allResources.map((resource) => ({ resource })),
-            }, null, 2),
-            `${base}.bundle.json`,
-            "application/fhir+json",
-          );
-          break;
-        case "json-array":
-          triggerDownload(JSON.stringify(allResources, null, 2), `${base}.json`, "application/json");
-          break;
-        case "patient-bundles":
-          triggerDownload(
-            buildPatientBundlesNdjson(allResources),
-            `${base}.patient-bundles.ndjson`,
-            "application/x-ndjson",
-          );
-          break;
+      if (selectedFormat === "ndjson") {
+        // Fastest path: download the blob directly — zero client-side parsing
+        const blob = await getJobResult(job.jobId);
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `${base}.ndjson`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      } else {
+        // Other formats: fetch blob, parse transiently, format, download
+        const blob = await getJobResult(job.jobId);
+        const text = await blob.text();
+        const resources: Record<string, unknown>[] = [];
+        for (const line of text.split("\n")) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          try {
+            resources.push(stripManifestTag(JSON.parse(trimmed) as Record<string, unknown>));
+          } catch { /* skip */ }
+        }
+        // Yield one frame so the spinner renders before heavy serialization
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        switch (selectedFormat) {
+          case "bundle":
+            triggerDownload(
+              JSON.stringify({
+                resourceType: "Bundle", id: crypto.randomUUID(), type: "collection",
+                timestamp: new Date().toISOString(), total: resources.length,
+                entry: resources.map((resource) => ({ resource })),
+              }, null, 2),
+              `${base}.bundle.json`,
+              "application/fhir+json",
+            );
+            break;
+          case "json-array":
+            triggerDownload(JSON.stringify(resources, null, 2), `${base}.json`, "application/json");
+            break;
+          case "patient-bundles":
+            triggerDownload(
+              buildPatientBundlesNdjson(resources),
+              `${base}.patient-bundles.ndjson`,
+              "application/x-ndjson",
+            );
+            break;
+        }
       }
+    } catch (err) {
+      setFetchError(err instanceof Error ? err.message : "Download failed");
     } finally {
       setDownloading(false);
     }
-  }, [selectedFormat, allResources, rawNdjson, job.filename, downloading, setDownloading]);
+  }, [selectedFormat, job.jobId, job.filename, downloading]);
 
   const isDone = job.status === "done";
   const isRunning =
@@ -124,7 +155,6 @@ export function JobDetailPanel({ job }: { job: ExportJob }) {
     job.status === "pending" ||
     job.status === "running";
   const isCancelled = job.status === "cancelled";
-  const totalResources = Object.values(resourceCounts).reduce((s, c) => s + c, 0);
   const error = job.error ?? fetchError;
   const isTerminal = isDone || job.status === "error" || isCancelled;
 
@@ -149,7 +179,8 @@ export function JobDetailPanel({ job }: { job: ExportJob }) {
     setUploading(true);
     setUploadResult(null);
     try {
-      const result = await uploadJobToTarget(job.jobId);
+      const url = targetUrl.trim() || undefined;
+      const result = await uploadJobToTarget(job.jobId, url);
       setUploadResult({ uploaded: result.uploaded, errors: result.errors });
     } catch (err) {
       setUploadResult({ uploaded: 0, errors: -1 });
@@ -347,6 +378,15 @@ export function JobDetailPanel({ job }: { job: ExportJob }) {
                   ? `Download (${totalResources})`
                   : "Preparing…"}
             </Button>
+          </div>
+          <div className="flex items-center gap-2">
+            <Input
+              placeholder="Target FHIR server URL (optional — uses FHIR_TARGET_URL if empty)"
+              value={targetUrl}
+              onChange={(e) => setTargetUrl(e.target.value)}
+              className="max-w-sm text-xs"
+              disabled={uploading}
+            />
             <Button
               variant="outline"
               onClick={handleUploadToTarget}

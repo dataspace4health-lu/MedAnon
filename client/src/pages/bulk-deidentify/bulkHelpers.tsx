@@ -3,7 +3,6 @@ import {
   Loader2, AlertCircle, CheckCircle2, XCircle,
 } from "lucide-react";
 import { extractFieldsDeep } from "@/lib/fhirFields";
-import { stripManifestTag } from "@/lib/piiDetection";
 import type { ExportJobStatus } from "@/context/BulkExportContext";
 
 // ---------------------------------------------------------------------------
@@ -17,42 +16,75 @@ export const PHASE_LABELS: Record<string, string> = {
   done: "Complete",
 };
 
-export async function parseNdjsonBlob(blob: Blob): Promise<{
+export interface NdjsonSummary {
   counts: Record<string, number>;
   allFieldCounts: Record<string, Record<string, number>>;
   piiSample: Record<string, unknown>[];
-  allResources: Record<string, unknown>[];
-  rawNdjson: string;
-}> {
-  const text = await blob.text();
+  totalResources: number;
+}
+
+export async function parseNdjsonBlob(blob: Blob): Promise<NdjsonSummary> {
   const counts: Record<string, number> = {};
   const allFieldCounts: Record<string, Record<string, number>> = {};
-  const allResources: Record<string, unknown>[] = [];
-  const rawLines: string[] = [];
   const piiSample: Record<string, unknown>[] = [];
-  // PII sample cap — keep originals (with manifest) for accurate action detection
-  const PII_SAMPLE_LIMIT = 200;
+  // Per-type PII sample cap — ensures uniform coverage across all resource types
+  const PII_SAMPLE_PER_TYPE = 50;
+  const piiSampleCount: Record<string, number> = {};
   // Cap expensive deep-field walk per type — schema is consistent after ~200 resources
   const FIELD_SAMPLE_LIMIT = 200;
   const fieldSampleCount: Record<string, number> = {};
+  let totalResources = 0;
 
-  for (const line of text.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
+  // Stream the blob in chunks — never materialise the full text
+  const reader = blob.stream().getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    // Keep the last (potentially incomplete) chunk in the buffer
+    buffer = lines.pop() ?? "";
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        const resource = JSON.parse(trimmed) as Record<string, unknown>;
+        const type = (resource.resourceType as string) ?? "Unknown";
+        counts[type] = (counts[type] ?? 0) + 1;
+        totalResources++;
+
+        // Per-type PII sample — keep originals (with manifest tags)
+        piiSampleCount[type] = (piiSampleCount[type] ?? 0) + 1;
+        if (piiSampleCount[type] <= PII_SAMPLE_PER_TYPE) piiSample.push(resource);
+
+        // Only extract fields for the first FIELD_SAMPLE_LIMIT resources per type
+        fieldSampleCount[type] = (fieldSampleCount[type] ?? 0) + 1;
+        if (fieldSampleCount[type] <= FIELD_SAMPLE_LIMIT) {
+          if (!allFieldCounts[type]) allFieldCounts[type] = {};
+          const fc = allFieldCounts[type];
+          for (const { field } of extractFieldsDeep(resource)) {
+            if (field !== "resourceType") fc[field] = (fc[field] ?? 0) + 1;
+          }
+        }
+      } catch {
+        // skip malformed lines
+      }
+    }
+  }
+
+  // Flush remaining buffer
+  if (buffer.trim()) {
     try {
-      const resource = JSON.parse(trimmed) as Record<string, unknown>;
+      const resource = JSON.parse(buffer.trim()) as Record<string, unknown>;
       const type = (resource.resourceType as string) ?? "Unknown";
       counts[type] = (counts[type] ?? 0) + 1;
-
-      // Keep original (with manifest tags) for PII detection
-      if (piiSample.length < PII_SAMPLE_LIMIT) piiSample.push(resource);
-
-      // Strip manifest and pre-serialize for download
-      const cleaned = stripManifestTag(resource);
-      allResources.push(cleaned);
-      rawLines.push(JSON.stringify(cleaned));
-
-      // Only extract fields for the first FIELD_SAMPLE_LIMIT resources per type
+      totalResources++;
+      piiSampleCount[type] = (piiSampleCount[type] ?? 0) + 1;
+      if (piiSampleCount[type] <= PII_SAMPLE_PER_TYPE) piiSample.push(resource);
       fieldSampleCount[type] = (fieldSampleCount[type] ?? 0) + 1;
       if (fieldSampleCount[type] <= FIELD_SAMPLE_LIMIT) {
         if (!allFieldCounts[type]) allFieldCounts[type] = {};
@@ -62,10 +94,11 @@ export async function parseNdjsonBlob(blob: Blob): Promise<{
         }
       }
     } catch {
-      // skip malformed lines
+      // skip malformed
     }
   }
-  return { counts, allFieldCounts, piiSample, allResources, rawNdjson: rawLines.join("\n") };
+
+  return { counts, allFieldCounts, piiSample, totalResources };
 }
 
 // ---------------------------------------------------------------------------

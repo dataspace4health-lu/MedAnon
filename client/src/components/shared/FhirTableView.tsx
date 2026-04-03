@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { ChevronRight } from "lucide-react";
 import {
   Table,
@@ -8,9 +8,12 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { extractFieldsDeep } from "@/lib/fhirFields";
 import type { PiiDetectionMap } from "@/lib/piiDetection";
+
+const PAGE_SIZE = 50;
 
 // ---------------------------------------------------------------------------
 // Action colour palette
@@ -108,6 +111,12 @@ export function FhirTableView({
   piiData,
 }: FhirTableViewProps) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+
+  // Reset pagination when resources change
+  useEffect(() => {
+    setVisibleCount(PAGE_SIZE);
+  }, [resources.length]);
 
   if (originalResources.length === 0 && resources.length === 0) {
     return (
@@ -129,9 +138,12 @@ export function FhirTableView({
     deided,
   }));
 
+  const visiblePairs = pairs.slice(0, visibleCount);
+  const remaining = pairs.length - visibleCount;
+
   return (
     <div className="flex flex-col gap-6">
-      {pairs.map(({ original, deided }, idx) => {
+      {visiblePairs.map(({ original, deided }, idx) => {
         const resourceType = String(
           deided.resourceType ?? original.resourceType ?? "Resource",
         );
@@ -334,6 +346,17 @@ export function FhirTableView({
           </div>
         );
       })}
+      {remaining > 0 && (
+        <div className="flex justify-center pt-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setVisibleCount((v) => v + PAGE_SIZE)}
+          >
+            Show more ({remaining} remaining)
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

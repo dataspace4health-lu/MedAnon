@@ -273,10 +273,14 @@ export type FieldSummaryMap = Record<string, FieldSummaryEntry[]>;
  * Build a full field summary map with PII actions overlaid.
  * Action lookup tries exact match first, then parent key fallback so that
  * a "name" entry covers deep paths like "name.family", "name.given".
+ *
+ * When `realCounts` is provided, sampled field counts are scaled
+ * proportionally so they reflect the true per-type resource totals.
  */
 export function buildFieldSummary(
   allFieldCounts: Record<string, Record<string, number>>,
   piiData: PiiDetectionMap,
+  realCounts?: Record<string, number>,
 ): FieldSummaryMap {
   const result: FieldSummaryMap = {};
   for (const [resType, fieldCounts] of Object.entries(allFieldCounts)) {
@@ -286,10 +290,19 @@ export function buildFieldSummary(
         if (!piiActions[e.fieldPath]) piiActions[e.fieldPath] = e.action;
       }
     }
+    // Determine the scale factor: real total / sampled total.
+    // The sampled total is the max field count (the field present in every
+    // sampled resource), which equals min(realCount, FIELD_SAMPLE_LIMIT).
+    const realTotal = realCounts?.[resType];
+    const sampledTotal = Math.max(...Object.values(fieldCounts), 1);
+    const scale = realTotal && realTotal > sampledTotal
+      ? realTotal / sampledTotal
+      : 1;
+
     result[resType] = Object.entries(fieldCounts)
       .map(([fieldPath, count]) => ({
         fieldPath,
-        count,
+        count: scale > 1 ? Math.round(count * scale) : count,
         action:
           piiActions[fieldPath] ?? piiActions[parentKey(fieldPath)],
       }))

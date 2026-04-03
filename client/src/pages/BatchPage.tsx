@@ -8,6 +8,7 @@ import { ResourceTypeSummary } from '@/components/shared/ResourceTypeSummary';
 import { DownloadButton } from '@/components/shared/DownloadButton';
 import { FhirCodeViewer } from '@/components/shared/FhirCodeViewer';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import {
   Card,
   CardContent,
@@ -57,6 +58,7 @@ export default function BatchPage() {
   const [previewOpen, setPreviewOpen] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadResult, setUploadResult] = useState<{ uploaded: number; errors: number } | null>(null);
+  const [targetUrl, setTargetUrl] = useState("");
 
   // Keep abort ref current so the unmount cleanup always calls the latest abort
   const abortRef = useRef(abort);
@@ -126,7 +128,8 @@ export default function BatchPage() {
     setUploadResult(null);
     try {
       const cleanLines = lines.map(stripManifestTag);
-      const result = await uploadToTarget(cleanLines);
+      const url = targetUrl.trim() || undefined;
+      const result = await uploadToTarget(cleanLines, url);
       setUploadResult({ uploaded: result.uploaded, errors: result.errors });
       toast.success(`Uploaded ${result.uploaded} resource${result.uploaded !== 1 ? 's' : ''} to target server`);
     } catch (err) {
@@ -137,7 +140,7 @@ export default function BatchPage() {
     } finally {
       setUploading(false);
     }
-  }, [uploading, lines]);
+  }, [uploading, lines, targetUrl]);
 
   // -- derived values -------------------------------------------------------
 
@@ -166,21 +169,21 @@ export default function BatchPage() {
 
   // Strip manifest tags before download so the output file stays clean
   const resultNdjson = useMemo(() => {
-    if (lines.length === 0) return '';
+    if (isStreaming || lines.length === 0) return '';
     return lines.map((line) => JSON.stringify(stripManifestTag(line))).join('\n');
-  }, [lines]);
+  }, [isStreaming, lines]);
 
   const piiData = useMemo(() => {
-    if (lines.length === 0) return undefined;
+    if (isStreaming || lines.length === 0) return undefined;
     // Use accurate diff when originals are available and counts align with no errors
     if (originalResources.length > 0 && originalResources.length === lines.length && errors.length === 0) {
       return buildPiiDetectionMap(originalResources, lines);
     }
     return buildPiiFromDeidentifiedOnly(lines);
-  }, [lines, originalResources, errors]);
+  }, [isStreaming, lines, originalResources, errors]);
 
   const fieldSummary = useMemo(() => {
-    if (lines.length === 0 || !piiData) return undefined;
+    if (isStreaming || lines.length === 0 || !piiData) return undefined;
     const allFieldCounts: Record<string, Record<string, number>> = {};
     for (const resource of lines) {
       const type = String(resource.resourceType ?? 'Unknown');
@@ -190,7 +193,7 @@ export default function BatchPage() {
       }
     }
     return buildFieldSummary(allFieldCounts, piiData);
-  }, [lines, piiData]);
+  }, [isStreaming, lines, piiData]);
 
   const downloadFilename = fileInfo
     ? sanitizeFilename(fileInfo.name)
@@ -398,6 +401,15 @@ export default function BatchPage() {
                             filename={downloadFilename}
                             mime="application/x-ndjson"
                             label="Download NDJSON result"
+                          />
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Input
+                            placeholder="Target FHIR server URL (optional — uses FHIR_TARGET_URL if empty)"
+                            value={targetUrl}
+                            onChange={(e) => setTargetUrl(e.target.value)}
+                            className="max-w-sm text-xs"
+                            disabled={uploading}
                           />
                           <Button
                             variant="outline"

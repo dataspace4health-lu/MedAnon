@@ -38,6 +38,27 @@ export function AsyncExportPanel({ configProfile }: { configProfile: string }) {
 
   useEffect(() => () => stopPolling(), [stopPolling]);
 
+  // Recover job from previous session on mount
+  useEffect(() => {
+    const savedJobId = sessionStorage.getItem("asyncExportJobId");
+    if (!savedJobId || job) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const recovered = await getJobStatus(savedJobId);
+        if (cancelled) return;
+        setJob(recovered);
+        if (recovered.status === "pending" || recovered.status === "running") {
+          startPolling(recovered.job_id);
+        }
+      } catch {
+        sessionStorage.removeItem("asyncExportJobId");
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const startPolling = useCallback(
     (jobId: string) => {
       stopPolling();
@@ -76,6 +97,7 @@ export function AsyncExportPanel({ configProfile }: { configProfile: string }) {
         config_profile: configProfile,
       });
       setJob(submitted);
+      sessionStorage.setItem("asyncExportJobId", submitted.job_id);
       toast.success('Job queued.', { description: `ID: ${submitted.job_id}` });
       startPolling(submitted.job_id);
     } catch (err) {

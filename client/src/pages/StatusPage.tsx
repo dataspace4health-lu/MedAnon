@@ -1,43 +1,65 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { PageHeader } from '@/components/layout/PageHeader';
-import { health, ready } from '@/api/medanon';
-import { capabilityStatement, patientCount } from '@/api/fhir';
+import { health, ready, listJobs } from '@/api/medanon';
+import { capabilityStatement, fetchResourceTypeCounts } from '@/api/fhir';
 import type { HealthResponse, ReadyResponse } from '@/api/types';
-import {
-  Card,
-  CardHeader,
-  CardTitle,
-  CardDescription,
-  CardContent,
-} from '@/components/ui/card';
+import type { ResourceTypeCount } from '@/api/fhir';
+import type { JobResponse } from '@/api/medanon';
+import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Checkbox } from '@/components/ui/checkbox';
-import {
-  Table,
-  TableHeader,
-  TableBody,
-  TableHead,
-  TableRow,
-  TableCell,
-} from '@/components/ui/table';
 import {
   Collapsible,
   CollapsibleTrigger,
   CollapsibleContent,
 } from '@/components/ui/collapsible';
-import { HealthBadge } from '@/components/shared/HealthBadge';
-import { MetricCard } from '@/components/shared/MetricCard';
 import { FhirCodeViewer } from '@/components/shared/FhirCodeViewer';
-import { RefreshCw, ChevronDown } from 'lucide-react';
+import {
+  RefreshCw,
+  ChevronDown,
+  Activity,
+  Server,
+  Database,
+  Brain,
+  BarChart3,
+  CircleCheck,
+  CircleX,
+  Clock,
+  Loader2,
+  ShieldCheck,
+  Cpu,
+  AlertTriangle,
+  CheckCircle2,
+} from 'lucide-react';
+import { cn } from '@/lib/utils';
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
-const AUTO_REFRESH_INTERVAL_MS = 30_000;
+const AUTO_REFRESH_SEC = 30;
+
+const RESOURCE_TYPE_COLORS: Record<string, string> = {
+  Patient:              'bg-blue-500',
+  Observation:          'bg-emerald-500',
+  Condition:            'bg-amber-500',
+  MedicationRequest:    'bg-purple-500',
+  Encounter:            'bg-orange-500',
+  Procedure:            'bg-pink-500',
+  DiagnosticReport:     'bg-teal-500',
+  AllergyIntolerance:   'bg-red-400',
+  Immunization:         'bg-lime-500',
+  Claim:                'bg-indigo-400',
+  ExplanationOfBenefit: 'bg-cyan-500',
+  CarePlan:             'bg-violet-400',
+};
+const FALLBACK_COLORS = ['bg-slate-400', 'bg-sky-400', 'bg-rose-400', 'bg-fuchsia-400'];
+
+function barColor(type: string, idx: number) {
+  return RESOURCE_TYPE_COLORS[type] ?? FALLBACK_COLORS[idx % FALLBACK_COLORS.length];
+}
 
 // ---------------------------------------------------------------------------
-// Types for fetched data
+// Types
 // ---------------------------------------------------------------------------
 
 interface CapabilityData {
@@ -47,48 +69,193 @@ interface CapabilityData {
   raw: Record<string, unknown>;
 }
 
-interface ServiceState {
+interface ServiceDef {
+  key: string;
+  name: string;
+  description: string;
+  icon: React.ReactNode;
+  ok: boolean;
   loading: boolean;
-  medanon: { ok: boolean; data: HealthResponse | null; error: string | null };
-  fhir: { ok: boolean; data: CapabilityData | null; error: string | null };
-  gpas: { ok: boolean; status: string | null; error: string | null };
-  ready: { ok: boolean; data: ReadyResponse | null; error: string | null };
-  patientCount: { count: number | null; error: string | null };
+  detail: string | null;
+  version?: string;
+  error?: string | null;
 }
 
-const initialState: ServiceState = {
+interface PageState {
+  loading: boolean;
+  medanon:        { ok: boolean; data: HealthResponse | null; error: string | null };
+  fhir:           { ok: boolean; data: CapabilityData | null; error: string | null };
+  ready:          { ok: boolean; data: ReadyResponse  | null; error: string | null };
+  resourceCounts: { data: ResourceTypeCount[] | null; error: string | null };
+  jobs:           { data: JobResponse[] | null;       error: string | null };
+}
+
+const initialState: PageState = {
   loading: true,
-  medanon: { ok: false, data: null, error: null },
-  fhir: { ok: false, data: null, error: null },
-  gpas: { ok: false, status: null, error: null },
-  ready: { ok: false, data: null, error: null },
-  patientCount: { count: null, error: null },
+  medanon:        { ok: false, data: null, error: null },
+  fhir:           { ok: false, data: null, error: null },
+  ready:          { ok: false, data: null, error: null },
+  resourceCounts: { data: null, error: null },
+  jobs:           { data: null, error: null },
 };
 
 // ---------------------------------------------------------------------------
-// Helper: extract CapabilityData from raw response
+// Helpers
 // ---------------------------------------------------------------------------
 
 function parseCapability(raw: Record<string, unknown>): CapabilityData {
-  const software = raw.software as Record<string, unknown> | undefined;
+  const sw = raw.software as Record<string, unknown> | undefined;
   return {
-    fhirVersion: String(raw.fhirVersion ?? 'unknown'),
-    softwareName: String(software?.name ?? 'unknown'),
-    softwareVersion: String(software?.version ?? 'unknown'),
+    fhirVersion:     String(raw.fhirVersion ?? 'unknown'),
+    softwareName:    String(sw?.name    ?? 'unknown'),
+    softwareVersion: String(sw?.version ?? 'unknown'),
     raw,
   };
 }
 
+function formatRelative(date: Date): string {
+  const sec = Math.floor((Date.now() - date.getTime()) / 1000);
+  if (sec < 5)  return 'just now';
+  if (sec < 60) return `${sec}s ago`;
+  const min = Math.floor(sec / 60);
+  return min === 1 ? '1 min ago' : `${min} mins ago`;
+}
+
+function fmtNum(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000)     return `${(n / 1_000).toFixed(1)}K`;
+  return String(n);
+}
+
 // ---------------------------------------------------------------------------
-// Helper: format a Date as a short time string
+// Sub-components
 // ---------------------------------------------------------------------------
 
-function formatTime(date: Date): string {
-  return date.toLocaleTimeString(undefined, {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  });
+function StatusPulse({ ok, loading }: { ok: boolean; loading: boolean }) {
+  if (loading) return (
+    <span className="size-2.5 flex items-center justify-center">
+      <span className="size-2 animate-pulse rounded-full bg-muted-foreground/40" />
+    </span>
+  );
+  return (
+    <span className="relative inline-flex size-2.5">
+      {ok && (
+        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />
+      )}
+      <span className={cn(
+        'relative inline-flex size-2.5 rounded-full',
+        ok ? 'bg-emerald-500' : 'bg-red-500',
+      )} />
+    </span>
+  );
+}
+
+function ServiceCard({ svc }: { svc: ServiceDef }) {
+  return (
+    <Card className={cn(
+      'relative overflow-hidden transition-colors',
+      !svc.loading && (svc.ok ? 'border-emerald-200/70' : 'border-red-200/70'),
+    )}>
+      <div className={cn(
+        'h-0.5 w-full',
+        svc.loading ? 'bg-muted/40' : svc.ok ? 'bg-emerald-400' : 'bg-red-400',
+      )} />
+      <CardContent className="flex flex-col gap-2.5 pb-3 pt-4">
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex items-center gap-2.5">
+            <span className={cn(
+              'flex size-8 shrink-0 items-center justify-center rounded-lg',
+              svc.loading ? 'bg-muted text-muted-foreground'
+                : svc.ok   ? 'bg-emerald-50 text-emerald-600'
+                           : 'bg-red-50 text-red-500',
+            )}>
+              {svc.icon}
+            </span>
+            <div>
+              <p className="text-sm font-semibold leading-none">{svc.name}</p>
+              <p className="mt-0.5 text-[11px] text-muted-foreground">{svc.description}</p>
+            </div>
+          </div>
+          <div className="mt-0.5 flex shrink-0 items-center gap-1.5">
+            <StatusPulse ok={svc.ok} loading={svc.loading} />
+            <span className={cn(
+              'text-xs font-medium',
+              svc.loading ? 'text-muted-foreground'
+                : svc.ok  ? 'text-emerald-600'
+                          : 'text-red-500',
+            )}>
+              {svc.loading ? 'Checking' : svc.ok ? 'Online' : 'Offline'}
+            </span>
+          </div>
+        </div>
+
+        {svc.version && (
+          <p className="font-mono text-[11px] text-muted-foreground">{svc.version}</p>
+        )}
+        {svc.detail && !svc.error && (
+          <p className="text-[11px] text-muted-foreground">{svc.detail}</p>
+        )}
+        {svc.error && (
+          <p className="truncate text-[11px] text-destructive" title={svc.error}>{svc.error}</p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function StatBox({
+  label, value, accent,
+}: { label: string; value: number; accent: string }) {
+  return (
+    <div className="relative overflow-hidden rounded-xl border bg-card px-4 py-3 shadow-sm">
+      <div className={cn('absolute left-0 top-0 h-full w-1', accent)} />
+      <p className="pl-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+        {label}
+      </p>
+      <p className="pl-1 mt-0.5 text-2xl font-bold tabular-nums leading-tight">
+        {value}
+      </p>
+    </div>
+  );
+}
+
+function JobRow({ job }: { job: JobResponse }) {
+  const isActive = job.status === 'pending' || job.status === 'running';
+  const statusStyles: Record<string, string> = {
+    pending:   'bg-amber-100 text-amber-800',
+    running:   'bg-blue-100 text-blue-800',
+    done:      'bg-emerald-100 text-emerald-800',
+    error:     'bg-red-100 text-red-800',
+    cancelled: 'bg-slate-100 text-slate-600',
+  };
+  return (
+    <div className="flex items-center gap-3 px-4 py-2.5">
+      {isActive ? (
+        <Loader2 className="size-3.5 shrink-0 animate-spin text-blue-500" />
+      ) : job.status === 'done' ? (
+        <CircleCheck className="size-3.5 shrink-0 text-emerald-500" />
+      ) : job.status === 'error' ? (
+        <CircleX className="size-3.5 shrink-0 text-red-500" />
+      ) : (
+        <span className="size-3.5 shrink-0 rounded-full border border-muted-foreground/30" />
+      )}
+      <span className="font-mono text-[11px] text-muted-foreground">
+        {job.job_id.slice(0, 8)}…
+      </span>
+      <span className="flex-1 truncate text-xs capitalize text-foreground">
+        {job.type.replace(/-/g, ' ')}
+      </span>
+      <span className="tabular-nums text-xs text-muted-foreground">
+        {job.processed.toLocaleString()} res
+      </span>
+      <span className={cn(
+        'inline-block rounded px-1.5 py-0.5 text-[10px] font-medium uppercase',
+        statusStyles[job.status] ?? 'bg-muted text-muted-foreground',
+      )}>
+        {job.status}
+      </span>
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -96,103 +263,52 @@ function formatTime(date: Date): string {
 // ---------------------------------------------------------------------------
 
 export default function StatusPage() {
-  const [state, setState] = useState<ServiceState>(initialState);
-  const [autoRefresh, setAutoRefresh] = useState(false);
+  const [state, setState] = useState<PageState>(initialState);
   const [lastChecked, setLastChecked] = useState<Date | null>(null);
+  const [relTime, setRelTime] = useState('');
   const [refreshing, setRefreshing] = useState(false);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [autoRefresh, setAutoRefresh] = useState(false);
+  const [countdown, setCountdown] = useState(AUTO_REFRESH_SEC);
+  const autoIntervalRef  = useRef<ReturnType<typeof setInterval> | null>(null);
+  const countdownRef     = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // -----------------------------------------------------------------------
-  // Refresh logic: fetch all endpoints in parallel
-  // -----------------------------------------------------------------------
+  // ── Refresh ───────────────────────────────────────────────────────────────
 
   const refresh = useCallback(async () => {
     setRefreshing(true);
+    setCountdown(AUTO_REFRESH_SEC);
 
-    const [healthResult, readyResult, capResult, countResult] =
+    const [healthRes, readyRes, capRes, countsRes, jobsRes] =
       await Promise.allSettled([
         health(),
         ready(),
         capabilityStatement(),
-        patientCount(),
+        fetchResourceTypeCounts(),
+        listJobs({ limit: 100 }),
       ]);
 
     setState((prev) => {
-      const next: ServiceState = { ...prev, loading: false };
+      const next: PageState = { ...prev, loading: false };
 
-      // MedAnon health
-      if (healthResult.status === 'fulfilled') {
-        const h = healthResult.value;
-        next.medanon = {
-          ok: h.status === 'ok' || h.status === 'healthy',
-          data: h,
-          error: null,
-        };
-      } else {
-        next.medanon = {
-          ok: false,
-          data: null,
-          error: String(healthResult.reason),
-        };
-      }
+      next.medanon = healthRes.status === 'fulfilled'
+        ? { ok: ['ok', 'healthy'].includes(healthRes.value.status), data: healthRes.value, error: null }
+        : { ok: false, data: null, error: String(healthRes.reason) };
 
-      // MedAnon readiness
-      if (readyResult.status === 'fulfilled') {
-        const r = readyResult.value;
-        next.ready = { ok: r.ready, data: r, error: null };
+      next.ready = readyRes.status === 'fulfilled'
+        ? { ok: readyRes.value.ready, data: readyRes.value, error: null }
+        : { ok: false, data: null, error: String(readyRes.reason) };
 
-        // Extract gPAS status from readiness checks
-        const gpasCheck = r.checks?.gpas ?? r.checks?.gPAS ?? null;
-        if (gpasCheck !== null && gpasCheck !== undefined) {
-          const gpasOk =
-            gpasCheck === 'ok' ||
-            gpasCheck === 'healthy' ||
-            gpasCheck === 'available';
-          next.gpas = { ok: gpasOk, status: String(gpasCheck), error: null };
-        } else {
-          next.gpas = {
-            ok: false,
-            status: 'not configured',
-            error: null,
-          };
-        }
-      } else {
-        next.ready = {
-          ok: false,
-          data: null,
-          error: String(readyResult.reason),
-        };
-        next.gpas = {
-          ok: false,
-          status: null,
-          error: String(readyResult.reason),
-        };
-      }
+      next.fhir = capRes.status === 'fulfilled'
+        ? { ok: true, data: parseCapability(capRes.value), error: null }
+        : { ok: false, data: null, error: String(capRes.reason) };
 
-      // HAPI FHIR capability
-      if (capResult.status === 'fulfilled') {
-        next.fhir = {
-          ok: true,
-          data: parseCapability(capResult.value),
-          error: null,
-        };
-      } else {
-        next.fhir = {
-          ok: false,
-          data: null,
-          error: String(capResult.reason),
-        };
-      }
+      next.resourceCounts = countsRes.status === 'fulfilled'
+        ? { data: countsRes.value, error: null }
+        : { data: null, error: String(countsRes.reason) };
 
-      // Patient count
-      if (countResult.status === 'fulfilled') {
-        next.patientCount = { count: countResult.value, error: null };
-      } else {
-        next.patientCount = {
-          count: null,
-          error: String(countResult.reason),
-        };
-      }
+      next.jobs = jobsRes.status === 'fulfilled'
+        ? { data: jobsRes.value, error: null }
+        : { data: null, error: String(jobsRes.reason) };
 
       return next;
     });
@@ -201,312 +317,377 @@ export default function StatusPage() {
     setRefreshing(false);
   }, []);
 
-  // -----------------------------------------------------------------------
-  // Initial fetch + auto-refresh interval
-  // -----------------------------------------------------------------------
+  useEffect(() => { refresh(); }, [refresh]);
 
+  // ── Relative time ticker ──────────────────────────────────────────────────
   useEffect(() => {
-    refresh();
-  }, [refresh]);
+    if (lastChecked) setRelTime(formatRelative(lastChecked));
+    const t = setInterval(() => {
+      if (lastChecked) setRelTime(formatRelative(lastChecked));
+    }, 5000);
+    return () => clearInterval(t);
+  }, [lastChecked]);
 
+  // ── Auto-refresh ──────────────────────────────────────────────────────────
   useEffect(() => {
-    if (intervalRef.current) {
-      clearInterval(intervalRef.current);
-      intervalRef.current = null;
-    }
+    if (autoIntervalRef.current) clearInterval(autoIntervalRef.current);
+    if (countdownRef.current)    clearInterval(countdownRef.current);
 
     if (autoRefresh) {
-      intervalRef.current = setInterval(() => {
+      setCountdown(AUTO_REFRESH_SEC);
+      autoIntervalRef.current = setInterval(() => {
         refresh();
-      }, AUTO_REFRESH_INTERVAL_MS);
+        setCountdown(AUTO_REFRESH_SEC);
+      }, AUTO_REFRESH_SEC * 1000);
+      countdownRef.current = setInterval(
+        () => setCountdown((c) => Math.max(0, c - 1)),
+        1000,
+      );
     }
 
     return () => {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-      }
+      if (autoIntervalRef.current) clearInterval(autoIntervalRef.current);
+      if (countdownRef.current)    clearInterval(countdownRef.current);
     };
   }, [autoRefresh, refresh]);
 
-  // -----------------------------------------------------------------------
-  // Dependency checks from the ready response
-  // -----------------------------------------------------------------------
+  // ── Derived values ────────────────────────────────────────────────────────
 
   const checks = state.ready.data?.checks ?? {};
-  const checkEntries = Object.entries(checks);
 
-  // -----------------------------------------------------------------------
-  // Memoized JSON strings for code viewers — avoids recomputing on every
-  // render and prevents wrapLongLines from re-running the expensive highlight
-  // pass each time an unrelated state field changes.
-  // -----------------------------------------------------------------------
+  const services: ServiceDef[] = useMemo(() => {
+    const CHECK_META: Record<string, { name: string; description: string; icon: React.ReactNode }> = {
+      gpas:      { name: 'gPAS',      description: 'Pseudonymization service', icon: <Cpu       className="size-4" /> },
+      gPAS:      { name: 'gPAS',      description: 'Pseudonymization service', icon: <Cpu       className="size-4" /> },
+      redis:     { name: 'Redis',     description: 'Shared cache & job queue',  icon: <Server    className="size-4" /> },
+      nlp:       { name: 'NLP',       description: 'Presidio NLP microservice', icon: <Brain     className="size-4" /> },
+      analytics: { name: 'Analytics', description: 'Risk & synthetic data',     icon: <BarChart3 className="size-4" /> },
+    };
+
+    const defs: ServiceDef[] = [
+      {
+        key: 'medanon',
+        name: 'MedAnon',
+        description: 'De-identification engine',
+        icon: <ShieldCheck className="size-4" />,
+        ok: state.medanon.ok,
+        loading: state.loading,
+        detail: state.medanon.data?.status ?? null,
+        version: state.medanon.data?.version ? `v${state.medanon.data.version}` : undefined,
+        error: state.medanon.error,
+      },
+      {
+        key: 'fhir',
+        name: 'HAPI FHIR',
+        description: 'FHIR R4 source server',
+        icon: <Database className="size-4" />,
+        ok: state.fhir.ok,
+        loading: state.loading,
+        detail: state.fhir.data
+          ? `${state.fhir.data.softwareName} ${state.fhir.data.softwareVersion}`
+          : null,
+        version: state.fhir.data ? `FHIR ${state.fhir.data.fhirVersion}` : undefined,
+        error: state.fhir.error,
+      },
+    ];
+
+    const seen = new Set<string>();
+    for (const [k, status] of Object.entries(checks)) {
+      const meta = CHECK_META[k];
+      if (!meta || seen.has(meta.name)) continue;
+      seen.add(meta.name);
+      const isOk  = ['ok', 'healthy', 'available'].includes(status);
+      const isOff = ['not configured', 'disabled'].includes(status);
+      defs.push({
+        key: k,
+        name: meta.name,
+        description: meta.description,
+        icon: meta.icon,
+        ok:      isOk,
+        loading: state.loading,
+        detail:  isOff ? 'Not configured' : isOk ? null : status,
+        error:   !isOk && !isOff ? `Status: ${status}` : null,
+      });
+    }
+
+    return defs;
+  }, [state.loading, state.medanon, state.fhir, checks]);
+
+  const servicesOnline = services.filter((s) => !s.loading && s.ok).length;
+  const servicesTotal  = services.filter((s) => !s.loading).length;
+  const allOk   = servicesTotal > 0 && servicesOnline === servicesTotal;
+  const someDown = servicesTotal > 0 && servicesOnline < servicesTotal;
+
+  const totalResources = state.resourceCounts.data?.reduce((s, r) => s + r.count, 0) ?? 0;
+  const topResources   = state.resourceCounts.data?.slice(0, 14) ?? [];
+
+  const jobData = state.jobs.data ?? [];
+  const jobStats = useMemo(() => ({
+    total:     jobData.length,
+    pending:   jobData.filter((j) => j.status === 'pending').length,
+    running:   jobData.filter((j) => j.status === 'running').length,
+    done:      jobData.filter((j) => j.status === 'done').length,
+    error:     jobData.filter((j) => j.status === 'error').length,
+    cancelled: jobData.filter((j) => j.status === 'cancelled').length,
+  }), [jobData]);
+
+  const activeJobs  = useMemo(() => jobData.filter((j) => j.status === 'pending' || j.status === 'running').slice(0, 8),  [jobData]);
+  const recentJobs  = useMemo(() => jobData.filter((j) => j.status === 'done'    || j.status === 'error').slice(0, 5),  [jobData]);
 
   const MAX_CAP_CHARS = 30_000;
-
-  const healthJson = useMemo(
-    () => (state.medanon.data ? JSON.stringify(state.medanon.data, null, 2) : ''),
-    [state.medanon.data],
-  );
-
-  const readyJson = useMemo(
-    () => (state.ready.data ? JSON.stringify(state.ready.data, null, 2) : ''),
-    [state.ready.data],
-  );
-
+  const healthJson     = useMemo(() => state.medanon.data ? JSON.stringify(state.medanon.data, null, 2) : '', [state.medanon.data]);
+  const readyJson      = useMemo(() => state.ready.data   ? JSON.stringify(state.ready.data,   null, 2) : '', [state.ready.data]);
   const capabilityJson = useMemo(() => {
     if (!state.fhir.data) return '';
     const full = JSON.stringify(state.fhir.data.raw, null, 2);
-    if (full.length <= MAX_CAP_CHARS) return full;
-    return (
-      full.slice(0, MAX_CAP_CHARS) +
-      '\n\n// ... document truncated (too large to display in full)'
-    );
+    return full.length <= MAX_CAP_CHARS ? full : full.slice(0, MAX_CAP_CHARS) + '\n\n// … truncated';
   }, [state.fhir.data]);
 
-  // -----------------------------------------------------------------------
-  // Render
-  // -----------------------------------------------------------------------
+  // ── Render ────────────────────────────────────────────────────────────────
 
   return (
-    <div>
+    <div className="flex flex-col gap-8">
       <PageHeader
         title="Status Dashboard"
         description="Live health, readiness, and dependency status of all services"
       />
 
-      {/* Auto-refresh controls */}
-      <div className="mb-6 flex flex-wrap items-center gap-4">
-        <label className="flex items-center gap-2 text-sm">
-          <Checkbox
-            checked={autoRefresh}
-            onCheckedChange={(checked) => setAutoRefresh(Boolean(checked))}
-          />
-          Auto-refresh (30s)
-        </label>
-
-        {lastChecked && (
-          <span className="text-sm text-muted-foreground">
-            Last checked: {formatTime(lastChecked)}
-          </span>
-        )}
-
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => refresh()}
-          disabled={refreshing}
-        >
-          <RefreshCw
-            className={`size-3.5 ${refreshing ? 'animate-spin' : ''}`}
-          />
-          Refresh now
-        </Button>
-      </div>
-
-      {/* Service health cards */}
-      <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {/* MedAnon */}
-        <Card>
-          <CardHeader>
-            <CardTitle>MedAnon</CardTitle>
-            <CardDescription>De-identification engine</CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-3">
-            <HealthBadge
-              ok={state.medanon.ok}
-              version={state.medanon.data?.version}
-              loading={state.loading}
-            />
-            {state.medanon.error && (
-              <p className="text-xs text-destructive">{state.medanon.error}</p>
-            )}
-            {state.medanon.data && (
-              <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm">
-                <dt className="text-muted-foreground">Status</dt>
-                <dd>{state.medanon.data.status}</dd>
-                {state.medanon.data.version && (
-                  <>
-                    <dt className="text-muted-foreground">Version</dt>
-                    <dd>{state.medanon.data.version}</dd>
-                  </>
-                )}
-              </dl>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* HAPI FHIR */}
-        <Card>
-          <CardHeader>
-            <CardTitle>HAPI FHIR</CardTitle>
-            <CardDescription>FHIR R4 server</CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-3">
-            <HealthBadge ok={state.fhir.ok} loading={state.loading} />
-            {state.fhir.error && (
-              <p className="text-xs text-destructive">{state.fhir.error}</p>
-            )}
-            {state.fhir.data && (
-              <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm">
-                <dt className="text-muted-foreground">FHIR Version</dt>
-                <dd>{state.fhir.data.fhirVersion}</dd>
-                <dt className="text-muted-foreground">Software</dt>
-                <dd>{state.fhir.data.softwareName}</dd>
-                <dt className="text-muted-foreground">Software Version</dt>
-                <dd>{state.fhir.data.softwareVersion}</dd>
-              </dl>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* gPAS */}
-        <Card>
-          <CardHeader>
-            <CardTitle>gPAS</CardTitle>
-            <CardDescription>Pseudonymization service</CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-3">
-            <HealthBadge ok={state.gpas.ok} loading={state.loading} />
-            {state.gpas.error && (
-              <p className="text-xs text-destructive">{state.gpas.error}</p>
-            )}
-            {state.gpas.status !== null && (
-              <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm">
-                <dt className="text-muted-foreground">Status</dt>
-                <dd>{state.gpas.status}</dd>
-              </dl>
-            )}
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* HAPI FHIR statistics */}
-      <div className="mb-6">
-        <h2 className="mb-3 text-lg font-semibold">HAPI FHIR Statistics</h2>
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          <MetricCard
-            label="Patient Count"
-            value={
-              state.patientCount.count !== null
-                ? state.patientCount.count
-                : state.patientCount.error
-                  ? 'N/A'
-                  : '...'
-            }
-            variant={
-              state.patientCount.error
-                ? 'destructive'
-                : state.patientCount.count !== null
-                  ? 'default'
-                  : 'default'
-            }
-          />
+      {/* ── Toolbar ── */}
+      <div className="flex flex-wrap items-center gap-3">
+        {/* Overall health pill */}
+        <div className={cn(
+          'flex items-center gap-2 rounded-full border px-3 py-1 text-sm font-medium',
+          state.loading
+            ? 'border-muted bg-muted/30 text-muted-foreground'
+            : allOk
+              ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+              : someDown
+                ? 'border-amber-200  bg-amber-50  text-amber-700'
+                : 'border-muted bg-muted/30 text-muted-foreground',
+        )}>
+          {state.loading ? (
+            <Loader2       className="size-3.5 animate-spin" />
+          ) : allOk ? (
+            <CheckCircle2  className="size-3.5" />
+          ) : (
+            <AlertTriangle className="size-3.5" />
+          )}
+          {state.loading
+            ? 'Checking services…'
+            : allOk
+              ? `All ${servicesTotal} services operational`
+              : `${servicesOnline} / ${servicesTotal} services online`}
         </div>
-        {state.patientCount.error && (
-          <p className="mt-2 text-xs text-destructive">
-            {state.patientCount.error}
-          </p>
-        )}
+
+        <div className="ml-auto flex items-center gap-3">
+          {lastChecked && (
+            <span className="flex items-center gap-1 text-xs text-muted-foreground">
+              <Clock className="size-3" />
+              {relTime}
+            </span>
+          )}
+
+          {/* Auto-refresh toggle */}
+          <button
+            onClick={() => setAutoRefresh((v) => !v)}
+            className={cn(
+              'flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors',
+              autoRefresh
+                ? 'border-primary/30 bg-primary/10 text-primary'
+                : 'border-border text-muted-foreground hover:bg-muted/50',
+            )}
+          >
+            <Activity className="size-3" />
+            {autoRefresh ? `Auto (${countdown}s)` : 'Auto-refresh'}
+          </button>
+
+          <Button variant="outline" size="sm" onClick={refresh} disabled={refreshing}>
+            <RefreshCw className={cn('size-3.5', refreshing && 'animate-spin')} />
+            Refresh
+          </Button>
+        </div>
       </div>
 
-      {/* Dependency checks table */}
-      {checkEntries.length > 0 && (
-        <div className="mb-6">
-          <h2 className="mb-3 text-lg font-semibold">Dependency Checks</h2>
-          <Card>
-            <CardContent>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Check</TableHead>
-                    <TableHead>Status</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {checkEntries.map(([name, status]) => {
-                    const isOk =
-                      status === 'ok' ||
-                      status === 'healthy' ||
-                      status === 'available';
-                    return (
-                      <TableRow key={name}>
-                        <TableCell className="font-medium">{name}</TableCell>
-                        <TableCell>
-                          <span
-                            className={
-                              isOk
-                                ? 'text-emerald-600 dark:text-emerald-400'
-                                : 'text-destructive'
-                            }
-                          >
-                            {status}
-                          </span>
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
+      {/* ── Service Cards ── */}
+      <section>
+        <h2 className="mb-3 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
+          Services
+        </h2>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+          {services.map((svc) => <ServiceCard key={svc.key} svc={svc} />)}
         </div>
+      </section>
+
+      {/* ── FHIR Resource Inventory ── */}
+      <section>
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
+            FHIR Source — Resource Inventory
+          </h2>
+          {totalResources > 0 && (
+            <span className="text-sm font-semibold tabular-nums">
+              {totalResources.toLocaleString()} total resources
+            </span>
+          )}
+        </div>
+
+        {state.resourceCounts.error ? (
+          <p className="text-xs text-destructive">{state.resourceCounts.error}</p>
+        ) : state.loading ? (
+          <div className="flex gap-3">
+            {[1, 2, 3, 4].map((i) => (
+              <div key={i} className="h-10 flex-1 animate-pulse rounded-xl border bg-muted/30" />
+            ))}
+          </div>
+        ) : topResources.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No resources found in FHIR server.</p>
+        ) : (
+          <div className="rounded-xl border overflow-hidden">
+            <div className="divide-y">
+              {topResources.map((rc, idx) => {
+                const pct = totalResources > 0 ? (rc.count / totalResources) * 100 : 0;
+                const color = barColor(rc.type, idx);
+                return (
+                  <div key={rc.type} className="flex items-center gap-3 px-4 py-2.5 hover:bg-muted/20 transition-colors">
+                    <span className={cn('size-2 shrink-0 rounded-full', color)} />
+                    <span className="w-44 shrink-0 text-sm font-medium truncate">{rc.type}</span>
+                    <div className="flex-1">
+                      <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                        <div
+                          className={cn('h-full rounded-full transition-all duration-500', color)}
+                          style={{ width: `${Math.max(pct, 0.4)}%` }}
+                        />
+                      </div>
+                    </div>
+                    <span className="w-14 text-right text-xs text-muted-foreground tabular-nums">
+                      {pct.toFixed(1)}%
+                    </span>
+                    <span className="w-20 text-right text-sm font-semibold tabular-nums">
+                      {rc.count.toLocaleString()}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+            {totalResources > 0 && (
+              <div className="flex items-center justify-between border-t bg-muted/20 px-4 py-2">
+                <span className="text-xs text-muted-foreground">
+                  {topResources.length} resource type{topResources.length !== 1 ? 's' : ''} shown
+                </span>
+                <span className="text-xs font-semibold tabular-nums">
+                  Total: {totalResources.toLocaleString()} ({fmtNum(totalResources)})
+                </span>
+              </div>
+            )}
+          </div>
+        )}
+      </section>
+
+      {/* ── Job Queue ── */}
+      <section>
+        <h2 className="mb-3 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
+          Job Queue
+        </h2>
+
+        {state.jobs.error ? (
+          <p className="text-xs text-destructive">{state.jobs.error}</p>
+        ) : (
+          <>
+            <div className="mb-4 grid grid-cols-3 gap-3 sm:grid-cols-6">
+              <StatBox label="Total"     value={jobStats.total}     accent="bg-primary/60" />
+              <StatBox label="Pending"   value={jobStats.pending}   accent={jobStats.pending > 0   ? 'bg-amber-400'   : 'bg-muted/40'} />
+              <StatBox label="Running"   value={jobStats.running}   accent={jobStats.running > 0   ? 'bg-blue-500'    : 'bg-muted/40'} />
+              <StatBox label="Done"      value={jobStats.done}      accent={jobStats.done > 0      ? 'bg-emerald-500' : 'bg-muted/40'} />
+              <StatBox label="Error"     value={jobStats.error}     accent={jobStats.error > 0     ? 'bg-red-500'     : 'bg-muted/40'} />
+              <StatBox label="Cancelled" value={jobStats.cancelled} accent="bg-muted/40" />
+            </div>
+
+            {activeJobs.length > 0 && (
+              <div className="mb-3 rounded-xl border overflow-hidden">
+                <div className="border-b bg-blue-50/60 px-4 py-2 text-[11px] font-semibold uppercase tracking-wide text-blue-700">
+                  Active — {activeJobs.length} job{activeJobs.length !== 1 ? 's' : ''}
+                </div>
+                <div className="divide-y">
+                  {activeJobs.map((j) => <JobRow key={j.job_id} job={j} />)}
+                </div>
+              </div>
+            )}
+
+            {recentJobs.length > 0 && (
+              <div className="rounded-xl border overflow-hidden">
+                <div className="border-b bg-muted/30 px-4 py-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  Recent — {recentJobs.length} job{recentJobs.length !== 1 ? 's' : ''}
+                </div>
+                <div className="divide-y">
+                  {recentJobs.map((j) => <JobRow key={j.job_id} job={j} />)}
+                </div>
+              </div>
+            )}
+
+            {jobStats.total === 0 && !state.loading && (
+              <p className="text-sm text-muted-foreground">No jobs in the queue.</p>
+            )}
+          </>
+        )}
+      </section>
+
+      {/* ── Dependency Check Pills ── */}
+      {Object.keys(checks).length > 0 && (
+        <section>
+          <h2 className="mb-3 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
+            Dependency Checks
+          </h2>
+          <div className="flex flex-wrap gap-2">
+            {Object.entries(checks).map(([name, status]) => {
+              const ok  = ['ok', 'healthy', 'available'].includes(status);
+              const off = ['not configured', 'disabled'].includes(status);
+              return (
+                <div key={name} className={cn(
+                  'flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium',
+                  ok  ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                  : off ? 'border-muted bg-muted/30 text-muted-foreground'
+                       : 'border-red-200 bg-red-50 text-red-700',
+                )}>
+                  <StatusPulse ok={ok} loading={false} />
+                  <span className="font-semibold">{name}</span>
+                  <span className="opacity-60">·</span>
+                  <span>{status}</span>
+                </div>
+              );
+            })}
+          </div>
+        </section>
       )}
 
-      {/* Raw response viewers */}
-      <div className="space-y-3">
-        <h2 className="text-lg font-semibold">Raw Responses</h2>
-
-        {/* MedAnon /health */}
-        <Collapsible>
-          <CollapsibleTrigger className="flex w-full items-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium hover:bg-muted/50 transition-colors">
-            <ChevronDown className="size-4 transition-transform [[data-panel-open]_&]:rotate-180" />
-            MedAnon Health Response
-          </CollapsibleTrigger>
-          <CollapsibleContent className="pt-2">
-            {healthJson ? (
-              <FhirCodeViewer code={healthJson} />
-            ) : (
-              <p className="px-4 text-sm text-muted-foreground">
-                {state.loading ? 'Loading...' : 'No data available'}
-              </p>
-            )}
-          </CollapsibleContent>
-        </Collapsible>
-
-        {/* MedAnon /ready */}
-        <Collapsible>
-          <CollapsibleTrigger className="flex w-full items-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium hover:bg-muted/50 transition-colors">
-            <ChevronDown className="size-4 transition-transform [[data-panel-open]_&]:rotate-180" />
-            MedAnon Readiness Response
-          </CollapsibleTrigger>
-          <CollapsibleContent className="pt-2">
-            {readyJson ? (
-              <FhirCodeViewer code={readyJson} />
-            ) : (
-              <p className="px-4 text-sm text-muted-foreground">
-                {state.loading ? 'Loading...' : 'No data available'}
-              </p>
-            )}
-          </CollapsibleContent>
-        </Collapsible>
-
-        {/* HAPI FHIR /metadata */}
-        <Collapsible>
-          <CollapsibleTrigger className="flex w-full items-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium hover:bg-muted/50 transition-colors">
-            <ChevronDown className="size-4 transition-transform [[data-panel-open]_&]:rotate-180" />
-            HAPI FHIR CapabilityStatement
-          </CollapsibleTrigger>
-          <CollapsibleContent className="pt-2">
-            {capabilityJson ? (
-              <FhirCodeViewer code={capabilityJson} />
-            ) : (
-              <p className="px-4 text-sm text-muted-foreground">
-                {state.loading ? 'Loading...' : 'No data available'}
-              </p>
-            )}
-          </CollapsibleContent>
-        </Collapsible>
-      </div>
+      {/* ── Raw Responses ── */}
+      <section>
+        <h2 className="mb-3 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
+          Raw Responses
+        </h2>
+        <div className="space-y-2">
+          {([
+            { label: 'MedAnon /health',    json: healthJson },
+            { label: 'MedAnon /ready',     json: readyJson },
+            { label: 'HAPI FHIR /metadata', json: capabilityJson },
+          ] as const).map(({ label, json }) => (
+            <Collapsible key={label}>
+              <CollapsibleTrigger className="flex w-full items-center gap-2 rounded-lg border px-4 py-2.5 text-sm font-medium transition-colors hover:bg-muted/50">
+                <ChevronDown className="size-4 shrink-0 transition-transform [[data-panel-open]_&]:rotate-180" />
+                {label}
+              </CollapsibleTrigger>
+              <CollapsibleContent className="pt-2">
+                {json ? (
+                  <FhirCodeViewer code={json} maxHeight="320px" />
+                ) : (
+                  <p className="px-4 py-3 text-sm text-muted-foreground">
+                    {state.loading ? 'Loading…' : 'No data available'}
+                  </p>
+                )}
+              </CollapsibleContent>
+            </Collapsible>
+          ))}
+        </div>
+      </section>
     </div>
   );
 }

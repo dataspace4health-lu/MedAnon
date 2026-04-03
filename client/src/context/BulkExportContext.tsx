@@ -7,7 +7,7 @@ import {
   useEffect,
 } from "react";
 import type { ReactNode } from "react";
-import { getJobStatus, getJobResult, cancelJob as cancelJobApi, reprocessJob as reprocessJobApi } from "@/api/medanon";
+import { getJobStatus, getJobResult, cancelJob as cancelJobApi, reprocessJob as reprocessJobApi, listJobs } from "@/api/medanon";
 import type { JobResponse } from "@/api/medanon";
 
 export type ExportJobStatus = "submitting" | "pending" | "running" | "done" | "error" | "cancelled";
@@ -62,6 +62,36 @@ export function useBulkExport() {
 }
 
 let nextId = 1;
+
+const TYPE_LABELS: Record<string, string> = {
+  "bulk-export": "Bulk Export",
+  "cohort": "Cohort Export",
+  "patient-export": "Patient Export",
+  "bulk-import": "Bulk Import",
+  "reprocess": "Re-process",
+};
+
+function jobResponseToExportJob(jr: JobResponse): ExportJob {
+  const label = `${TYPE_LABELS[jr.type] ?? jr.type} ${jr.job_id.slice(0, 8)}`;
+  const sourceMap: Record<string, ExportJob["source"]> = {
+    "cohort": "condition",
+    "patient-export": "patient",
+  };
+  return {
+    id: `recovered-${jr.job_id}`,
+    jobId: jr.job_id,
+    label,
+    filename: `job_${jr.job_id}.ndjson`,
+    status: jr.status as ExportJobStatus,
+    phase: jr.phase as ExportJobPhase,
+    error: jr.error,
+    processed: jr.processed,
+    stagedCount: jr.staged_count,
+    startedAt: new Date(jr.created_at).getTime(),
+    source: sourceMap[jr.type] ?? "all",
+    configProfile: "auto",
+  };
+}
 
 export function BulkExportProvider({ children }: { children: ReactNode }) {
   const [jobs, setJobs] = useState<ExportJob[]>([]);
@@ -148,6 +178,47 @@ export function BulkExportProvider({ children }: { children: ReactNode }) {
     },
     [stopPolling, updateJob],
   );
+
+  // Recover jobs from backend on mount
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const backendJobs = await listJobs({ limit: 50 });
+        if (cancelled) return;
+
+        // backendJobs arrives DESC (newest first). Reverse to ASC so recovered
+        // jobs match the normal append-based state order: the grid does
+        // [...jobs].reverse() for display, and auto-select uses
+        // jobs[jobs.length-1] — both expect oldest-first state.
+        const sortedAsc = [...backendJobs].reverse();
+
+        // Build candidates outside the updater to avoid StrictMode double-run.
+        const candidates: ExportJob[] = sortedAsc.map(jobResponseToExportJob);
+        const activeIds: { localId: string; serverId: string }[] = sortedAsc
+          .filter((jr) => jr.status === "pending" || jr.status === "running")
+          .map((jr) => ({ localId: `recovered-${jr.job_id}`, serverId: jr.job_id }));
+
+        // Merge into state, skipping jobs already tracked (dedup by jobId).
+        setJobs((prev) => {
+          const known = new Set(prev.map((j) => j.jobId));
+          const fresh = candidates.filter((c) => !known.has(c.jobId));
+          return fresh.length === 0 ? prev : [...prev, ...fresh];
+        });
+
+        // Resume polling for active recovered jobs (guarded against double-start).
+        for (const { localId, serverId } of activeIds) {
+          if (!pollRefs.current.has(localId)) {
+            startPolling(localId, serverId);
+          }
+        }
+      } catch (err) {
+        console.warn("Failed to recover jobs from backend:", err);
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const submitExport = useCallback(
     (

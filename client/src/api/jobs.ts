@@ -128,3 +128,28 @@ export async function reprocessJob(
   }
   return response.json() as Promise<JobResponse>;
 }
+
+/** GET /api/v1/jobs — list jobs with optional filters. */
+export async function listJobs(params?: {
+  status?: string;
+  type?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<JobResponse[]> {
+  const qs = new URLSearchParams();
+  if (params?.status) qs.set("status", params.status);
+  if (params?.type) qs.set("type", params.type);
+  if (params?.limit != null) qs.set("limit", String(params.limit));
+  if (params?.offset != null) qs.set("offset", String(params.offset));
+  const query = qs.toString();
+  const response = await fetch(`/api/v1/jobs${query ? `?${query}` : ""}`, {
+    headers: getAuthHeaders(),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(
+      `listJobs failed (${response.status}): ${body?.detail ?? response.statusText}`,
+    );
+  }
+  return response.json() as Promise<JobResponse[]>;
+}

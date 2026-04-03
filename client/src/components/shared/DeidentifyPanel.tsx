@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useMemo } from "react";
 import { Play, Square, AlertCircle, GitCompare, FileJson, TableProperties, Maximize2, Minimize2, Upload, CheckCircle2, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Collapsible,
   CollapsibleContent,
@@ -125,6 +126,7 @@ export function DeidentifyPanel({
       const counts: Record<string, number> = {};
       let errors = 0;
       let fatalError: string | null = null;
+      let lastFlush = 0;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -165,12 +167,17 @@ export function DeidentifyPanel({
 
         if (fatalError) break;
 
-        setState((prev) => ({
-          ...prev,
-          resources: [...collectedResources],
-          resourceCounts: { ...counts },
-          errorCount: errors,
-        }));
+        // Throttle UI updates to avoid excessive re-renders
+        const now = Date.now();
+        if (now - lastFlush >= 250) {
+          lastFlush = now;
+          setState((prev) => ({
+            ...prev,
+            resources: collectedResources.slice(),
+            resourceCounts: { ...counts },
+            errorCount: errors,
+          }));
+        }
       }
 
       // Flush any remaining buffer
@@ -260,32 +267,43 @@ export function DeidentifyPanel({
     }
   }, [patientId, configProfile, cleanResources]);
 
+  // Limit resources for diff/table views to prevent browser freeze
+  const DIFF_LIMIT = 200;
+  const resourceCount = cleanResources.length;
+  const isDiffLimited = resourceCount > DIFF_LIMIT;
+
   const jsonOutput = useMemo(() => {
-    return JSON.stringify(cleanResources, null, 2);
-  }, [cleanResources]);
+    if (activeTab !== "output" && activeTab !== "diff") return "";
+    const subset = isDiffLimited && activeTab === "diff" ? cleanResources.slice(0, DIFF_LIMIT) : cleanResources;
+    return JSON.stringify(subset, null, 2);
+  }, [cleanResources, activeTab, isDiffLimited]);
 
   const jsonOriginal = useMemo(() => {
-    return JSON.stringify(state.originalResources, null, 2);
-  }, [state.originalResources]);
+    if (activeTab !== "diff") return "";
+    const subset = isDiffLimited ? state.originalResources.slice(0, DIFF_LIMIT) : state.originalResources;
+    return JSON.stringify(subset, null, 2);
+  }, [state.originalResources, activeTab, isDiffLimited]);
 
   const hasResults = !state.isStreaming && state.resources.length > 0;
 
   const [uploading, setUploading] = useState(false);
   const [uploadResult, setUploadResult] = useState<{ uploaded: number; errors: number } | null>(null);
+  const [targetUrl, setTargetUrl] = useState("");
 
   const handleUploadToTarget = useCallback(async () => {
     if (uploading || cleanResources.length === 0) return;
     setUploading(true);
     setUploadResult(null);
     try {
-      const result = await uploadToTarget(cleanResources);
+      const url = targetUrl.trim() || undefined;
+      const result = await uploadToTarget(cleanResources, url);
       setUploadResult({ uploaded: result.uploaded, errors: result.errors });
     } catch {
       setUploadResult({ uploaded: 0, errors: -1 });
     } finally {
       setUploading(false);
     }
-  }, [uploading, cleanResources]);
+  }, [uploading, cleanResources, targetUrl]);
 
   const piiDetectionMap = useMemo(
     () =>
@@ -441,20 +459,29 @@ export function DeidentifyPanel({
                 defaultFormat="ndjson"
                 onXmlDownload={handleXmlDownload}
               />
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleUploadToTarget}
-                  disabled={uploading}
-                >
-                  {uploading ? (
-                    <Loader2 className="size-3.5 animate-spin" />
-                  ) : (
-                    <Upload className="size-3.5" />
-                  )}
-                  {uploading ? "Sending…" : "Send to Target"}
-                </Button>
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center gap-2">
+                  <Input
+                    placeholder="Target FHIR server URL (optional — uses FHIR_TARGET_URL if empty)"
+                    value={targetUrl}
+                    onChange={(e) => setTargetUrl(e.target.value)}
+                    className="max-w-sm text-xs"
+                    disabled={uploading}
+                  />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleUploadToTarget}
+                    disabled={uploading}
+                  >
+                    {uploading ? (
+                      <Loader2 className="size-3.5 animate-spin" />
+                    ) : (
+                      <Upload className="size-3.5" />
+                    )}
+                    {uploading ? "Sending…" : "Send to Target"}
+                  </Button>
+                </div>
                 {uploadResult && uploadResult.errors !== -1 && (
                   <span className="flex items-center gap-1.5 text-xs text-green-700">
                     <CheckCircle2 className="size-3.5" />
@@ -465,7 +492,7 @@ export function DeidentifyPanel({
                   </span>
                 )}
                 {uploadResult && uploadResult.errors === -1 && (
-                  <span className="text-xs text-destructive">Upload failed</span>
+                  <span className="text-xs text-destructive">Upload failed — check that the target FHIR server URL is correct or that FHIR_TARGET_URL is set</span>
                 )}
               </div>
             </>
@@ -473,14 +500,21 @@ export function DeidentifyPanel({
 
           {/* Diff tab */}
           {activeTab === "diff" && (
-            <JsonDiffViewer
-              original={jsonOriginal}
-              modified={jsonOutput}
-              maxHeight={fullView ? "none" : "520px"}
-              context={fullView ? 20 : 4}
-              disableGapCompression={fullView}
-              fullHeight={fullView}
-            />
+            <>
+              {isDiffLimited && (
+                <p className="rounded-md border bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                  Showing diff for the first {DIFF_LIMIT} of {resourceCount} resources. Download the full result for a complete view.
+                </p>
+              )}
+              <JsonDiffViewer
+                original={jsonOriginal}
+                modified={jsonOutput}
+                maxHeight={fullView ? "none" : "520px"}
+                context={fullView ? 20 : 4}
+                disableGapCompression={fullView}
+                fullHeight={fullView}
+              />
+            </>
           )}
 
           {/* Table tab */}
