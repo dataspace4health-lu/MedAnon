@@ -217,13 +217,15 @@ rules:
 #- match: "*.subject.display"
 #  action: redact
 
-- match: "*.subject.reference"
-  action: gpas_pseudonymize
-  params: *gpas
-
-- match: "*.patient.reference"
-  action: gpas_pseudonymize
-  params: *gpas
+# Cross-resource references (subject, patient, etc.) are handled by rewrite_references: true
+# via _deep_rewrite_references_gpas, which strips the "ResourceType/" prefix, pseudonymizes
+# only the bare ID using the same gPAS domain as the *.id rule, then reassembles the full
+# reference string (e.g. "Patient/abc123" → "Patient/<pseudonym>").
+#
+# DO NOT add gpas_pseudonymize rules for *.subject.reference or *.patient.reference here.
+# Those would send the compound string "Patient/abc123" to gPAS as an opaque token; gPAS
+# returns a bare ID with no resource-type prefix, causing HAPI-0505 referential integrity
+# failures on upload. The rewrite_references mechanism avoids this correctly.
 
 # ==========================================================
 # 9. DOCUMENTS / ATTACHMENTS

@@ -191,8 +191,11 @@ rules:
 # ==========================================================
 
 # US Core Race Extension - contains demographic information (PHI)
+# Redact the whole ombCategory inner extension (not just its valueCoding) so the
+# remaining Extension object always has value[x] — prevents FHIR R4 violation
+# "missing required element: value" (LenientErrorHandler warning on HAPI).
 - name: redact race omb category coding
-  match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-race').extension.where(url='ombCategory').valueCoding
+  match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-race').extension.where(url='ombCategory')
   action: redact
 
 - name: redact race text value
@@ -202,7 +205,7 @@ rules:
 
 # US Core Ethnicity Extension - contains demographic information (PHI)
 - name: redact ethnicity omb category coding
-  match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-ethnicity').extension.where(url='ombCategory').valueCoding
+  match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-ethnicity').extension.where(url='ombCategory')
   action: redact
 
 - name: redact ethnicity text value
@@ -216,9 +219,10 @@ rules:
   action: substitute
   params: *redacted
 
-# Birth Sex Extension - may be kept for medical purposes or redacted depending on policy
+# Birth Sex Extension - redact the whole extension (not just valueCode) so no
+# orphaned Extension with only url remains (FHIR R4 requires value[x] or sub-extensions).
 - name: redact birth sex
-  match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-birthsex').valueCode
+  match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-birthsex')
   action: redact
 
 # Birth Place Extension - contains geographic identifiers (PHI)
@@ -237,13 +241,15 @@ rules:
   action: substitute
   params: *redacted
 
-# Synthea-specific extensions - may contain identifiable data
+# Synthea-specific extensions - redact the whole extension so no orphaned
+# Extension with only url remains (valueDecimal removal would trigger HAPI
+# LenientErrorHandler "missing required element: value" warning).
 - name: redact synthea disability adjusted life years
-  match: Patient.extension.where(url='http://synthetichealth.github.io/synthea/disability-adjusted-life-years').valueDecimal
+  match: Patient.extension.where(url='http://synthetichealth.github.io/synthea/disability-adjusted-life-years')
   action: redact
 
 - name: redact synthea quality adjusted life years
-  match: Patient.extension.where(url='http://synthetichealth.github.io/synthea/quality-adjusted-life-years').valueDecimal
+  match: Patient.extension.where(url='http://synthetichealth.github.io/synthea/quality-adjusted-life-years')
   action: redact
 
 # Patient record links — cross-patient associations can re-identify
