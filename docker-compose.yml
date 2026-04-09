@@ -3,12 +3,19 @@
 # Usage:
 #   docker compose up              # start all services
 #   docker compose up anonymizer   # start only the anonymizer
-#   docker compose down -v         # tear down + remove volumes
+#   docker compose down -v         # tear down + remove volumes (wipes all DB data)
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── Networks ──────────────────────────────────────────────────────────────────
+# processing-net: anonymizer, worker, gPAS, Redis, target HAPI, UI, opt-in services
+# source-net:     source HAPI + its PostgreSQL (isolated; anonymizer bridges in read-only)
+# Anonymizer and worker sit on BOTH networks so they can fetch from source and
+# write de-identified results to the processing side. No other processing-net
+# service can initiate connections to the source network.
 networks:
-  fhir-net:
+  processing-net:
+    driver: bridge
+  source-net:
     driver: bridge
 
 # ── Named volumes ─────────────────────────────────────────────────────────────
@@ -19,6 +26,52 @@ volumes:
   hapi-target-pg-data:
   redis-data:
   minio-data:
+
+# ── Shared environment (anonymizer + worker) ──────────────────────────────────
+# Both services run the same image; this anchor eliminates the ~40-line duplication.
+x-worker-env: &worker-env
+  GPAS_URL: ${GPAS_URL}
+  GPAS_DOMAIN: ${GPAS_DOMAIN}
+  GPAS_OPERATION: ${GPAS_OPERATION}
+  GPAS_TIMEOUT_SEC: ${GPAS_TIMEOUT_SEC}
+  GPAS_TOKEN: ${GPAS_TOKEN:-}
+  GPAS_BASIC_USER: ${GPAS_BASIC_USER:-}
+  GPAS_BASIC_PASS: ${GPAS_BASIC_PASS:-}
+  GPAS_CACHE_ENABLED: ${GPAS_CACHE_ENABLED:-true}
+  GPAS_RETRY_COUNT: ${GPAS_RETRY_COUNT:-2}
+  GPAS_RETRY_BACKOFF_SEC: ${GPAS_RETRY_BACKOFF_SEC:-0.2}
+  GPAS_MAX_BATCH_SIZE: ${GPAS_MAX_BATCH_SIZE:-500}
+  GPAS_POOL_SIZE: ${GPAS_POOL_SIZE:-10}
+  MEDANON_HASH_KEY: ${MEDANON_HASH_KEY:-}
+  MEDANON_MANIFEST_ENABLED: ${MEDANON_MANIFEST_ENABLED:-true}
+  # MEDANON_REDIS_URL must be set explicitly in .env — no default password shipped here.
+  MEDANON_REDIS_URL: ${MEDANON_REDIS_URL:?MEDANON_REDIS_URL must be set in .env}
+  MEDANON_JOB_WORKERS: ${MEDANON_JOB_WORKERS:-3}
+  MEDANON_STAGING_DB_URL: ${MEDANON_STAGING_DB_URL:-}
+  MEDANON_STAGING_RETENTION_DAYS: ${MEDANON_STAGING_RETENTION_DAYS:-30}
+  MEDANON_STAGING_BATCH_SIZE: ${MEDANON_STAGING_BATCH_SIZE:-1000}
+  MEDANON_FHIR_FETCH_PARALLEL: ${MEDANON_FHIR_FETCH_PARALLEL:-4}
+  MEDANON_COHORT_PARALLEL: ${MEDANON_COHORT_PARALLEL:-4}
+  MEDANON_BATCH_SIZE: ${MEDANON_BATCH_SIZE:-300}
+  MEDANON_WORKERS: ${MEDANON_WORKERS:-4}
+  MEDANON_REQUEST_TIMEOUT_SEC: ${MEDANON_REQUEST_TIMEOUT_SEC:-300}
+  MEDANON_UPLOAD_BATCH_SIZE: ${MEDANON_UPLOAD_BATCH_SIZE:-500}
+  MEDANON_UPLOAD_PARALLEL: ${MEDANON_UPLOAD_PARALLEL:-4}
+  MEDANON_RESULT_STORAGE: ${MEDANON_RESULT_STORAGE:-local}
+  MEDANON_RESULT_TTL_SEC: ${MEDANON_RESULT_TTL_SEC:-604800}
+  MEDANON_RESULT_CLEANUP_INTERVAL_SEC: ${MEDANON_RESULT_CLEANUP_INTERVAL_SEC:-3600}
+  FHIR_SOURCE_URL: ${FHIR_SOURCE_URL:-}
+  FHIR_SOURCE_TOKEN: ${FHIR_SOURCE_TOKEN:-}
+  FHIR_TARGET_URL: ${FHIR_TARGET_URL:-http://hapi-fhir-target:8080/fhir}
+  FHIR_TARGET_TOKEN: ${FHIR_TARGET_TOKEN:-}
+  FHIR_PAGE_SIZE: ${FHIR_PAGE_SIZE:-500}
+  FHIR_POOL_SIZE: ${FHIR_POOL_SIZE:-10}
+  MEDANON_TARGET_CONFIG_PROFILE: ${MEDANON_TARGET_CONFIG_PROFILE:-structural}
+  # MINIO_ROOT_USER/PASSWORD must be set in .env when MEDANON_RESULT_STORAGE=s3.
+  MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio:9000}
+  MINIO_ROOT_USER: ${MINIO_ROOT_USER:-}
+  MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-}
+  MINIO_BUCKET: ${MINIO_BUCKET:-medanon-results}
 
 # ── Services ──────────────────────────────────────────────────────────────────
 services:
@@ -37,55 +90,19 @@ services:
     env_file:
       - .env
     environment:
-      - GPAS_URL=${GPAS_URL}
-      - GPAS_DOMAIN=${GPAS_DOMAIN}
-      - GPAS_OPERATION=${GPAS_OPERATION}
-      - GPAS_TIMEOUT_SEC=${GPAS_TIMEOUT_SEC}
-      - GPAS_ADMIN_URL=${GPAS_ADMIN_URL:-}
-      - GPAS_TOKEN=${GPAS_TOKEN:-}
-      - GPAS_BASIC_USER=${GPAS_BASIC_USER:-}
-      - GPAS_BASIC_PASS=${GPAS_BASIC_PASS:-}
-      - GPAS_CACHE_ENABLED=${GPAS_CACHE_ENABLED:-true}
-      - GPAS_RETRY_COUNT=${GPAS_RETRY_COUNT:-2}
-      - GPAS_RETRY_BACKOFF_SEC=${GPAS_RETRY_BACKOFF_SEC:-0.2}
-      - MEDANON_CORS_ORIGINS=${MEDANON_CORS_ORIGINS}
-      - MEDANON_MAX_BODY_BYTES=${MEDANON_MAX_BODY_BYTES}
-      - MEDANON_HASH_KEY=${MEDANON_HASH_KEY:-}
-      - FHIR_SOURCE_URL=${FHIR_SOURCE_URL:-}
-      - FHIR_SOURCE_TOKEN=${FHIR_SOURCE_TOKEN:-}
-      - FHIR_TARGET_URL=${FHIR_TARGET_URL:-http://hapi-fhir-target:8080/fhir}
-      - FHIR_TARGET_TOKEN=${FHIR_TARGET_TOKEN:-}
-      - MEDANON_TARGET_CONFIG_PROFILE=${MEDANON_TARGET_CONFIG_PROFILE:-structural}
-      - MEDANON_AUDIT_LOG_FILE=/output/audit.log
-      - MEDANON_REDIS_URL=${MEDANON_REDIS_URL:-redis://redis:6379/0}
-      - MEDANON_JOB_WORKERS=${MEDANON_JOB_WORKERS:-3}
-      - MEDANON_MANIFEST_ENABLED=${MEDANON_MANIFEST_ENABLED:-true}
-      - MEDANON_STAGING_DB_URL=${MEDANON_STAGING_DB_URL:-}
-      - MEDANON_STAGING_RETENTION_DAYS=${MEDANON_STAGING_RETENTION_DAYS:-30}
-      - MEDANON_STAGING_BATCH_SIZE=${MEDANON_STAGING_BATCH_SIZE:-1000}
-      - MEDANON_FHIR_FETCH_PARALLEL=${MEDANON_FHIR_FETCH_PARALLEL:-4}
-      - MEDANON_COHORT_PARALLEL=${MEDANON_COHORT_PARALLEL:-4}
-      - FHIR_PAGE_SIZE=${FHIR_PAGE_SIZE:-500}
-      - MEDANON_BATCH_SIZE=${MEDANON_BATCH_SIZE:-300}
-      - MEDANON_WORKERS=${MEDANON_WORKERS:-4}
-      - MEDANON_REQUEST_TIMEOUT_SEC=${MEDANON_REQUEST_TIMEOUT_SEC:-300}
-      - GPAS_MAX_BATCH_SIZE=${GPAS_MAX_BATCH_SIZE:-500}
-      - GPAS_POOL_SIZE=${GPAS_POOL_SIZE:-10}
-      - FHIR_POOL_SIZE=${FHIR_POOL_SIZE:-10}
-      - MEDANON_WORKER_ENABLED=${MEDANON_WORKER_ENABLED:-false}
-      - MEDANON_NLP_PREWARM=${MEDANON_NLP_PREWARM:-false}
-      - MEDANON_UPLOAD_BATCH_SIZE=${MEDANON_UPLOAD_BATCH_SIZE:-500}
-      - MEDANON_UPLOAD_PARALLEL=${MEDANON_UPLOAD_PARALLEL:-4}
-      - MEDANON_RESULT_STORAGE=${MEDANON_RESULT_STORAGE:-local}
-      - MINIO_ENDPOINT=${MINIO_ENDPOINT:-minio:9000}
-      - MINIO_ROOT_USER=${MINIO_ROOT_USER:-minioadmin}
-      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-minioadmin}
-      - MINIO_BUCKET=${MINIO_BUCKET:-medanon-results}
+      <<: *worker-env
+      GPAS_ADMIN_URL: ${GPAS_ADMIN_URL:-}
+      MEDANON_CORS_ORIGINS: ${MEDANON_CORS_ORIGINS}
+      MEDANON_MAX_BODY_BYTES: ${MEDANON_MAX_BODY_BYTES}
+      MEDANON_AUDIT_LOG_FILE: /output/audit.log
+      MEDANON_WORKER_ENABLED: ${MEDANON_WORKER_ENABLED:-false}
+      MEDANON_NLP_PREWARM: ${MEDANON_NLP_PREWARM:-false}
     volumes:
       - ./data:/data:ro
       - ./output:/output
     networks:
-      - fhir-net
+      - processing-net  # gPAS, Redis, target HAPI, UI
+      - source-net      # source HAPI (read-only fetch)
     depends_on:
       gpas:
         condition: service_healthy
@@ -95,11 +112,9 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      hapi-db:
-        condition: service_healthy
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
-      interval: 90s
+      interval: 30s
       timeout: 10s
       retries: 3
       start_period: 5s
@@ -131,46 +146,15 @@ services:
     env_file:
       - .env
     environment:
-      - GPAS_URL=${GPAS_URL}
-      - GPAS_DOMAIN=${GPAS_DOMAIN}
-      - GPAS_OPERATION=${GPAS_OPERATION}
-      - GPAS_TIMEOUT_SEC=${GPAS_TIMEOUT_SEC}
-      - GPAS_TOKEN=${GPAS_TOKEN:-}
-      - GPAS_BASIC_USER=${GPAS_BASIC_USER:-}
-      - GPAS_BASIC_PASS=${GPAS_BASIC_PASS:-}
-      - GPAS_CACHE_ENABLED=${GPAS_CACHE_ENABLED:-true}
-      - GPAS_RETRY_COUNT=${GPAS_RETRY_COUNT:-2}
-      - GPAS_RETRY_BACKOFF_SEC=${GPAS_RETRY_BACKOFF_SEC:-0.2}
-      - MEDANON_HASH_KEY=${MEDANON_HASH_KEY:-}
-      - MEDANON_MANIFEST_ENABLED=${MEDANON_MANIFEST_ENABLED:-true}
-      - MEDANON_REDIS_URL=${MEDANON_REDIS_URL:-redis://redis:6379/0}
-      - MEDANON_JOB_WORKERS=${MEDANON_JOB_WORKERS:-3}
-      - MEDANON_STAGING_DB_URL=${MEDANON_STAGING_DB_URL:-}
-      - MEDANON_STAGING_RETENTION_DAYS=${MEDANON_STAGING_RETENTION_DAYS:-30}
-      - MEDANON_STAGING_BATCH_SIZE=${MEDANON_STAGING_BATCH_SIZE:-1000}
-      - MEDANON_FHIR_FETCH_PARALLEL=${MEDANON_FHIR_FETCH_PARALLEL:-4}
-      - MEDANON_COHORT_PARALLEL=${MEDANON_COHORT_PARALLEL:-4}
-      - FHIR_PAGE_SIZE=${FHIR_PAGE_SIZE:-500}
-      - MEDANON_BATCH_SIZE=${MEDANON_BATCH_SIZE:-300}
-      - FHIR_SOURCE_URL=${FHIR_SOURCE_URL:-}
-      - FHIR_SOURCE_TOKEN=${FHIR_SOURCE_TOKEN:-}
-      - FHIR_TARGET_URL=${FHIR_TARGET_URL:-http://hapi-fhir-target:8080/fhir}
-      - FHIR_TARGET_TOKEN=${FHIR_TARGET_TOKEN:-}
-      - MEDANON_TARGET_CONFIG_PROFILE=${MEDANON_TARGET_CONFIG_PROFILE:-structural}
-      - GPAS_MAX_BATCH_SIZE=${GPAS_MAX_BATCH_SIZE:-500}
-      - GPAS_POOL_SIZE=${GPAS_POOL_SIZE:-10}
-      - FHIR_POOL_SIZE=${FHIR_POOL_SIZE:-10}
-      - MEDANON_UPLOAD_BATCH_SIZE=${MEDANON_UPLOAD_BATCH_SIZE:-500}
-      - MEDANON_UPLOAD_PARALLEL=${MEDANON_UPLOAD_PARALLEL:-4}
-      - MEDANON_RESULT_STORAGE=${MEDANON_RESULT_STORAGE:-local}
-      - MINIO_ENDPOINT=${MINIO_ENDPOINT:-minio:9000}
-      - MINIO_ROOT_USER=${MINIO_ROOT_USER:-minioadmin}
-      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-minioadmin}
-      - MINIO_BUCKET=${MINIO_BUCKET:-medanon-results}
+      <<: *worker-env
+      MEDANON_WORKER_METRICS_PORT: ${MEDANON_WORKER_METRICS_PORT:-9091}
+    ports:
+      - "${WORKER_METRICS_PORT:-9091}:9091"
     volumes:
       - ./output:/output
     networks:
-      - fhir-net
+      - processing-net  # gPAS, Redis, target HAPI
+      - source-net      # source HAPI (read-only fetch)
     depends_on:
       redis:
         condition: service_healthy
@@ -189,14 +173,26 @@ services:
     read_only: true
     tmpfs:
       - /tmp:size=100M
+    healthcheck:
+      test: ["CMD-SHELL", "test $$(( $$(date +%s) - $$(stat -c %Y /output/worker_healthy 2>/dev/null || echo 0) )) -lt 120"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
-  # ── 2. HAPI FHIR server (PostgreSQL backend) ──────────────────────────────
+  # ── 2. HAPI FHIR source server (source-net only) ───────────────────────────
+  # Holds identified patient data. Only anonymizer/worker can reach it.
+  # No processing-net service can initiate connections here.
   fhir-server:
     image: hapiproject/hapi:v7.6.0
     container_name: hapi-fhir
     restart: unless-stopped
-    ports:
-      - "${HAPI_PORT:-8081}:8080"
+    # Source FHIR server holds identified patient data — intentionally NOT published
+    # to a host port. Only anonymizer/worker on source-net can connect to it.
+    # To inspect the source FHIR during development:
+    #   docker compose exec fhir-server curl http://localhost:8080/fhir/metadata
+    # Or override with: HAPI_EXPOSED_PORT=8081 in .env and add a ports section in
+    # an override file (docker-compose.override.yml).
     environment:
       - hapi.fhir.fhir_version=${HAPI_FHIR_VERSION:-R4}
       - HAPI_SERVER_ADDRESS=${HAPI_SERVER_ADDRESS:-http://localhost:8080/fhir}
@@ -208,14 +204,11 @@ services:
       - ./services/fhir-server/config/application.yaml:/app/config/application.yaml:ro
       - ./services/fhir-server/healthcheck:/healthcheck:ro
     networks:
-      - fhir-net
+      - source-net
     depends_on:
       hapi-db:
         condition: service_healthy
     healthcheck:
-      # HealthCheck.class must be compiled targeting the same Java version as this
-      # image (currently Java 17). Run `make build-healthcheck` to recompile, or
-      # `make up` which does it automatically.
       test: ["CMD", "java", "-cp", "/healthcheck", "HealthCheck"]
       interval: 30s
       timeout: 15s
@@ -229,8 +222,12 @@ services:
         reservations:
           cpus: "0.5"
           memory: 512M
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
 
-  # ── 3. HAPI FHIR PostgreSQL database ──────────────────────────────────────
+  # ── 3. HAPI FHIR source PostgreSQL (source-net only) ──────────────────────
   hapi-db:
     image: postgres:16-alpine
     container_name: hapi-postgres
@@ -242,7 +239,7 @@ services:
     volumes:
       - hapi-pg-data:/var/lib/postgresql/data
     networks:
-      - fhir-net
+      - source-net
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${HAPI_DB_USER:-hapi}"]
       interval: 10s
@@ -257,36 +254,12 @@ services:
         reservations:
           cpus: "0.25"
           memory: 256M
+    security_opt:
+      - no-new-privileges:true
 
-  # ── 3b. HAPI FHIR target PostgreSQL database (de-identified data) ──────────
-  hapi-target-db:
-    image: postgres:16-alpine
-    container_name: hapi-target-postgres
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: ${HAPI_TARGET_DB_USER:-hapi}
-      POSTGRES_PASSWORD: ${HAPI_TARGET_DB_PASSWORD}
-      POSTGRES_DB: ${HAPI_TARGET_DB_NAME:-hapi_target}
-    volumes:
-      - hapi-target-pg-data:/var/lib/postgresql/data
-    networks:
-      - fhir-net
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${HAPI_TARGET_DB_USER:-hapi} -d ${HAPI_TARGET_DB_NAME:-hapi_target}"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 15s
-    deploy:
-      resources:
-        limits:
-          cpus: "1.0"
-          memory: 1G
-        reservations:
-          cpus: "0.25"
-          memory: 256M
-
-  # ── 2b. HAPI FHIR target server (de-identified data store) ────────────────
+  # ── 2b. HAPI FHIR target server (processing-net) ──────────────────────────
+  # Holds de-identified data. Lives on processing-net alongside anonymizer and gPAS.
+  # The source network cannot reach this server.
   fhir-target:
     image: hapiproject/hapi:v7.6.0
     container_name: hapi-fhir-target
@@ -304,7 +277,7 @@ services:
       - ./services/fhir-target/config/application.yaml:/app/config/application.yaml:ro
       - ./services/fhir-server/healthcheck:/healthcheck:ro
     networks:
-      - fhir-net
+      - processing-net
     depends_on:
       hapi-target-db:
         condition: service_healthy
@@ -322,24 +295,54 @@ services:
         reservations:
           cpus: "0.5"
           memory: 512M
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
 
-  # ── 4. gPAS MySQL database ────────────────────────────────────────────────
+  # ── 3b. HAPI FHIR target PostgreSQL (processing-net) ──────────────────────
+  hapi-target-db:
+    image: postgres:16-alpine
+    container_name: hapi-target-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${HAPI_TARGET_DB_USER:-hapi}
+      POSTGRES_PASSWORD: ${HAPI_TARGET_DB_PASSWORD}
+      POSTGRES_DB: ${HAPI_TARGET_DB_NAME:-hapi_target}
+    volumes:
+      - hapi-target-pg-data:/var/lib/postgresql/data
+    networks:
+      - processing-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${HAPI_TARGET_DB_USER:-hapi} -d ${HAPI_TARGET_DB_NAME:-hapi_target}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+    security_opt:
+      - no-new-privileges:true
+
+  # ── 4. gPAS MySQL database (processing-net) ───────────────────────────────
   gpas-db:
-    # Pin to 8.0 (LTS). mysql_native_password flag ensures WildFly's JDBC connector
-    # can authenticate without needing caching_sha2_password support (which hangs
-    # on login when the Connector/J version bundled in WildFly doesn't support it).
     image: mysql:8.0
     container_name: gpas-mysql
     restart: unless-stopped
     environment:
-      # Always set GPAS_MYSQL_ROOT_PASSWORD in your .env or environment. Never commit real secrets.
       MYSQL_ROOT_PASSWORD: ${GPAS_MYSQL_ROOT_PASSWORD}
       TZ: Europe/Berlin
     volumes:
       - ./services/gpas/sqls:/docker-entrypoint-initdb.d
       - gpas-db-data:/var/lib/mysql
     networks:
-      - fhir-net
+      - processing-net
     command: --max_allowed_packet=20M --default-time-zone=Europe/Berlin --innodb_buffer_pool_size=512M --default-authentication-plugin=mysql_native_password
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
@@ -355,8 +358,10 @@ services:
         reservations:
           cpus: "0.25"
           memory: 512M
+    security_opt:
+      - no-new-privileges:true
 
-  # ── 5. gPAS TTP pseudonymisation service (official mosaicgreifswald) ───────
+  # ── 5. gPAS TTP pseudonymisation service (processing-net) ─────────────────
   gpas:
     image: mosaicgreifswald/wildfly:38
     container_name: gpas-wildfly
@@ -381,9 +386,9 @@ services:
       - ./services/gpas/deployments:/entrypoint-wildfly-deployments
       - ./services/gpas/addins:/entrypoint-wildfly-addins
     networks:
-      - fhir-net
+      - processing-net
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/"]
+      test: ["CMD", "curl", "-f", "http://localhost:8080/ttp-fhir/fhir/gpas/metadata"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -396,20 +401,21 @@ services:
         reservations:
           cpus: "0.5"
           memory: 1G
+    security_opt:
+      - no-new-privileges:true
 
-  # ── 6. Analytics microservice (opt-in — start with: docker compose --profile analytics up) ─
+  # ── 6. Analytics microservice (opt-in) ────────────────────────────────────
   analytics:
     build:
       context: .
       dockerfile: services/analytics/Dockerfile
     image: medanon-analytics:latest
     container_name: medanon-analytics
-    profiles: [analytics]
     restart: unless-stopped
     ports:
       - "${ANALYTICS_PORT:-8100}:8100"
     networks:
-      - fhir-net
+      - processing-net
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8100/health')"]
       interval: 30s
@@ -429,19 +435,18 @@ services:
     cap_drop:
       - ALL
 
-  # ── 7. NLP microservice (opt-in — start with: docker compose --profile nlp up) ────────────
+  # ── 7. NLP microservice (opt-in) ──────────────────────────────────────────
   nlp:
     build:
       context: .
       dockerfile: services/nlp/Dockerfile
     image: medanon-nlp:latest
     container_name: medanon-nlp
-    profiles: [nlp]
     restart: unless-stopped
     ports:
       - "${NLP_PORT:-8200}:8200"
     networks:
-      - fhir-net
+      - processing-net
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8200/health')"]
       interval: 60s
@@ -461,17 +466,7 @@ services:
     cap_drop:
       - ALL
 
-  # ── 8. gPAS MySQL read replica (opt-in HA — start with: docker compose --profile ha up) ───
-  # The replica mirrors the primary gpas-db using MySQL binary replication.
-  # gPAS (WildFly) always writes to the primary; the replica is read-only and
-  # is useful for audit queries, backups, and reducing read load.
-  #
-  # Initialisation: after starting both containers run once:
-  #   docker exec gpas-mysql mysql -uroot -p${GPAS_MYSQL_ROOT_PASSWORD} \
-  #     -e "GRANT REPLICATION SLAVE ON *.* TO 'repl'@'%' IDENTIFIED BY '${GPAS_REPL_PASSWORD}';"
-  #   docker exec gpas-mysql-replica mysql -uroot -p${GPAS_MYSQL_ROOT_PASSWORD} \
-  #     -e "CHANGE MASTER TO MASTER_HOST='gpas-db', MASTER_USER='repl', \
-  #         MASTER_PASSWORD='${GPAS_REPL_PASSWORD}', MASTER_AUTO_POSITION=1; START SLAVE;"
+  # ── 8. gPAS MySQL read replica (opt-in HA) ────────────────────────────────
   gpas-db-replica:
     image: mysql:8.0
     container_name: gpas-mysql-replica
@@ -483,7 +478,7 @@ services:
     volumes:
       - gpas-db-replica-data:/var/lib/mysql
     networks:
-      - fhir-net
+      - processing-net
     depends_on:
       gpas-db:
         condition: service_healthy
@@ -511,8 +506,12 @@ services:
         reservations:
           cpus: "0.1"
           memory: 256M
+    security_opt:
+      - no-new-privileges:true
 
-  # ── 9. React UI ──────────────────────────────────────────────────────────
+  # ── 9. React UI (processing-net + source-net) ────────────────────────────
+  # Needs source-net so nginx can resolve hapi-fhir for the /fhir/ proxy
+  # (Patient Browser). All other routes go through processing-net → anonymizer.
   ui:
     build:
       context: client
@@ -523,7 +522,8 @@ services:
     ports:
       - "${UI_PORT:-8501}:8501"
     networks:
-      - fhir-net
+      - processing-net
+      - source-net
     depends_on:
       anonymizer:
         condition: service_healthy
@@ -546,19 +546,24 @@ services:
     cap_drop:
       - ALL
 
-  # ── 10. Redis (shared cache + job queue) ──────────────────────────────────
+  # ── 10. Redis (processing-net) ────────────────────────────────────────────
   redis:
     image: redis:7-alpine
     container_name: medanon-redis
     restart: unless-stopped
     user: redis
-    command: redis-server --maxmemory 1gb --maxmemory-policy allkeys-lru --save ""
+    command: >
+      redis-server
+      --maxmemory 1gb
+      --maxmemory-policy allkeys-lru
+      --save ""
+      --requirepass ${MEDANON_REDIS_PASSWORD:?MEDANON_REDIS_PASSWORD must be set in .env}
     volumes:
       - redis-data:/data
     networks:
-      - fhir-net
+      - processing-net
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${MEDANON_REDIS_PASSWORD:?}", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -577,10 +582,6 @@ services:
       - ALL
 
   # ── 11. MinIO object storage (opt-in: MEDANON_RESULT_STORAGE=s3) ──────────
-  # Stores job result NDJSON files off-pod so multi-replica deployments can
-  # serve results regardless of which replica processed the job.
-  # Enable by setting MEDANON_RESULT_STORAGE=s3 in .env and starting the stack
-  # with:  docker compose --profile s3 up
   minio:
     image: minio/minio:RELEASE.2024-11-07T00-52-20Z
     container_name: medanon-minio
@@ -588,15 +589,15 @@ services:
     restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER must be set in .env}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set in .env}
     volumes:
       - minio-data:/data
     ports:
       - "${MINIO_PORT:-9000}:9000"
       - "${MINIO_CONSOLE_PORT:-9001}:9001"
     networks:
-      - fhir-net
+      - processing-net
     healthcheck:
       test: ["CMD", "mc", "ready", "local"]
       interval: 10s

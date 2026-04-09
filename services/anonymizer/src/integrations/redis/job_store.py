@@ -37,7 +37,13 @@ class RedisJobStore:
     def __init__(self, redis_url: str, ttl: int = _DEFAULT_TTL) -> None:
         import redis as _redis
 
-        self._client = _redis.StrictRedis.from_url(redis_url, decode_responses=True)
+        self._client = _redis.StrictRedis.from_url(
+            redis_url,
+            decode_responses=True,
+            socket_timeout=30,       # must exceed XREADGROUP block timeout (5 s)
+            socket_connect_timeout=2,
+            retry_on_timeout=True,
+        )
         self._ttl = ttl
         self._consumer_id = f"worker-{uuid.uuid4().hex[:8]}"
         # Verify connectivity
@@ -52,13 +58,17 @@ class RedisJobStore:
 
     def _ensure_stream_group(self) -> None:
         """Idempotent consumer-group creation.  BUSYGROUP = already exists, ignore."""
+        import redis as _redis
         try:
             self._client.xgroup_create(
                 _STREAM_KEY, _STREAM_GROUP, id="$", mkstream=True
             )
-        except Exception as exc:
+        except _redis.exceptions.ResponseError as exc:
+            # BUSYGROUP means the group already exists — expected on restart.
             if "BUSYGROUP" not in str(exc):
                 _log.warning("stream_group_init_error: %s", exc)
+        except Exception as exc:
+            _log.warning("stream_group_init_error: %s", exc)
 
     def _job_key(self, job_id: str) -> str:
         return f"{_KEY_PREFIX}{job_id}"
@@ -106,26 +116,45 @@ class RedisJobStore:
         return self._hash_to_job(data)
 
     def update(self, job: Job) -> None:
-        """Persist status, result_path, error, and checkpoint_data changes for *job*."""
+        """Persist status, result_path, error, and checkpoint_data changes for *job*.
+
+        Uses a Lua script to atomically read old_status + write new fields +
+        update secondary index sets, preventing race conditions.
+        """
         job.updated_at = datetime.now(timezone.utc).isoformat()
         key = self._job_key(job.id)
-        old_status = self._client.hget(key, "status")
-        pipe = self._client.pipeline()
-        pipe.hset(
-            key,
-            mapping={
-                "status": job.status.value,
-                "updated_at": job.updated_at,
-                "result_path": job.result_path or "",
-                "error": job.error or "",
-                "checkpoint_data": json.dumps(job.checkpoint_data) if job.checkpoint_data else "",
-            },
+        lua = """
+        local key = KEYS[1]
+        local new_status = ARGV[1]
+        local updated_at = ARGV[2]
+        local result_path = ARGV[3]
+        local error_val = ARGV[4]
+        local checkpoint = ARGV[5]
+        local ttl = tonumber(ARGV[6])
+        local job_id = ARGV[7]
+        local status_prefix = ARGV[8]
+        local old_status = redis.call('HGET', key, 'status')
+        redis.call('HSET', key, 'status', new_status, 'updated_at', updated_at,
+                    'result_path', result_path, 'error', error_val,
+                    'checkpoint_data', checkpoint)
+        redis.call('EXPIRE', key, ttl)
+        if old_status and old_status ~= new_status then
+            redis.call('SREM', status_prefix .. old_status, job_id)
+            redis.call('SADD', status_prefix .. new_status, job_id)
+        end
+        return 1
+        """
+        self._client.eval(
+            lua, 1, key,
+            job.status.value,
+            job.updated_at,
+            job.result_path or "",
+            job.error or "",
+            json.dumps(job.checkpoint_data) if job.checkpoint_data else "",
+            str(self._ttl),
+            job.id,
+            _STATUS_PREFIX,
         )
-        pipe.expire(key, self._ttl)
-        if old_status and old_status != job.status.value:
-            pipe.srem(f"{_STATUS_PREFIX}{old_status}", job.id)
-            pipe.sadd(f"{_STATUS_PREFIX}{job.status.value}", job.id)
-        pipe.execute()
 
     def next_pending(self) -> Job | None:
         """Return the oldest PENDING job (polling fallback for non-Streams callers)."""
@@ -286,36 +315,78 @@ class RedisJobStore:
             return []
 
     def get_queue_depth(self) -> int:
-        """Return the total number of messages in the stream."""
+        """Return the number of pending (unacknowledged) messages in the stream.
+
+        Uses XPENDING summary to get the actual backlog count, not XLEN which
+        includes already-acknowledged messages not yet trimmed from the stream.
+        """
         try:
-            return self._client.xlen(_STREAM_KEY)
+            info = self._client.xpending(_STREAM_KEY, _STREAM_GROUP)
+            return info.get("pending", 0) if isinstance(info, dict) else (info[0] if info else 0)
         except Exception:
             return 0
 
     def cancel(self, job_id: str) -> bool:
-        """Mark a pending or running job as cancelled."""
+        """Mark a pending or running job as cancelled.
+
+        Uses a Lua script for atomic read-check-write to prevent race conditions
+        when concurrent cancel/update calls target the same job.
+        """
         key = self._job_key(job_id)
-        old_status = self._client.hget(key, "status")
-        if old_status not in ("pending", "running"):
-            return False
         updated_at = datetime.now(timezone.utc).isoformat()
-        pipe = self._client.pipeline()
-        pipe.hset(key, mapping={"status": "cancelled", "updated_at": updated_at})
-        pipe.srem(f"{_STATUS_PREFIX}{old_status}", job_id)
-        pipe.sadd(f"{_STATUS_PREFIX}cancelled", job_id)
-        pipe.execute()
-        return True
+        lua = """
+        local key = KEYS[1]
+        local job_id = ARGV[1]
+        local updated_at = ARGV[2]
+        local status_prefix = ARGV[3]
+        local old_status = redis.call('HGET', key, 'status')
+        if old_status ~= 'pending' and old_status ~= 'running' then
+            return 0
+        end
+        redis.call('HSET', key, 'status', 'cancelled', 'updated_at', updated_at)
+        redis.call('SREM', status_prefix .. old_status, job_id)
+        redis.call('SADD', status_prefix .. 'cancelled', job_id)
+        return 1
+        """
+        result = self._client.eval(lua, 1, key, job_id, updated_at, _STATUS_PREFIX)
+        return bool(result)
 
     def update_checkpoint(self, job_id: str, data: dict) -> None:
-        """Persist only checkpoint_data for an in-progress job."""
+        """Persist only checkpoint_data for an in-progress job.
+
+        Also refreshes the hash TTL and the status/type set TTLs to prevent
+        secondary index inconsistency when job hashes outlive their index entries.
+        """
         key = self._job_key(job_id)
         updated_at = datetime.now(timezone.utc).isoformat()
-        self._client.hset(
-            key,
-            mapping={
-                "checkpoint_data": json.dumps(data),
-                "updated_at": updated_at,
-            },
+        lua = """
+        local key = KEYS[1]
+        local checkpoint = ARGV[1]
+        local updated_at = ARGV[2]
+        local ttl = tonumber(ARGV[3])
+        local job_id = ARGV[4]
+        local status_prefix = ARGV[5]
+        local type_prefix = ARGV[6]
+        redis.call('HSET', key, 'checkpoint_data', checkpoint, 'updated_at', updated_at)
+        redis.call('EXPIRE', key, ttl)
+        local status = redis.call('HGET', key, 'status')
+        local job_type = redis.call('HGET', key, 'type')
+        if status then
+            redis.call('EXPIRE', status_prefix .. status, ttl)
+        end
+        if job_type then
+            redis.call('EXPIRE', type_prefix .. job_type, ttl)
+        end
+        return 1
+        """
+        self._client.eval(
+            lua, 1, key,
+            json.dumps(data),
+            updated_at,
+            str(self._ttl),
+            job_id,
+            _STATUS_PREFIX,
+            _TYPE_PREFIX,
         )
 
     @staticmethod

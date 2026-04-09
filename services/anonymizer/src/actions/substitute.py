@@ -4,14 +4,15 @@ expected_params = ['substitute_with']
 
 def _substitute_nodes(node, key, value, new_value):
     if isinstance(node, list):
-        [ _substitute_nodes(node[node_elem_idx], key, value, new_value) for node_elem_idx in range(len(node)) ]
-    elif (key in list(node.keys())):
+        for item in node:
+            _substitute_nodes(item, key, value, new_value)
+    elif isinstance(node, dict) and key in node:
         if isinstance(node[key], list):
             for idx, data in enumerate(node[key]):
-                if data == value or str(data) == str(value):
+                if data == value:
                     node[key][idx] = new_value
         else:
-            if node[key] == value or str(node[key]) == str(value):
+            if node[key] == value:
                 node[key] = new_value
 
 def substitute_by_path(resource, el, params):

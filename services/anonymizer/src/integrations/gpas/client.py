@@ -10,9 +10,10 @@ All call sites import from this module; the sub-modules are internal.
 
 import logging
 import os
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import as_completed
 
 from utils.fhirpath import find_nodes
+from utils.thread_pool import get_executor
 from actions.substitute import _substitute_nodes
 
 from .circuit_breaker import GpasUnavailableError  # noqa: F401 — re-exported for callers
@@ -32,7 +33,6 @@ from .protocol import (
 )
 
 _GPAS_MAX_BATCH = int(os.environ.get("GPAS_MAX_BATCH_SIZE", "500"))
-_GPAS_PARALLEL_BATCHES = int(os.environ.get("GPAS_PARALLEL_BATCHES", "8"))
 _log = logging.getLogger("medanon.gpas")
 
 
@@ -98,27 +98,29 @@ def gpas_pseudonymize_batch(values, params):
             ]
             mapping = {}
             failed_chunks = []
-            with ThreadPoolExecutor(max_workers=min(len(chunks), _GPAS_PARALLEL_BATCHES)) as pool:
-                futures = {pool.submit(_call_chunk, c): c for c in chunks}
-                for future in as_completed(futures):
-                    try:
-                        partial = future.result()
-                        mapping.update(partial)
-                        # Cache successful results immediately (not deferred to
-                        # after the loop) so they survive even if later chunks fail.
-                        if use_cache:
-                            for orig, psn in partial.items():
-                                _cache_set(('pseudonymize', base_url, domain, operation, orig), psn)
-                    except GpasUnavailableError:
-                        # Circuit breaker open — re-raise immediately, no retry
-                        raise
-                    except Exception as exc:
-                        failed_chunk = futures[future]
-                        _log.warning(
-                            "gpas sub-batch failed (%d values): %s — will retry",
-                            len(failed_chunk), type(exc).__name__,
-                        )
-                        failed_chunks.append(failed_chunk)
+            # Use the process-wide shared executor instead of a nested
+            # ThreadPoolExecutor — avoids spawning N*8 threads when multiple
+            # jobs run concurrently.  The global pool caps concurrency.
+            futures = {get_executor().submit(_call_chunk, c): c for c in chunks}
+            for future in as_completed(futures):
+                try:
+                    partial = future.result()
+                    mapping.update(partial)
+                    # Cache successful results immediately (not deferred to
+                    # after the loop) so they survive even if later chunks fail.
+                    if use_cache:
+                        for orig, psn in partial.items():
+                            _cache_set(('pseudonymize', base_url, domain, operation, orig), psn)
+                except GpasUnavailableError:
+                    # Circuit breaker open — re-raise immediately, no retry
+                    raise
+                except Exception as exc:
+                    failed_chunk = futures[future]
+                    _log.warning(
+                        "gpas sub-batch failed (%d values): %s — will retry",
+                        len(failed_chunk), type(exc).__name__,
+                    )
+                    failed_chunks.append(failed_chunk)
 
             # Retry failed chunks once (sequentially to avoid thundering herd)
             for retry_chunk in failed_chunks:
