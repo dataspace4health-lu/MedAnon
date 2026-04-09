@@ -27,3 +27,11 @@ class LocalResultStorage:
 
     def exists(self, result_key: str) -> bool:
         return os.path.exists(result_key)
+
+    def delete(self, result_key: str) -> bool:
+        """Remove the NDJSON file. Returns True if it existed."""
+        try:
+            os.remove(result_key)
+            return True
+        except FileNotFoundError:
+            return False

@@ -10,76 +10,27 @@ from __future__ import annotations
 from utils.json_fast import dumps_bytes as _json_dumps_bytes
 import logging
 import os
-import threading
-import time
 
 from integrations.http_client import proxy_post_json
+from utils.circuit_breaker import CircuitBreaker
 
 _log = logging.getLogger("medanon.nlp.remote")
 
+# NLP failure mode: always fail-closed (redact) to prevent PHI leakage.
+_NLP_FALLBACK_TEXT = "[NLP_UNAVAILABLE]"
+
 
 # ---------------------------------------------------------------------------
-# Lightweight NLP circuit breaker (same pattern as gPAS)
+# Three-state NLP circuit breaker (shared implementation)
 # ---------------------------------------------------------------------------
 
-class _NlpCircuitBreaker:
-    CLOSED = "closed"
-    OPEN = "open"
-
-    def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._state = self.CLOSED
-        self._failure_count = 0
-        self._last_failure_time = 0.0
-        self._threshold = int(os.environ.get("NLP_CB_FAILURE_THRESHOLD", "5"))
-        self._recovery_timeout = float(os.environ.get("NLP_CB_RECOVERY_TIMEOUT_SEC", "60"))
-        self._window_start = 0.0
-        self._window = float(os.environ.get("NLP_CB_WINDOW_SEC", "120"))
-
-    def allow_request(self) -> bool:
-        with self._lock:
-            if self._state == self.OPEN:
-                if time.time() - self._last_failure_time >= self._recovery_timeout:
-                    self._state = self.CLOSED
-                    self._failure_count = 0
-                    _log.info("nlp_circuit_breaker state=closed (recovery)")
-                    return True
-                return False
-            return True
-
-    @property
-    def stats(self) -> dict:
-        """Return a snapshot for health checks."""
-        with self._lock:
-            return {
-                "state": self._state,
-                "failure_count": self._failure_count,
-                "threshold": self._threshold,
-                "recovery_timeout_sec": self._recovery_timeout,
-            }
-
-    def record_success(self) -> None:
-        with self._lock:
-            self._failure_count = 0
-            self._state = self.CLOSED
-
-    def record_failure(self) -> None:
-        with self._lock:
-            now = time.time()
-            if now - self._window_start > self._window:
-                self._failure_count = 0
-                self._window_start = now
-            self._failure_count += 1
-            self._last_failure_time = now
-            if self._failure_count >= self._threshold:
-                self._state = self.OPEN
-                _log.warning(
-                    "nlp_circuit_breaker state=open failures=%d threshold=%d",
-                    self._failure_count, self._threshold,
-                )
-
-
-_nlp_cb = _NlpCircuitBreaker()
+_nlp_cb = CircuitBreaker(
+    name="nlp",
+    failure_threshold=int(os.environ.get("NLP_CB_FAILURE_THRESHOLD", "5")),
+    recovery_timeout_sec=float(os.environ.get("NLP_CB_RECOVERY_TIMEOUT_SEC", "60")),
+    window_sec=float(os.environ.get("NLP_CB_WINDOW_SEC", "120")),
+    half_open_probes=int(os.environ.get("NLP_CB_HALF_OPEN_PROBES", "2")),
+)
 
 
 def nlp_circuit_breaker_stats() -> dict:
@@ -89,7 +40,7 @@ def nlp_circuit_breaker_stats() -> dict:
 
 def nlp_circuit_breaker_is_open() -> bool:
     """Return True if the NLP circuit breaker is currently OPEN."""
-    return _nlp_cb.stats["state"] == _NlpCircuitBreaker.OPEN
+    return _nlp_cb.state == CircuitBreaker.OPEN
 
 
 def _nlp_service_url(path: str) -> str:
@@ -111,15 +62,12 @@ def analyze_and_replace_remote(
     so that deterministic surrogate tokens remain consistent across multiple
     fields of the same resource.
 
-    Falls back to the original *text* unchanged if the NLP service is
-    unreachable — processing continues rather than failing hard.
-    **Warning**: returning unscrubbed text means PHI may leak through.
+    Falls back to ``[NLP_UNAVAILABLE]`` placeholder if the NLP service is
+    unreachable — fail-closed to prevent PHI leakage.
     """
     if not _nlp_cb.allow_request():
-        _log.warning(
-            "nlp_circuit_breaker OPEN — returning unscrubbed text (PHI leak risk)"
-        )
-        return text
+        _log.warning("nlp_circuit_breaker OPEN — returning redacted placeholder")
+        return _NLP_FALLBACK_TEXT
 
     payload = _json_dumps_bytes({
         "text": text,
@@ -140,10 +88,10 @@ def analyze_and_replace_remote(
     except Exception as exc:
         _nlp_cb.record_failure()
         _log.warning(
-            "nlp_service_error type=%s — returning unscrubbed text (PHI leak risk)",
+            "nlp_service_error type=%s — returning redacted placeholder",
             type(exc).__name__,
         )
-        return text
+        return _NLP_FALLBACK_TEXT
 
 
 def analyze_and_replace_batch_remote(
@@ -164,10 +112,10 @@ def analyze_and_replace_batch_remote(
 
     if not _nlp_cb.allow_request():
         _log.warning(
-            "nlp_circuit_breaker OPEN — returning %d unscrubbed texts (PHI leak risk)",
+            "nlp_circuit_breaker OPEN — returning %d redacted placeholders",
             len(texts),
         )
-        return list(texts)
+        return [_NLP_FALLBACK_TEXT] * len(texts)
 
     payload = _json_dumps_bytes({
         "items": [
@@ -197,7 +145,36 @@ def analyze_and_replace_batch_remote(
         _nlp_cb.record_failure()
         _log.warning("nlp_batch_error type=%s — falling back to sequential", type(exc).__name__)
 
-    # Fallback: sequential per-text calls
+    # Fallback: sub-batch retry (batches of 10) then sequential per-text calls
+    sub_batch_size = 10
+    if len(texts) > sub_batch_size:
+        results = []
+        for i in range(0, len(texts), sub_batch_size):
+            sub = texts[i:i + sub_batch_size]
+            sub_payload = _json_dumps_bytes({
+                "items": [
+                    {"text": t, "entities": entities, "threshold": threshold,
+                     "language": language, "mode": mode}
+                    for t in sub
+                ],
+                "token_state": token_state,
+            })
+            try:
+                sub_result = proxy_post_json(url, sub_payload, timeout=60)
+                returned_state = sub_result.get("token_state", {})
+                token_state.update(returned_state)
+                scrubbed = sub_result.get("results", [])
+                if len(scrubbed) == len(sub):
+                    _nlp_cb.record_success()
+                    results.extend(scrubbed)
+                    continue
+            except Exception:
+                pass
+            # Sub-batch failed — fall back to sequential for this sub-batch
+            for t in sub:
+                results.append(analyze_and_replace_remote(t, entities, threshold, language, mode, token_state))
+        return results
+
     return [
         analyze_and_replace_remote(t, entities, threshold, language, mode, token_state)
         for t in texts

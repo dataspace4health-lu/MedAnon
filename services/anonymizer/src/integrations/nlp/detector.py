@@ -356,6 +356,7 @@ def nlp_detect_by_path(resource: dict, el: dict, params: dict) -> None:
     try:
         nodes = find_nodes(resource, parent_path, [])
     except Exception:
+        log.error("nlp_find_nodes_failed path=%s — field left unprocessed (detector.py)", path)
         return
 
     def _apply(node, field):

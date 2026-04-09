@@ -4,8 +4,10 @@ Imported by main.py and all router modules. No imports from api.main or api.rout
 to keep the dependency graph acyclic.
 """
 
+import asyncio
 import ipaddress
 import os
+import socket
 import urllib.parse
 from typing import Any
 
@@ -80,9 +82,7 @@ async def _validate_server_url(url: str) -> str:
     Blocks:
     - Non-http(s) schemes (file://, gopher://, etc.)
     - Raw IP addresses in private / loopback ranges
-
-    DNS names are allowed at this layer; tighten further with
-    ALLOWED_FHIR_HOSTS env-var allowlist if needed.
+    - DNS names that resolve to private / loopback addresses
     """
     try:
         parsed = urllib.parse.urlparse(url)
@@ -104,9 +104,37 @@ async def _validate_server_url(url: str) -> str:
                 detail="server_url must not target private or loopback addresses",
             )
     except ValueError:
-        # hostname is a DNS name — allowed at this layer
-        pass
+        # hostname is a DNS name — resolve and check against private ranges.
+        # DNS resolution failure is not an SSRF concern (host simply doesn't
+        # exist from this network); the connection will fail at request time.
+        err = await asyncio.to_thread(check_hostname_ssrf, hostname)
+        if err and "resolves to private address" in err:
+            raise HTTPException(
+                status_code=422,
+                detail=f"server_url rejected: {err}",
+            )
     return url
+
+
+def check_hostname_ssrf(hostname: str) -> str | None:
+    """Resolve *hostname* via DNS and check all addresses against private ranges.
+
+    Returns an error message if any resolved address is private/loopback,
+    or ``None`` when the hostname is safe.
+    """
+    try:
+        results = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+    except socket.gaierror:
+        return f"Cannot resolve hostname: {hostname}"
+    for family, _, _, _, sockaddr in results:
+        ip_str = sockaddr[0]
+        try:
+            addr = ipaddress.ip_address(ip_str)
+            if any(addr in net for net in _PRIVATE_NETS):
+                return f"Hostname {hostname} resolves to private address {ip_str}"
+        except ValueError:
+            continue
+    return None
 
 
 async def _get_url_from_request_or_env(

@@ -9,6 +9,7 @@ actions.
 from __future__ import annotations
 
 import logging
+import threading
 
 from utils.fhirpath import find_nodes
 from actions.substitute import _substitute_nodes
@@ -25,6 +26,7 @@ audit_log = logging.getLogger("medanon.audit")
 
 _SENTINEL = object()
 _gpas_params_lru: dict = {}
+_gpas_params_lock = threading.Lock()
 
 
 def _extract_gpas_params(settings) -> dict | None:
@@ -41,10 +43,11 @@ def _extract_gpas_params(settings) -> dict | None:
             result = _resolve_rule_params(rule, settings)
             break
     if rules_key is not None:
-        _gpas_params_lru[rules_key] = result
-        if len(_gpas_params_lru) > 64:
-            oldest = next(iter(_gpas_params_lru))
-            _gpas_params_lru.pop(oldest, None)
+        with _gpas_params_lock:
+            _gpas_params_lru[rules_key] = result
+            if len(_gpas_params_lru) > 64:
+                oldest = next(iter(_gpas_params_lru))
+                _gpas_params_lru.pop(oldest, None)
     return result
 
 

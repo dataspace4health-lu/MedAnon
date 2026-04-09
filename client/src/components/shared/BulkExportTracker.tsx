@@ -36,13 +36,21 @@ function formatElapsed(ms: number): string {
 }
 
 function JobStatusLine({ job }: { job: ExportJob }) {
-  const [elapsed, setElapsed] = useState(() => Date.now() - job.startedAt);
   const isActive =
     job.status === "submitting" ||
     job.status === "pending" ||
     job.status === "running";
 
+  // For terminal jobs, freeze elapsed at completedAt - startedAt.
+  // For active jobs, tick every second from startedAt.
+  const frozenElapsed = job.completedAt != null ? job.completedAt - job.startedAt : null;
+  const [elapsed, setElapsed] = useState(() => frozenElapsed ?? Date.now() - job.startedAt);
+
   useEffect(() => {
+    if (frozenElapsed != null) {
+      setElapsed(frozenElapsed);
+      return;
+    }
     if (!isActive) {
       setElapsed(Date.now() - job.startedAt);
       return;
@@ -52,7 +60,7 @@ function JobStatusLine({ job }: { job: ExportJob }) {
       1000,
     );
     return () => clearInterval(timer);
-  }, [isActive, job.startedAt]);
+  }, [isActive, job.startedAt, frozenElapsed]);
 
   if (job.error) {
     return <span className="text-xs text-destructive truncate">{job.error}</span>;
@@ -96,6 +104,7 @@ function JobStatusLine({ job }: { job: ExportJob }) {
 export function BulkExportTracker() {
   const { jobs, downloadResult, dismissJob, clearCompleted } = useBulkExport();
   const [collapsed, setCollapsed] = useState(false);
+  const [confirmDismissId, setConfirmDismissId] = useState<string | null>(null);
 
   if (jobs.length === 0) return null;
 
@@ -172,15 +181,39 @@ export function BulkExportTracker() {
                       </Button>
                     )}
                     {(job.status === "done" || job.status === "error") && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-7 w-7 p-0 text-muted-foreground hover:text-foreground"
-                        onClick={() => dismissJob(job.id)}
-                        title="Dismiss"
-                      >
-                        <X className="h-3.5 w-3.5" />
-                      </Button>
+                      confirmDismissId === job.id ? (
+                        <div className="flex items-center gap-1">
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            className="h-6 px-1.5 text-xs"
+                            onClick={() => {
+                              dismissJob(job.id);
+                              setConfirmDismissId(null);
+                            }}
+                          >
+                            Yes
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 px-1.5 text-xs"
+                            onClick={() => setConfirmDismissId(null)}
+                          >
+                            No
+                          </Button>
+                        </div>
+                      ) : (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 w-7 p-0 text-muted-foreground hover:text-foreground"
+                          onClick={() => setConfirmDismissId(job.id)}
+                          title="Dismiss"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </Button>
+                      )
                     )}
                   </div>
                 </div>

@@ -386,7 +386,7 @@ def _post_bundle_batch(base: str, chunk: list[dict], token, timeout) -> list[dic
     return results
 
 
-def upload_resources(base_url, resources, token=None, timeout=30, parallel: int = 1):
+def upload_resources(base_url, resources, token=None, timeout=30, parallel: int = 1, batch_size: int | None = None):
     """Upload FHIR resources to a server using FHIR batch Bundles.
 
     Consumes *resources* in two passes:
@@ -394,8 +394,8 @@ def upload_resources(base_url, resources, token=None, timeout=30, parallel: int 
     1. **Tier inference pass**: Scans all resources to build a topological
        dependency graph and an ID-sanitisation map.
     2. **Upload pass**: Sorts by tier, rewrites cross-resource references,
-       then sends chunks of ``_UPLOAD_BATCH_SIZE`` resources as FHIR batch
-       Bundles via :func:`_post_bundle_batch`.
+       then sends chunks of *batch_size* (or ``_UPLOAD_BATCH_SIZE``)
+       resources as FHIR batch Bundles via :func:`_post_bundle_batch`.
 
     When *parallel* > 1, bundles **within each topological tier** are posted
     concurrently via :class:`~concurrent.futures.ThreadPoolExecutor`.  Tiers
@@ -417,6 +417,7 @@ def upload_resources(base_url, resources, token=None, timeout=30, parallel: int 
 
     Never raises — errors are captured per-resource or per-chunk.
     """
+    chunk_size = batch_size or _UPLOAD_BATCH_SIZE
     base = base_url.rstrip("/")
 
     if not isinstance(resources, list):
@@ -456,8 +457,8 @@ def upload_resources(base_url, resources, token=None, timeout=30, parallel: int 
 
         for tier_level in tier_levels:
             tier_resources = tier_buckets.pop(tier_level)
-            batches = [tier_resources[i:i + _UPLOAD_BATCH_SIZE]
-                       for i in range(0, len(tier_resources), _UPLOAD_BATCH_SIZE)]
+            batches = [tier_resources[i:i + chunk_size]
+                       for i in range(0, len(tier_resources), chunk_size)]
             effective = min(parallel, len(batches))
             with ThreadPoolExecutor(max_workers=effective) as pool:
                 futs = [pool.submit(_post_bundle_batch, base, b, token, timeout)
@@ -471,10 +472,10 @@ def upload_resources(base_url, resources, token=None, timeout=30, parallel: int 
                         if done % 1000 == 0 or done == total:
                             log.info("upload_resources: %d/%d processed", done, total)
     else:
-        for i in range(0, total, _UPLOAD_BATCH_SIZE):
-            chunk = all_resources[i:i + _UPLOAD_BATCH_SIZE]
+        for i in range(0, total, chunk_size):
+            chunk = all_resources[i:i + chunk_size]
             # Free the consumed slice to reduce peak memory
-            for j in range(i, min(i + _UPLOAD_BATCH_SIZE, total)):
+            for j in range(i, min(i + chunk_size, total)):
                 all_resources[j] = None
 
             for result in _post_bundle_batch(base, chunk, token, timeout):

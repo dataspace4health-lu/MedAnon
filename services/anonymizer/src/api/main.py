@@ -8,6 +8,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 import uuid
 
@@ -33,7 +34,7 @@ from api.deps import (
     get_settings,
     limiter,
 )
-from api.routers import analytics, configs, dicom, fhir_bulk, fhir_server, hl7v2, jobs, process, synthetic
+from api.routers import analytics, audit, configs, dicom, fhir_bulk, fhir_server, hl7v2, jobs, process, scoring, synthetic
 from api.routers import fhir_subscriptions, smart
 
 # Refresh fhir_bulk's module-level URL cache so that re-imports (e.g. during
@@ -145,8 +146,7 @@ async def _startup() -> None:
                             "staging_store_setup_failed attempt=%d/%d: %s — retrying in %.0fs",
                             attempt, retries, exc, backoff,
                         )
-                        import time
-                        time.sleep(backoff)
+                        await asyncio.sleep(backoff)
                         backoff *= 2
                     else:
                         logger.warning("staging_store_setup_failed falling_back=streaming: %s", exc)
@@ -227,7 +227,7 @@ async def auth_middleware(request: Request, call_next):
     if request.url.path in OPEN_PATHS:
         return await call_next(request)
     try:
-        auth_ctx = get_auth_context(request)
+        auth_ctx = await asyncio.to_thread(get_auth_context, request)
     except HTTPException as exc:
         return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
     request.state.auth = auth_ctx
@@ -300,16 +300,30 @@ async def request_id_middleware(request: Request, call_next):
         REQUEST_ID.reset(token)
 
 
+# Pattern to normalize UUID and numeric segments in URL paths for Prometheus labels,
+# preventing cardinality explosion from parameterized routes like /v1/jobs/{id}.
+_PATH_NORMALIZE_RE = re.compile(r'/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}', re.IGNORECASE)
+_PATH_NUMERIC_RE = re.compile(r'/\d+(?=/|$)')
+
+
+def _normalize_metric_path(path: str) -> str:
+    """Replace UUID and numeric segments with placeholders to bound label cardinality."""
+    path = _PATH_NORMALIZE_RE.sub('/{id}', path)
+    path = _PATH_NUMERIC_RE.sub('/{id}', path)
+    return path
+
+
 @app.middleware("http")
 async def metrics_middleware(request: Request, call_next):
     """Record per-endpoint request count and latency for Prometheus."""
     start = time.perf_counter()
     response = await call_next(request)
-    REQUEST_LATENCY.labels(endpoint=request.url.path).observe(
+    normalized = _normalize_metric_path(request.url.path)
+    REQUEST_LATENCY.labels(endpoint=normalized).observe(
         time.perf_counter() - start
     )
     REQUEST_COUNT.labels(
-        endpoint=request.url.path,
+        endpoint=normalized,
         status_code=str(response.status_code),
     ).inc()
     return response
@@ -387,6 +401,8 @@ app.include_router(analytics.router, prefix="/v1")
 app.include_router(synthetic.router, prefix="/v1")
 app.include_router(jobs.router, prefix="/v1")
 app.include_router(configs.router, prefix="/v1")
+app.include_router(scoring.router, prefix="/v1")
+app.include_router(audit.router, prefix="/v1")
 app.include_router(dicom.router, prefix="/v1")
 app.include_router(hl7v2.router, prefix="/v1")
 app.include_router(fhir_bulk.router, prefix="/fhir")

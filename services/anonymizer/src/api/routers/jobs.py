@@ -3,11 +3,13 @@
     POST   /jobs/bulk-export          — queue a bulk export job, returns 202
     POST   /jobs/cohort               — queue a cohort export job, returns 202
     POST   /jobs/patient-export       — queue a patient $everything export job, returns 202
+    POST   /jobs/batch-patient-export — queue a multi-patient $everything export job, returns 202
     POST   /jobs/bulk-import          — upload a completed NDJSON to a target FHIR server (parallel), returns 202
     GET    /jobs                      — list jobs with optional filtering
     GET    /jobs/{job_id}             — poll job status
     DELETE /jobs/{job_id}             — cancel a pending or running job
     GET    /jobs/{job_id}/result      — download completed NDJSON result
+    DELETE /jobs/{job_id}/result      — delete a completed NDJSON result file
     POST   /jobs/{job_id}/reprocess   — re-process staged rows with a new config profile
     POST   /jobs/{job_id}/upload-to-target — upload completed results to target FHIR server
     GET    /jobs/{job_id}/staged-stats — staging row counts (pending/done/error/total)
@@ -15,14 +17,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 
 from api.deps import _get_url_from_request_or_env, _validate_server_url
-from api.schemas.jobs import BulkExportJobRequest, BulkImportJobRequest, CohortJobRequest, PatientExportJobRequest
+from api.schemas.jobs import BatchPatientExportRequest, BulkExportJobRequest, BulkImportJobRequest, CohortJobRequest, PatientExportJobRequest
+from utils import audit
 from api.services.jobs import (
     JobNotComplete,
     JobNotFound,
@@ -85,7 +89,7 @@ async def submit_bulk_export(req: BulkExportJobRequest):
     target_url = await _resolve_optional_target_url(req.target_url)
     target_token = req.target_token or os.environ.get("FHIR_TARGET_TOKEN") or None
     try:
-        job_dict = _service.submit_bulk_export(server_url, {
+        job_dict = await asyncio.to_thread(_service.submit_bulk_export, server_url, {
             "level": req.level,
             "resource_type": req.resource_type,
             "type_filter": req.type_filter,
@@ -98,6 +102,7 @@ async def submit_bulk_export(req: BulkExportJobRequest):
         })
     except JobStoreUnavailable:
         raise HTTPException(status_code=503, detail="Job store not initialised")
+    audit.emit("job.create", resource_type="bulk-export", resource_id=job_dict.get("id", ""), action="submit")
     return JSONResponse(status_code=202, content=job_dict)
 
 
@@ -108,7 +113,7 @@ async def submit_cohort(req: CohortJobRequest):
     target_url = await _resolve_optional_target_url(req.target_url)
     target_token = req.target_token or os.environ.get("FHIR_TARGET_TOKEN") or None
     try:
-        job_dict = _service.submit_cohort(server_url, {
+        job_dict = await asyncio.to_thread(_service.submit_cohort, server_url, {
             "search_type": req.search_type,
             "search_params": req.search_params,
             "everything_params": req.everything_params,
@@ -120,6 +125,7 @@ async def submit_cohort(req: CohortJobRequest):
         })
     except JobStoreUnavailable:
         raise HTTPException(status_code=503, detail="Job store not initialised")
+    audit.emit("job.create", resource_type="cohort", resource_id=job_dict.get("id", ""), action="submit")
     return JSONResponse(status_code=202, content=job_dict)
 
 
@@ -130,7 +136,7 @@ async def submit_patient_export(req: PatientExportJobRequest):
     target_url = await _resolve_optional_target_url(req.target_url)
     target_token = req.target_token or os.environ.get("FHIR_TARGET_TOKEN") or None
     try:
-        job_dict = _service.submit_patient_export(server_url, {
+        job_dict = await asyncio.to_thread(_service.submit_patient_export, server_url, {
             "patient_id": req.patient_id,
             "patient_name": req.patient_name,
             "token": req.token,
@@ -141,6 +147,33 @@ async def submit_patient_export(req: PatientExportJobRequest):
         })
     except JobStoreUnavailable:
         raise HTTPException(status_code=503, detail="Job store not initialised")
+    audit.emit("job.create", resource_type="patient-export", resource_id=job_dict.get("id", ""), action="submit")
+    return JSONResponse(status_code=202, content=job_dict)
+
+
+@router.post("/jobs/batch-patient-export", status_code=202)
+async def submit_batch_patient_export(req: BatchPatientExportRequest):
+    """Queue a batch patient $everything export + de-identify job. Returns 202 immediately.
+
+    Fetches $everything for each patient ID in parallel, de-duplicates shared
+    resources, de-identifies, and writes a single combined NDJSON result.
+    """
+    server_url = await _get_url_from_request_or_env(req.server_url, "FHIR_SOURCE_URL")
+    target_url = await _resolve_optional_target_url(req.target_url)
+    target_token = req.target_token or os.environ.get("FHIR_TARGET_TOKEN") or None
+    try:
+        job_dict = await asyncio.to_thread(_service.submit_batch_patient_export, server_url, {
+            "patient_ids": req.patient_ids,
+            "patient_names": req.patient_names,
+            "token": req.token,
+            "timeout": req.timeout,
+            "config_profile": req.config_profile,
+            "target_url": target_url,
+            "target_token": target_token,
+        })
+    except JobStoreUnavailable:
+        raise HTTPException(status_code=503, detail="Job store not initialised")
+    audit.emit("job.create", resource_type="batch-patient-export", resource_id=job_dict.get("id", ""), action="submit")
     return JSONResponse(status_code=202, content=job_dict)
 
 
@@ -168,7 +201,7 @@ async def submit_bulk_import(req: BulkImportJobRequest):
         )
     target_token = req.target_token or os.environ.get("FHIR_TARGET_TOKEN") or None
     try:
-        job_dict = _service.submit_bulk_import({
+        job_dict = await asyncio.to_thread(_service.submit_bulk_import, {
             "job_id": req.job_id,
             "ndjson_path": req.ndjson_path,
             "target_url": target_url,
@@ -179,6 +212,7 @@ async def submit_bulk_import(req: BulkImportJobRequest):
         })
     except JobStoreUnavailable:
         raise HTTPException(status_code=503, detail="Job store not initialised")
+    audit.emit("job.create", resource_type="bulk-import", resource_id=job_dict.get("id", ""), action="submit")
     return JSONResponse(status_code=202, content=job_dict)
 
 
@@ -191,8 +225,9 @@ async def list_jobs(
 ):
     """List all jobs with optional status/type filtering and pagination."""
     try:
-        return _service.list_jobs(
-            status=status, job_type=type, limit=limit, offset=offset
+        return await asyncio.to_thread(
+            _service.list_jobs,
+            status=status, job_type=type, limit=limit, offset=offset,
         )
     except JobStoreUnavailable:
         raise HTTPException(status_code=503, detail="Job store not initialised")
@@ -202,7 +237,7 @@ async def list_jobs(
 async def get_job_status(job_id: str):
     """Return current status and metadata for the given job."""
     try:
-        return _service.get_status(job_id)
+        return await asyncio.to_thread(_service.get_status, job_id)
     except JobStoreUnavailable:
         raise HTTPException(status_code=503, detail="Job store not initialised")
     except JobNotFound:
@@ -218,7 +253,7 @@ async def cancel_job(job_id: str):
     - Jobs already in ``done`` or ``error`` state are returned as-is (no error).
     """
     try:
-        return _service.cancel_job(job_id)
+        return await asyncio.to_thread(_service.cancel_job, job_id)
     except JobStoreUnavailable:
         raise HTTPException(status_code=503, detail="Job store not initialised")
     except JobNotFound:
@@ -235,7 +270,7 @@ async def get_job_result(job_id: str):
     - 307 redirect when result is stored in S3/MinIO (``MEDANON_RESULT_STORAGE=s3``).
     """
     try:
-        result_path = _service.get_result_path(job_id)
+        result_path = await asyncio.to_thread(_service.get_result_path, job_id)
     except JobStoreUnavailable:
         raise HTTPException(status_code=503, detail="Job store not initialised")
     except JobNotFound:
@@ -259,6 +294,29 @@ async def get_job_result(job_id: str):
     )
 
 
+@router.delete("/jobs/{job_id}/result", status_code=204)
+async def delete_job_result(job_id: str):
+    """Delete the NDJSON result file for a completed job.
+
+    - 404 if the job does not exist.
+    - 409 if the job is not yet ``done``.
+    - 410 if the result file has already been removed.
+    """
+    try:
+        deleted = await asyncio.to_thread(_service.delete_result, job_id)
+    except JobStoreUnavailable:
+        raise HTTPException(status_code=503, detail="Job store not initialised")
+    except JobNotFound:
+        raise HTTPException(status_code=404, detail="Job not found")
+    except JobNotComplete as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except JobResultMissing:
+        raise HTTPException(status_code=410, detail="Result file not available")
+    if not deleted:
+        raise HTTPException(status_code=410, detail="Result file already removed")
+    return Response(status_code=204)
+
+
 @router.post("/jobs/{job_id}/reprocess", status_code=202)
 async def reprocess_job(job_id: str, config_profile: str = Query("auto")):
     """Queue a re-processing job that replays staged rows with a (new) config profile.
@@ -268,7 +326,7 @@ async def reprocess_job(job_id: str, config_profile: str = Query("auto")):
     Returns 503 if the job store is not initialised.
     """
     try:
-        job_dict = _service.submit_reprocess(job_id, config_profile=config_profile)
+        job_dict = await asyncio.to_thread(_service.submit_reprocess, job_id, config_profile=config_profile)
     except JobStoreUnavailable:
         raise HTTPException(status_code=503, detail="Job store not initialised")
     except JobNotFound:
@@ -294,7 +352,9 @@ async def upload_job_to_target(job_id: str, target_url: str | None = None, targe
         raise HTTPException(status_code=400, detail="No target URL provided and FHIR_TARGET_URL env var is not set")
     resolved_token = target_token or os.environ.get("FHIR_TARGET_TOKEN") or None
     try:
-        result = _service.upload_job_to_target(job_id, resolved_url, target_token=resolved_token)
+        result = await asyncio.to_thread(
+            _service.upload_job_to_target, job_id, resolved_url, target_token=resolved_token,
+        )
     except JobStoreUnavailable:
         raise HTTPException(status_code=503, detail="Job store not initialised")
     except JobNotFound:
@@ -314,7 +374,7 @@ async def get_staged_stats(job_id: str):
     or ``{"staging": "unavailable"}`` when ``MEDANON_STAGING_DB_URL`` is not set.
     """
     try:
-        return _service.get_staged_stats(job_id)
+        return await asyncio.to_thread(_service.get_staged_stats, job_id)
     except JobStoreUnavailable:
         raise HTTPException(status_code=503, detail="Job store not initialised")
     except JobNotFound:

@@ -147,3 +147,18 @@ class S3ResultStorage:
             return True
         except Exception:
             return False
+
+    def delete(self, result_key: str) -> bool:
+        """Remove the object from MinIO. Returns True if it existed."""
+        obj_name = self._object_name(result_key)
+        try:
+            self._client.stat_object(self._bucket, obj_name)
+        except Exception:
+            return False
+        try:
+            self._client.remove_object(self._bucket, obj_name)
+            _log.info("s3_delete_done key=%s", result_key)
+            return True
+        except Exception as exc:
+            _log.warning("s3_delete_failed key=%s: %s", result_key, exc)
+            return False

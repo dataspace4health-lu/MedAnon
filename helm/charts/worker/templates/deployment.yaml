@@ -1,0 +1,90 @@
+{{- $registry := coalesce .Values.registry .Values.global.registry "" -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "worker.fullname" . }}
+  labels:
+    {{- include "worker.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicas }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "worker.selectorLabels" (dict "Release" .Release "component" "worker") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "worker.selectorLabels" (dict "Release" .Release "component" "worker") | nindent 8 }}
+        {{- include "worker.labels" . | nindent 8 }}
+        app.kubernetes.io/component: worker
+      annotations:
+        # Force pod restart when secret changes
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        # Prometheus scraping
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "{{ .Values.metricsPort }}"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: {{ include "worker.fullname" . }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      {{- with (coalesce .Values.imagePullSecrets .Values.global.imagePullSecrets) }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: worker
+          image: {{ include "worker.image" (dict "registry" $registry "image" .Values.image "tag" .Values.tag) }}
+          imagePullPolicy: {{ coalesce .Values.imagePullPolicy .Values.global.imagePullPolicy "IfNotPresent" }}
+          command: ["python", "-m", "pipeline.jobs.worker_main"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - name: metrics
+              containerPort: {{ .Values.metricsPort }}
+              protocol: TCP
+          # ── Environment — non-secret config ──────────────────────────────────
+          env:
+            {{- range $k, $v := .Values.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+          # ── Environment — secrets ─────────────────────────────────────────────
+          envFrom:
+            - secretRef:
+                name: {{ include "worker.fullname" . }}-secret
+          # ── Volume mounts ─────────────────────────────────────────────────────
+          volumeMounts:
+            - name: output
+              mountPath: /output
+            - name: tmp
+              mountPath: /tmp
+          # ── Health checks ─────────────────────────────────────────────────────
+          livenessProbe:
+            exec:
+              command: ["test", "-f", "/tmp/worker_healthy"]
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command: ["test", "-f", "/tmp/worker_healthy"]
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: output
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}

@@ -22,10 +22,11 @@ All existing callers that omit the parameter continue to work unchanged.
 
 from __future__ import annotations
 
-import copy
 import logging
 import os
-from concurrent.futures import ThreadPoolExecutor
+
+from utils.json_fast import dumps_bytes as _json_dumps_bytes, loads as _json_loads
+from utils.thread_pool import get_executor
 
 from pipeline.manifest import _MANIFEST_ENABLED, _attach_manifest
 from pipeline.rule_matcher import _get_rules_for_resource
@@ -157,7 +158,7 @@ def _pass1_single(resource, settings, processing_mode):
     In ``skip`` mode, snapshots the resource before mutation so that a
     partially de-identified resource is never emitted (PHI leak prevention).
     """
-    snapshot = copy.deepcopy(resource) if processing_mode == "skip" else None
+    snapshot = _json_dumps_bytes(resource) if processing_mode == "skip" else None
     try:
         rules = _get_rules_for_resource(resource, settings)
         manifest_entries: list[dict] = []
@@ -167,7 +168,7 @@ def _pass1_single(resource, settings, processing_mode):
         if snapshot is not None:
             # Restore original resource to prevent emitting partial de-identification
             resource.clear()
-            resource.update(snapshot)
+            resource.update(_json_loads(snapshot))
         raise
 
 
@@ -206,7 +207,9 @@ def process_data_batch(
 
     processing_mode = _processing_errors_mode(settings)
 
-    # -- N=1 fast path: no cross-resource pre-fetch overhead ----------------
+    # -- N=1 fast path -------------------------------------------------------
+    # Collect ALL gPAS IDs (value + reference) before calling gPAS so that
+    # exactly ONE HTTP round-trip is made (was two: values then refs).
     if len(resources) == 1:
         resource = resources[0]
         try:
@@ -215,9 +218,40 @@ def process_data_batch(
             gpas_work = dispatch_pass1(
                 resource, rules, settings, manifest_entries, processing_mode
             )
+            gpas_params = _extract_gpas_params(settings)
+            do_refs = getattr(settings, "rewrite_references", False)
+
+            # Collect reference IDs from the resource (if needed) so they can
+            # be batched together with the value IDs in a single gPAS call.
+            ref_ids: set[str] = set()
+            if do_refs and gpas_params:
+                _collect_reference_ids(resource, ref_ids)
+
+            # Build combined unique ID list: gpas_work values first, then any
+            # reference IDs not already present (dedup via set membership).
+            value_id_set = {item.serialized_value for item in gpas_work}
+            combined_ids = list(value_id_set) + [r for r in ref_ids if r not in value_id_set]
+
+            # Single gPAS call for all IDs (or zero calls if nothing to do).
+            combined_mapping: dict = {}
+            if combined_ids and gpas_params:
+                try:
+                    combined_mapping = pseudonymizer.pseudonymize_batch(
+                        combined_ids, gpas_params
+                    )
+                except GpasUnavailableError:
+                    raise
+                except Exception:
+                    if processing_mode != "skip":
+                        raise
+
+            precomputed_ref_mapping = combined_mapping if ref_ids else None
+
             return [_finalize_resource(
                 resource, settings, pseudonymizer,
                 gpas_work, manifest_entries, processing_mode,
+                precomputed_mapping=combined_mapping,
+                precomputed_ref_mapping=precomputed_ref_mapping,
             )]
         except Exception as exc:
             rtype = resource.get("resourceType", "Unknown") if isinstance(resource, dict) else "Unknown"
@@ -235,24 +269,24 @@ def process_data_batch(
 
     # Step 1: Pass 1 on all resources (optionally parallel)
     if _PARALLEL_WORKERS > 0:
-        with ThreadPoolExecutor(max_workers=_PARALLEL_WORKERS) as pool:
-            futures = [
-                pool.submit(_pass1_single, resource, settings, processing_mode)
-                for resource in resources
-            ]
-            for future in futures:
-                try:
-                    resource, gpas_work, manifest_entries_ = future.result()
-                    parsed.append(resource)
-                    all_gpas_works.append(gpas_work)
-                    all_manifest_entries.append(manifest_entries_)
-                except Exception as exc:
-                    audit_log.error("batch_pass1_error: %s", exc)
-                    if processing_mode != "skip":
-                        raise
-                    parsed.append(None)
-                    all_gpas_works.append([])
-                    all_manifest_entries.append([])
+        pool = get_executor()
+        futures = [
+            pool.submit(_pass1_single, resource, settings, processing_mode)
+            for resource in resources
+        ]
+        for idx, future in enumerate(futures):
+            try:
+                resource, gpas_work, manifest_entries_ = future.result()
+                parsed.append(resource)
+                all_gpas_works.append(gpas_work)
+                all_manifest_entries.append(manifest_entries_)
+            except Exception as exc:
+                audit_log.error("batch_pass1_error: %s", exc)
+                if processing_mode != "skip":
+                    raise
+                parsed.append(None)
+                all_gpas_works.append([])
+                all_manifest_entries.append([])
     else:
         for resource in resources:
             try:
@@ -368,13 +402,11 @@ def _process_bundle(resource: dict, settings, pseudonymizer) -> dict:
         else:
             pre_ids.append((None, None))
 
-    # Batch-process inner resources in chunks to limit peak memory
+    # Batch-process all inner resources in a single call so gPAS dedup spans
+    # the entire Bundle (not per-chunk).  process_data_batch already handles
+    # memory-bounded chunking internally via _BATCH_SIZE for the gPAS HTTP call.
     if inner_resources:
-        all_processed: list[dict] = []
-        for chunk_start in range(0, len(inner_resources), _BATCH_SIZE):
-            chunk = inner_resources[chunk_start:chunk_start + _BATCH_SIZE]
-            processed_chunk = process_data_batch(chunk, settings, pseudonymizer)
-            all_processed.extend(processed_chunk)
+        all_processed = process_data_batch(inner_resources, settings, pseudonymizer)
         for idx, result in zip(entry_indices, all_processed):
             entries[idx]["resource"] = result
 

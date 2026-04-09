@@ -23,6 +23,7 @@ _pool = urllib3.PoolManager(
     num_pools=8,
     maxsize=_POOL_SIZE,
     retries=False,
+    timeout=urllib3.Timeout(connect=5, read=60),
 )
 
 
@@ -44,7 +45,7 @@ def proxy_request(
                 method, url,
                 body=body,
                 headers=headers or {},
-                timeout=timeout,
+                timeout=urllib3.Timeout(connect=5, read=timeout),
             )
             if resp.status >= 400:
                 should_retry = resp.status in (429, 500, 502, 503, 504)

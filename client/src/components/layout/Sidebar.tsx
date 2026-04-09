@@ -190,19 +190,6 @@ export function Sidebar({ onNavigate }: SidebarProps) {
           </SelectContent>
         </Select>
       </div>
-
-      {/* Connection info footer */}
-      <div className="border-t px-4 py-3">
-        <p className="text-xs text-muted-foreground">
-          API: <span className="font-mono">/api</span>
-        </p>
-        <p className="text-xs text-muted-foreground">
-          FHIR: <span className="font-mono">/fhir</span>
-        </p>
-        <p className="text-xs text-muted-foreground">
-          Target: <span className="font-mono">/fhir-target</span>
-        </p>
-      </div>
     </div>
   );
 }

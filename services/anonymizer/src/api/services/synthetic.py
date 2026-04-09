@@ -88,7 +88,9 @@ class SyntheticDataService:
                 generate_synthetic_patients_sdv, patients, count=count, seed=seed
             )
         else:
-            synthetic = generate_synthetic_patients(patients, count=count, seed=seed)
+            synthetic = await asyncio.to_thread(
+                generate_synthetic_patients, patients, count=count, seed=seed
+            )
 
         synthetic_conditions: list[dict] = []
         if include_conditions:
@@ -102,7 +104,8 @@ class SyntheticDataService:
                             count_per_patient=count_per_patient, seed=seed,
                         )
                     else:
-                        synthetic_conditions = generate_synthetic_conditions(
+                        synthetic_conditions = await asyncio.to_thread(
+                            generate_synthetic_conditions,
                             conditions, synthetic,
                             count_per_patient=count_per_patient, seed=seed,
                         )

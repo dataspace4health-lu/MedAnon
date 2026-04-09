@@ -22,6 +22,7 @@ from pathlib import Path
 
 from medanon_core.domain import JobStatus
 from pipeline.jobs.checkpoint import load_checkpoint, save_checkpoint
+from pipeline.jobs.worker import _truncate_to_lines
 from integrations.storage import store_result
 
 _log = logging.getLogger("medanon.staged_worker")
@@ -73,6 +74,7 @@ def _process_batch_with_fallback(
     staging,
     job_id: str,
     label: str,
+    summary=None,
 ) -> tuple[int, int]:
     """Process a staged batch with per-resource fallback on failure.
 
@@ -80,6 +82,9 @@ def _process_batch_with_fallback(
     each resource individually so a single bad resource does not kill the
     entire job.  Successful results are written to *fh*; failed rows are
     marked via ``staging.mark_error``.
+
+    When *summary* (:class:`~pipeline.jobs.summary.JobSummaryCollector`) is
+    provided, each result is recorded for the completion summary.
 
     Returns ``(succeeded, failed)`` counts.
     """
@@ -95,6 +100,8 @@ def _process_batch_with_fallback(
             fh.write(_json_dumps(result) + "\n")
             done_ids.append(row["id"])
             succeeded += 1
+            if summary is not None:
+                summary.record_resource(result)
         fh.flush()
         staging.mark_done(job_id, done_ids)
     except Exception:
@@ -108,6 +115,8 @@ def _process_batch_with_fallback(
                 fh.write(_json_dumps(result) + "\n")
                 staging.mark_done(job_id, [row["id"]])
                 succeeded += 1
+                if summary is not None:
+                    summary.record_resource(result)
             except Exception as exc:
                 _log.error(
                     "%s job=%s resource_type=%s row_id=%d error=%s",
@@ -119,6 +128,8 @@ def _process_batch_with_fallback(
                 except Exception:
                     _log.warning("%s job=%s mark_error failed row_id=%d", label, job_id, row["id"])
                 failed += 1
+                if summary is not None:
+                    summary.record_error(rtype)
         fh.flush()
 
     return succeeded, failed
@@ -235,7 +246,11 @@ def execute_bulk_export_staged(job, store, staging) -> None:
     # Phase 2: Process staged rows → NDJSON
     # ════════════════════════════════════════════════════════════════════════
     if phase == "processing":
+        from pipeline.jobs.summary import JobSummaryCollector
+        collector = JobSummaryCollector(config_profile=profile)
         open_mode = "a" if processed > 0 else "w"
+        if processed > 0:
+            _truncate_to_lines(output_path, processed)
         _log.info("staged_process_start job=%s processed=%d", job.id, processed)
 
         with open(output_path, open_mode, encoding="utf-8") as fh:
@@ -252,6 +267,7 @@ def execute_bulk_export_staged(job, store, staging) -> None:
                 ok, bad = _process_batch_with_fallback(
                     batch_rows, settings, pseudonymizer, processing_mode,
                     fh, staging, job.id, "staged_bulk_export",
+                    summary=collector,
                 )
                 processed += ok + bad
                 save_checkpoint(store, job, {
@@ -261,7 +277,12 @@ def execute_bulk_export_staged(job, store, staging) -> None:
                 })
 
         job.result_path = store_result(job.id, output_path)
-        save_checkpoint(store, job, {"phase": "done", "staged_count": staged_count, "processed": processed})
+        save_checkpoint(store, job, {
+            "phase": "done",
+            "staged_count": staged_count,
+            "processed": processed,
+            "summary": collector.to_dict(file_size_bytes=os.path.getsize(output_path)),
+        })
         _log.info("staged_bulk_export_done job=%s processed=%d", job.id, processed)
 
 
@@ -345,7 +366,11 @@ def execute_cohort_staged(job, store, staging) -> None:
     # Phase 2: Process staged rows → NDJSON
     # ════════════════════════════════════════════════════════════════════════
     if phase == "processing":
+        from pipeline.jobs.summary import JobSummaryCollector
+        collector = JobSummaryCollector(config_profile=profile)
         open_mode = "a" if processed > 0 else "w"
+        if processed > 0:
+            _truncate_to_lines(output_path, processed)
         _log.info("staged_cohort_process_start job=%s processed=%d", job.id, processed)
 
         with open(output_path, open_mode, encoding="utf-8") as fh:
@@ -362,6 +387,7 @@ def execute_cohort_staged(job, store, staging) -> None:
                 ok, bad = _process_batch_with_fallback(
                     batch_rows, settings, pseudonymizer, processing_mode,
                     fh, staging, job.id, "staged_cohort",
+                    summary=collector,
                 )
                 processed += ok + bad
                 save_checkpoint(store, job, {
@@ -371,7 +397,12 @@ def execute_cohort_staged(job, store, staging) -> None:
                 })
 
         job.result_path = store_result(job.id, output_path)
-        save_checkpoint(store, job, {"phase": "done", "staged_count": staged_count, "processed": processed})
+        save_checkpoint(store, job, {
+            "phase": "done",
+            "staged_count": staged_count,
+            "processed": processed,
+            "summary": collector.to_dict(file_size_bytes=os.path.getsize(output_path)),
+        })
         _log.info("staged_cohort_done job=%s processed=%d", job.id, processed)
 
 
@@ -441,7 +472,11 @@ def execute_patient_export_staged(job, store, staging) -> None:
     # Phase 2: Process staged rows → NDJSON
     # ════════════════════════════════════════════════════════════════════════
     if phase == "processing":
+        from pipeline.jobs.summary import JobSummaryCollector
+        collector = JobSummaryCollector(config_profile=profile)
         open_mode = "a" if processed > 0 else "w"
+        if processed > 0:
+            _truncate_to_lines(output_path, processed)
         _log.info("staged_patient_process_start job=%s processed=%d", job.id, processed)
 
         with open(output_path, open_mode, encoding="utf-8") as fh:
@@ -458,6 +493,7 @@ def execute_patient_export_staged(job, store, staging) -> None:
                 ok, bad = _process_batch_with_fallback(
                     batch_rows, settings, pseudonymizer, processing_mode,
                     fh, staging, job.id, "staged_patient",
+                    summary=collector,
                 )
                 processed += ok + bad
                 save_checkpoint(store, job, {
@@ -467,8 +503,117 @@ def execute_patient_export_staged(job, store, staging) -> None:
                 })
 
         job.result_path = store_result(job.id, output_path)
-        save_checkpoint(store, job, {"phase": "done", "staged_count": staged_count, "processed": processed})
+        save_checkpoint(store, job, {
+            "phase": "done",
+            "staged_count": staged_count,
+            "processed": processed,
+            "summary": collector.to_dict(file_size_bytes=os.path.getsize(output_path)),
+        })
         _log.info("staged_patient_export_done job=%s processed=%d", job.id, processed)
+
+
+def execute_batch_patient_export_staged(job, store, staging) -> None:
+    """Staged two-phase batch patient $everything executor (synchronous — runs via asyncio.to_thread)."""
+    from integrations.fhir.client import fetch_patients_everything
+    from pipeline.config.service import get_settings
+    from pipeline.processor import _get_default_pseudonymizer
+
+    params = job.params
+    server_url = params["server_url"]
+    patient_ids = params["patient_ids"]
+    token = params.get("token") or os.environ.get("FHIR_SOURCE_TOKEN")
+    timeout = float(params.get("timeout", 30))
+    profile = params.get("config_profile", "auto")
+
+    settings = get_settings(profile)
+    pseudonymizer = _get_default_pseudonymizer()
+    processing_mode = str(getattr(settings, "processing_errors", "raise")).lower()
+    output_path = os.path.join(_OUTPUT_DIR, f"{job.id}.ndjson")
+    Path(_OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
+
+    checkpoint = load_checkpoint(job) or {}
+    phase = checkpoint.get("phase", "fetching")
+    staged_count = checkpoint.get("staged_count", 0)
+    processed = checkpoint.get("processed", 0)
+
+    # ════════════════════════════════════════════════════════════════════════
+    # Phase 1: Fetch $everything for all patients → staging table
+    # ════════════════════════════════════════════════════════════════════════
+    if phase == "fetching":
+        _log.info("staged_batch_patient_fetch_start job=%s patients=%d", job.id, len(patient_ids))
+        buffer: list[dict] = []
+        gen = fetch_patients_everything(
+            server_url, patient_ids,
+            token=token, timeout=timeout,
+        )
+        for resource in gen:
+            fresh = store.get(job.id)
+            if fresh and fresh.status == JobStatus.CANCELLED:
+                _log.info("staged_batch_patient_fetch_cancelled job=%s", job.id)
+                return
+
+            buffer.append(resource)
+            if len(buffer) >= _BATCH_SIZE:
+                inserted = staging.stage_batch(job.id, buffer)
+                staged_count += inserted
+                buffer.clear()
+                save_checkpoint(store, job, {
+                    "phase": "fetching",
+                    "staged_count": staged_count,
+                    "processed": 0,
+                })
+
+        if buffer:
+            inserted = staging.stage_batch(job.id, buffer)
+            staged_count += inserted
+
+        _log.info("staged_batch_patient_fetch_done job=%s rows=%d", job.id, staged_count)
+        save_checkpoint(store, job, {"phase": "processing", "staged_count": staged_count, "processed": 0})
+        phase = "processing"
+        processed = 0
+
+    # ════════════════════════════════════════════════════════════════════════
+    # Phase 2: Process staged rows → NDJSON
+    # ════════════════════════════════════════════════════════════════════════
+    if phase == "processing":
+        from pipeline.jobs.summary import JobSummaryCollector
+        collector = JobSummaryCollector(config_profile=profile)
+        open_mode = "a" if processed > 0 else "w"
+        if processed > 0:
+            _truncate_to_lines(output_path, processed)
+        _log.info("staged_batch_patient_process_start job=%s processed=%d", job.id, processed)
+
+        with open(output_path, open_mode, encoding="utf-8") as fh:
+            while True:
+                fresh = store.get(job.id)
+                if fresh and fresh.status == JobStatus.CANCELLED:
+                    _log.info("staged_batch_patient_process_cancelled job=%s at=%d", job.id, processed)
+                    return
+
+                batch_rows = staging.get_pending_batch(job.id, _BATCH_SIZE)
+                if not batch_rows:
+                    break
+
+                ok, bad = _process_batch_with_fallback(
+                    batch_rows, settings, pseudonymizer, processing_mode,
+                    fh, staging, job.id, "staged_batch_patient",
+                    summary=collector,
+                )
+                processed += ok + bad
+                save_checkpoint(store, job, {
+                    "phase": "processing",
+                    "staged_count": staged_count,
+                    "processed": processed,
+                })
+
+        job.result_path = store_result(job.id, output_path)
+        save_checkpoint(store, job, {
+            "phase": "done",
+            "staged_count": staged_count,
+            "processed": processed,
+            "summary": collector.to_dict(file_size_bytes=os.path.getsize(output_path)),
+        })
+        _log.info("staged_batch_patient_export_done job=%s processed=%d", job.id, processed)
 
 
 def execute_reprocess_staged(job, store, staging) -> None:
@@ -497,11 +642,16 @@ def execute_reprocess_staged(job, store, staging) -> None:
     if processed == 0:
         staging.reset_pending(source_job_id)
 
+    from pipeline.jobs.summary import JobSummaryCollector
+    collector = JobSummaryCollector(config_profile=profile)
+
     _log.info(
         "staged_reprocess_start job=%s source=%s profile=%s",
         job.id, source_job_id, profile,
     )
     open_mode = "a" if processed > 0 else "w"
+    if processed > 0:
+        _truncate_to_lines(output_path, processed)
 
     with open(output_path, open_mode, encoding="utf-8") as fh:
         while True:
@@ -517,10 +667,15 @@ def execute_reprocess_staged(job, store, staging) -> None:
             ok, bad = _process_batch_with_fallback(
                 batch_rows, settings, pseudonymizer, processing_mode,
                 fh, staging, source_job_id, "staged_reprocess",
+                summary=collector,
             )
             processed += ok + bad
             save_checkpoint(store, job, {"phase": "processing", "processed": processed})
 
     job.result_path = store_result(job.id, output_path)
-    save_checkpoint(store, job, {"phase": "done", "processed": processed})
+    save_checkpoint(store, job, {
+        "phase": "done",
+        "processed": processed,
+        "summary": collector.to_dict(file_size_bytes=os.path.getsize(output_path)),
+    })
     _log.info("staged_reprocess_done job=%s processed=%d", job.id, processed)

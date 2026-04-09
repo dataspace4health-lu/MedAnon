@@ -58,6 +58,22 @@ anonymizer:
     rsaPublicKey: ""
     rsaPrivateKey: ""
 
+# ─── Worker overrides ───────────────────────────────────────────────────────
+worker:
+  env:
+    GPAS_URL: ""
+    FHIR_SOURCE_URL: ""
+    FHIR_SOURCE_TOKEN: ""
+    FHIR_TARGET_URL: ""
+    FHIR_TARGET_TOKEN: ""
+    MEDANON_REDIS_URL: ""
+    MEDANON_JOB_WORKERS: "3"
+    MEDANON_MANIFEST_ENABLED: "false"
+  secrets:
+    MEDANON_HASH_KEY: ""
+    GPAS_BASIC_USER: ""
+    GPAS_BASIC_PASS: ""
+
 # ─── FHIR Server overrides ────────────────────────────────────────────────────
 fhir-server:
   # Public base URL for Bundle fullUrl and pagination links.

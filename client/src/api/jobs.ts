@@ -15,6 +15,32 @@ export interface JobResponse {
   processed: number;
   staged_count: number | null;
   phase: "queued" | "fetching" | "processing" | "done";
+  summary: {
+    total_resources: number;
+    error_count: number;
+    resource_type_counts: Record<string, number>;
+    config_profile: string;
+    completed_at: string;
+    duration_sec: number;
+    compressed: boolean;
+    file_size_bytes: number;
+  } | null;
+}
+
+export interface JobScoreResponse {
+  job_id: string;
+  computed: boolean;
+  reason?: string;
+  total_scored?: number;
+  pass_count?: number;
+  fail_count?: number;
+  error_count?: number;
+  avg_composite?: number;
+  min_composite?: number;
+  avg_utility?: number;
+  avg_quality?: number;
+  batch_privacy?: Record<string, unknown> | null;
+  config_profile?: string;
 }
 
 /** POST /api/v1/jobs/bulk-export — queue a bulk-export job, returns 202. */
@@ -75,6 +101,26 @@ export async function submitCohortJob(params: {
     const body = await response.json().catch(() => ({}));
     throw new Error(
       `submitCohortJob failed (${response.status}): ${body?.detail ?? response.statusText}`,
+    );
+  }
+  return response.json() as Promise<JobResponse>;
+}
+
+/** POST /api/v1/jobs/batch-patient-export — queue a batch patient export job, returns 202. */
+export async function submitBatchPatientExportJob(params: {
+  patient_ids: string[];
+  patient_names?: Record<string, string>;
+  config_profile?: string;
+}): Promise<JobResponse> {
+  const response = await fetch("/api/v1/jobs/batch-patient-export", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    body: JSON.stringify(params),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(
+      `submitBatchPatientExportJob failed (${response.status}): ${body?.detail ?? response.statusText}`,
     );
   }
   return response.json() as Promise<JobResponse>;
@@ -175,4 +221,34 @@ export async function listJobs(params?: {
     );
   }
   return response.json() as Promise<JobResponse[]>;
+}
+
+/** GET /api/v1/jobs/:jobId/score — retrieve cached score for a job. */
+export async function getJobScore(jobId: string): Promise<JobScoreResponse> {
+  const response = await fetch(
+    `/api/v1/jobs/${encodeURIComponent(jobId)}/score`,
+    { headers: getAuthHeaders() },
+  );
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(
+      `getJobScore failed (${response.status}): ${body?.detail ?? response.statusText}`,
+    );
+  }
+  return response.json() as Promise<JobScoreResponse>;
+}
+
+/** POST /api/v1/jobs/:jobId/score — trigger on-demand scoring for a completed job. */
+export async function triggerJobScore(jobId: string): Promise<JobScoreResponse> {
+  const response = await fetch(
+    `/api/v1/jobs/${encodeURIComponent(jobId)}/score`,
+    { method: "POST", headers: getAuthHeaders() },
+  );
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(
+      `triggerJobScore failed (${response.status}): ${body?.detail ?? response.statusText}`,
+    );
+  }
+  return response.json() as Promise<JobScoreResponse>;
 }

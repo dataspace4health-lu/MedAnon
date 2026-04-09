@@ -13,6 +13,7 @@ import time
 import urllib3
 from urllib.parse import urlparse
 
+from utils.circuit_breaker import CircuitBreaker
 from utils.logging import REQUEST_ID
 from utils.metrics import FHIR_CALL_COUNT, FHIR_LATENCY
 
@@ -42,9 +43,29 @@ _pool = urllib3.PoolManager(
     num_pools=4,
     maxsize=_FHIR_POOL_SIZE,
     retries=False,
+    timeout=urllib3.Timeout(connect=5, read=30),
 )
 
 log = logging.getLogger("medanon.fhir_server")
+
+# ---------------------------------------------------------------------------
+# Circuit breaker for FHIR server
+# ---------------------------------------------------------------------------
+
+_fhir_cb = CircuitBreaker(
+    name="fhir",
+    failure_threshold=int(os.environ.get("FHIR_CB_FAILURE_THRESHOLD", "5")),
+    recovery_timeout_sec=float(os.environ.get("FHIR_CB_RECOVERY_TIMEOUT_SEC", "30")),
+    window_sec=float(os.environ.get("FHIR_CB_WINDOW_SEC", "60")),
+    half_open_probes=int(os.environ.get("FHIR_CB_HALF_OPEN_PROBES", "3")),
+)
+
+# ---------------------------------------------------------------------------
+# Retry configuration (cached at module level)
+# ---------------------------------------------------------------------------
+
+_FHIR_RETRY_COUNT = int(os.environ.get("FHIR_RETRY_COUNT", 2))
+_FHIR_RETRY_BACKOFF = float(os.environ.get("FHIR_RETRY_BACKOFF_SEC", 0.3))
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -120,130 +141,119 @@ def _make_post_headers(token=None, target: bool = False):
     return h
 
 
-def _do_request(method, url, headers, timeout, body=None, operation="request"):
-    """Execute an HTTP request via the connection pool and return parsed JSON.
+# ---------------------------------------------------------------------------
+# Unified retry loop (DRY: shared by _do_request and _do_raw_request)
+# ---------------------------------------------------------------------------
 
-    Retries on transient server errors (429, 500, 502, 503, 504) and
-    connection errors with exponential backoff.
+def _retry_request(method, url, headers, timeout, body, operation, parse_json):
+    """Execute an HTTP request with retry, circuit breaker, and timeout separation.
 
-    Raises ``ValueError`` on HTTP or connection errors (consistent with
-    the rest of the module so callers only need to catch one exception type).
+    When *parse_json* is True, parses the response as JSON and raises on HTTP >= 400.
+    When False, returns the raw urllib3 response (including 2xx non-200 like 202).
     """
-    retry_count = int(os.environ.get("FHIR_RETRY_COUNT", 2))
-    retry_backoff = float(os.environ.get("FHIR_RETRY_BACKOFF_SEC", 0.3))
+    if not _fhir_cb.allow_request():
+        FHIR_CALL_COUNT.labels(operation=operation, status="error").inc()
+        raise ValueError(f"FHIR server unavailable — circuit breaker OPEN ({operation})")
 
     t0 = time.perf_counter()
-    for attempt in range(retry_count + 1):
+    for attempt in range(_FHIR_RETRY_COUNT + 1):
         try:
             resp = _pool.request(
-                method, url, headers=headers, body=body, timeout=timeout,
+                method, url, headers=headers, body=body,
+                timeout=urllib3.Timeout(connect=5, read=timeout),
             )
             if resp.status >= 400:
                 should_retry = resp.status in (429, 500, 502, 503, 504)
-                if should_retry and attempt < retry_count:
+                if should_retry and attempt < _FHIR_RETRY_COUNT:
                     log.warning(
                         "FHIR request %s HTTP %d — retrying (%d/%d)",
-                        url, resp.status, attempt + 1, retry_count,
+                        url, resp.status, attempt + 1, _FHIR_RETRY_COUNT,
                     )
-                    time.sleep(retry_backoff * (2 ** attempt) * (0.5 + random.random()))
+                    time.sleep(_FHIR_RETRY_BACKOFF * (2 ** attempt) * (0.5 + random.random()))
                     continue
                 FHIR_LATENCY.labels(operation=operation).observe(time.perf_counter() - t0)
                 FHIR_CALL_COUNT.labels(operation=operation, status="error").inc()
+                if should_retry:
+                    _fhir_cb.record_failure()
                 body_snippet = resp.data[:400].decode("utf-8", errors="replace") if resp.data else ""
                 raise ValueError(f"FHIR server HTTP {resp.status} for {url}: {body_snippet}")
-            result = _json_loads(resp.data.decode("utf-8"))
+
             FHIR_LATENCY.labels(operation=operation).observe(time.perf_counter() - t0)
             FHIR_CALL_COUNT.labels(operation=operation, status="ok").inc()
-            return result
+            _fhir_cb.record_success()
+
+            if parse_json:
+                return _json_loads(resp.data.decode("utf-8"))
+            return resp
         except (urllib3.exceptions.HTTPError, OSError) as exc:
-            if attempt < retry_count:
+            if attempt < _FHIR_RETRY_COUNT:
                 log.warning(
                     "FHIR request %s connection error — retrying (%d/%d)",
-                    url, attempt + 1, retry_count,
+                    url, attempt + 1, _FHIR_RETRY_COUNT,
                 )
-                time.sleep(retry_backoff * (2 ** attempt) * (0.5 + random.random()))
+                time.sleep(_FHIR_RETRY_BACKOFF * (2 ** attempt) * (0.5 + random.random()))
                 continue
             FHIR_LATENCY.labels(operation=operation).observe(time.perf_counter() - t0)
             FHIR_CALL_COUNT.labels(operation=operation, status="error").inc()
+            _fhir_cb.record_failure()
             raise ValueError(f"FHIR server connection error for {url}: {exc}") from exc
+
+
+def _do_request(method, url, headers, timeout, body=None, operation="request"):
+    """Execute an HTTP request and return parsed JSON. Raises ValueError on errors."""
+    return _retry_request(method, url, headers, timeout, body, operation, parse_json=True)
 
 
 def _do_raw_request(method, url, headers, timeout, body=None, operation="request"):
-    """Execute HTTP request and return the raw urllib3 response object.
-
-    Like ``_do_request()`` but does NOT parse JSON — the caller gets the raw
-    response with ``.status``, ``.headers``, and ``.data``.  Does NOT raise on
-    2xx status codes (including 202 Accepted used by bulk export).
-
-    Retries on transient errors (429, 500, 502, 503, 504) and connection
-    failures with exponential backoff, same as ``_do_request()``.
-    """
-    retry_count = int(os.environ.get("FHIR_RETRY_COUNT", 2))
-    retry_backoff = float(os.environ.get("FHIR_RETRY_BACKOFF_SEC", 0.3))
-
-    t0 = time.perf_counter()
-    for attempt in range(retry_count + 1):
-        try:
-            resp = _pool.request(
-                method, url, headers=headers, body=body, timeout=timeout,
-            )
-            if resp.status >= 400:
-                should_retry = resp.status in (429, 500, 502, 503, 504)
-                if should_retry and attempt < retry_count:
-                    log.warning(
-                        "FHIR raw request %s HTTP %d — retrying (%d/%d)",
-                        url, resp.status, attempt + 1, retry_count,
-                    )
-                    time.sleep(retry_backoff * (2 ** attempt) * (0.5 + random.random()))
-                    continue
-                FHIR_LATENCY.labels(operation=operation).observe(time.perf_counter() - t0)
-                FHIR_CALL_COUNT.labels(operation=operation, status="error").inc()
-                raise ValueError(f"FHIR server HTTP {resp.status} for {url}")
-            FHIR_LATENCY.labels(operation=operation).observe(time.perf_counter() - t0)
-            FHIR_CALL_COUNT.labels(operation=operation, status="ok").inc()
-            return resp
-        except (urllib3.exceptions.HTTPError, OSError) as exc:
-            if attempt < retry_count:
-                log.warning(
-                    "FHIR raw request %s connection error — retrying (%d/%d)",
-                    url, attempt + 1, retry_count,
-                )
-                time.sleep(retry_backoff * (2 ** attempt) * (0.5 + random.random()))
-                continue
-            FHIR_LATENCY.labels(operation=operation).observe(time.perf_counter() - t0)
-            FHIR_CALL_COUNT.labels(operation=operation, status="error").inc()
-            raise ValueError(f"FHIR server connection error for {url}: {exc}") from exc
+    """Execute HTTP request and return the raw urllib3 response object."""
+    return _retry_request(method, url, headers, timeout, body, operation, parse_json=False)
 
 
-def _safe_next_url(next_url: str, current_url: str) -> str:
-    """Validate that a pagination link stays on the same origin as current_url.
+def _safe_next_url(next_url: str, current_url: str, pinned_origin: list | None = None) -> str:
+    """Validate that a pagination link stays on the same origin.
 
-    Compares scheme + netloc of the next link against the URL we actually
-    fetched (not the original base_url, which may differ when the FHIR server
-    returns a different public address via ``server_address``).
+    On the first page, the FHIR server may return links using a different
+    public address than the caller-provided base_url.  We allow this **once**
+    and then pin all subsequent pages to the server's chosen origin.
 
-    Prevents SSRF where a malicious FHIR server returns a link[rel=next]
-    pointing to an internal service (e.g. http://internal-admin:9090/).
+    Pass a single-element list as *pinned_origin* to share state across pages.
+    On first divergence, the accepted origin is stored in ``pinned_origin[0]``
+    and all subsequent pages must match it.  If *pinned_origin* is ``None``
+    the behaviour is the same but without cross-page pinning.
+
+    Prevents SSRF where a malicious FHIR server progressively redirects
+    pagination links to arbitrary internal services.
     """
     n = urlparse(next_url)
     b = urlparse(current_url)
     if n.scheme not in ("http", "https"):
         raise ValueError(f"Pagination link uses disallowed scheme: {next_url!r}")
-    # After the first page we follow the server's own links, so compare
-    # against the URL we just fetched (which may already be a server-issued
-    # pagination link with the server's public address).
-    if n.scheme == b.scheme and n.netloc == b.netloc:
+
+    next_origin = (n.scheme, n.netloc)
+    current_origin = (b.scheme, b.netloc)
+
+    # If we already pinned an origin from a prior divergence, enforce it.
+    if pinned_origin and pinned_origin[0] is not None:
+        if next_origin != pinned_origin[0]:
+            raise ValueError(
+                f"Pagination link origin {n.scheme}://{n.netloc} does not match "
+                f"pinned origin {pinned_origin[0][0]}://{pinned_origin[0][1]}"
+            )
         return next_url
-    # On the very first page the server may return links using its configured
-    # server_address which differs from the caller-provided base_url (e.g.
-    # caller uses http://hapi-fhir:8080/fhir, server returns
-    # http://10.x.x.x:8081/fhir).  Allow this transition once and then
-    # subsequent pages will validate against the server's own origin.
+
+    # Same origin as the current page — always allowed.
+    if next_origin == current_origin:
+        return next_url
+
+    # First divergence: server returned a different public address.  Allow it
+    # once and pin so subsequent pages cannot hop to yet another origin.
     log.debug(
         "Pagination link origin (%s://%s) differs from request origin (%s://%s) "
-        "— accepting server-issued pagination URL",
+        "— accepting and pinning server-issued origin",
         n.scheme, n.netloc, b.scheme, b.netloc,
     )
+    if pinned_origin is not None:
+        pinned_origin[0] = next_origin
     return next_url
 
 

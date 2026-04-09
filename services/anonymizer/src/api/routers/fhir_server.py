@@ -76,8 +76,9 @@ async def process_from_server(
     token = req.token or os.environ.get("FHIR_SOURCE_TOKEN")
     svc = _get_service()
     try:
-        resource_types = svc.resolve_resource_types(
-            server_url, req.resource_types, token, req.timeout
+        resource_types = await asyncio.to_thread(
+            svc.resolve_resource_types,
+            server_url, req.resource_types, token, req.timeout,
         )
     except ValueError as exc:
         raise HTTPException(status_code=502, detail=f"Could not reach FHIR server: {exc}") from exc
@@ -249,8 +250,9 @@ async def process_round_trip(
     target_token = req.target_token or os.environ.get("FHIR_TARGET_TOKEN")
     svc = _get_service()
     try:
-        resource_types = svc.resolve_resource_types(
-            source_url, req.resource_types, source_token, req.timeout
+        resource_types = await asyncio.to_thread(
+            svc.resolve_resource_types,
+            source_url, req.resource_types, source_token, req.timeout,
         )
     except ValueError as exc:
         raise HTTPException(status_code=502, detail=f"Could not reach FHIR server: {exc}") from exc

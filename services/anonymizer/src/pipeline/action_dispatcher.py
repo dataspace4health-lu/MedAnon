@@ -93,13 +93,16 @@ def dispatch_pass1(
                 try:
                     matched = _evaluate_fhirpath_cached(resource, candidate + ".log()")
                     matched_elements.extend(matched)
-                except Exception:
-                    audit_log.debug(
-                        "fhirpath_eval_failed expression=%s resource_type=%s",
-                        candidate.replace("\n", " ").replace("\r", " "),
-                        resource.get("resourceType", "unknown") if isinstance(resource, dict) else "unknown",
-                    )
-                    continue
+                except Exception as exc:
+                    if processing_mode == "skip":
+                        audit_log.warning(
+                            "fhirpath_eval_failed_skip expression=%s resource_type=%s error=%s",
+                            candidate.replace("\n", " ").replace("\r", " "),
+                            resource.get("resourceType", "unknown") if isinstance(resource, dict) else "unknown",
+                            type(exc).__name__,
+                        )
+                        continue
+                    raise
 
         # Determine action category for duplicate-path filtering
         if action in DEIDENT_ACTIONS:

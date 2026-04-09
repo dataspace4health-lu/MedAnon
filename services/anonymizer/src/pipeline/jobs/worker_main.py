@@ -30,15 +30,26 @@ async def _main() -> None:
     redis_url = os.environ.get("MEDANON_REDIS_URL", "").strip()
     max_concurrent = int(os.environ.get("MEDANON_JOB_WORKERS", "3"))
 
+    # Expose Prometheus metrics on a lightweight HTTP server (separate from the
+    # FastAPI anonymizer).  Port is configurable; set to 0 to disable.
+    metrics_port = int(os.environ.get("MEDANON_WORKER_METRICS_PORT", "9091"))
+    if metrics_port > 0:
+        try:
+            from prometheus_client import start_http_server
+            start_http_server(metrics_port)
+            logger.info("worker_metrics_server started port=%d", metrics_port)
+        except Exception as exc:
+            logger.warning("worker_metrics_server_failed port=%d: %s", metrics_port, exc)
+
     # Opt-in Redis L2 cache for gPAS pseudonym sharing (with retry)
     if redis_url:
         retries = 5
         backoff = 2.0
         for attempt in range(1, retries + 1):
             try:
-                from utils.cache import RedisCache, configure_cache
-                configure_cache(RedisCache(redis_url))
-                logger.info("gpas_cache=redis")
+                from utils.cache import RedisCache, LocalLruCache, TieredCache, configure_cache
+                configure_cache(TieredCache(LocalLruCache(), RedisCache(redis_url)))
+                logger.info("gpas_cache=tiered(local+redis)")
                 break
             except Exception as exc:
                 if attempt < retries:

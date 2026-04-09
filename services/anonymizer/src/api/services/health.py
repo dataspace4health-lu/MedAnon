@@ -4,6 +4,9 @@ import logging
 import os
 import urllib.error
 import urllib.request as _ureq
+from concurrent.futures import as_completed
+
+from utils.thread_pool import get_executor
 
 logger = logging.getLogger("medanon")
 
@@ -12,36 +15,50 @@ class HealthCheckService:
     """Probes configured upstream services (gPAS, FHIR, NLP) for readiness."""
 
     def check_readiness(self, timeout: float | None = None) -> dict[str, str]:
-        """Probe all configured upstream services.
+        """Probe all configured upstream services **in parallel**.
 
         Returns a dict of ``{service_name: "ok"|"error"}`` for each configured
         upstream.  Empty dict when no upstreams are configured.
+
+        Worst-case latency is bounded by the single slowest probe (~timeout)
+        rather than the sum of all probes.
         """
         if timeout is None:
             timeout = float(os.environ.get("MEDANON_READY_TIMEOUT", "5.0"))
 
-        checks: dict[str, str] = {}
+        probes: dict[str, tuple] = {}
 
         gpas_url = os.environ.get("GPAS_URL", "")
         if gpas_url:
-            checks["gpas"] = self._probe_gpas(gpas_url, timeout)
+            probes["gpas"] = (self._probe_gpas, (gpas_url, timeout))
 
         fhir_url = os.environ.get("FHIR_SOURCE_URL", "")
         if fhir_url:
-            checks["fhir"] = self._probe_fhir(fhir_url, timeout)
+            probes["fhir"] = (self._probe_fhir, (fhir_url, timeout))
 
         fhir_target_url = os.environ.get("FHIR_TARGET_URL", "")
         if fhir_target_url:
-            checks["fhir_target"] = self._probe_fhir(fhir_target_url, timeout)
+            probes["fhir_target"] = (self._probe_fhir, (fhir_target_url, timeout))
 
         redis_url = os.environ.get("MEDANON_REDIS_URL", "").strip()
         if redis_url:
-            checks["redis"] = self._probe_redis(redis_url, timeout)
+            probes["redis"] = (self._probe_redis, (redis_url, timeout))
 
         nlp_model = os.environ.get("MEDANON_NLP_MODEL", "")
         if nlp_model:
-            checks["nlp"] = self._probe_nlp()
+            probes["nlp"] = (self._probe_nlp, ())
 
+        if not probes:
+            return {}
+
+        checks: dict[str, str] = {}
+        executor = get_executor()
+        futures = {
+            executor.submit(fn, *args): name
+            for name, (fn, args) in probes.items()
+        }
+        for fut in as_completed(futures, timeout=timeout + 2):
+            checks[futures[fut]] = fut.result()
         return checks
 
     def _probe_gpas(self, url: str, timeout: float) -> str:

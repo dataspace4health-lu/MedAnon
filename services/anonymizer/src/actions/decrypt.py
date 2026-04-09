@@ -18,9 +18,9 @@ def _decrypt(ciphertext, enc_params):
 
 def _decrypt_nodes(node, key, value, enc_params):
     if isinstance(node, list):
-        for idx in range(len(node)):
-            _decrypt_nodes(node[idx], key, value, enc_params)
-    elif isinstance(node, dict) and (key in list(node.keys())):
+        for item in node:
+            _decrypt_nodes(item, key, value, enc_params)
+    elif isinstance(node, dict) and key in node:
         if isinstance(node[key], list):
             for idx, data in enumerate(node[key]):
                 if data == value:

@@ -3,16 +3,21 @@ import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import {
   Search, Loader2, AlertCircle, Users, ChevronDown, PackageOpen,
-  ChevronRight, Check,
+  ChevronRight, Check, X, ShieldCheck,
 } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { PatientCard } from '@/components/shared/PatientCard';
+import { DeidentifyPanel } from '@/components/shared/DeidentifyPanel';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
+} from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
 import { capabilityStatement, searchPatients, fetchResourceTypeCounts } from '@/api/fhir';
 import type { ResourceTypeCount } from '@/api/fhir';
-import { submitBulkExportJob } from '@/api/medanon';
+import { submitBulkExportJob, submitBatchPatientExportJob } from '@/api/medanon';
 import { useConfig } from '@/context/ConfigContext';
 import { useBulkExport } from '@/context/BulkExportContext';
 import type { PatientSummary } from '@/api/types';
@@ -40,6 +45,57 @@ export default function PatientBrowserPage() {
   const [selectedTypes, setSelectedTypes] = useState<Set<string>>(new Set());
   const [typePickerOpen, setTypePickerOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
+
+  // Multi-patient selection state
+  const [selectedPatients, setSelectedPatients] = useState<Map<string, PatientSummary>>(new Map());
+  const selectionMode = selectedPatients.size > 0;
+
+  // Preview dialog state
+  const [previewPatient, setPreviewPatient] = useState<PatientSummary | null>(null);
+
+  const togglePatientSelection = (patient: PatientSummary) => {
+    setSelectedPatients((prev) => {
+      const next = new Map(prev);
+      if (next.has(patient.id)) {
+        next.delete(patient.id);
+      } else {
+        next.set(patient.id, patient);
+      }
+      return next;
+    });
+  };
+
+  const selectAllOnPage = () => {
+    setSelectedPatients((prev) => {
+      const next = new Map(prev);
+      for (const p of patients) next.set(p.id, p);
+      return next;
+    });
+  };
+
+  const deselectAll = () => setSelectedPatients(new Map());
+
+  const handleBatchDeidentify = () => {
+    if (selectedPatients.size === 0) return;
+    const patientIds = Array.from(selectedPatients.keys());
+    const patientNames: Record<string, string> = {};
+    for (const [id, p] of selectedPatients) {
+      if (p.name) patientNames[id] = p.name;
+    }
+    const count = patientIds.length;
+    const exportId = submitExport(
+      `Batch Export (${count} patient${count !== 1 ? 's' : ''})`,
+      `batch-${count}-patients-deidentified.ndjson`,
+      () => submitBatchPatientExportJob({
+        patient_ids: patientIds,
+        patient_names: Object.keys(patientNames).length > 0 ? patientNames : undefined,
+        config_profile: configProfile,
+      }),
+      { source: 'patients', patientCount: count, configProfile },
+    );
+    deselectAll();
+    navigate('/bulk-deidentify', { state: { autoSelectId: exportId } });
+  };
 
   // FHIR connectivity check + initial data load
   useEffect(() => {
@@ -85,6 +141,7 @@ export default function PatientBrowserPage() {
   const handleSearch = async () => {
     setSearching(true);
     setCommittedName(searchName);
+    setSelectedPatients(new Map());
     try {
       const result = await searchPatients(searchName || undefined, PAGE_SIZE, 0);
       setPatients(result.items);
@@ -358,21 +415,62 @@ export default function PatientBrowserPage() {
       {/* Results */}
       {!searching && patients.length > 0 && (
         <>
-          <p className="mb-4 text-sm text-muted-foreground">
-            {total !== null ? (
-              <>{total} patient{total !== 1 ? 's' : ''} total &middot; showing {patients.length}</>
-            ) : (
-              <>{patients.length} patient{patients.length !== 1 ? 's' : ''} found</>
-            )}
-          </p>
+          <div className="mb-4 flex items-center justify-between">
+            <p className="text-sm text-muted-foreground">
+              {total !== null ? (
+                <>{total} patient{total !== 1 ? 's' : ''} total &middot; showing {patients.length}</>
+              ) : (
+                <>{patients.length} patient{patients.length !== 1 ? 's' : ''} found</>
+              )}
+            </p>
+            <div className="flex items-center gap-2">
+              <button
+                className="text-xs font-medium text-primary hover:underline"
+                onClick={selectionMode && selectedPatients.size === patients.length ? deselectAll : selectAllOnPage}
+              >
+                {selectionMode && selectedPatients.size === patients.length ? 'Deselect All' : 'Select All'}
+              </button>
+            </div>
+          </div>
+
+          {/* Sticky selection toolbar */}
+          {selectionMode && (
+            <div className="mb-4 flex flex-wrap items-center gap-3 rounded-xl border bg-primary/5 border-primary/30 p-3 shadow-sm">
+              <div className="flex items-center gap-2 flex-1 min-w-0">
+                <Badge variant="secondary" className="text-xs gap-1">
+                  <Users className="size-3" />
+                  {selectedPatients.size} patient{selectedPatients.size !== 1 ? 's' : ''} selected
+                </Badge>
+                <button
+                  className="text-xs text-muted-foreground hover:text-foreground hover:underline flex items-center gap-1"
+                  onClick={deselectAll}
+                >
+                  <X className="size-3" />
+                  Clear
+                </button>
+              </div>
+              <div className="flex items-center gap-2">
+                <Badge variant="outline" className="font-mono text-xs">
+                  {configProfile}
+                </Badge>
+                <Button size="sm" onClick={handleBatchDeidentify}>
+                  <ShieldCheck className="size-4" />
+                  De-identify Selected ({selectedPatients.size})
+                </Button>
+              </div>
+            </div>
+          )}
 
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             {patients.map((patient) => (
               <PatientCard
                 key={patient.id}
                 patient={patient}
-                selected={false}
-                onSelect={() => handleSelectPatient(patient)}
+                selected={selectedPatients.has(patient.id)}
+                selectionMode={selectionMode}
+                onSelect={() => togglePatientSelection(patient)}
+                onNavigate={() => handleSelectPatient(patient)}
+                onPreview={() => setPreviewPatient(patient)}
               />
             ))}
           </div>
@@ -387,6 +485,27 @@ export default function PatientBrowserPage() {
           )}
         </>
       )}
+      {/* Preview dialog */}
+      <Dialog open={previewPatient !== null} onOpenChange={(open) => { if (!open) setPreviewPatient(null); }}>
+        <DialogContent className="sm:max-w-4xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>
+              Preview De-identification — {previewPatient?.name || 'Patient'}
+            </DialogTitle>
+            <DialogDescription>
+              Preview how this patient's data will be de-identified with the current config profile.
+              Click "Run $everything" below to start.
+            </DialogDescription>
+          </DialogHeader>
+          {previewPatient && (
+            <DeidentifyPanel
+              patientId={previewPatient.id}
+              patientName={previewPatient.name}
+              configProfile={configProfile}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

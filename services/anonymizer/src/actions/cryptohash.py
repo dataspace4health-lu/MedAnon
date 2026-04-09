@@ -3,9 +3,11 @@ from Crypto.Hash import SHA3_256, SHA256, HMAC
 import json as _json_stdlib
 import logging
 import os
+import threading
 
 _hash_log = logging.getLogger("medanon.cryptohash")
 _warned_no_key = False
+_warned_lock = threading.Lock()
 
 
 def _normalized_node_str(value):
@@ -64,23 +66,24 @@ def _compute_hash(msg, params):
         )
 
     global _warned_no_key
-    if not _warned_no_key:
-        _hash_log.warning(
-            "No HMAC key configured (MEDANON_HASH_KEY is unset). "
-            "Falling back to plain %s without a secret key. "
-            "This produces deterministic, reversible hashes via rainbow tables — "
-            "NOT suitable for production pseudonymization under GDPR Art. 4(5).",
-            hash_type.upper(),
-        )
-        _warned_no_key = True
+    with _warned_lock:
+        if not _warned_no_key:
+            _hash_log.warning(
+                "No HMAC key configured (MEDANON_HASH_KEY is unset). "
+                "Falling back to plain %s without a secret key. "
+                "This produces deterministic, reversible hashes via rainbow tables — "
+                "NOT suitable for production pseudonymization under GDPR Art. 4(5).",
+                hash_type.upper(),
+            )
+            _warned_no_key = True
     return digestmod.new(msg).hexdigest()
 
 
 def _hash_nodes(node, key, value, params):
     if isinstance(node, list):
-        for idx in range(len(node)):
-            _hash_nodes(node[idx], key, value, params)
-    elif isinstance(node, dict) and (key in list(node.keys())):
+        for item in node:
+            _hash_nodes(item, key, value, params)
+    elif isinstance(node, dict) and (key in node):
         if isinstance(node[key], list):
             for idx, data in enumerate(node[key]):
                 if data == value:

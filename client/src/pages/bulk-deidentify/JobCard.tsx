@@ -4,6 +4,9 @@ import { Progress } from "@/components/ui/progress";
 import { cn } from "@/lib/utils";
 import type { ExportJob } from "@/context/BulkExportContext";
 import { PHASE_LABELS, StatusIcon, statusBadge, formatElapsed } from "./bulkHelpers.tsx";
+import { getGradeStyle } from "@/lib/qualityScore";
+import type { LetterGrade } from "@/lib/qualityScore";
+import { ShieldCheck } from "lucide-react";
 
 export function JobCard({
   job,
@@ -14,20 +17,28 @@ export function JobCard({
   isSelected: boolean;
   onSelect: () => void;
 }) {
-  const [elapsed, setElapsed] = useState(() => Date.now() - job.startedAt);
   const isActive =
     job.status === "submitting" ||
     job.status === "pending" ||
     job.status === "running";
 
+  // For terminal jobs, freeze elapsed at completedAt - startedAt.
+  // For active jobs, tick every second from startedAt.
+  const frozenElapsed = job.completedAt != null ? job.completedAt - job.startedAt : null;
+  const [elapsed, setElapsed] = useState(() => frozenElapsed ?? Date.now() - job.startedAt);
+
   useEffect(() => {
+    if (frozenElapsed != null) {
+      setElapsed(frozenElapsed);
+      return;
+    }
     if (!isActive) {
       setElapsed(Date.now() - job.startedAt);
       return;
     }
     const timer = setInterval(() => setElapsed(Date.now() - job.startedAt), 1000);
     return () => clearInterval(timer);
-  }, [isActive, job.startedAt]);
+  }, [isActive, job.startedAt, frozenElapsed]);
 
   // Compute real progress percentage when staged_count is available
   const hasProgress = job.stagedCount != null && job.stagedCount > 0 && job.phase === "processing";
@@ -47,6 +58,20 @@ export function JobCard({
           <StatusIcon status={job.status} />
           <CardTitle className="flex-1 truncate">{job.label}</CardTitle>
           {statusBadge(job.status)}
+          {job.backendScore?.computed && (() => {
+            const avg = job.backendScore.avg_composite ?? 0;
+            const grade: LetterGrade = avg >= 90 ? "A" : avg >= 75 ? "B" : avg >= 60 ? "C" : avg >= 40 ? "D" : "F";
+            return (
+              <span className={cn(
+                "inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-bold tabular-nums",
+                getGradeStyle(grade).bg,
+                getGradeStyle(grade).text,
+              )}>
+                <ShieldCheck className="size-2.5" />
+                {grade}
+              </span>
+            );
+          })()}
         </div>
       </CardHeader>
       <CardContent>

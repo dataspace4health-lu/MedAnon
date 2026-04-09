@@ -21,6 +21,7 @@ export interface NdjsonSummary {
   allFieldCounts: Record<string, Record<string, number>>;
   piiSample: Record<string, unknown>[];
   totalResources: number;
+  errorCount: number;
 }
 
 export async function parseNdjsonBlob(blob: Blob): Promise<NdjsonSummary> {
@@ -34,6 +35,7 @@ export async function parseNdjsonBlob(blob: Blob): Promise<NdjsonSummary> {
   const FIELD_SAMPLE_LIMIT = 200;
   const fieldSampleCount: Record<string, number> = {};
   let totalResources = 0;
+  let errorCount = 0;
 
   // Stream the blob in chunks — never materialise the full text
   const reader = blob.stream().getReader();
@@ -56,6 +58,12 @@ export async function parseNdjsonBlob(blob: Blob): Promise<NdjsonSummary> {
         const type = (resource.resourceType as string) ?? "Unknown";
         counts[type] = (counts[type] ?? 0) + 1;
         totalResources++;
+
+        // Count error markers from failed processing
+        if ("error" in resource) {
+          errorCount++;
+          continue;
+        }
 
         // Per-type PII sample — keep originals (with manifest tags)
         piiSampleCount[type] = (piiSampleCount[type] ?? 0) + 1;
@@ -83,14 +91,18 @@ export async function parseNdjsonBlob(blob: Blob): Promise<NdjsonSummary> {
       const type = (resource.resourceType as string) ?? "Unknown";
       counts[type] = (counts[type] ?? 0) + 1;
       totalResources++;
-      piiSampleCount[type] = (piiSampleCount[type] ?? 0) + 1;
-      if (piiSampleCount[type] <= PII_SAMPLE_PER_TYPE) piiSample.push(resource);
-      fieldSampleCount[type] = (fieldSampleCount[type] ?? 0) + 1;
-      if (fieldSampleCount[type] <= FIELD_SAMPLE_LIMIT) {
-        if (!allFieldCounts[type]) allFieldCounts[type] = {};
-        const fc = allFieldCounts[type];
-        for (const { field } of extractFieldsDeep(resource)) {
-          if (field !== "resourceType") fc[field] = (fc[field] ?? 0) + 1;
+      if ("error" in resource) {
+        errorCount++;
+      } else {
+        piiSampleCount[type] = (piiSampleCount[type] ?? 0) + 1;
+        if (piiSampleCount[type] <= PII_SAMPLE_PER_TYPE) piiSample.push(resource);
+        fieldSampleCount[type] = (fieldSampleCount[type] ?? 0) + 1;
+        if (fieldSampleCount[type] <= FIELD_SAMPLE_LIMIT) {
+          if (!allFieldCounts[type]) allFieldCounts[type] = {};
+          const fc = allFieldCounts[type];
+          for (const { field } of extractFieldsDeep(resource)) {
+            if (field !== "resourceType") fc[field] = (fc[field] ?? 0) + 1;
+          }
         }
       }
     } catch {
@@ -98,7 +110,7 @@ export async function parseNdjsonBlob(blob: Blob): Promise<NdjsonSummary> {
     }
   }
 
-  return { counts, allFieldCounts, piiSample, totalResources };
+  return { counts, allFieldCounts, piiSample, totalResources, errorCount };
 }
 
 // ---------------------------------------------------------------------------

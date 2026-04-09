@@ -37,6 +37,7 @@ class JobService:
             "processed": processed,
             "staged_count": checkpoint.get("staged_count"),
             "phase": checkpoint.get("phase", "queued"),
+            "summary": checkpoint.get("summary"),
         }
 
     def submit_bulk_export(self, server_url: str, params: dict) -> dict:
@@ -57,6 +58,13 @@ class JobService:
         """Create a patient $everything export job. Returns the job dict."""
         store = self._get_store()
         job = store.create("patient-export", {"server_url": server_url, **params})
+        store.notify_new_job(job.id)
+        return self._job_to_dict(job)
+
+    def submit_batch_patient_export(self, server_url: str, params: dict) -> dict:
+        """Create a batch patient $everything export job. Returns the job dict."""
+        store = self._get_store()
+        job = store.create("batch-patient-export", {"server_url": server_url, **params})
         store.notify_new_job(job.id)
         return self._job_to_dict(job)
 
@@ -143,21 +151,28 @@ class JobService:
         store.notify_new_job(job.id)
         return self._job_to_dict(job)
 
+    _UPLOAD_CHUNK = 10_000
+
     def upload_job_to_target(self, job_id: str, target_url: str, target_token: str | None = None, timeout: float = 30.0) -> dict:
         """Read a completed job's NDJSON result and upload resources to target FHIR server.
 
         Uses idempotent PUT (via upload_resources) so repeated calls are safe.
         Returns {job_id, uploaded, errors, total}.
         Supports both local-file and S3 result keys transparently.
+
+        Streams the NDJSON in chunks of ``_UPLOAD_CHUNK`` resources to cap
+        peak memory regardless of total file size.
         """
         result_path = self.get_result_path(job_id)  # raises JobNotFound / JobNotComplete / JobResultMissing
 
         from integrations.fhir.client import upload_resources
         from integrations.storage import get_result_storage
 
-        resources: list[dict] = []
+        uploaded = 0
+        errors = 0
         stream = get_result_storage().open_stream(result_path)
         try:
+            chunk: list[dict] = []
             for line in stream:
                 if isinstance(line, (bytes, bytearray)):
                     line = line.decode("utf-8")
@@ -167,23 +182,33 @@ class JobService:
                 try:
                     resource = json.loads(line)
                     if isinstance(resource, dict) and resource.get("resourceType") and "error" not in resource:
-                        resources.append(resource)
+                        chunk.append(resource)
                 except (json.JSONDecodeError, TypeError):
                     pass
+                if len(chunk) >= self._UPLOAD_CHUNK:
+                    uploaded, errors = self._flush_upload_chunk(
+                        chunk, target_url, target_token, timeout, uploaded, errors, upload_resources,
+                    )
+                    chunk = []
+            if chunk:
+                uploaded, errors = self._flush_upload_chunk(
+                    chunk, target_url, target_token, timeout, uploaded, errors, upload_resources,
+                )
         finally:
             if hasattr(stream, "close"):
                 stream.close()
 
-        uploaded = 0
-        errors = 0
-        for result in upload_resources(target_url, resources, token=target_token, timeout=timeout):
+        logger.info("upload_job_to_target job=%s uploaded=%d errors=%d target=%s", job_id, uploaded, errors, target_url)
+        return {"job_id": job_id, "uploaded": uploaded, "errors": errors, "total": uploaded + errors}
+
+    @staticmethod
+    def _flush_upload_chunk(chunk, target_url, target_token, timeout, uploaded, errors, upload_fn):
+        for result in upload_fn(target_url, chunk, token=target_token, timeout=timeout):
             if result["success"]:
                 uploaded += 1
             else:
                 errors += 1
-
-        logger.info("upload_job_to_target job=%s uploaded=%d errors=%d target=%s", job_id, uploaded, errors, target_url)
-        return {"job_id": job_id, "uploaded": uploaded, "errors": errors, "total": uploaded + errors}
+        return uploaded, errors
 
     def get_staged_stats(self, job_id: str) -> dict:
         """Return staging row counts for a bulk-export or cohort job.
@@ -204,3 +229,24 @@ class JobService:
 
         counts = staging.count_by_status(job_id)
         return {"job_id": job_id, **counts}
+
+    def delete_result(self, job_id: str) -> bool:
+        """Delete the result file for a completed job.
+
+        Returns True if the file was deleted, False if it did not exist.
+        Raises JobNotFound / JobNotComplete / JobResultMissing as appropriate.
+        """
+        store = self._get_store()
+        job = store.get(job_id)
+        if job is None:
+            raise JobNotFound()
+        if job.status.value != "done":
+            raise JobNotComplete(job.status.value)
+        if not job.result_path:
+            raise JobResultMissing()
+        from integrations.storage import get_result_storage
+        storage = get_result_storage()
+        deleted = storage.delete(job.result_path)
+        if deleted:
+            logger.info("result_deleted job=%s path=%s", job_id, job.result_path)
+        return deleted

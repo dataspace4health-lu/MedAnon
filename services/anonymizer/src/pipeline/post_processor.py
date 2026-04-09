@@ -301,9 +301,7 @@ def _post_process_resource(
                     del obj["display"]
 
         # --- Text-ID replacement + recurse
-        # Note: del obj["display"] above mutates before iteration starts, so
-        # list(keys()) is not needed — the view is created post-mutation.
-        for key in obj.keys():
+        for key in list(obj.keys()):
             value = obj[key]
             if isinstance(value, str):
                 # text-ID replacement (skip structural fields)

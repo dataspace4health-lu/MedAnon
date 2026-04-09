@@ -7,7 +7,9 @@ metadata:
     {{- include "anonymizer.labels" . | nindent 4 }}
     app.kubernetes.io/component: anonymizer
 spec:
+  {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicas }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "anonymizer.selectorLabels" (dict "Release" .Release "component" "anonymizer") | nindent 6 }}

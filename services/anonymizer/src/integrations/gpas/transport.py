@@ -37,6 +37,7 @@ _gpas_pool = urllib3.PoolManager(
     num_pools=2,
     maxsize=_GPAS_POOL_SIZE,
     retries=False,
+    timeout=urllib3.Timeout(connect=5, read=30),
 )
 
 # ---------------------------------------------------------------------------
@@ -161,15 +162,22 @@ def _parse_gpas_domains_from_html(html_text):
 
 def list_gpas_domains(params):
     """Fetch and return configured gPAS domain names from the admin UI."""
+    if not _gpas_circuit_breaker.allow_request():
+        raise GpasUnavailableError("gPAS circuit breaker OPEN — cannot list domains")
     url = _resolve_gpas_admin_url(params)
     auth_headers = _resolve_gpas_headers(params)
     headers = {'Accept': 'text/html'}
     if 'Authorization' in auth_headers:
         headers['Authorization'] = auth_headers['Authorization']
     timeout = float(params.get('gpas_timeout_sec', 30))
-    resp = _gpas_pool.request('GET', url, headers=headers, timeout=timeout)
-    body = resp.data.decode('utf-8', errors='replace')
-    return _parse_gpas_domains_from_html(body)
+    try:
+        resp = _gpas_pool.request('GET', url, headers=headers, timeout=timeout)
+        body = resp.data.decode('utf-8', errors='replace')
+        _gpas_circuit_breaker.record_success()
+        return _parse_gpas_domains_from_html(body)
+    except Exception:
+        _gpas_circuit_breaker.record_failure()
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -211,7 +219,7 @@ def _call_gpas_operation(base_url, operation, fhir_params, params):
                 'POST', url,
                 body=payload,
                 headers=_resolve_gpas_headers(params),
-                timeout=timeout_sec,
+                timeout=urllib3.Timeout(connect=5, read=timeout_sec),
             )
             if resp.status >= 400:
                 should_retry = resp.status in (429, 500, 502, 503, 504)

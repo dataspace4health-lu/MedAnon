@@ -85,7 +85,13 @@ class RedisCache:
         key_prefix: str = "medanon:gpas:",
     ) -> None:
         import redis as _redis  # lazy import — redis package is optional
-        self._client = _redis.StrictRedis.from_url(redis_url, decode_responses=True)
+        self._client = _redis.StrictRedis.from_url(
+            redis_url,
+            decode_responses=True,
+            socket_timeout=5,
+            socket_connect_timeout=2,
+            retry_on_timeout=True,
+        )
         self._ttl = ttl
         self._prefix = key_prefix
 

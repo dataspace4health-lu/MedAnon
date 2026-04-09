@@ -14,6 +14,8 @@ Configuration env vars (all optional):
     SMART_ISSUER             — Token issuer (iss claim); defaults to request base URL
 """
 
+import asyncio
+import hmac
 import json
 import logging
 import os
@@ -107,24 +109,30 @@ async def introspect_token(
         return await _proxy_introspect(upstream_url, token)
 
     api_key = os.environ.get("MEDANON_API_KEY", "").strip()
-    if api_key and token == api_key:
+    if api_key and hmac.compare_digest(token, api_key):
         return JSONResponse(content={"active": True, "scope": "user/*.*", "token_type": "bearer"})
 
     return JSONResponse(content={"active": False})
 
 
-async def _proxy_introspect(upstream_url: str, token: str) -> JSONResponse:
-    """Proxy a token introspection request to an upstream OAuth2 server."""
-    body = urllib.parse.urlencode({"token": token}).encode("utf-8")
+def _sync_introspect(upstream_url: str, body: bytes) -> tuple[dict, int]:
+    """Sync HTTP call for upstream token introspection (runs in thread pool)."""
     req = urllib.request.Request(
         upstream_url,
         data=body,
         headers={"Content-Type": "application/x-www-form-urlencoded"},
         method="POST",
     )
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        return json.loads(resp.read()), resp.status
+
+
+async def _proxy_introspect(upstream_url: str, token: str) -> JSONResponse:
+    """Proxy a token introspection request to an upstream OAuth2 server."""
+    body = urllib.parse.urlencode({"token": token}).encode("utf-8")
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            return JSONResponse(content=json.loads(resp.read()), status_code=resp.status)
+        data, status = await asyncio.to_thread(_sync_introspect, upstream_url, body)
+        return JSONResponse(content=data, status_code=status)
     except urllib.error.HTTPError as exc:
         _log.warning("smart_introspect_upstream_error status=%d", exc.code)
         raise HTTPException(status_code=502, detail=f"Upstream introspection server returned {exc.code}")

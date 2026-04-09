@@ -19,6 +19,7 @@ audit_log = logging.getLogger("medanon.audit")
 # ---------------------------------------------------------------------------
 
 _fhirpathpy_log_registered = False
+_fhirpathpy_log_lock = threading.Lock()
 
 
 @lru_cache(maxsize=512)
@@ -31,10 +32,12 @@ def _compile_fhirpath(expression: str):
     global _fhirpathpy_log_registered
     import fhirpathpy
     if not _fhirpathpy_log_registered:
-        fhirpathpy.engine.invocations["log"] = {
-            "fn": lambda ctx, els: [{"path": x.path, "value": x.data} for x in els]
-        }
-        _fhirpathpy_log_registered = True
+        with _fhirpathpy_log_lock:
+            if not _fhirpathpy_log_registered:
+                fhirpathpy.engine.invocations["log"] = {
+                    "fn": lambda ctx, els: [{"path": x.path, "value": x.data} for x in els]
+                }
+                _fhirpathpy_log_registered = True
     return fhirpathpy.compile(expression)
 
 
@@ -327,6 +330,7 @@ def _build_match_candidates(match_expr: str, resource: dict) -> tuple:
 # ---------------------------------------------------------------------------
 
 _rule_index_cache: dict = {}
+_RULE_INDEX_CACHE_MAX = 64
 _per_type_cache: dict[tuple, list] = {}
 _PER_TYPE_CACHE_MAX = 256
 _cache_lock = threading.Lock()
@@ -371,6 +375,12 @@ def _get_rules_for_resource(resource: dict, settings) -> list:
             else:
                 index = _build_rule_index(rules)
                 if rules_key:
+                    if len(_rule_index_cache) >= _RULE_INDEX_CACHE_MAX:
+                        try:
+                            oldest = next(iter(_rule_index_cache))
+                            del _rule_index_cache[oldest]
+                        except StopIteration:
+                            pass
                     _rule_index_cache[rules_key] = index
 
     resource_type = resource.get("resourceType", "") if isinstance(resource, dict) else ""
@@ -386,7 +396,10 @@ def _get_rules_for_resource(resource: dict, settings) -> list:
     if rules_key:
         with _cache_lock:
             if len(_per_type_cache) >= _PER_TYPE_CACHE_MAX:
-                _per_type_cache.clear()
+                # Evict oldest 25% instead of clearing the entire cache
+                evict_count = _PER_TYPE_CACHE_MAX // 4
+                for _k in list(_per_type_cache)[:evict_count]:
+                    del _per_type_cache[_k]
             _per_type_cache[per_type_key] = applicable
     return applicable
 

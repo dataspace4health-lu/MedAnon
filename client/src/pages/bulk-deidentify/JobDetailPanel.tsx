@@ -13,14 +13,20 @@ import {
 } from "@/components/ui/select";
 import {
   Loader2, AlertCircle, Download, CheckCircle2, Inbox, Square,
-  RefreshCw, User, Stethoscope, Database, Upload,
+  RefreshCw, User, Users, Stethoscope, Database, Upload, ShieldCheck,
 } from "lucide-react";
-import { getJobResult, getJobStatus, submitBulkImport } from "@/api/medanon";
+import { getJobResult, getJobStatus, submitBulkImport, getJobScore, triggerJobScore } from "@/api/medanon";
 import type { JobResponse } from "@/api/medanon";
 import { useBulkExport } from "@/context/BulkExportContext";
 import type { ExportJob } from "@/context/BulkExportContext";
 import { buildPiiFromDeidentifiedOnly, buildFieldSummary, stripManifestTag } from "@/lib/piiDetection";
 import type { PiiDetectionMap, FieldSummaryMap } from "@/lib/piiDetection";
+import { getGradeStyle } from "@/lib/qualityScore";
+import type { LetterGrade } from "@/lib/qualityScore";
+import {
+  Tooltip, TooltipTrigger, TooltipContent, TooltipProvider,
+} from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
 import {
   PHASE_LABELS,
   parseNdjsonBlob,
@@ -33,7 +39,7 @@ import {
 import type { BulkFormat } from "./bulkHelpers.tsx";
 
 export function JobDetailPanel({ job }: { job: ExportJob }) {
-  const { cancelJob, dismissJob, reprocessJob } = useBulkExport();
+  const { cancelJob, dismissJob, reprocessJob, setJobBackendScore } = useBulkExport();
   const navigate = useNavigate();
   const [resourceCounts, setResourceCounts] = useState<Record<string, number>>({});
   const [piiData, setPiiData] = useState<PiiDetectionMap>({});
@@ -48,6 +54,7 @@ export function JobDetailPanel({ job }: { job: ExportJob }) {
   const [reprocessing, setReprocessing] = useState(false);
   const [importJob, setImportJob] = useState<JobResponse | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [confirmDismiss, setConfirmDismiss] = useState(false);
   const importPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // Cache parsed job ID to avoid re-parsing the same result
   const parsedJobIdRef = useRef<string | null>(null);
@@ -76,12 +83,24 @@ export function JobDetailPanel({ job }: { job: ExportJob }) {
         await new Promise<void>((r) => setTimeout(r, 0));
         const pii = buildPiiFromDeidentifiedOnly(piiSample);
         if (cancelled) return;
+        const builtFieldSummary = buildFieldSummary(allFieldCounts, pii, counts);
         setResourceCounts(counts);
         setPiiData(pii);
-        setFieldSummary(buildFieldSummary(allFieldCounts, pii, counts));
+        setFieldSummary(builtFieldSummary);
         setTotalResources(total);
         setParsed(true);
         parsedJobIdRef.current = job.jobId;
+        // Fetch backend score
+        try {
+          let scoreResult = await getJobScore(job.jobId!);
+          if (!scoreResult.computed) {
+            // Trigger on-demand scoring if not yet computed
+            scoreResult = await triggerJobScore(job.jobId!);
+          }
+          setJobBackendScore(job.id, scoreResult);
+        } catch (scoreErr) {
+          console.warn("Failed to fetch backend score:", scoreErr);
+        }
       } catch (err) {
         if (!cancelled)
           setFetchError(err instanceof Error ? err.message : "Failed to fetch results");
@@ -234,14 +253,36 @@ export function JobDetailPanel({ job }: { job: ExportJob }) {
           </Button>
         )}
         {isTerminal && (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="text-xs text-muted-foreground"
-            onClick={() => dismissJob(job.id)}
-          >
-            Dismiss
-          </Button>
+          confirmDismiss ? (
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs text-muted-foreground">Dismiss this job?</span>
+              <Button
+                variant="destructive"
+                size="sm"
+                className="text-xs"
+                onClick={() => dismissJob(job.id)}
+              >
+                Confirm
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-xs"
+                onClick={() => setConfirmDismiss(false)}
+              >
+                Cancel
+              </Button>
+            </div>
+          ) : (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-xs text-muted-foreground"
+              onClick={() => setConfirmDismiss(true)}
+            >
+              Dismiss
+            </Button>
+          )
         )}
       </div>
 
@@ -256,6 +297,12 @@ export function JobDetailPanel({ job }: { job: ExportJob }) {
             {job.patientName || "Patient"}
           </Badge>
         )}
+        {job.source === "patients" && (
+          <Badge variant="secondary" className="text-xs gap-1">
+            <Users className="size-3" />
+            {job.patientCount ? `${job.patientCount} Patients` : "Multiple Patients"}
+          </Badge>
+        )}
         {job.source === "condition" && job.conditionName && (
           <Badge variant="secondary" className="text-xs gap-1">
             <Stethoscope className="size-3" />
@@ -267,6 +314,41 @@ export function JobDetailPanel({ job }: { job: ExportJob }) {
             <Database className="size-3" />
             Full Export
           </Badge>
+        )}
+        {job.backendScore?.computed && (() => {
+          const avg = job.backendScore.avg_composite ?? 0;
+          const grade: LetterGrade = avg >= 90 ? "A" : avg >= 75 ? "B" : avg >= 60 ? "C" : avg >= 40 ? "D" : "F";
+          const s = getGradeStyle(grade);
+          const decision = job.backendScore.pass_count != null && job.backendScore.total_scored != null
+            ? `${job.backendScore.pass_count}/${job.backendScore.total_scored} passed`
+            : "";
+          return (
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger>
+                  <span className={cn(
+                    "inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-xs font-semibold",
+                    s.bg, s.text, s.border,
+                  )}>
+                    <ShieldCheck className="size-3" />
+                    {grade} ({Math.round(avg)}%)
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <div className="text-xs space-y-1">
+                    <p className="font-semibold">De-identification Quality</p>
+                    <p>Composite: {Math.round(avg)}%</p>
+                    {job.backendScore.avg_utility != null && <p>Utility: {Math.round(job.backendScore.avg_utility * 100)}%</p>}
+                    {job.backendScore.avg_quality != null && <p>Quality: {Math.round(job.backendScore.avg_quality * 100)}%</p>}
+                    <p>{decision}</p>
+                  </div>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          );
+        })()}
+        {job.backendScore && !job.backendScore.computed && (
+          <span className="text-xs text-muted-foreground">No data to score</span>
         )}
       </div>
 
