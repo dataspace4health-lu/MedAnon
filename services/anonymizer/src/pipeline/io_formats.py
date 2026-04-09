@@ -1,5 +1,5 @@
-import json
 from pathlib import Path
+from utils.json_fast import loads as _json_loads, dumps as _json_dumps, dumps_pretty as _json_dumps_pretty
 import defusedxml.ElementTree as ET
 import xml.etree.ElementTree as _ET_WRITE  # stdlib ET used only for write operations
 
@@ -165,7 +165,7 @@ def write_fhir_xml_string(payload):
 def read_input_file(input_path, in_format, strip_line_prefix='//'):
     if in_format == 'json':
         with open(input_path, 'r', encoding='utf-8') as fin:
-            return json.load(fin)
+            return _json_loads(fin.read())
 
     if in_format == 'xml':
         return read_fhir_xml(input_path)
@@ -180,8 +180,8 @@ def read_input_file(input_path, in_format, strip_line_prefix='//'):
                 if strip_line_prefix and line.startswith(strip_line_prefix):
                     line = line[len(strip_line_prefix):]
                 try:
-                    records.append(json.loads(line))
-                except json.JSONDecodeError as exc:
+                    records.append(_json_loads(line))
+                except (ValueError, TypeError) as exc:
                     raise ValueError(f'Invalid NDJSON at line {line_number}: {exc}') from exc
         return records
 
@@ -192,9 +192,9 @@ def write_output_file(payload, output_path, out_format, pretty=False):
     if out_format == 'json':
         with open(output_path, 'w', encoding='utf-8') as fout:
             if pretty:
-                json.dump(payload, fout, indent=2)
+                fout.write(_json_dumps_pretty(payload))
             else:
-                json.dump(payload, fout, separators=(',', ':'))
+                fout.write(_json_dumps(payload))
             fout.write('\n')
         return
 
@@ -206,10 +206,10 @@ def write_output_file(payload, output_path, out_format, pretty=False):
         with open(output_path, 'w', encoding='utf-8') as fout:
             if isinstance(payload, list):
                 for item in payload:
-                    fout.write(json.dumps(item, separators=(',', ':')))
+                    fout.write(_json_dumps(item))
                     fout.write('\n')
             else:
-                fout.write(json.dumps(payload, separators=(',', ':')))
+                fout.write(_json_dumps(payload))
                 fout.write('\n')
         return
 
@@ -232,7 +232,7 @@ def parse_payload_bytes(body, in_format='auto', content_type=None, strip_line_pr
     text = body.decode('utf-8-sig') if isinstance(body, (bytes, bytearray)) else str(body)
 
     if fmt == 'json':
-        return json.loads(text)
+        return _json_loads(text)
     if fmt == 'xml':
         return read_fhir_xml_string(text)
     if fmt == 'ndjson':
@@ -244,8 +244,8 @@ def parse_payload_bytes(body, in_format='auto', content_type=None, strip_line_pr
             if strip_line_prefix and line.startswith(strip_line_prefix):
                 line = line[len(strip_line_prefix):]
             try:
-                records.append(json.loads(line))
-            except json.JSONDecodeError as exc:
+                records.append(_json_loads(line))
+            except (ValueError, TypeError) as exc:
                 raise ValueError(f'Invalid NDJSON at line {line_number}: {exc}') from exc
         return records
 
@@ -255,13 +255,19 @@ def parse_payload_bytes(body, in_format='auto', content_type=None, strip_line_pr
 def serialize_payload(payload, out_format='json', pretty=False):
     if out_format == 'json':
         if pretty:
-            return json.dumps(payload, indent=2) + '\n', 'application/fhir+json'
-        return json.dumps(payload, separators=(',', ':')) + '\n', 'application/fhir+json'
+            return _json_dumps_pretty(payload) + '\n', 'application/fhir+json'
+        return _json_dumps(payload) + '\n', 'application/fhir+json'
     if out_format == 'ndjson':
         if isinstance(payload, list):
-            text = ''.join(json.dumps(item, separators=(',', ':')) + '\n' for item in payload)
+            # Build NDJSON line-by-line to avoid holding the full serialized string
+            # in memory alongside the payload list.  For very large lists the caller
+            # should stream instead, but this prevents the 2× peak from .join().
+            parts = []
+            for item in payload:
+                parts.append(_json_dumps(item) + '\n')
+            text = ''.join(parts)
         else:
-            text = json.dumps(payload, separators=(',', ':')) + '\n'
+            text = _json_dumps(payload) + '\n'
         return text, 'application/x-ndjson'
     if out_format == 'xml':
         return write_fhir_xml_string(payload), 'application/fhir+xml'

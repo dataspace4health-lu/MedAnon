@@ -167,7 +167,8 @@ rules:
 - name: redact patient gender
   match: Patient.gender
   action: substitute
-  params: *redacted
+  params:
+    substitute_with: "unknown"
 
 - name: redact patient marital status
   match: Patient.maritalStatus
@@ -190,60 +191,87 @@ rules:
 # ==========================================================
 
 # US Core Race Extension - contains demographic information (PHI)
+# Redact the whole ombCategory inner extension (not just its valueCoding) so the
+# remaining Extension object always has value[x] — prevents FHIR R4 violation
+# "missing required element: value" (LenientErrorHandler warning on HAPI).
 - name: redact race omb category coding
-  match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-race').extension.where(url='ombCategory').value.coding
+  match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-race').extension.where(url='ombCategory')
   action: redact
 
 - name: redact race text value
-  match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-race').extension.where(url='text').value
+  match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-race').extension.where(url='text').valueString
   action: substitute
   params: *redacted
 
 # US Core Ethnicity Extension - contains demographic information (PHI)
 - name: redact ethnicity omb category coding
-  match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-ethnicity').extension.where(url='ombCategory').value.coding
+  match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-ethnicity').extension.where(url='ombCategory')
   action: redact
 
 - name: redact ethnicity text value
-  match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-ethnicity').extension.where(url='text').value
+  match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-ethnicity').extension.where(url='text').valueString
   action: substitute
   params: *redacted
 
 # Mother's Maiden Name Extension - contains identifying information (PHI)
 - name: redact mothers maiden name
-  match: Patient.extension.where(url='http://hl7.org/fhir/StructureDefinition/patient-mothersMaidenName').value
+  match: Patient.extension.where(url='http://hl7.org/fhir/StructureDefinition/patient-mothersMaidenName').valueString
   action: substitute
   params: *redacted
 
-# Birth Sex Extension - may be kept for medical purposes or redacted depending on policy
+# Birth Sex Extension - redact the whole extension (not just valueCode) so no
+# orphaned Extension with only url remains (FHIR R4 requires value[x] or sub-extensions).
 - name: redact birth sex
-  match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-birthsex').value
+  match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-birthsex')
   action: redact
 
 # Birth Place Extension - contains geographic identifiers (PHI)
 - name: redact birth place city
-  match: Patient.extension.where(url='http://hl7.org/fhir/StructureDefinition/patient-birthPlace').value.city
+  match: Patient.extension.where(url='http://hl7.org/fhir/StructureDefinition/patient-birthPlace').valueAddress.city
   action: substitute
   params: *redacted
 
 - name: redact birth place state
-  match: Patient.extension.where(url='http://hl7.org/fhir/StructureDefinition/patient-birthPlace').value.state
+  match: Patient.extension.where(url='http://hl7.org/fhir/StructureDefinition/patient-birthPlace').valueAddress.state
   action: substitute
   params: *redacted
 
 - name: redact birth place country
-  match: Patient.extension.where(url='http://hl7.org/fhir/StructureDefinition/patient-birthPlace').value.country
+  match: Patient.extension.where(url='http://hl7.org/fhir/StructureDefinition/patient-birthPlace').valueAddress.country
   action: substitute
   params: *redacted
 
-# Synthea-specific extensions - may contain identifiable data
+# Synthea-specific extensions - redact the whole extension so no orphaned
+# Extension with only url remains (valueDecimal removal would trigger HAPI
+# LenientErrorHandler "missing required element: value" warning).
 - name: redact synthea disability adjusted life years
-  match: Patient.extension.where(url='http://synthetichealth.github.io/synthea/disability-adjusted-life-years').value
+  match: Patient.extension.where(url='http://synthetichealth.github.io/synthea/disability-adjusted-life-years')
   action: redact
 
 - name: redact synthea quality adjusted life years
-  match: Patient.extension.where(url='http://synthetichealth.github.io/synthea/quality-adjusted-life-years').value
+  match: Patient.extension.where(url='http://synthetichealth.github.io/synthea/quality-adjusted-life-years')
   action: redact
+
+# Patient record links — cross-patient associations can re-identify
+- name: redact patient link
+  match: Patient.link
+  action: redact
+
+# Patient deceased boolean — fact of death is sensitive even without a date
+- name: redact patient deceased boolean
+  match: Patient.deceasedBoolean
+  action: redact
+
+# General practitioner and managing organisation display names
+- name: redact patient general practitioner display
+  match: Patient.generalPractitioner.display
+  action: substitute
+  params: *redacted
+
+- name: redact patient managing organization display
+  match: Patient.managingOrganization.display
+  action: substitute
+  params: *redacted
 
 # ==========================================================
 # 4. BIRTH DATE / DECEASED DATE — year only
@@ -322,7 +350,8 @@ rules:
 - name: redact practitioner gender
   match: Practitioner.gender
   action: substitute
-  params: *redacted
+  params:
+    substitute_with: "unknown"
 
 - name: generalise practitioner birth date
   match: Practitioner.birthDate
@@ -858,3 +887,30 @@ rules:
 - name: redact all addresses
   match: "*.address"
   action: redact
+
+# Coverage / insurance reference display names (subscriberId is a bare string,
+# not under identifier.value, so needs its own rule)
+- name: redact coverage subscriber id
+  match: Coverage.subscriberId
+  action: substitute
+  params: *redacted
+
+- name: redact coverage dependent
+  match: Coverage.dependent
+  action: substitute
+  params: *redacted
+
+- name: redact coverage subscriber display
+  match: Coverage.subscriber.display
+  action: substitute
+  params: *redacted
+
+- name: redact coverage beneficiary display
+  match: Coverage.beneficiary.display
+  action: substitute
+  params: *redacted
+
+- name: redact coverage payor display
+  match: Coverage.payor.display
+  action: substitute
+  params: *redacted

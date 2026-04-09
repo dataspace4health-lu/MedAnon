@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { toast } from 'sonner';
-import { Play, ChevronDown, X, FileText, Loader2, Server, Download } from 'lucide-react';
+import { Play, ChevronDown, X, FileText, Loader2, Server, Upload, CheckCircle2 } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { FileUploader } from '@/components/shared/FileUploader';
 import { StreamProgress } from '@/components/shared/StreamProgress';
@@ -24,325 +24,25 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useStreamingProcess } from '@/hooks/useStreamingProcess';
 import { useConfig } from '@/context/ConfigContext';
+import { buildPiiDetectionMap, buildPiiFromDeidentifiedOnly, buildFieldSummary, stripManifestTag } from '@/lib/piiDetection';
+import { extractFieldsDeep } from '@/lib/fhirFields';
 import {
   processBatch,
-  submitBulkExportJob,
-  getJobStatus,
-  getJobResult,
-  type JobResponse,
+  uploadToTarget,
 } from '@/api/medanon';
-
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
-const MAX_SIZE = 10 * 1024 * 1024; // 10 MB
-const ACCEPTED_EXTENSIONS = ['.ndjson', '.json', '.xml'];
-const MAX_VISIBLE_ERRORS = 10;
-
-const CT_MAP: Record<string, string> = {
-  '.ndjson': 'application/x-ndjson',
-  '.json': 'application/json',
-  '.xml': 'application/fhir+xml',
-};
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return '0 B';
-  const units = ['B', 'KB', 'MB', 'GB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(1024));
-  const value = bytes / Math.pow(1024, i);
-  return `${value.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
-}
-
-function sanitizeFilename(name: string): string {
-  const sanitized = name.replace(/[^a-zA-Z0-9\-_.]/g, '_');
-  return `deid_${sanitized}`;
-}
-
-function detectFormat(ext: string): string {
-  switch (ext) {
-    case '.ndjson':
-      return 'NDJSON';
-    case '.json':
-      return 'JSON';
-    case '.xml':
-      return 'XML';
-    default:
-      return 'Unknown';
-  }
-}
-
-function countResources(content: string, ext: string): string {
-  switch (ext) {
-    case '.ndjson': {
-      const lines = content.split('\n').filter((l) => l.trim().length > 0);
-      return `${lines.length} resource(s)`;
-    }
-    case '.json': {
-      try {
-        const parsed = JSON.parse(content);
-        if (parsed.resourceType === 'Bundle' && Array.isArray(parsed.entry)) {
-          return `${parsed.entry.length} resource(s) in Bundle`;
-        }
-        return '1 resource';
-      } catch {
-        return 'Invalid JSON';
-      }
-    }
-    case '.xml':
-      return formatBytes(new TextEncoder().encode(content).byteLength);
-    default:
-      return 'Unknown';
-  }
-}
-
-function getPreview(content: string, ext: string): string {
-  switch (ext) {
-    case '.ndjson': {
-      const lines = content.split('\n').filter((l) => l.trim().length > 0);
-      return lines
-        .slice(0, 3)
-        .map((line) => {
-          try {
-            return JSON.stringify(JSON.parse(line), null, 2);
-          } catch {
-            return line;
-          }
-        })
-        .join('\n---\n');
-    }
-    case '.json': {
-      try {
-        const parsed = JSON.parse(content);
-        return JSON.stringify(parsed, null, 2).slice(0, 2000);
-      } catch {
-        return content.slice(0, 2000);
-      }
-    }
-    case '.xml':
-      return content.slice(0, 800);
-    default:
-      return content.slice(0, 800);
-  }
-}
-
-// Poll interval for job status (ms)
-const JOB_POLL_INTERVAL = 3000;
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-interface FileInfo {
-  name: string;
-  size: number;
-  ext: string;
-  content: string;
-}
-
-// ---------------------------------------------------------------------------
-// Component
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// AsyncExportPanel — submit a server-side bulk export job
-// ---------------------------------------------------------------------------
-
-function AsyncExportPanel({ configProfile }: { configProfile: string }) {
-  const [serverUrl, setServerUrl] = useState('');
-  const [resourceType, setResourceType] = useState('');
-  const [job, setJob] = useState<JobResponse | null>(null);
-  const [submitting, setSubmitting] = useState(false);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  const stopPolling = useCallback(() => {
-    if (pollRef.current !== null) {
-      clearInterval(pollRef.current);
-      pollRef.current = null;
-    }
-  }, []);
-
-  useEffect(() => () => stopPolling(), [stopPolling]);
-
-  const startPolling = useCallback(
-    (jobId: string) => {
-      stopPolling();
-      pollRef.current = setInterval(async () => {
-        try {
-          const updated = await getJobStatus(jobId);
-          setJob(updated);
-          if (updated.status === 'done' || updated.status === 'error') {
-            stopPolling();
-            if (updated.status === 'done') {
-              toast.success('Export job complete — ready to download.');
-            } else {
-              toast.error('Export job failed.', {
-                description: updated.error ?? undefined,
-              });
-            }
-          }
-        } catch {
-          stopPolling();
-        }
-      }, JOB_POLL_INTERVAL);
-    },
-    [stopPolling],
-  );
-
-  const handleSubmit = useCallback(async () => {
-    if (!serverUrl.trim()) {
-      toast.error('Server URL is required.');
-      return;
-    }
-    setSubmitting(true);
-    try {
-      const submitted = await submitBulkExportJob({
-        server_url: serverUrl.trim(),
-        resource_type: resourceType.trim() || undefined,
-        config_profile: configProfile,
-      });
-      setJob(submitted);
-      toast.success('Job queued.', { description: `ID: ${submitted.job_id}` });
-      startPolling(submitted.job_id);
-    } catch (err) {
-      toast.error('Failed to submit job.', {
-        description: err instanceof Error ? err.message : String(err),
-      });
-    } finally {
-      setSubmitting(false);
-    }
-  }, [serverUrl, resourceType, configProfile, startPolling]);
-
-  const handleDownload = useCallback(async () => {
-    if (!job) return;
-    try {
-      const blob = await getJobResult(job.job_id);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `job_${job.job_id}.ndjson`;
-      a.click();
-      URL.revokeObjectURL(url);
-    } catch (err) {
-      toast.error('Download failed.', {
-        description: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }, [job]);
-
-  const statusColor: Record<string, string> = {
-    pending: 'secondary',
-    running: 'default',
-    done: 'default',
-    error: 'destructive',
-  };
-
-  return (
-    <div className="flex flex-col gap-6">
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Server className="h-4 w-4" />
-            Server Export (Async)
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-4">
-          <p className="text-sm text-muted-foreground">
-            Queue a background job that fetches resources from a FHIR server,
-            de-identifies them, and writes the result to a downloadable NDJSON
-            file. Large exports run without blocking your browser.
-          </p>
-          <div className="flex flex-col gap-3">
-            <div>
-              <label className="mb-1 block text-sm font-medium">
-                FHIR Server URL
-              </label>
-              <Input
-                placeholder="http://fhir-server:8080/fhir"
-                value={serverUrl}
-                onChange={(e) => setServerUrl(e.target.value)}
-                disabled={submitting || job?.status === 'running' || job?.status === 'pending'}
-              />
-            </div>
-            <div>
-              <label className="mb-1 block text-sm font-medium">
-                Resource Type{' '}
-                <span className="font-normal text-muted-foreground">
-                  (optional — leave blank for system-level export)
-                </span>
-              </label>
-              <Input
-                placeholder="Patient"
-                value={resourceType}
-                onChange={(e) => setResourceType(e.target.value)}
-                disabled={submitting || job?.status === 'running' || job?.status === 'pending'}
-              />
-            </div>
-          </div>
-          <Button
-            onClick={handleSubmit}
-            disabled={submitting || job?.status === 'running' || job?.status === 'pending'}
-          >
-            {submitting ? (
-              <Loader2 data-icon="inline-start" className="h-4 w-4 animate-spin" />
-            ) : (
-              <Play data-icon="inline-start" className="h-4 w-4" />
-            )}
-            {submitting ? 'Submitting…' : 'Start Export'}
-          </Button>
-        </CardContent>
-      </Card>
-
-      {job && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Job Status</CardTitle>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-3">
-            <div className="grid grid-cols-2 gap-x-8 gap-y-2 text-sm sm:grid-cols-3">
-              <div>
-                <span className="text-muted-foreground">Job ID</span>
-                <p className="truncate font-mono text-xs">{job.job_id}</p>
-              </div>
-              <div>
-                <span className="text-muted-foreground">Status</span>
-                <p>
-                  <Badge variant={statusColor[job.status] as 'default' | 'secondary' | 'destructive'}>
-                    {job.status}
-                    {job.status === 'running' && (
-                      <Loader2 className="ml-1 h-3 w-3 animate-spin" />
-                    )}
-                  </Badge>
-                </p>
-              </div>
-              <div>
-                <span className="text-muted-foreground">Updated</span>
-                <p className="text-xs">
-                  {new Date(job.updated_at).toLocaleTimeString()}
-                </p>
-              </div>
-            </div>
-            {job.error && (
-              <p className="rounded border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-                {job.error}
-              </p>
-            )}
-            {job.status === 'done' && (
-              <Button onClick={handleDownload} variant="outline">
-                <Download data-icon="inline-start" className="h-4 w-4" />
-                Download NDJSON result
-              </Button>
-            )}
-          </CardContent>
-        </Card>
-      )}
-    </div>
-  );
-}
+import { AsyncExportPanel } from './batch/AsyncExportPanel.tsx';
+import {
+  MAX_SIZE,
+  ACCEPTED_EXTENSIONS,
+  MAX_VISIBLE_ERRORS,
+  CT_MAP,
+  formatBytes,
+  sanitizeFilename,
+  detectFormat,
+  countResources,
+  getPreview,
+} from './batch/batchHelpers.ts';
+import type { FileInfo } from './batch/batchHelpers.ts';
 
 // ---------------------------------------------------------------------------
 // Main BatchPage component
@@ -356,6 +56,9 @@ export default function BatchPage() {
   const [fileInfo, setFileInfo] = useState<FileInfo | null>(null);
   const [hasProcessed, setHasProcessed] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [uploadResult, setUploadResult] = useState<{ uploaded: number; errors: number } | null>(null);
+  const [targetUrl, setTargetUrl] = useState("");
 
   // Keep abort ref current so the unmount cleanup always calls the latest abort
   const abortRef = useRef(abort);
@@ -416,14 +119,81 @@ export default function BatchPage() {
     setFileInfo(null);
     setHasProcessed(false);
     setPreviewOpen(false);
+    setUploadResult(null);
   }, [isStreaming, abort]);
+
+  const handleUploadToTarget = useCallback(async () => {
+    if (uploading || lines.length === 0) return;
+    setUploading(true);
+    setUploadResult(null);
+    try {
+      const cleanLines = lines.map(stripManifestTag);
+      const url = targetUrl.trim() || undefined;
+      const result = await uploadToTarget(cleanLines, url);
+      setUploadResult({ uploaded: result.uploaded, errors: result.errors });
+      toast.success(`Uploaded ${result.uploaded} resource${result.uploaded !== 1 ? 's' : ''} to target server`);
+    } catch (err) {
+      setUploadResult({ uploaded: 0, errors: -1 });
+      toast.error('Upload to target failed', {
+        description: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setUploading(false);
+    }
+  }, [uploading, lines, targetUrl]);
 
   // -- derived values -------------------------------------------------------
 
+  // Parse original resources from the uploaded file so we can do an accurate
+  // field diff (buildPiiDetectionMap) instead of relying on heuristics only.
+  const originalResources = useMemo((): Record<string, unknown>[] => {
+    if (!fileInfo || !hasProcessed || fileInfo.ext === '.xml') return [];
+    try {
+      if (fileInfo.ext === '.ndjson') {
+        return fileInfo.content
+          .split('\n')
+          .filter((l) => l.trim())
+          .map((l) => JSON.parse(l) as Record<string, unknown>);
+      }
+      const parsed = JSON.parse(fileInfo.content) as Record<string, unknown>;
+      if (parsed.resourceType === 'Bundle' && Array.isArray(parsed.entry)) {
+        return (parsed.entry as Array<{ resource?: Record<string, unknown> }>)
+          .map((e) => e.resource)
+          .filter((r): r is Record<string, unknown> => !!r);
+      }
+      return [parsed];
+    } catch {
+      return [];
+    }
+  }, [fileInfo, hasProcessed]);
+
+  // Strip manifest tags before download so the output file stays clean
   const resultNdjson = useMemo(() => {
-    if (lines.length === 0) return '';
-    return lines.map((line) => JSON.stringify(line)).join('\n');
-  }, [lines]);
+    if (isStreaming || lines.length === 0) return '';
+    return lines.map((line) => JSON.stringify(stripManifestTag(line))).join('\n');
+  }, [isStreaming, lines]);
+
+  const piiData = useMemo(() => {
+    if (isStreaming || lines.length === 0) return undefined;
+    // Use accurate diff when originals are available and counts align with no errors
+    if (originalResources.length > 0 && originalResources.length === lines.length && errors.length === 0) {
+      return buildPiiDetectionMap(originalResources, lines);
+    }
+    return buildPiiFromDeidentifiedOnly(lines);
+  }, [isStreaming, lines, originalResources, errors]);
+
+  const fieldSummary = useMemo(() => {
+    if (isStreaming || lines.length === 0 || !piiData) return undefined;
+    const allFieldCounts: Record<string, Record<string, number>> = {};
+    for (const resource of lines) {
+      const type = String(resource.resourceType ?? 'Unknown');
+      if (!allFieldCounts[type]) allFieldCounts[type] = {};
+      for (const { field } of extractFieldsDeep(resource)) {
+        allFieldCounts[type][field] = (allFieldCounts[type][field] ?? 0) + 1;
+      }
+    }
+    return buildFieldSummary(allFieldCounts, piiData);
+  }, [isStreaming, lines, piiData]);
 
   const downloadFilename = fileInfo
     ? sanitizeFilename(fileInfo.name)
@@ -612,21 +382,59 @@ export default function BatchPage() {
                         <CardTitle>Resource Summary</CardTitle>
                       </CardHeader>
                       <CardContent>
-                        <ResourceTypeSummary counts={resourceCounts} />
+                        <ResourceTypeSummary
+                          counts={resourceCounts}
+                          piiData={piiData}
+                          fieldSummary={fieldSummary}
+                        />
                       </CardContent>
                     </Card>
                   )}
 
-                  {/* Download button -- shown once streaming finishes */}
+                  {/* Download + Send to Target -- shown once streaming finishes */}
                   {!isStreaming && lines.length > 0 && (
                     <Card>
-                      <CardContent>
-                        <DownloadButton
-                          data={resultNdjson}
-                          filename={downloadFilename}
-                          mime="application/x-ndjson"
-                          label="Download NDJSON result"
-                        />
+                      <CardContent className="flex flex-col gap-3">
+                        <div className="flex items-center gap-2">
+                          <DownloadButton
+                            data={resultNdjson}
+                            filename={downloadFilename}
+                            mime="application/x-ndjson"
+                            label="Download NDJSON result"
+                          />
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Input
+                            placeholder="Target FHIR server URL (optional — uses FHIR_TARGET_URL if empty)"
+                            value={targetUrl}
+                            onChange={(e) => setTargetUrl(e.target.value)}
+                            className="max-w-sm text-xs"
+                            disabled={uploading}
+                          />
+                          <Button
+                            variant="outline"
+                            onClick={handleUploadToTarget}
+                            disabled={uploading}
+                          >
+                            {uploading ? (
+                              <Loader2 className="size-4 animate-spin" />
+                            ) : (
+                              <Upload className="size-4" />
+                            )}
+                            {uploading ? 'Sending…' : 'Send to Target'}
+                          </Button>
+                        </div>
+                        {uploadResult && uploadResult.errors !== -1 && (
+                          <div className="flex items-center gap-2 text-sm">
+                            <CheckCircle2 className="size-4 text-green-600" />
+                            <span>
+                              Uploaded {uploadResult.uploaded} resource{uploadResult.uploaded !== 1 ? 's' : ''} to target server
+                              {uploadResult.errors > 0 && (
+                                <span className="text-destructive"> ({uploadResult.errors} error{uploadResult.errors !== 1 ? 's' : ''})</span>
+                              )}
+                            </span>
+                          </div>
+                        )}
                       </CardContent>
                     </Card>
                   )}

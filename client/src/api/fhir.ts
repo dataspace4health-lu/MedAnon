@@ -70,6 +70,87 @@ export function capabilityStatement(): Promise<Record<string, unknown>> {
 }
 
 // ---------------------------------------------------------------------------
+// Resource type discovery
+// ---------------------------------------------------------------------------
+
+/** Infrastructure types excluded from resource-type counts (not useful for export). */
+const EXCLUDED_TYPES = new Set([
+  "CapabilityStatement", "OperationDefinition", "SearchParameter",
+  "StructureDefinition", "CompartmentDefinition", "ImplementationGuide",
+  "CodeSystem", "ValueSet", "ConceptMap", "NamingSystem",
+  "OperationOutcome", "Bundle",
+]);
+
+/**
+ * Read supported resource types from the server's CapabilityStatement.
+ *
+ * Falls back to a minimal list if the metadata request fails.
+ */
+async function discoverResourceTypes(): Promise<string[]> {
+  try {
+    const cs = await capabilityStatement();
+    const rest = cs.rest as Array<{ resource?: Array<{ type?: string }> }> | undefined;
+    const types = rest?.[0]?.resource
+      ?.map((r) => r.type)
+      .filter((t): t is string => typeof t === "string" && !EXCLUDED_TYPES.has(t));
+    if (types && types.length > 0) return types;
+  } catch {
+    // metadata unavailable — fall through to fallback
+  }
+  return ["Patient", "Observation", "Condition", "Encounter", "Procedure"];
+}
+
+export interface ResourceTypeCount {
+  type: string;
+  count: number;
+}
+
+// Module-level cache — survives SPA navigation, lives for the browser session.
+// Re-fetches after TTL_MS so counts stay reasonably fresh without hammering HAPI.
+const _COUNTS_TTL_MS = 5 * 60 * 1000; // 5 minutes
+let _countsCache: ResourceTypeCount[] | null = null;
+let _countsCacheAt = 0;
+
+/**
+ * Discover resource types from the CapabilityStatement, then probe each
+ * with `?_summary=count&_count=0` in parallel.
+ *
+ * Results are cached for 5 minutes so navigating back to the Patient Browser
+ * does not re-fire 100+ parallel FHIR count queries on every visit.
+ *
+ * Returns only types with count > 0, sorted by count descending.
+ */
+export async function fetchResourceTypeCounts(): Promise<ResourceTypeCount[]> {
+  if (_countsCache && Date.now() - _countsCacheAt < _COUNTS_TTL_MS) {
+    return _countsCache;
+  }
+
+  const types = await discoverResourceTypes();
+
+  const results = await Promise.allSettled(
+    types.map(async (type) => {
+      const bundle = await fetchFhir<FhirBundle>(`/${type}`, {
+        _summary: "count",
+        _count: "0",
+      });
+      return { type, count: bundle.total ?? 0 };
+    }),
+  );
+
+  const counts = results
+    .filter(
+      (r): r is PromiseFulfilledResult<ResourceTypeCount> =>
+        r.status === "fulfilled" && r.value.count > 0,
+    )
+    .map((r) => r.value)
+    .sort((a, b) => b.count - a.count);
+
+  _countsCache = counts;
+  _countsCacheAt = Date.now();
+  return counts;
+}
+
+// ---------------------------------------------------------------------------
 // Patient queries
 // ---------------------------------------------------------------------------
 

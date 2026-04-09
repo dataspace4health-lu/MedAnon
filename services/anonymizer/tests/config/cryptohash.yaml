@@ -1,9 +1,0 @@
-# Substitute the patient name with its hash
-# Currently we support sha256 hash function
-general:
-  appname: SPE-FHIR-BlackBox
-rules:
-  - match: Patient.name
-    action: cryptohash
-    params:
-      hash_type: sha3_256

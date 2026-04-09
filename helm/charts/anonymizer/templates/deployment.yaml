@@ -7,7 +7,9 @@ metadata:
     {{- include "anonymizer.labels" . | nindent 4 }}
     app.kubernetes.io/component: anonymizer
 spec:
+  {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicas }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "anonymizer.selectorLabels" (dict "Release" .Release "component" "anonymizer") | nindent 6 }}
@@ -93,6 +95,18 @@ spec:
             - name: config
               mountPath: /code/config/config_gdpr_eu.yaml
               subPath: config_gdpr_eu.yaml
+              readOnly: true
+            - name: config
+              mountPath: /code/config/config_hipaa_safe_harbor.yaml
+              subPath: config_hipaa_safe_harbor.yaml
+              readOnly: true
+            - name: config
+              mountPath: /code/config/config_research_pseudonymous.yaml
+              subPath: config_research_pseudonymous.yaml
+              readOnly: true
+            - name: config
+              mountPath: /code/config/config_structure_preserving.yaml
+              subPath: config_structure_preserving.yaml
               readOnly: true
             {{- if and .Values.secrets.rsaPublicKey .Values.secrets.rsaPrivateKey }}
             # RSA keys mounted at /code/keys/

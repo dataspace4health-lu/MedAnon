@@ -11,6 +11,10 @@ const BatchPage = lazy(() => import('@/pages/BatchPage'));
 const RiskAssessmentPage = lazy(() => import('@/pages/RiskAssessmentPage'));
 const SyntheticDataPage = lazy(() => import('@/pages/SyntheticDataPage'));
 const StatusPage = lazy(() => import('@/pages/StatusPage'));
+const ConfigsPage = lazy(() => import('@/pages/ConfigsPage'));
+const ConfigBuilderPage = lazy(() => import('@/pages/ConfigBuilderPage'));
+const BulkDeidentifyPage = lazy(() => import('@/pages/BulkDeidentifyPage'));
+const TargetBrowserPage = lazy(() => import('@/pages/TargetBrowserPage'));
 
 function PageLoader() {
   return (
@@ -34,6 +38,11 @@ export default function App() {
           <Route path="risk" element={<RiskAssessmentPage />} />
           <Route path="synthetic" element={<SyntheticDataPage />} />
           <Route path="status" element={<StatusPage />} />
+          <Route path="configs" element={<ConfigsPage />} />
+          <Route path="configs/new" element={<ConfigBuilderPage />} />
+          <Route path="configs/:name/edit" element={<ConfigBuilderPage />} />
+          <Route path="bulk-deidentify" element={<BulkDeidentifyPage />} />
+          <Route path="target-browser" element={<TargetBrowserPage />} />
         </Route>
       </Routes>
     </Suspense>

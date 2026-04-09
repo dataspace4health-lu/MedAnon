@@ -4,7 +4,7 @@ Strangler Fig: when ANALYTICS_SERVICE_URL is set, requests are proxied to the
 standalone analytics microservice. Otherwise, generation runs locally (default).
 """
 
-import json
+from utils.json_fast import dumps as _json_dumps
 import logging
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -79,9 +79,9 @@ async def generate_synthetic(
     # Local generation returns SyntheticResult
     async def _stream():
         for patient in result.patients:
-            yield json.dumps(patient) + "\n"
+            yield _json_dumps(patient) + "\n"
         for condition in result.conditions:
-            yield json.dumps(condition) + "\n"
+            yield _json_dumps(condition) + "\n"
 
     return StreamingResponse(
         _stream(),

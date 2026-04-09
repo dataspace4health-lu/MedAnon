@@ -1,6 +1,7 @@
 import { Card, CardContent, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Check, Eye } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface PatientCardProps {
@@ -11,7 +12,10 @@ interface PatientCardProps {
     gender: string;
   };
   onSelect?: () => void;
+  onNavigate?: () => void;
+  onPreview?: () => void;
   selected?: boolean;
+  selectionMode?: boolean;
 }
 
 function getInitials(name: string): string {
@@ -37,12 +41,21 @@ const GENDER_COLORS: Record<string, string> = {
 export function PatientCard({
   patient,
   onSelect,
+  onNavigate,
+  onPreview,
   selected = false,
+  selectionMode = false,
 }: PatientCardProps) {
   const initials = getInitials(patient.name);
   const genderColor =
     GENDER_COLORS[patient.gender?.toLowerCase()] ??
     "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300";
+
+  const handleCardClick = () => {
+    if (selectionMode && onSelect) {
+      onSelect();
+    }
+  };
 
   return (
     <Card
@@ -50,11 +63,26 @@ export function PatientCard({
         "transition-all duration-200",
         selected
           ? "border-primary/60 bg-primary/5 ring-1 ring-primary/30 shadow-sm"
-          : "hover:border-border hover:shadow-sm"
+          : "hover:border-border hover:shadow-sm",
+        selectionMode && "cursor-pointer",
       )}
+      onClick={handleCardClick}
     >
       <CardContent className="pt-4 pb-3">
         <div className="flex items-start gap-3">
+          {/* Selection checkbox */}
+          <div
+            className={cn(
+              "flex size-5 shrink-0 items-center justify-center rounded border transition-colors mt-0.5",
+              selected
+                ? "border-primary bg-primary text-primary-foreground"
+                : "border-muted-foreground/30",
+              !selectionMode && "opacity-0 group-hover:opacity-100",
+            )}
+          >
+            {selected && <Check className="size-3.5" />}
+          </div>
+
           {/* Initials avatar */}
           <div
             className={cn(
@@ -96,18 +124,40 @@ export function PatientCard({
         </div>
       </CardContent>
 
-      {onSelect && (
-        <CardFooter className="pt-0 pb-3 px-4">
+      <CardFooter className="pt-0 pb-3 px-4">
+        {selectionMode ? (
           <Button
-            variant={selected ? "secondary" : "default"}
+            variant={selected ? "secondary" : "outline"}
             size="sm"
-            onClick={onSelect}
+            onClick={(e) => { e.stopPropagation(); onSelect?.(); }}
             className="w-full"
           >
-            {selected ? "Deselect" : "De-identify"}
+            {selected ? "Deselect" : "Select"}
           </Button>
-        </CardFooter>
-      )}
+        ) : (
+          <div className="flex w-full gap-2">
+            {onPreview && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={(e) => { e.stopPropagation(); onPreview(); }}
+                className="gap-1"
+              >
+                <Eye className="size-3.5" />
+                Preview
+              </Button>
+            )}
+            <Button
+              variant="default"
+              size="sm"
+              onClick={(e) => { e.stopPropagation(); onNavigate?.(); }}
+              className="flex-1"
+            >
+              De-identify
+            </Button>
+          </div>
+        )}
+      </CardFooter>
     </Card>
   );
 }

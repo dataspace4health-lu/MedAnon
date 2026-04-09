@@ -1,9 +1,0 @@
-general:
-  appname: SPE-FHIR-BlackBox
-rules:
-  - match: "Patient.id"
-    action: gpas_pseudonymize
-    params:
-      gpas_url: "${GPAS_URL}"
-      gpas_domain: "${GPAS_DOMAIN}"
-      gpas_timeout_sec: "${GPAS_TIMEOUT_SEC}"

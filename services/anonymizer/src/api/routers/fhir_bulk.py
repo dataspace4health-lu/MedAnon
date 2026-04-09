@@ -13,7 +13,7 @@ header pointing to the polling URL, as required by the spec.
 """
 from __future__ import annotations
 
-import json
+from utils.json_fast import loads as _json_loads, dumps as _json_dumps
 import logging
 import os
 
@@ -105,12 +105,12 @@ def _collect_resource_types(result_path: str) -> list[str]:
                 if not line:
                     continue
                 try:
-                    obj = json.loads(line)
+                    obj = _json_loads(line)
                     rt = obj.get("resourceType")
                     if rt and rt not in seen_set:
                         seen_set.add(rt)
                         types_seen.append(rt)
-                except (json.JSONDecodeError, AttributeError):
+                except (ValueError, TypeError, AttributeError):
                     continue
     except OSError:
         return []
@@ -252,7 +252,7 @@ async def export_status(request: Request, job_id: str) -> Response:
         outcome = _operation_outcome("error", "not-found", f"Job '{job_id}' not found")
         return Response(
             status_code=404,
-            content=json.dumps(outcome),
+            content=_json_dumps(outcome),
             media_type="application/json",
         )
 
@@ -289,7 +289,7 @@ async def export_status(request: Request, job_id: str) -> Response:
     outcome = _operation_outcome("error", "exception", diagnostics)
     return Response(
         status_code=500,
-        content=json.dumps(outcome),
+        content=_json_dumps(outcome),
         media_type="application/json",
     )
 
@@ -313,7 +313,7 @@ async def cancel_export(request: Request, job_id: str) -> Response:
         outcome = _operation_outcome("error", "not-found", f"Job '{job_id}' not found")
         return Response(
             status_code=404,
-            content=json.dumps(outcome),
+            content=_json_dumps(outcome),
             media_type="application/json",
         )
 
@@ -325,7 +325,7 @@ async def cancel_export(request: Request, job_id: str) -> Response:
         )
         return Response(
             status_code=409,
-            content=json.dumps(outcome),
+            content=_json_dumps(outcome),
             media_type="application/json",
         )
 

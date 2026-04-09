@@ -1,0 +1,6 @@
+apiVersion: v2
+name: worker
+description: Dedicated async job worker for MedAnon (bulk-export, cohort, patient-export, bulk-import)
+type: application
+version: 0.1.0
+appVersion: "2025.2.0"

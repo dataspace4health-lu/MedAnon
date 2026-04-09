@@ -102,6 +102,10 @@ preflight:
 	@# 4. Required env vars are set
 	@grep -q '^GPAS_MYSQL_ROOT_PASSWORD=.\+' .env || { echo "FAIL: GPAS_MYSQL_ROOT_PASSWORD not set in .env"; exit 1; }
 	@echo "  [OK] GPAS_MYSQL_ROOT_PASSWORD is set"
+	@grep -q '^HAPI_DB_PASSWORD=.\+' .env || { echo "FAIL: HAPI_DB_PASSWORD not set in .env"; exit 1; }
+	@echo "  [OK] HAPI_DB_PASSWORD is set"
+	@grep -q '^HAPI_TARGET_DB_PASSWORD=.\+' .env || { echo "FAIL: HAPI_TARGET_DB_PASSWORD not set in .env"; exit 1; }
+	@echo "  [OK] HAPI_TARGET_DB_PASSWORD is set"
 	@# 5. HAPI FHIR health check class exists and is compiled for correct Java version
 	@test -f $(HC_DIR)/HealthCheck.class || { echo "WARN: HealthCheck.class not found — run 'make build-healthcheck'"; exit 1; }
 	@python3 -c "\
@@ -111,7 +115,7 @@ preflight:
 	    || { echo "FAIL: HealthCheck.class compiled for wrong Java version — run 'make build-healthcheck'"; exit 1; }
 	@echo "  [OK] HealthCheck.class targets Java <= 17"
 	@# 6. Required ports are free
-	@for port in $${ANONYMIZER_PORT:-8000} $${HAPI_PORT:-8081} $${GPAS_PORT:-8080} $${UI_PORT:-8501}; do \
+	@for port in $${ANONYMIZER_PORT:-8000} $${HAPI_PORT:-8081} $${HAPI_TARGET_PORT:-8082} $${GPAS_PORT:-8080} $${UI_PORT:-8501}; do \
 	    if ss -tlnp 2>/dev/null | grep -q ":$$port " || \
 	       lsof -iTCP:$$port -sTCP:LISTEN >/dev/null 2>&1; then \
 	        echo "WARN: Port $$port already in use (may conflict)"; \

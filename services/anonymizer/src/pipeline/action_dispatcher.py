@@ -8,13 +8,17 @@ accumulates gPAS work items for the batch Pass 2.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from utils.json_fast import dumps as _json_dumps
+from dataclasses import dataclass, field
 
 from utils.fhirpath import not_implemented
 from pipeline.manifest import _MANIFEST_ENABLED
 from pipeline.rule_matcher import (
     _build_match_candidates,
+    _classify_match,
     _evaluate_fhirpath_cached,
+    _evaluate_simple_path,
+    _evaluate_where_path,
     _resolve_rule_params,
 )
 from pipeline.deidentify import (
@@ -48,6 +52,7 @@ class BatchWork:
     rule: dict
     element: dict   # FHIRPath node with ``path`` and ``value`` keys
     params: dict
+    serialized_value: str = field(default="", repr=False)
 
 
 # ---------------------------------------------------------------------------
@@ -79,16 +84,25 @@ def dispatch_pass1(
         # Evaluate FHIRPath match candidates, collecting node elements
         matched_elements: list[dict] = []
         for candidate in _build_match_candidates(rule["match"], resource):
-            try:
-                matched = _evaluate_fhirpath_cached(resource, candidate + ".log()")
-                matched_elements.extend(matched)
-            except Exception:
-                audit_log.warning(
-                    "fhirpath_eval_failed expression=%s resource_type=%s",
-                    candidate.replace("\n", " ").replace("\r", " "),
-                    resource.get("resourceType", "unknown") if isinstance(resource, dict) else "unknown",
-                )
-                continue
+            match_class = _classify_match(candidate)
+            if match_class in ("simple", "wildcard"):
+                matched_elements.extend(_evaluate_simple_path(resource, candidate))
+            elif match_class == "where":
+                matched_elements.extend(_evaluate_where_path(resource, candidate))
+            else:
+                try:
+                    matched = _evaluate_fhirpath_cached(resource, candidate + ".log()")
+                    matched_elements.extend(matched)
+                except Exception as exc:
+                    if processing_mode == "skip":
+                        audit_log.warning(
+                            "fhirpath_eval_failed_skip expression=%s resource_type=%s error=%s",
+                            candidate.replace("\n", " ").replace("\r", " "),
+                            resource.get("resourceType", "unknown") if isinstance(resource, dict) else "unknown",
+                            type(exc).__name__,
+                        )
+                        continue
+                    raise
 
         # Determine action category for duplicate-path filtering
         if action in DEIDENT_ACTIONS:
@@ -106,7 +120,7 @@ def dispatch_pass1(
             el_path = el.get("path", "?")
             path_key = (el_path, category)
             if path_key in processed_paths:
-                audit_log.info(
+                audit_log.debug(
                     "rule_skipped_duplicate action=%s path=%s category=%s",
                     action, el_path, category,
                 )
@@ -119,7 +133,7 @@ def dispatch_pass1(
         for el in elements_to_process:
             el_path = el.get("path", "?")
 
-            audit_log.info(
+            audit_log.debug(
                 "rule_applied action=%s match=%s path=%s resource_type=%s",
                 action,
                 rule["match"],
@@ -135,7 +149,12 @@ def dispatch_pass1(
                 })
 
             if action in GPAS_PSEUDO_ACTIONS:
-                gpas_work.append(BatchWork(rule=rule, element=el, params=params))
+                val = el["value"]
+                serialized = str(val) if not isinstance(val, dict) else _json_dumps(val)
+                gpas_work.append(BatchWork(
+                    rule=rule, element=el, params=params,
+                    serialized_value=serialized,
+                ))
                 continue
 
             try:

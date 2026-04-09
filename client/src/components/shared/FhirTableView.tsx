@@ -1,3 +1,5 @@
+import { useState, useEffect } from "react";
+import { ChevronRight } from "lucide-react";
 import {
   Table,
   TableBody,
@@ -6,135 +8,91 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
+import { extractFieldsDeep } from "@/lib/fhirFields";
+import type { PiiDetectionMap } from "@/lib/piiDetection";
+
+const PAGE_SIZE = 50;
 
 // ---------------------------------------------------------------------------
-// FHIR resource field extraction
+// Action colour palette
 // ---------------------------------------------------------------------------
 
-interface FieldRow {
+const ACTION_STYLES: Record<
+  string,
+  { row: string; badge: string; label: string }
+> = {
+  redact:            { row: "bg-rose-50",   badge: "bg-rose-100 text-rose-700",     label: "Redacted"      },
+  substitute:        { row: "bg-orange-50", badge: "bg-orange-100 text-orange-700", label: "Substituted"   },
+  cryptohash:        { row: "bg-blue-50",   badge: "bg-blue-100 text-blue-700",     label: "Cryptohash"    },
+  generalize:        { row: "bg-amber-50",  badge: "bg-amber-100 text-amber-700",   label: "Generalized"   },
+  gpas_pseudonymize: { row: "bg-purple-50", badge: "bg-purple-100 text-purple-700", label: "Pseudonymized" },
+  encrypt:           { row: "bg-indigo-50", badge: "bg-indigo-100 text-indigo-700", label: "Encrypted"     },
+  perturb:           { row: "bg-teal-50",   badge: "bg-teal-100 text-teal-700",     label: "Perturbed"     },
+  scrub_text:        { row: "bg-pink-50",   badge: "bg-pink-100 text-pink-700",     label: "Scrubbed"      },
+  nlp_detect:        { row: "bg-pink-50",   badge: "bg-pink-100 text-pink-700",     label: "NLP scrub"     },
+  modified:          { row: "bg-slate-50",  badge: "bg-slate-100 text-slate-600",   label: "Modified"      },
+};
+
+function getStyle(action: string) {
+  return ACTION_STYLES[action] ?? ACTION_STYLES.modified;
+}
+
+// ---------------------------------------------------------------------------
+// Field grouping
+// ---------------------------------------------------------------------------
+
+interface FieldEntry {
   field: string;
-  value: string;
+  subField: string;
+  origVal: string;
+  deidVal: string;
+  changed: boolean;
+  action?: string;
 }
 
-function extractFromObject(
-  rows: FieldRow[],
-  key: string,
-  obj: Record<string, unknown>,
-): void {
-  // CodeableConcept: { coding: [{ code, display, system }], text }
-  if (Array.isArray(obj.coding) && obj.coding.length > 0) {
-    const c = obj.coding[0] as Record<string, unknown>;
-    if (c.code !== undefined) rows.push({ field: key, value: String(c.code) });
-    if (c.display !== undefined)
-      rows.push({ field: "display", value: String(c.display) });
-    return;
-  }
-  if (obj.text !== undefined) {
-    rows.push({ field: key, value: String(obj.text) });
-    return;
-  }
-  // Reference: { reference: "Patient/123" }
-  if (obj.reference !== undefined) {
-    rows.push({ field: key, value: String(obj.reference) });
-    return;
-  }
-  // Quantity / Range: { value, unit } or { value, code }
-  if (obj.value !== undefined) {
-    const fieldName = key.startsWith("value") ? "value" : key;
-    rows.push({ field: fieldName, value: String(obj.value) });
-    if (obj.unit !== undefined)
-      rows.push({ field: "unit", value: String(obj.unit) });
-    else if (obj.code !== undefined)
-      rows.push({ field: "unit", value: String(obj.code) });
-    return;
-  }
-  // Period: { start, end }
-  if (obj.start !== undefined || obj.end !== undefined) {
-    if (obj.start !== undefined)
-      rows.push({ field: `${key}.start`, value: String(obj.start) });
-    if (obj.end !== undefined)
-      rows.push({ field: `${key}.end`, value: String(obj.end) });
-    return;
-  }
-  // HumanName: { family, given }
-  if (obj.family !== undefined || obj.given !== undefined) {
-    const parts = [
-      ...((obj.given as string[] | undefined) ?? []),
-      (obj.family as string | undefined) ?? "",
-    ].filter(Boolean);
-    rows.push({ field: key, value: parts.join(" ") });
-    return;
-  }
-  // Address: { line, city, state, postalCode }
-  if (obj.city !== undefined || obj.postalCode !== undefined) {
-    const parts = [
-      ((obj.line as string[] | undefined) ?? []).join(", "),
-      obj.city,
-      obj.state,
-      obj.postalCode,
-      obj.country,
-    ]
-      .filter(Boolean)
-      .map(String);
-    rows.push({ field: key, value: parts.join(", ") });
-    return;
-  }
-  // Identifier: { system, value }
-  if (obj.system !== undefined && "value" in obj) {
-    rows.push({ field: key, value: String(obj["value"]) });
-    return;
-  }
-  // Generic fallback: stringify scalar sub-fields
-  const str = Object.entries(obj)
-    .filter(
-      ([, v]) =>
-        typeof v === "string" || typeof v === "number" || typeof v === "boolean",
-    )
-    .map(([k, v]) => `${k}: ${v}`)
-    .join(", ");
-  if (str) rows.push({ field: key, value: str });
+interface FieldGroup {
+  parentKey: string;
+  isGroup: boolean;
+  entries: FieldEntry[];
+  changed: boolean;
+  dominantAction?: string;
 }
 
-const SKIP_KEYS = new Set([
-  "meta",
-  "text",
-  "extension",
-  "contained",
-  "modifierExtension",
-  "implicitRules",
-]);
+function buildGroups(
+  allFields: string[],
+  origMap: Map<string, string>,
+  deidMap: Map<string, string>,
+  resolveAction: (f: string) => string | undefined,
+): FieldGroup[] {
+  const order: string[] = [];
+  const map = new Map<string, FieldEntry[]>();
 
-function extractFields(resource: Record<string, unknown>): FieldRow[] {
-  const rows: FieldRow[] = [];
+  for (const field of allFields) {
+    const dot = field.indexOf(".");
+    const parent = dot >= 0 ? field.slice(0, dot) : field;
+    const sub = dot >= 0 ? field.slice(dot + 1) : field;
+    const origVal = origMap.get(field) ?? "";
+    const deidVal = deidMap.get(field) ?? "";
+    const changed = origVal !== deidVal;
+    const action = resolveAction(field) ?? (changed ? "modified" : undefined);
 
-  for (const [key, value] of Object.entries(resource)) {
-    if (SKIP_KEYS.has(key)) continue;
-    if (value === null || value === undefined) continue;
-
-    if (
-      typeof value === "string" ||
-      typeof value === "number" ||
-      typeof value === "boolean"
-    ) {
-      rows.push({ field: key, value: String(value) });
-    } else if (Array.isArray(value)) {
-      if (value.length === 0) continue;
-      const first = value[0];
-      if (
-        typeof first === "string" ||
-        typeof first === "number" ||
-        typeof first === "boolean"
-      ) {
-        rows.push({ field: key, value: value.map(String).join(", ") });
-      } else if (first && typeof first === "object") {
-        extractFromObject(rows, key, first as Record<string, unknown>);
-      }
-    } else if (typeof value === "object") {
-      extractFromObject(rows, key, value as Record<string, unknown>);
-    }
+    if (!map.has(parent)) { map.set(parent, []); order.push(parent); }
+    map.get(parent)!.push({ field, subField: sub, origVal, deidVal, changed, action });
   }
 
-  return rows;
+  return order.map((parentKey) => {
+    const entries = map.get(parentKey)!;
+    const isGroup = entries.some((e) => e.field !== parentKey);
+    const changed = entries.some((e) => e.changed);
+    // Pick the most specific (non-modified) action as the group label
+    const specific = entries
+      .map((e) => e.action)
+      .find((a) => a && a !== "modified");
+    const dominantAction = specific ?? (changed ? "modified" : undefined);
+    return { parentKey, isGroup, entries, changed, dominantAction };
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -144,12 +102,22 @@ function extractFields(resource: Record<string, unknown>): FieldRow[] {
 interface FhirTableViewProps {
   originalResources: Record<string, unknown>[];
   resources: Record<string, unknown>[];
+  piiData?: PiiDetectionMap;
 }
 
 export function FhirTableView({
   originalResources,
   resources,
+  piiData,
 }: FhirTableViewProps) {
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+
+  // Reset pagination when resources change
+  useEffect(() => {
+    setVisibleCount(PAGE_SIZE);
+  }, [resources.length]);
+
   if (originalResources.length === 0 && resources.length === 0) {
     return (
       <p className="text-sm text-muted-foreground py-4 text-center">
@@ -158,34 +126,58 @@ export function FhirTableView({
     );
   }
 
+  const toggle = (key: string) =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      next.has(key) ? next.delete(key) : next.add(key);
+      return next;
+    });
+
   const pairs = resources.map((deided, idx) => ({
     original: originalResources[idx] ?? {},
     deided,
   }));
 
+  const visiblePairs = pairs.slice(0, visibleCount);
+  const remaining = pairs.length - visibleCount;
+
   return (
     <div className="flex flex-col gap-6">
-      {pairs.map(({ original, deided }, idx) => {
+      {visiblePairs.map(({ original, deided }, idx) => {
         const resourceType = String(
           deided.resourceType ?? original.resourceType ?? "Resource",
         );
         const resourceId = String(deided.id ?? original.id ?? idx);
+        const resourceKey = `${resourceType}-${resourceId}-${idx}`;
 
-        const origFields = extractFields(original);
-        const deidFields = extractFields(deided);
-
-        // Build a unified field list from original; fall back to deid-only fields
+        const origFields = extractFieldsDeep(original);
+        const deidFields = extractFieldsDeep(deided);
         const origMap = new Map(origFields.map((r) => [r.field, r.value]));
         const deidMap = new Map(deidFields.map((r) => [r.field, r.value]));
+
+        // Build action lookup from piiData (exact + parent fallback)
+        const actionByField = new Map<string, string>();
+        if (piiData?.[resourceType]) {
+          for (const e of piiData[resourceType]) {
+            if (!actionByField.has(e.fieldPath)) actionByField.set(e.fieldPath, e.action);
+          }
+        }
+        const resolveAction = (field: string) => {
+          if (actionByField.has(field)) return actionByField.get(field)!;
+          const parent = field.includes(".") ? field.split(".")[0] : field;
+          return actionByField.get(parent);
+        };
+
         const allFields = [
           ...origFields.map((r) => r.field),
-          ...deidFields
-            .filter((r) => !origMap.has(r.field))
-            .map((r) => r.field),
+          ...deidFields.filter((r) => !origMap.has(r.field)).map((r) => r.field),
         ];
 
+        const groups = buildGroups(allFields, origMap, deidMap, resolveAction);
+        const hasPii = groups.some((g) => g.changed);
+
         return (
-          <div key={`${resourceType}-${resourceId}-${idx}`}>
+          <div key={resourceKey}>
             <p className="mb-2 text-sm font-semibold text-foreground">
               {resourceType}{" "}
               <span className="font-mono text-muted-foreground">
@@ -196,39 +188,157 @@ export function FhirTableView({
               <Table>
                 <TableHeader>
                   <TableRow className="bg-muted/50">
-                    <TableHead className="w-1/4 font-semibold text-xs uppercase tracking-wide">
+                    <TableHead className="w-[28%] font-semibold text-xs uppercase tracking-wide">
                       Field
                     </TableHead>
-                    <TableHead className="w-[37.5%] font-semibold text-xs uppercase tracking-wide">
-                      Value
+                    <TableHead className="font-semibold text-xs uppercase tracking-wide">
+                      Original Value
                     </TableHead>
-                    <TableHead className="w-[37.5%] font-semibold text-xs uppercase tracking-wide">
+                    <TableHead className="font-semibold text-xs uppercase tracking-wide">
                       De-identified Value
                     </TableHead>
+                    {hasPii && (
+                      <TableHead className="w-32 font-semibold text-xs uppercase tracking-wide">
+                        Action
+                      </TableHead>
+                    )}
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {allFields.map((field) => {
-                    const origVal = origMap.get(field) ?? "";
-                    const deidVal = deidMap.get(field) ?? "";
-                    const changed = origVal !== deidVal;
-                    return (
-                      <TableRow key={field}>
-                        <TableCell className="font-mono text-xs text-muted-foreground">
-                          {field}
-                        </TableCell>
-                        <TableCell className="text-sm">{origVal}</TableCell>
-                        <TableCell
-                          className={`text-sm ${
-                            changed
-                              ? "bg-amber-50 text-amber-800 font-medium"
-                              : ""
-                          }`}
+                  {groups.map((group) => {
+                    const gKey = `${resourceKey}::${group.parentKey}`;
+                    const isOpen = expanded.has(gKey);
+                    const gStyle = group.dominantAction
+                      ? getStyle(group.dominantAction)
+                      : null;
+
+                    if (!group.isGroup) {
+                      // ── Single flat row ─────────────────────────────
+                      const e = group.entries[0];
+                      const style = e.action ? getStyle(e.action) : null;
+                      return (
+                        <TableRow
+                          key={group.parentKey}
+                          className={style ? style.row : undefined}
                         >
-                          {deidVal}
+                          <TableCell className="font-mono text-xs text-muted-foreground">
+                            {group.parentKey}
+                          </TableCell>
+                          <TableCell className="text-sm">
+                            {String(e.origVal)}
+                          </TableCell>
+                          <TableCell className="text-sm font-medium">
+                            {e.changed ? String(e.deidVal) : ""}
+                          </TableCell>
+                          {hasPii && (
+                            <TableCell>
+                              {e.action && (
+                                <span
+                                  className={cn(
+                                    "inline-block rounded px-2 py-0.5 text-xs font-medium",
+                                    getStyle(e.action).badge,
+                                  )}
+                                >
+                                  {getStyle(e.action).label}
+                                </span>
+                              )}
+                            </TableCell>
+                          )}
+                        </TableRow>
+                      );
+                    }
+
+                    // ── Group header + collapsible sub-rows ──────────
+                    const changedCount = group.entries.filter(
+                      (e) => e.changed,
+                    ).length;
+
+                    return [
+                      // Group header row
+                      <TableRow
+                        key={`${group.parentKey}--header`}
+                        className={cn(
+                          "cursor-pointer select-none hover:brightness-95 transition-colors",
+                          gStyle ? gStyle.row : "bg-muted/20",
+                        )}
+                        onClick={() => toggle(gKey)}
+                      >
+                        <TableCell className="font-mono text-xs font-semibold">
+                          <span className="flex items-center gap-1">
+                            <ChevronRight
+                              className={cn(
+                                "size-3 shrink-0 text-muted-foreground transition-transform",
+                                isOpen && "rotate-90",
+                              )}
+                            />
+                            {group.parentKey}
+                            <span className="ml-1 text-[10px] font-normal text-muted-foreground">
+                              ({group.entries.length} field
+                              {group.entries.length !== 1 ? "s" : ""}
+                              {changedCount > 0 &&
+                                `, ${changedCount} changed`}
+                              )
+                            </span>
+                          </span>
                         </TableCell>
-                      </TableRow>
-                    );
+                        <TableCell />
+                        <TableCell />
+                        {hasPii && (
+                          <TableCell>
+                            {group.dominantAction && (
+                              <span
+                                className={cn(
+                                  "inline-block rounded px-2 py-0.5 text-xs font-medium",
+                                  getStyle(group.dominantAction).badge,
+                                )}
+                              >
+                                {getStyle(group.dominantAction).label}
+                              </span>
+                            )}
+                          </TableCell>
+                        )}
+                      </TableRow>,
+
+                      // Sub-rows (shown when expanded)
+                      ...(isOpen
+                        ? group.entries.map((e) => {
+                            const style = e.action ? getStyle(e.action) : null;
+                            return (
+                              <TableRow
+                                key={e.field}
+                                className={cn(
+                                  "border-l-2 border-l-muted/40",
+                                  style ? style.row : undefined,
+                                )}
+                              >
+                                <TableCell className="pl-6 font-mono text-xs text-muted-foreground">
+                                  {e.subField}
+                                </TableCell>
+                                <TableCell className="text-sm">
+                                  {String(e.origVal)}
+                                </TableCell>
+                                <TableCell className="text-sm font-medium">
+                                  {e.changed ? String(e.deidVal) : ""}
+                                </TableCell>
+                                {hasPii && (
+                                  <TableCell>
+                                    {e.action && (
+                                      <span
+                                        className={cn(
+                                          "inline-block rounded px-2 py-0.5 text-xs font-medium",
+                                          getStyle(e.action).badge,
+                                        )}
+                                      >
+                                        {getStyle(e.action).label}
+                                      </span>
+                                    )}
+                                  </TableCell>
+                                )}
+                              </TableRow>
+                            );
+                          })
+                        : []),
+                    ];
                   })}
                 </TableBody>
               </Table>
@@ -236,6 +346,17 @@ export function FhirTableView({
           </div>
         );
       })}
+      {remaining > 0 && (
+        <div className="flex justify-center pt-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setVisibleCount((v) => v + PAGE_SIZE)}
+          >
+            Show more ({remaining} remaining)
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

@@ -1,15 +1,25 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
-import { Search, Loader2, AlertCircle, Users, ChevronDown } from 'lucide-react';
+import {
+  Search, Loader2, AlertCircle, Users, ChevronDown, PackageOpen,
+  ChevronRight, Check, X, ShieldCheck,
+} from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { PatientCard } from '@/components/shared/PatientCard';
-import { BulkExportButton } from '@/components/shared/BulkExportButton';
+import { DeidentifyPanel } from '@/components/shared/DeidentifyPanel';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { capabilityStatement, searchPatients } from '@/api/fhir';
-import { submitBulkExportJob } from '@/api/medanon';
+import { Badge } from '@/components/ui/badge';
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
+} from '@/components/ui/dialog';
+import { cn } from '@/lib/utils';
+import { capabilityStatement, searchPatients, fetchResourceTypeCounts } from '@/api/fhir';
+import type { ResourceTypeCount } from '@/api/fhir';
+import { submitBulkExportJob, submitBatchPatientExportJob } from '@/api/medanon';
 import { useConfig } from '@/context/ConfigContext';
+import { useBulkExport } from '@/context/BulkExportContext';
 import type { PatientSummary } from '@/api/types';
 
 const PAGE_SIZE = 20;
@@ -17,6 +27,7 @@ const PAGE_SIZE = 20;
 export default function PatientBrowserPage() {
   const navigate = useNavigate();
   const { configProfile } = useConfig();
+  const { submitExport } = useBulkExport();
 
   const [patients, setPatients] = useState<PatientSummary[]>([]);
   const [total, setTotal] = useState<number | null>(null);
@@ -26,10 +37,67 @@ export default function PatientBrowserPage() {
   const [searching, setSearching] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [searchName, setSearchName] = useState('');
-  // Committed search term (only changes on Search click / Enter)
   const [committedName, setCommittedName] = useState('');
 
-  // FHIR connectivity check + initial data load on mount
+  // Resource type picker state
+  const [typeCounts, setTypeCounts] = useState<ResourceTypeCount[]>([]);
+  const [typeCountsLoading, setTypeCountsLoading] = useState(false);
+  const [selectedTypes, setSelectedTypes] = useState<Set<string>>(new Set());
+  const [typePickerOpen, setTypePickerOpen] = useState(false);
+  const [exporting, setExporting] = useState(false);
+
+  // Multi-patient selection state
+  const [selectedPatients, setSelectedPatients] = useState<Map<string, PatientSummary>>(new Map());
+  const selectionMode = selectedPatients.size > 0;
+
+  // Preview dialog state
+  const [previewPatient, setPreviewPatient] = useState<PatientSummary | null>(null);
+
+  const togglePatientSelection = (patient: PatientSummary) => {
+    setSelectedPatients((prev) => {
+      const next = new Map(prev);
+      if (next.has(patient.id)) {
+        next.delete(patient.id);
+      } else {
+        next.set(patient.id, patient);
+      }
+      return next;
+    });
+  };
+
+  const selectAllOnPage = () => {
+    setSelectedPatients((prev) => {
+      const next = new Map(prev);
+      for (const p of patients) next.set(p.id, p);
+      return next;
+    });
+  };
+
+  const deselectAll = () => setSelectedPatients(new Map());
+
+  const handleBatchDeidentify = () => {
+    if (selectedPatients.size === 0) return;
+    const patientIds = Array.from(selectedPatients.keys());
+    const patientNames: Record<string, string> = {};
+    for (const [id, p] of selectedPatients) {
+      if (p.name) patientNames[id] = p.name;
+    }
+    const count = patientIds.length;
+    const exportId = submitExport(
+      `Batch Export (${count} patient${count !== 1 ? 's' : ''})`,
+      `batch-${count}-patients-deidentified.ndjson`,
+      () => submitBatchPatientExportJob({
+        patient_ids: patientIds,
+        patient_names: Object.keys(patientNames).length > 0 ? patientNames : undefined,
+        config_profile: configProfile,
+      }),
+      { source: 'patients', patientCount: count, configProfile },
+    );
+    deselectAll();
+    navigate('/bulk-deidentify', { state: { autoSelectId: exportId } });
+  };
+
+  // FHIR connectivity check + initial data load
   useEffect(() => {
     let cancelled = false;
     const run = async () => {
@@ -54,9 +122,26 @@ export default function PatientBrowserPage() {
     return () => { cancelled = true; };
   }, []);
 
+  // Fetch resource type counts when FHIR is connected
+  useEffect(() => {
+    if (!fhirConnected) return;
+    let cancelled = false;
+    setTypeCountsLoading(true);
+    fetchResourceTypeCounts()
+      .then((counts) => {
+        if (cancelled) return;
+        setTypeCounts(counts);
+        setSelectedTypes(new Set(counts.map((c) => c.type)));
+      })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setTypeCountsLoading(false); });
+    return () => { cancelled = true; };
+  }, [fhirConnected]);
+
   const handleSearch = async () => {
     setSearching(true);
     setCommittedName(searchName);
+    setSelectedPatients(new Map());
     try {
       const result = await searchPatients(searchName || undefined, PAGE_SIZE, 0);
       setPatients(result.items);
@@ -94,6 +179,54 @@ export default function PatientBrowserPage() {
     navigate(`/deidentify/${patient.id}`, { state: { name: patient.name, from: '/patients' } });
   };
 
+  // Toggle a single resource type
+  const toggleType = (type: string) => {
+    setSelectedTypes((prev) => {
+      const next = new Set(prev);
+      if (next.has(type)) next.delete(type);
+      else next.add(type);
+      return next;
+    });
+  };
+
+  // Select all / deselect all
+  const allSelected = typeCounts.length > 0 && selectedTypes.size === typeCounts.length;
+  const toggleAll = () => {
+    if (allSelected) {
+      setSelectedTypes(new Set());
+    } else {
+      setSelectedTypes(new Set(typeCounts.map((c) => c.type)));
+    }
+  };
+
+  // Export selected types: one job per type → each gets its own file
+  const handleExportByType = () => {
+    if (selectedTypes.size === 0) return;
+    setExporting(true);
+    const types = Array.from(selectedTypes);
+    let lastExportId: string | undefined;
+
+    for (const type of types) {
+      lastExportId = submitExport(
+        `Export ${type}`,
+        `${type.toLowerCase()}-deidentified.ndjson`,
+        () => submitBulkExportJob({
+          level: 'system',
+          resource_type: type,
+          config_profile: configProfile,
+        }),
+        { source: 'all', configProfile },
+      );
+    }
+
+    setExporting(false);
+    if (lastExportId) {
+      navigate('/bulk-deidentify', { state: { autoSelectId: lastExportId } });
+    }
+  };
+
+  const totalServerResources = typeCounts.reduce((sum, c) => sum + c.count, 0);
+
   return (
     <div>
       <PageHeader
@@ -119,7 +252,7 @@ export default function PatientBrowserPage() {
       )}
 
       {/* Search toolbar */}
-      <div className="mb-6 flex flex-col gap-3 rounded-xl border bg-card p-4 shadow-sm sm:flex-row sm:items-end">
+      <div className="mb-4 flex flex-col gap-3 rounded-xl border bg-card p-4 shadow-sm sm:flex-row sm:items-end">
         <div className="flex-1">
           <label htmlFor="patient-name" className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             Patient name
@@ -138,22 +271,130 @@ export default function PatientBrowserPage() {
           disabled={!fhirConnected || searching}
           className="sm:mb-0 sm:self-end"
         >
-          {searching ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <Search className="h-4 w-4" />
-          )}
+          {searching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
           {searching ? 'Searching…' : 'Search'}
         </Button>
         <div className="sm:self-end">
-          <BulkExportButton
-            label="Bulk Export All"
-            onSubmit={() => submitBulkExportJob({ config_profile: configProfile })}
-            filename="all-patients-deidentified.ndjson"
+          <Button
+            variant="outline"
+            size="sm"
             disabled={!fhirConnected}
-          />
+            onClick={() => {
+              const exportId = submitExport(
+                'Bulk Export All',
+                'all-deidentified.ndjson',
+                () => submitBulkExportJob({ config_profile: configProfile }),
+                { source: 'all', configProfile },
+              );
+              navigate('/bulk-deidentify', { state: { autoSelectId: exportId } });
+            }}
+          >
+            <PackageOpen className="h-4 w-4" />
+            Bulk Export All
+          </Button>
         </div>
       </div>
+
+      {/* Export by Resource Type picker */}
+      {fhirConnected && (
+        <div className="mb-6 rounded-xl border bg-card shadow-sm overflow-hidden">
+          {/* Collapsible header */}
+          <button
+            className="flex w-full items-center gap-2.5 px-4 py-3 text-left hover:bg-muted/20 transition-colors"
+            onClick={() => setTypePickerOpen((v) => !v)}
+          >
+            <ChevronRight
+              className={cn(
+                "size-4 text-muted-foreground transition-transform",
+                typePickerOpen && "rotate-90",
+              )}
+            />
+            <PackageOpen className="size-4 text-muted-foreground" />
+            <span className="flex-1 text-sm font-medium">Export by Resource Type</span>
+            {typeCountsLoading && <Loader2 className="size-3.5 animate-spin text-muted-foreground" />}
+            {!typeCountsLoading && typeCounts.length > 0 && (
+              <span className="text-xs text-muted-foreground">
+                {typeCounts.length} type{typeCounts.length !== 1 ? 's' : ''} · {totalServerResources.toLocaleString()} resources
+              </span>
+            )}
+          </button>
+
+          {/* Expanded content */}
+          {typePickerOpen && (
+            <div className="border-t px-4 py-3">
+              {typeCountsLoading ? (
+                <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
+                  <Loader2 className="size-4 animate-spin" />
+                  Discovering resource types on FHIR server…
+                </div>
+              ) : typeCounts.length === 0 ? (
+                <p className="py-4 text-sm text-muted-foreground">
+                  No resources found on the FHIR server.
+                </p>
+              ) : (
+                <>
+                  {/* Select all toggle + export button */}
+                  <div className="mb-3 flex items-center justify-between">
+                    <button
+                      className="flex items-center gap-2 text-xs font-medium text-primary hover:underline"
+                      onClick={toggleAll}
+                    >
+                      {allSelected ? 'Deselect All' : 'Select All'}
+                    </button>
+                    <div className="flex items-center gap-3">
+                      <span className="text-xs text-muted-foreground">
+                        {selectedTypes.size} selected
+                      </span>
+                      <Button
+                        size="sm"
+                        disabled={selectedTypes.size === 0 || exporting}
+                        onClick={handleExportByType}
+                      >
+                        {exporting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <PackageOpen className="h-3.5 w-3.5" />}
+                        Export Selected ({selectedTypes.size})
+                      </Button>
+                    </div>
+                  </div>
+
+                  {/* Type grid */}
+                  <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2 lg:grid-cols-3">
+                    {typeCounts.map(({ type, count }) => {
+                      const isSelected = selectedTypes.has(type);
+                      return (
+                        <button
+                          key={type}
+                          className={cn(
+                            "flex items-center gap-2.5 rounded-lg border px-3 py-2 text-left transition-colors",
+                            isSelected
+                              ? "border-primary/40 bg-primary/5"
+                              : "border-transparent bg-muted/30 hover:bg-muted/50",
+                          )}
+                          onClick={() => toggleType(type)}
+                        >
+                          <div
+                            className={cn(
+                              "flex size-4 shrink-0 items-center justify-center rounded border transition-colors",
+                              isSelected
+                                ? "border-primary bg-primary text-primary-foreground"
+                                : "border-muted-foreground/30",
+                            )}
+                          >
+                            {isSelected && <Check className="size-3" />}
+                          </div>
+                          <span className="flex-1 truncate text-sm font-medium">{type}</span>
+                          <span className="text-xs tabular-nums text-muted-foreground">
+                            {count.toLocaleString()}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Empty state */}
       {!searching && patients.length === 0 && fhirConnected && (
@@ -174,44 +415,97 @@ export default function PatientBrowserPage() {
       {/* Results */}
       {!searching && patients.length > 0 && (
         <>
-          <p className="mb-4 text-sm text-muted-foreground">
-            {total !== null ? (
-              <>{total} patient{total !== 1 ? 's' : ''} total &middot; showing {patients.length}</>
-            ) : (
-              <>{patients.length} patient{patients.length !== 1 ? 's' : ''} found</>
-            )}
-          </p>
+          <div className="mb-4 flex items-center justify-between">
+            <p className="text-sm text-muted-foreground">
+              {total !== null ? (
+                <>{total} patient{total !== 1 ? 's' : ''} total &middot; showing {patients.length}</>
+              ) : (
+                <>{patients.length} patient{patients.length !== 1 ? 's' : ''} found</>
+              )}
+            </p>
+            <div className="flex items-center gap-2">
+              <button
+                className="text-xs font-medium text-primary hover:underline"
+                onClick={selectionMode && selectedPatients.size === patients.length ? deselectAll : selectAllOnPage}
+              >
+                {selectionMode && selectedPatients.size === patients.length ? 'Deselect All' : 'Select All'}
+              </button>
+            </div>
+          </div>
+
+          {/* Sticky selection toolbar */}
+          {selectionMode && (
+            <div className="mb-4 flex flex-wrap items-center gap-3 rounded-xl border bg-primary/5 border-primary/30 p-3 shadow-sm">
+              <div className="flex items-center gap-2 flex-1 min-w-0">
+                <Badge variant="secondary" className="text-xs gap-1">
+                  <Users className="size-3" />
+                  {selectedPatients.size} patient{selectedPatients.size !== 1 ? 's' : ''} selected
+                </Badge>
+                <button
+                  className="text-xs text-muted-foreground hover:text-foreground hover:underline flex items-center gap-1"
+                  onClick={deselectAll}
+                >
+                  <X className="size-3" />
+                  Clear
+                </button>
+              </div>
+              <div className="flex items-center gap-2">
+                <Badge variant="outline" className="font-mono text-xs">
+                  {configProfile}
+                </Badge>
+                <Button size="sm" onClick={handleBatchDeidentify}>
+                  <ShieldCheck className="size-4" />
+                  De-identify Selected ({selectedPatients.size})
+                </Button>
+              </div>
+            </div>
+          )}
 
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             {patients.map((patient) => (
               <PatientCard
                 key={patient.id}
                 patient={patient}
-                selected={false}
-                onSelect={() => handleSelectPatient(patient)}
+                selected={selectedPatients.has(patient.id)}
+                selectionMode={selectionMode}
+                onSelect={() => togglePatientSelection(patient)}
+                onNavigate={() => handleSelectPatient(patient)}
+                onPreview={() => setPreviewPatient(patient)}
               />
             ))}
           </div>
 
-          {/* Load more */}
           {hasMore && (
             <div className="mt-6 flex justify-center">
-              <Button
-                variant="outline"
-                onClick={handleLoadMore}
-                disabled={loadingMore}
-              >
-                {loadingMore ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <ChevronDown className="h-4 w-4" />
-                )}
+              <Button variant="outline" onClick={handleLoadMore} disabled={loadingMore}>
+                {loadingMore ? <Loader2 className="h-4 w-4 animate-spin" /> : <ChevronDown className="h-4 w-4" />}
                 {loadingMore ? 'Loading…' : 'Load more'}
               </Button>
             </div>
           )}
         </>
       )}
+      {/* Preview dialog */}
+      <Dialog open={previewPatient !== null} onOpenChange={(open) => { if (!open) setPreviewPatient(null); }}>
+        <DialogContent className="sm:max-w-4xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>
+              Preview De-identification — {previewPatient?.name || 'Patient'}
+            </DialogTitle>
+            <DialogDescription>
+              Preview how this patient's data will be de-identified with the current config profile.
+              Click "Run $everything" below to start.
+            </DialogDescription>
+          </DialogHeader>
+          {previewPatient && (
+            <DeidentifyPanel
+              patientId={previewPatient.id}
+              patientName={previewPatient.name}
+              configProfile={configProfile}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

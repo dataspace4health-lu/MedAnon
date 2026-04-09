@@ -1,23 +1,21 @@
+"""CLI entry point — thin dispatcher to command sub-modules."""
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
 
 from rich import print
 
 from integrations.gpas.client import list_gpas_domains
-from integrations.fhir.client import (
-    bulk_export,
-    fetch_all_resource_types,
-    fetch_cohort,
-    fetch_everything,
-    get_capability_statement,
-    upload_resources,
-)
 import pipeline.config as config
 from pipeline.io_formats import detect_format, read_input_file, write_output_file
 from pipeline.processor import process_data
+
+from cli.fetch import add_fetch_args, run_fetch
+from cli.everything import add_everything_args, run_everything
+from cli.push import add_push_args, run_push
+from cli.export import add_export_args, run_export
+from cli.cohort import add_cohort_args, run_cohort
 
 
 def _load_settings(config_filename, match, action, gpas_url, gpas_domain,
@@ -48,373 +46,6 @@ def _load_settings(config_filename, match, action, gpas_url, gpas_domain,
             'params': params,
         }]
     })()
-
-
-def _resource_types_from_config(settings) -> set:
-    """Return FHIR resource type names inferred from the leading segment of rule match expressions.
-
-    E.g. a rule matching ``Patient.name`` contributes ``Patient``.
-    """
-    types: set = set()
-    for rule in getattr(settings, "rules", []) or []:
-        match_expr = rule.get("match") if isinstance(rule, dict) else getattr(rule, "match", None)
-        if match_expr:
-            first = str(match_expr).split(".")[0]
-            if first:
-                types.add(first)
-    return types
-
-
-def _add_fetch_args(p):
-    """Add fetch-subcommand arguments to an argparse parser."""
-    p.add_argument("--server",
-                   help="FHIR base URL (overrides FHIR_SOURCE_URL env). "
-                        "E.g. http://host:8080/fhir")
-    p.add_argument("--resource-type", dest="resource_types",
-                   help="Comma-separated resource types to fetch. Omit to discover from /metadata.")
-    p.add_argument("--output", required=True,
-                   help="Output NDJSON file path.")
-    p.add_argument("--config", "-c", dest="config_filename",
-                   help="YAML config file for anonymization rules.")
-    p.add_argument("--count", type=int, default=None,
-                   help="Page size (_count) for FHIR search requests. "
-                        "Omit to let the server decide (controlled by FHIR_PAGE_SIZE env var).")
-    p.add_argument("--since",
-                   help="Only fetch resources modified after this date (sets _lastUpdated param).")
-    p.add_argument("--params", dest="extra_params",
-                   help="Additional FHIR query params, e.g. '_tag=study-cohort'.")
-    p.add_argument("--token", dest="fhir_token",
-                   help="Bearer token for FHIR server auth (overrides FHIR_SOURCE_TOKEN env).")
-    p.add_argument("--timeout", type=float, default=30.0,
-                   help="HTTP timeout in seconds.")
-    p.add_argument("--discover", "--discover-only", action="store_true",
-                   help="List available resource types from /metadata, write to --output, and exit.")
-    return p
-
-
-def _run_fetch(args):
-    server = (args.server or os.environ.get("FHIR_SOURCE_URL", "")).rstrip("/")
-    if not server:
-        raise SystemExit("error: --server or FHIR_SOURCE_URL env var is required")
-    token = args.fhir_token or os.environ.get("FHIR_SOURCE_TOKEN")
-    timeout = args.timeout
-
-    # Load settings early so resource type filtering can use config rules
-    settings = None
-    if args.config_filename:
-        settings = config.Settings(args.config_filename)
-
-    if args.discover:
-        try:
-            resource_types = get_capability_statement(server, token=token, timeout=timeout)
-        except ValueError as exc:
-            raise SystemExit(f"error: FHIR server error during /metadata: {exc}") from exc
-        for rt in resource_types:
-            print(rt)
-        output_path = Path(args.output)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text("\n".join(resource_types) + "\n")
-        return
-
-    # Resolve resource types
-    if args.resource_types:
-        resource_types = [rt.strip() for rt in args.resource_types.split(",") if rt.strip()]
-    else:
-        try:
-            resource_types = get_capability_statement(server, token=token, timeout=timeout)
-        except ValueError as exc:
-            raise SystemExit(f"error: FHIR server error during /metadata: {exc}") from exc
-        # Filter by resource types referenced in config rules when config is provided
-        if settings is not None:
-            config_types = _resource_types_from_config(settings)
-            if config_types:
-                resource_types = [rt for rt in resource_types if rt in config_types]
-        print("No --resource-type specified, discovering from /metadata...")
-        print(f"Found {len(resource_types)} resource type(s): {', '.join(resource_types)}")
-
-    # Build query params
-    query_params = {}
-    if args.count:
-        query_params["_count"] = args.count
-    if args.since:
-        query_params["_lastUpdated"] = f"ge{args.since}"
-    if args.extra_params:
-        for part in args.extra_params.split("&"):
-            if "=" in part:
-                k, v = part.split("=", 1)
-                query_params[k.strip()] = v.strip()
-
-    output_path = Path(args.output)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    total = 0
-    try:
-        with open(output_path, "w", encoding="utf-8") as fout:
-            for rt, resource in fetch_all_resource_types(
-                server, resource_types, params=query_params, token=token, timeout=timeout
-            ):
-                if settings is not None:
-                    resource = process_data(resource, settings)
-                fout.write(json.dumps(resource, separators=(',', ':')))
-                fout.write("\n")
-                total += 1
-                if total % 100 == 0:
-                    print(f"  processed {total} resources...")
-    except ValueError as exc:
-        raise SystemExit(f"error: FHIR server error: {exc}") from exc
-
-    print(f":thumbs_up: Fetched and processed {total} resource(s) → {output_path}")
-
-
-def _add_everything_args(p):
-    """Add everything-subcommand arguments to an argparse parser."""
-    p.add_argument("--server",
-                   help="FHIR base URL (overrides FHIR_SOURCE_URL env). "
-                        "E.g. http://host:8080/fhir")
-    p.add_argument("--resource-type", required=True, dest="resource_type",
-                   help="Resource type for $everything, e.g. Patient.")
-    p.add_argument("--id", required=True, dest="resource_id",
-                   help="Resource ID, e.g. DDME.")
-    p.add_argument("--output", required=True,
-                   help="Output NDJSON file path.")
-    p.add_argument("--config", "-c", dest="config_filename",
-                   help="YAML config file for anonymization rules.")
-    p.add_argument("--params", dest="extra_params",
-                   help="Additional query params, e.g. '_count=50'.")
-    p.add_argument("--token", dest="fhir_token",
-                   help="Bearer token for FHIR server auth (overrides FHIR_SOURCE_TOKEN env).")
-    p.add_argument("--timeout", type=float, default=30.0,
-                   help="HTTP timeout in seconds.")
-    return p
-
-
-def _run_everything(args):
-    server = (args.server or os.environ.get("FHIR_SOURCE_URL", "")).rstrip("/")
-    if not server:
-        raise SystemExit("error: --server or FHIR_SOURCE_URL env var is required")
-    token = args.fhir_token or os.environ.get("FHIR_SOURCE_TOKEN")
-    timeout = args.timeout
-
-    query_params = {}
-    if args.extra_params:
-        for part in args.extra_params.split("&"):
-            if "=" in part:
-                k, v = part.split("=", 1)
-                query_params[k.strip()] = v.strip()
-
-    settings = None
-    if args.config_filename:
-        settings = config.Settings(args.config_filename)
-
-    output_path = Path(args.output)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    total = 0
-    with open(output_path, "w", encoding="utf-8") as fout:
-        for resource in fetch_everything(
-            server, args.resource_type, args.resource_id,
-            params=query_params or None, token=token, timeout=timeout,
-        ):
-            if settings is not None:
-                resource = process_data(resource, settings)
-            fout.write(json.dumps(resource, separators=(',', ':')))
-            fout.write("\n")
-            total += 1
-            if total % 100 == 0:
-                print(f"  processed {total} resources...")
-
-    print(f":thumbs_up: $everything: {total} resource(s) → {output_path}")
-
-
-def _add_push_args(p):
-    """Add push-subcommand arguments to an argparse parser."""
-    p.add_argument("input_file", nargs="?", default=None,
-                   help="Input file (NDJSON or JSON). Each line / resource is uploaded individually.")
-    p.add_argument("--input", dest="input_flag", default=None,
-                   help="Input file (alternative to positional argument).")
-    p.add_argument("--server",
-                   help="Target FHIR base URL (overrides FHIR_TARGET_URL env). "
-                        "E.g. http://host:8080/fhir")
-    p.add_argument("--config", "-c", dest="config_filename",
-                   help="YAML config for de-identification rules. If omitted, resources are uploaded as-is.")
-    p.add_argument("--token", dest="fhir_token",
-                   help="Bearer token for target FHIR server auth (overrides FHIR_TARGET_TOKEN env).")
-    p.add_argument("--timeout", type=float, default=30.0,
-                   help="HTTP timeout in seconds (default 30).")
-    return p
-
-
-def _run_push(args):
-    server = (args.server or os.environ.get("FHIR_TARGET_URL", "")).rstrip("/")
-    if not server:
-        raise SystemExit("error: --server or FHIR_TARGET_URL env var is required")
-    token = args.fhir_token or os.environ.get("FHIR_TARGET_TOKEN")
-    timeout = args.timeout
-
-    settings = None
-    if args.config_filename:
-        settings = config.Settings(args.config_filename)
-
-    input_file = args.input_file or getattr(args, "input_flag", None)
-    if not input_file:
-        raise SystemExit(2)
-    input_path = Path(input_file)
-    chosen_format = detect_format(str(input_path), "auto")
-    resource_or_list = read_input_file(str(input_path), chosen_format)
-
-    if isinstance(resource_or_list, list):
-        resources = resource_or_list
-    else:
-        resources = [resource_or_list]
-
-    def _deidentify_and_yield():
-        for res in resources:
-            if settings is not None:
-                res = process_data(res, settings)
-            yield res
-
-    total = errors = 0
-    for result in upload_resources(server, _deidentify_and_yield(), token=token, timeout=timeout):
-        total += 1
-        if result["success"]:
-            print(
-                f"  [green]OK[/green] {result['resourceType']} "
-                f"{result['source_id']} → server id {result['server_id']}"
-            )
-        else:
-            errors += 1
-            print(
-                f"  [red]ERR[/red] {result['resourceType']} "
-                f"{result['source_id']}: {result['error']}"
-            )
-
-    status = ":thumbs_up:" if errors == 0 else ":warning:"
-    print(f"{status} Pushed {total} resource(s) to {server} — {errors} error(s)")
-
-
-def _add_export_args(p):
-    """Add export-subcommand arguments to an argparse parser."""
-    p.add_argument("--server",
-                   help="FHIR base URL (overrides FHIR_SOURCE_URL env). "
-                        "E.g. http://host:8080/fhir")
-    p.add_argument("--level", choices=["system", "type"], default="system",
-                   help="Export level: 'system' for /$export, 'type' for /{Type}/$export.")
-    p.add_argument("--resource-type", dest="resource_type",
-                   help="Resource type for type-level export. "
-                        "For system-level, sets the _type filter parameter.")
-    p.add_argument("--type-filter", dest="type_filter",
-                   help="Comma-separated _type filter for system-level export "
-                        "(e.g. Patient,Observation). Overrides --resource-type for system level.")
-    p.add_argument("--since",
-                   help="Only export resources modified after this instant (sets _since param).")
-    p.add_argument("--output", required=True,
-                   help="Output NDJSON file path.")
-    p.add_argument("--config", "-c", dest="config_filename",
-                   help="YAML config file for anonymization rules.")
-    p.add_argument("--token", dest="fhir_token",
-                   help="Bearer token for FHIR server auth (overrides FHIR_SOURCE_TOKEN env).")
-    p.add_argument("--timeout", type=float, default=30.0,
-                   help="HTTP timeout per request in seconds.")
-    return p
-
-
-def _run_export(args):
-    server = (args.server or os.environ.get("FHIR_SOURCE_URL", "")).rstrip("/")
-    if not server:
-        raise SystemExit("error: --server or FHIR_SOURCE_URL env var is required")
-    token = args.fhir_token or os.environ.get("FHIR_SOURCE_TOKEN")
-    timeout = args.timeout
-
-    if args.level == "type" and not args.resource_type:
-        raise SystemExit("error: --resource-type is required for type-level export")
-
-    settings = None
-    if args.config_filename:
-        settings = config.Settings(args.config_filename)
-
-    output_path = Path(args.output)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    total = 0
-    with open(output_path, "w", encoding="utf-8") as fout:
-        for resource in bulk_export(
-            server,
-            level=args.level,
-            resource_type=args.resource_type,
-            type_filter=args.type_filter,
-            since=args.since,
-            token=token,
-            timeout=timeout,
-        ):
-            if settings is not None:
-                resource = process_data(resource, settings)
-            fout.write(json.dumps(resource, separators=(',', ':')))
-            fout.write("\n")
-            total += 1
-            if total % 100 == 0:
-                print(f"  processed {total} resources...")
-
-    print(f":thumbs_up: Bulk export: {total} resource(s) → {output_path}")
-
-
-def _add_cohort_args(p):
-    """Add cohort-subcommand arguments to an argparse parser."""
-    p.add_argument("--server",
-                   help="FHIR base URL (overrides FHIR_SOURCE_URL env).")
-    p.add_argument("--search-type", dest="search_type", default="Condition",
-                   help="Resource type to search for cohort selection (default: Condition).")
-    p.add_argument("--code", required=True,
-                   help="Code to search for, e.g. 'E11' or 'http://hl7.org/fhir/sid/icd-10|E11'.")
-    p.add_argument("--search-params", dest="search_extra_params",
-                   help="Additional search params, e.g. 'clinical-status=active&verification-status=confirmed'.")
-    p.add_argument("--output", required=True,
-                   help="Output NDJSON file path.")
-    p.add_argument("--config", "-c", dest="config_filename",
-                   help="YAML config file for anonymization rules.")
-    p.add_argument("--token", dest="fhir_token",
-                   help="Bearer token for FHIR server auth (overrides FHIR_SOURCE_TOKEN env).")
-    p.add_argument("--timeout", type=float, default=30.0,
-                   help="HTTP timeout per request in seconds.")
-    return p
-
-
-def _run_cohort(args):
-    server = (args.server or os.environ.get("FHIR_SOURCE_URL", "")).rstrip("/")
-    if not server:
-        raise SystemExit("error: --server or FHIR_SOURCE_URL env var is required")
-    token = args.fhir_token or os.environ.get("FHIR_SOURCE_TOKEN")
-    timeout = args.timeout
-
-    # Build search params
-    search_params = {"code": args.code}
-    if args.search_extra_params:
-        for part in args.search_extra_params.split("&"):
-            if "=" in part:
-                k, v = part.split("=", 1)
-                search_params[k.strip()] = v.strip()
-
-    settings = None
-    if args.config_filename:
-        settings = config.Settings(args.config_filename)
-
-    output_path = Path(args.output)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    total = 0
-    with open(output_path, "w", encoding="utf-8") as fout:
-        for resource in fetch_cohort(
-            server, args.search_type, search_params,
-            token=token, timeout=timeout,
-        ):
-            if settings is not None:
-                resource = process_data(resource, settings)
-            fout.write(json.dumps(resource, separators=(',', ':')))
-            fout.write("\n")
-            total += 1
-            if total % 100 == 0:
-                print(f"  processed {total} resources...")
-
-    print(f":thumbs_up: Cohort export: {total} resource(s) → {output_path}")
 
 
 def _build_parser():
@@ -450,59 +81,46 @@ def _build_parser():
     return parser
 
 
+_SUBCOMMANDS = {
+    "fetch": ("cli.py fetch", None, add_fetch_args, run_fetch),
+    "everything": (
+        "cli.py everything",
+        "Fetch all resources via FHIR $everything, optionally de-identify, and save as NDJSON.",
+        add_everything_args, run_everything,
+    ),
+    "push": (
+        "cli.py push",
+        "De-identify a local FHIR file and upload resources to a FHIR server.",
+        add_push_args, run_push,
+    ),
+    "export": (
+        "cli.py export",
+        "Bulk export FHIR resources via $export, optionally de-identify, and save as NDJSON.",
+        add_export_args, run_export,
+    ),
+    "cohort": (
+        "cli.py cohort",
+        "Export all records for patients matching a condition code via $everything.",
+        add_cohort_args, run_cohort,
+    ),
+}
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv and argv[0] == "process":
         argv = argv[1:]
 
-    # Route fetch subcommand before falling through to legacy process parser
-    if argv and argv[0] == "fetch":
-        fetch_parser = argparse.ArgumentParser(prog="cli.py fetch")
-        _add_fetch_args(fetch_parser)
-        fetch_args = fetch_parser.parse_args(argv[1:])
-        _run_fetch(fetch_args)
+    # Route to subcommand modules
+    if argv and argv[0] in _SUBCOMMANDS:
+        prog, desc, add_args_fn, run_fn = _SUBCOMMANDS[argv[0]]
+        sub_parser = argparse.ArgumentParser(prog=prog, description=desc)
+        add_args_fn(sub_parser)
+        sub_args = sub_parser.parse_args(argv[1:])
+        run_fn(sub_args)
         return
 
-    if argv and argv[0] == "everything":
-        everything_parser = argparse.ArgumentParser(
-            prog="cli.py everything",
-            description="Fetch all resources via FHIR $everything, optionally de-identify, and save as NDJSON.",
-        )
-        _add_everything_args(everything_parser)
-        everything_args = everything_parser.parse_args(argv[1:])
-        _run_everything(everything_args)
-        return
-
-    if argv and argv[0] == "push":
-        push_parser = argparse.ArgumentParser(
-            prog="cli.py push",
-            description="De-identify a local FHIR file and upload resources to a FHIR server.",
-        )
-        _add_push_args(push_parser)
-        push_args = push_parser.parse_args(argv[1:])
-        _run_push(push_args)
-        return
-
-    if argv and argv[0] == "export":
-        export_parser = argparse.ArgumentParser(
-            prog="cli.py export",
-            description="Bulk export FHIR resources via $export, optionally de-identify, and save as NDJSON.",
-        )
-        _add_export_args(export_parser)
-        export_args = export_parser.parse_args(argv[1:])
-        _run_export(export_args)
-        return
-
-    if argv and argv[0] == "cohort":
-        cohort_parser = argparse.ArgumentParser(
-            prog="cli.py cohort",
-            description="Export all records for patients matching a condition code via $everything.",
-        )
-        _add_cohort_args(cohort_parser)
-        cohort_args = cohort_parser.parse_args(argv[1:])
-        _run_cohort(cohort_args)
-        return
-
+    # Default: process command
     parser = _build_parser()
     args = parser.parse_args(argv)
 
@@ -546,7 +164,7 @@ def main(argv=None):
     output_path = Path(args.output_file)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Stream NDJSON line-by-line to avoid loading entire file into memory (Step 6)
+    # Stream NDJSON line-by-line to avoid loading entire file into memory
     if chosen_input_format == 'ndjson':
         total = 0
         with open(input_path, 'r', encoding='utf-8-sig') as fin, \

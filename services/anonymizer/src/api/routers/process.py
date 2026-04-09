@@ -1,6 +1,7 @@
 """Core processing endpoints: /process, /process/ndjson, /process/raw, /process/batch."""
 
 import logging
+import os
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
@@ -17,10 +18,16 @@ from api.deps import (
     _unwrap_parameters_payload,
     _validate_dynamic_settings,
 )
+from api.services import stream_trailer
 from api.services.processing import ProcessingError, ProcessingService
 
 router = APIRouter()
 logger = logging.getLogger("medanon")
+
+_RATE_PROCESS = os.environ.get("MEDANON_RATE_PROCESS", "200/minute")
+_RATE_NDJSON = os.environ.get("MEDANON_RATE_NDJSON", "60/minute")
+_RATE_RAW = os.environ.get("MEDANON_RATE_RAW", "200/minute")
+_RATE_BATCH = os.environ.get("MEDANON_RATE_BATCH", "60/minute")
 
 _service = ProcessingService()
 
@@ -30,7 +37,7 @@ _service = ProcessingService()
 # ---------------------------------------------------------------------------
 
 @router.post("/process")
-@limiter.limit("60/minute")
+@limiter.limit(_RATE_PROCESS)
 async def process(
     request: Request,
     resource: dict | list = Body(...),
@@ -54,7 +61,7 @@ async def process(
 
 
 @router.post("/process/ndjson")
-@limiter.limit("20/minute")
+@limiter.limit(_RATE_NDJSON)
 async def process_ndjson(
     request: Request,
     settings: config.Settings = Depends(get_settings_dep),
@@ -73,17 +80,23 @@ async def process_ndjson(
     runtime_settings = _runtime_settings(settings)
 
     async def _generate():
+        count = 0
+        disconnected = False
         async for line in _service.process_ndjson_lines(lines, runtime_settings):
             if await request.is_disconnected():
                 logger.info("NDJSON: client disconnected")
+                disconnected = True
                 break
             yield line + "\n"
+            count += 1
+        if not disconnected:
+            yield stream_trailer(count) + "\n"
 
     return StreamingResponse(_generate(), media_type="application/x-ndjson")
 
 
 @router.post('/process/raw')
-@limiter.limit("60/minute")
+@limiter.limit(_RATE_RAW)
 async def process_raw(
     request: Request,
     output_format: str = 'json',
@@ -136,7 +149,7 @@ async def process_raw(
 
 
 @router.post("/process/batch")
-@limiter.limit("20/minute")
+@limiter.limit(_RATE_BATCH)
 async def process_batch(
     request: Request,
     settings: config.Settings = Depends(get_settings_dep),
@@ -148,8 +161,9 @@ async def process_batch(
     - ``application/json`` / ``application/fhir+json`` — single resource or Bundle
     - ``application/xml`` / ``application/fhir+xml`` — single resource or Bundle
 
-    Bundles are automatically unwrapped: each ``entry.resource`` is processed
-    individually.  Returns a streaming NDJSON response.
+    Bundles are processed as a whole to preserve cross-resource reference
+    rewriting, then each entry resource is streamed as NDJSON.
+    Non-Bundle inputs are unwrapped and streamed individually.
     """
     body = await request.body()
     if len(body) > MAX_BODY_BYTES:
@@ -163,15 +177,34 @@ async def process_batch(
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"Could not parse input: {exc}") from exc
 
-    resources = _unwrap_to_resources(payload)
     runtime_settings = _runtime_settings(settings)
 
+    # Bundles are processed as a whole so cross-resource reference rewriting
+    # (pre/post ID snapshot + _rewrite_references) is preserved.
+    is_bundle = isinstance(payload, dict) and payload.get("resourceType") == "Bundle"
+
     async def _generate():
-        async for line in _service.process_resource_stream(resources, runtime_settings):
-            if await request.is_disconnected():
-                logger.info("process_batch: client disconnected")
-                break
-            yield line + "\n"
+        count = 0
+        disconnected = False
+        if is_bundle:
+            async for line in _service.process_bundle_stream(payload, runtime_settings):
+                if await request.is_disconnected():
+                    logger.info("process_batch: client disconnected")
+                    disconnected = True
+                    break
+                yield line + "\n"
+                count += 1
+        else:
+            resources = _unwrap_to_resources(payload)
+            async for line in _service.process_resource_stream(resources, runtime_settings):
+                if await request.is_disconnected():
+                    logger.info("process_batch: client disconnected")
+                    disconnected = True
+                    break
+                yield line + "\n"
+                count += 1
+        if not disconnected:
+            yield stream_trailer(count) + "\n"
 
     return StreamingResponse(_generate(), media_type="application/x-ndjson")
 

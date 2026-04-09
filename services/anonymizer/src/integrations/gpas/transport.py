@@ -6,13 +6,13 @@ Depends on:
 """
 
 import html
-import json
 import logging
+from utils.json_fast import loads as _json_loads, dumps_bytes as _json_dumps_bytes
 import os
+import random
 import re
 import time
-from urllib import error as urlerror
-from urllib import request
+import urllib3
 from urllib.parse import urlsplit, urlunsplit
 
 import utils.cache as _gpas_cache_mod
@@ -27,6 +27,18 @@ from utils.metrics import (
 from .circuit_breaker import GpasUnavailableError, _gpas_circuit_breaker
 
 gpas_log = logging.getLogger("medanon.gpas")
+
+# ---------------------------------------------------------------------------
+# Connection pool (reuses TCP/TLS connections across gPAS requests)
+# ---------------------------------------------------------------------------
+
+_GPAS_POOL_SIZE = int(os.environ.get("GPAS_POOL_SIZE", "10"))
+_gpas_pool = urllib3.PoolManager(
+    num_pools=2,
+    maxsize=_GPAS_POOL_SIZE,
+    retries=False,
+    timeout=urllib3.Timeout(connect=5, read=30),
+)
 
 # ---------------------------------------------------------------------------
 # Well-known path constants
@@ -150,16 +162,22 @@ def _parse_gpas_domains_from_html(html_text):
 
 def list_gpas_domains(params):
     """Fetch and return configured gPAS domain names from the admin UI."""
+    if not _gpas_circuit_breaker.allow_request():
+        raise GpasUnavailableError("gPAS circuit breaker OPEN — cannot list domains")
     url = _resolve_gpas_admin_url(params)
     auth_headers = _resolve_gpas_headers(params)
     headers = {'Accept': 'text/html'}
     if 'Authorization' in auth_headers:
         headers['Authorization'] = auth_headers['Authorization']
-    req = request.Request(url=url, headers=headers, method='GET')
-    with request.urlopen(req, timeout=float(params.get('gpas_timeout_sec', 30))) as resp:
-        charset = resp.headers.get_content_charset('utf-8')
-        body = resp.read().decode(charset, errors='replace')
-    return _parse_gpas_domains_from_html(body)
+    timeout = float(params.get('gpas_timeout_sec', 30))
+    try:
+        resp = _gpas_pool.request('GET', url, headers=headers, timeout=timeout)
+        body = resp.data.decode('utf-8', errors='replace')
+        _gpas_circuit_breaker.record_success()
+        return _parse_gpas_domains_from_html(body)
+    except Exception:
+        _gpas_circuit_breaker.record_failure()
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -186,7 +204,7 @@ def _call_gpas_operation(base_url, operation, fhir_params, params):
 
     url = f"{base_url}/${operation}"
     timeout_sec = float(params.get('gpas_timeout_sec', 30))
-    payload = json.dumps(fhir_params).encode('utf-8')
+    payload = _json_dumps_bytes(fhir_params)
 
     gpas_log.info("calling %s with %d parameter(s)", url,
                   len(fhir_params.get("parameter", [])))
@@ -196,60 +214,58 @@ def _call_gpas_operation(base_url, operation, fhir_params, params):
 
     t0 = time.perf_counter()
     for attempt in range(retry_count + 1):
-        req = request.Request(
-            url=url,
-            data=payload,
-            headers=_resolve_gpas_headers(params),
-            method='POST',
-        )
         try:
-            with request.urlopen(req, timeout=timeout_sec) as resp:
-                charset = resp.headers.get_content_charset('utf-8')
-                body = resp.read().decode(charset)
-                GPAS_LATENCY.labels(operation=operation).observe(time.perf_counter() - t0)
-                GPAS_CALL_COUNT.labels(operation=operation, status='ok').inc()
-                _gpas_circuit_breaker.record_success()
-                return json.loads(body)
-        except urlerror.HTTPError as exc:
-            should_retry = exc.code in (429, 500, 502, 503, 504)
-            if should_retry and attempt < retry_count:
-                time.sleep(retry_backoff * (2 ** attempt))
-                continue
+            resp = _gpas_pool.request(
+                'POST', url,
+                body=payload,
+                headers=_resolve_gpas_headers(params),
+                timeout=urllib3.Timeout(connect=5, read=timeout_sec),
+            )
+            if resp.status >= 400:
+                should_retry = resp.status in (429, 500, 502, 503, 504)
+                if should_retry and attempt < retry_count:
+                    time.sleep(retry_backoff * (2 ** attempt) * (0.5 + random.random()))
+                    continue
 
-            detail = exc.read().decode('utf-8', errors='replace')[:500] if exc.fp else ""
-            try:
-                diagnostics = []
-                outcome = json.loads(detail)
-                for issue in outcome.get('issue', []):
-                    if issue.get('diagnostics'):
-                        diagnostics.append(issue['diagnostics'][:100])
-                detail_message = '; '.join(diagnostics)[:200] if diagnostics else ""
-            except Exception:
-                detail_message = ""
-
-            if 'Unknown domain' in detail_message:
+                detail = resp.data[:500].decode('utf-8', errors='replace') if resp.data else ""
                 try:
-                    domains = list_gpas_domains(params)
-                    if domains:
-                        detail_message = (
-                            f"Unknown domain. Available domains: {', '.join(domains)}"
-                        )
+                    diagnostics = []
+                    outcome = _json_loads(detail)
+                    for issue in outcome.get('issue', []):
+                        if issue.get('diagnostics'):
+                            diagnostics.append(issue['diagnostics'][:100])
+                    detail_message = '; '.join(diagnostics)[:200] if diagnostics else ""
                 except Exception:
-                    pass
+                    detail_message = ""
+
+                if 'Unknown domain' in detail_message:
+                    try:
+                        domains = list_gpas_domains(params)
+                        if domains:
+                            detail_message = (
+                                f"Unknown domain. Available domains: {', '.join(domains)}"
+                            )
+                    except Exception:
+                        pass
+                GPAS_LATENCY.labels(operation=operation).observe(time.perf_counter() - t0)
+                GPAS_CALL_COUNT.labels(operation=operation, status='error').inc()
+                if should_retry:
+                    _gpas_circuit_breaker.record_failure()
+                raise ValueError(f'gPAS HTTP {resp.status} on ${operation}: {detail_message[:200]}')
+            body = resp.data.decode('utf-8')
             GPAS_LATENCY.labels(operation=operation).observe(time.perf_counter() - t0)
-            GPAS_CALL_COUNT.labels(operation=operation, status='error').inc()
-            if should_retry:
-                _gpas_circuit_breaker.record_failure()
-            raise ValueError(f'gPAS HTTP {exc.code} on ${operation}: {detail_message[:200]}') from exc
-        except urlerror.URLError as exc:
+            GPAS_CALL_COUNT.labels(operation=operation, status='ok').inc()
+            _gpas_circuit_breaker.record_success()
+            return _json_loads(body)
+        except (urllib3.exceptions.HTTPError, OSError) as exc:
             if attempt < retry_count:
-                time.sleep(retry_backoff * (2 ** attempt))
+                time.sleep(retry_backoff * (2 ** attempt) * (0.5 + random.random()))
                 continue
             GPAS_LATENCY.labels(operation=operation).observe(time.perf_counter() - t0)
             GPAS_CALL_COUNT.labels(operation=operation, status='error').inc()
             _gpas_circuit_breaker.record_failure()
             raise GpasUnavailableError(
-                f'gPAS unreachable on ${operation}: {exc.reason}'
+                f'gPAS unreachable on ${operation}: {exc}'
             ) from exc
 
     raise GpasUnavailableError(f'gPAS request failed after retries on ${operation}')

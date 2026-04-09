@@ -194,9 +194,8 @@ CLAUDE.md
 # gPAS third-party service (not source-controlled)
 services/gpas/
 
-# Test directory and test data
-services/anonymizer/tests/*.py
-services/anonymizer/tests/data/
+# Tests folder — not source-controlled
+services/anonymizer/tests/
 
 # Virtual environments
 .venv/

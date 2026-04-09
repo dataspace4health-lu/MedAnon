@@ -74,6 +74,10 @@ env:
   # from the shared BLPOP queue. Raise for compute-heavy deployments.
   MEDANON_JOB_WORKERS: "3"
 
+  # Include transformation manifest in meta.tag (default off — opt-in).
+  # Set to "true" to embed a per-resource transformation log for audit/UI use.
+  MEDANON_MANIFEST_ENABLED: "false"
+
 # ─── Secrets ──────────────────────────────────────────────────────────────────
 secrets:
   # HMAC-SHA3-256 key for the cryptohash action.
@@ -99,6 +103,17 @@ resources:
   limits:
     memory: "2Gi"
     cpu: "1000m"
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
 
 # ─── Redis sidecar (opt-in — shared cache + job queue) ────────────────────────
 # When enabled, a Redis sidecar is added to the anonymizer Pod and

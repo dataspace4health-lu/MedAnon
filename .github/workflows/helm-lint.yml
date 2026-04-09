@@ -11,4 +11,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: azure/setup-helm@v4
-      - run: helm lint ./helm/medanon
+      - name: Helm lint
+        run: helm lint ./helm/medanon
+      - name: Helm template (dry-run)
+        run: helm template medanon ./helm/medanon

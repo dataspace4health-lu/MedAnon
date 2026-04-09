@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useMemo } from "react";
-import { Play, Square, AlertCircle, GitCompare, FileJson, TableProperties, Maximize2, Minimize2 } from "lucide-react";
+import { Play, Square, AlertCircle, GitCompare, FileJson, TableProperties, Maximize2, Minimize2, Upload, CheckCircle2, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Collapsible,
   CollapsibleContent,
@@ -12,7 +13,10 @@ import { FhirCodeViewer } from "@/components/shared/FhirCodeViewer";
 import { JsonDiffViewer } from "@/components/shared/JsonDiffViewer";
 import { MultiFormatDownload } from "@/components/shared/MultiFormatDownload";
 import { FhirTableView } from "@/components/shared/FhirTableView";
+import { buildPiiDetectionMap, buildFieldSummary, stripManifestTag } from "@/lib/piiDetection";
+import { extractFieldsDeep } from "@/lib/fhirFields";
 import { getAuthHeaders } from "@/api/client";
+import { uploadToTarget } from "@/api/medanon";
 
 interface DeidentifyPanelProps {
   patientId: string;
@@ -121,6 +125,8 @@ export function DeidentifyPanel({
       const collectedResources: Record<string, unknown>[] = [];
       const counts: Record<string, number> = {};
       let errors = 0;
+      let fatalError: string | null = null;
+      let lastFlush = 0;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -143,6 +149,9 @@ export function DeidentifyPanel({
 
             if ("error" in parsed && !("data" in parsed)) {
               errors++;
+              if (parsed.fatal) {
+                fatalError = String(parsed.error ?? "Fatal processing error — stream halted");
+              }
               continue;
             }
 
@@ -156,12 +165,19 @@ export function DeidentifyPanel({
           }
         }
 
-        setState((prev) => ({
-          ...prev,
-          resources: [...collectedResources],
-          resourceCounts: { ...counts },
-          errorCount: errors,
-        }));
+        if (fatalError) break;
+
+        // Throttle UI updates to avoid excessive re-renders
+        const now = Date.now();
+        if (now - lastFlush >= 250) {
+          lastFlush = now;
+          setState((prev) => ({
+            ...prev,
+            resources: collectedResources.slice(),
+            resourceCounts: { ...counts },
+            errorCount: errors,
+          }));
+        }
       }
 
       // Flush any remaining buffer
@@ -187,6 +203,7 @@ export function DeidentifyPanel({
         resources: collectedResources,
         resourceCounts: counts,
         errorCount: errors,
+        error: fatalError,
       }));
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") {
@@ -205,9 +222,17 @@ export function DeidentifyPanel({
     abortRef.current?.abort();
   }, []);
 
+  // Strip manifest tags for output/download (keep internal for PII detection)
+  const cleanResources = useMemo(
+    () => state.resources.map(stripManifestTag),
+    [state.resources],
+  );
+
   const handleXmlDownload = useCallback(async () => {
     try {
-      const response = await fetch(`/api/v1/process/batch?config_profile=${configProfile}&output_format=xml`, {
+      // Use already-processed resources instead of re-processing originals
+      // (which would generate different pseudonyms).
+      const response = await fetch(`/api/v1/process/raw?config_profile=${configProfile}&output_format=xml`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -216,7 +241,7 @@ export function DeidentifyPanel({
         body: JSON.stringify({
           resourceType: "Bundle",
           type: "collection",
-          entry: state.originalResources.map(resource => ({ resource })),
+          entry: cleanResources.map(resource => ({ resource })),
         }),
       });
 
@@ -240,17 +265,66 @@ export function DeidentifyPanel({
       console.error("Failed to download XML:", error);
       alert("Failed to generate XML download. Please try again or use a different format.");
     }
-  }, [patientId, configProfile, state.originalResources]);
+  }, [patientId, configProfile, cleanResources]);
+
+  // Limit resources for diff/table views to prevent browser freeze
+  const DIFF_LIMIT = 200;
+  const resourceCount = cleanResources.length;
+  const isDiffLimited = resourceCount > DIFF_LIMIT;
 
   const jsonOutput = useMemo(() => {
-    return JSON.stringify(state.resources, null, 2);
-  }, [state.resources]);
+    if (activeTab !== "output" && activeTab !== "diff") return "";
+    const subset = isDiffLimited && activeTab === "diff" ? cleanResources.slice(0, DIFF_LIMIT) : cleanResources;
+    return JSON.stringify(subset, null, 2);
+  }, [cleanResources, activeTab, isDiffLimited]);
 
   const jsonOriginal = useMemo(() => {
-    return JSON.stringify(state.originalResources, null, 2);
-  }, [state.originalResources]);
+    if (activeTab !== "diff") return "";
+    const subset = isDiffLimited ? state.originalResources.slice(0, DIFF_LIMIT) : state.originalResources;
+    return JSON.stringify(subset, null, 2);
+  }, [state.originalResources, activeTab, isDiffLimited]);
 
   const hasResults = !state.isStreaming && state.resources.length > 0;
+
+  const [uploading, setUploading] = useState(false);
+  const [uploadResult, setUploadResult] = useState<{ uploaded: number; errors: number } | null>(null);
+  const [targetUrl, setTargetUrl] = useState("");
+
+  const handleUploadToTarget = useCallback(async () => {
+    if (uploading || cleanResources.length === 0) return;
+    setUploading(true);
+    setUploadResult(null);
+    try {
+      const url = targetUrl.trim() || undefined;
+      const result = await uploadToTarget(cleanResources, url);
+      setUploadResult({ uploaded: result.uploaded, errors: result.errors });
+    } catch {
+      setUploadResult({ uploaded: 0, errors: -1 });
+    } finally {
+      setUploading(false);
+    }
+  }, [uploading, cleanResources, targetUrl]);
+
+  const piiDetectionMap = useMemo(
+    () =>
+      hasResults
+        ? buildPiiDetectionMap(state.originalResources, state.resources)
+        : {},
+    [hasResults, state.originalResources, state.resources],
+  );
+
+  const fieldSummary = useMemo(() => {
+    if (!hasResults) return undefined;
+    const allFieldCounts: Record<string, Record<string, number>> = {};
+    for (const resource of state.resources) {
+      const type = String(resource.resourceType ?? "Unknown");
+      if (!allFieldCounts[type]) allFieldCounts[type] = {};
+      for (const { field } of extractFieldsDeep(resource)) {
+        allFieldCounts[type][field] = (allFieldCounts[type][field] ?? 0) + 1;
+      }
+    }
+    return buildFieldSummary(allFieldCounts, piiDetectionMap);
+  }, [hasResults, state.resources, piiDetectionMap]);
 
   return (
     <div className="flex flex-col gap-4">
@@ -297,7 +371,7 @@ export function DeidentifyPanel({
 
       {/* Resource breakdown */}
       {Object.keys(state.resourceCounts).length > 0 && (
-        <ResourceTypeSummary counts={state.resourceCounts} />
+        <ResourceTypeSummary counts={state.resourceCounts} piiData={piiDetectionMap} fieldSummary={fieldSummary} />
       )}
 
       {/* Results */}
@@ -380,24 +454,67 @@ export function DeidentifyPanel({
                 </CollapsibleContent>
               </Collapsible>
               <MultiFormatDownload
-                resources={state.resources}
+                resources={cleanResources}
                 baseFilename={`deidentified-${patientId}`}
                 defaultFormat="ndjson"
                 onXmlDownload={handleXmlDownload}
               />
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center gap-2">
+                  <Input
+                    placeholder="Target FHIR server URL (optional — uses FHIR_TARGET_URL if empty)"
+                    value={targetUrl}
+                    onChange={(e) => setTargetUrl(e.target.value)}
+                    className="max-w-sm text-xs"
+                    disabled={uploading}
+                  />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleUploadToTarget}
+                    disabled={uploading}
+                  >
+                    {uploading ? (
+                      <Loader2 className="size-3.5 animate-spin" />
+                    ) : (
+                      <Upload className="size-3.5" />
+                    )}
+                    {uploading ? "Sending…" : "Send to Target"}
+                  </Button>
+                </div>
+                {uploadResult && uploadResult.errors !== -1 && (
+                  <span className="flex items-center gap-1.5 text-xs text-green-700">
+                    <CheckCircle2 className="size-3.5" />
+                    {uploadResult.uploaded} uploaded
+                    {uploadResult.errors > 0 && (
+                      <span className="text-destructive">({uploadResult.errors} error{uploadResult.errors !== 1 ? "s" : ""})</span>
+                    )}
+                  </span>
+                )}
+                {uploadResult && uploadResult.errors === -1 && (
+                  <span className="text-xs text-destructive">Upload failed — check that the target FHIR server URL is correct or that FHIR_TARGET_URL is set</span>
+                )}
+              </div>
             </>
           )}
 
           {/* Diff tab */}
           {activeTab === "diff" && (
-            <JsonDiffViewer
-              original={jsonOriginal}
-              modified={jsonOutput}
-              maxHeight={fullView ? "none" : "520px"}
-              context={fullView ? 20 : 4}
-              disableGapCompression={fullView}
-              fullHeight={fullView}
-            />
+            <>
+              {isDiffLimited && (
+                <p className="rounded-md border bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                  Showing diff for the first {DIFF_LIMIT} of {resourceCount} resources. Download the full result for a complete view.
+                </p>
+              )}
+              <JsonDiffViewer
+                original={jsonOriginal}
+                modified={jsonOutput}
+                maxHeight={fullView ? "none" : "520px"}
+                context={fullView ? 20 : 4}
+                disableGapCompression={fullView}
+                fullHeight={fullView}
+              />
+            </>
           )}
 
           {/* Table tab */}
@@ -409,6 +526,7 @@ export function DeidentifyPanel({
               <FhirTableView
                 originalResources={state.originalResources}
                 resources={state.resources}
+                piiData={piiDetectionMap}
               />
             </div>
           )}

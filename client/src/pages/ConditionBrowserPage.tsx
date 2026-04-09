@@ -186,12 +186,36 @@ export default function ConditionBrowserPage() {
     return params;
   };
 
-  const handleExport = () =>
-    submitCohortJob({
-      search_type: 'Condition',
-      search_params: buildExportSearchParams(),
-      config_profile: configProfile,
+  // Derive a label for the bulk de-identify page title.
+  const deriveConditionLabel = (): string => {
+    if (selectedCodes.size === 1) {
+      const code = [...selectedCodes][0];
+      const group = conditionGroups.find((g) => g.code === code);
+      return group?.display || code;
+    }
+    if (selectedCodes.size > 1) {
+      return `${selectedCodes.size} selected conditions`;
+    }
+    return committedQuery || 'matching conditions';
+  };
+
+  const handleBulkExport = () => {
+    const label = deriveConditionLabel();
+    const exportId = submitExport(
+      `Export: ${label}`,
+      'conditions-deidentified.ndjson',
+      () =>
+        submitCohortJob({
+          search_type: 'Condition',
+          search_params: buildExportSearchParams(),
+          config_profile: configProfile,
+        }),
+      { source: 'condition', conditionName: label, configProfile },
+    );
+    navigate('/bulk-deidentify', {
+      state: { autoSelectId: exportId },
     });
+  };
 
   const exportLabel =
     selectedCodes.size > 0
@@ -290,8 +314,8 @@ export default function ConditionBrowserPage() {
           <Button
             variant="outline"
             className="gap-1.5"
-            disabled={!fhirConnected || conditions.length === 0}
-            onClick={() => submitExport(exportLabel, 'conditions-deidentified.ndjson', handleExport)}
+            disabled={!fhirConnected || selectedCodes.size === 0}
+            onClick={handleBulkExport}
           >
             <PackageOpen className="h-4 w-4" />
             {exportLabel}

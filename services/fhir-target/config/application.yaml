@@ -1,0 +1,66 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# HAPI FHIR target server configuration (de-identified data store)
+# Mounted at /app/config/application.yaml inside the container.
+# See https://github.com/hapifhir/hapi-fhir-jpaserver-starter for all options.
+# ─────────────────────────────────────────────────────────────────────────────
+
+spring:
+  main:
+    allow-circular-references: true
+
+  datasource:
+    url: jdbc:postgresql://hapi-target-db:5432/${HAPI_DB_NAME:hapi_target}
+    username: ${HAPI_DB_USER:hapi}
+    password: ${HAPI_DB_PASSWORD:}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 10
+
+  jpa:
+    properties:
+      hibernate:
+        dialect: ca.uhn.fhir.jpa.model.dialect.HapiFhirPostgres94Dialect
+        hbm2ddl:
+          auto: update
+
+# Expose Spring Boot Actuator health endpoint for Docker/K8s health checks.
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
+
+hapi:
+  fhir:
+    fhir_version: R4
+    # Public base URL for Bundle fullUrl and pagination links.
+    # Set HAPI_SERVER_ADDRESS in .env (default: http://localhost:8082/fhir for local dev).
+    server_address: ${HAPI_SERVER_ADDRESS:http://localhost:8082/fhir}
+
+    # Validation
+    validation:
+      enabled: false       # set to true if you want profile validation
+
+    # CORS — in-cluster service names only; no hardcoded IP addresses.
+    cors:
+      allow_Credentials: true
+      allowed_origin:
+        - http://medanon:8000
+        - http://localhost:8000
+        - http://localhost:8501
+
+    # Bulk data / $export support
+    bulk_export_enabled: true
+
+    # Narrative generation (disable for de-identified data)
+    narrative_enabled: false
+
+    # Page size — no artificial cap; the client controls page size via _count
+    # when FHIR_PAGE_SIZE env var is set, otherwise the server returns up to
+    # default_page_size resources per page.  Pagination (link[rel=next])
+    # handles datasets larger than a single page.
+    default_page_size: 2147483647
+    max_page_size: 2147483647

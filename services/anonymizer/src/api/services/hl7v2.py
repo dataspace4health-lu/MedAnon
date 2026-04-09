@@ -3,7 +3,7 @@
 import asyncio
 import logging
 
-from pipeline.hl7v2_deidentify import deidentify_hl7v2, deidentify_hl7v2_batch
+from formats.hl7v2 import deidentify_hl7v2, deidentify_hl7v2_batch
 
 logger = logging.getLogger("medanon")
 

@@ -13,14 +13,14 @@ def _perturb(real_value, noise_range, is_date=False):
 
 def _perturb_nodes(node, key, value, noise_range):
     if isinstance(node, list):
-        for idx in range(len(node)):
-            _perturb_nodes(node[idx], key, value, noise_range)
-    elif isinstance(node, dict) and (key in list(node.keys())):
+        for item in node:
+            _perturb_nodes(item, key, value, noise_range)
+    elif isinstance(node, dict) and (key in node):
         if isinstance(node[key], list):
             for idx, data in enumerate(node[key]):
                 if data == value:
                     elem = node[key][idx]
-                    if type(elem) in [int, float]:
+                    if isinstance(elem, (int, float)) and not isinstance(elem, bool):
                         node[key][idx] = _perturb(elem, noise_range)
                     elif get_date(elem, date_format):
                         node[key][idx] = _perturb(get_date(elem, date_format), noise_range, True)
@@ -28,7 +28,7 @@ def _perturb_nodes(node, key, value, noise_range):
                         error(f'{type(node[key][idx])} is not a number')
         else:
             elem = node[key]
-            if type(elem) in [int, float]:
+            if isinstance(elem, (int, float)) and not isinstance(elem, bool):
                 node[key] = _perturb(elem, noise_range)
             elif get_date(elem, date_format):
                 node[key] = _perturb(get_date(elem, date_format), noise_range, True)

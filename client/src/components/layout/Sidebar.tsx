@@ -1,4 +1,5 @@
 import { NavLink } from 'react-router-dom';
+import { useState, useEffect } from 'react';
 import {
   Home,
   Users,
@@ -8,12 +9,16 @@ import {
   Shield,
   FlaskConical,
   BarChart3,
+  SlidersHorizontal,
+  PackageOpen,
+  ShieldCheck,
 } from 'lucide-react';
 import { HealthBadge } from '@/components/shared/HealthBadge';
 import { useHealth } from '@/hooks/useHealth';
 import { useAuth } from '@/context/AuthContext';
 import { useConfig } from '@/context/ConfigContext';
-import { CONFIG_PROFILES } from '@/config/constants';
+import { listConfigs } from '@/api/medanon';
+import type { ConfigMeta } from '@/api/medanon';
 import type { Role } from '@/config/constants';
 import {
   Select,
@@ -45,6 +50,7 @@ const NAV_SECTIONS: NavSection[] = [
     items: [
       { to: '/patients', label: 'Patient Browser', icon: Users, minRole: 'viewer' },
       { to: '/conditions', label: 'Condition Browser', icon: FileText, minRole: 'viewer' },
+      { to: '/target-browser', label: 'Target FHIR Browser', icon: ShieldCheck, minRole: 'viewer' },
     ],
   },
   {
@@ -52,6 +58,7 @@ const NAV_SECTIONS: NavSection[] = [
     items: [
       { to: '/process', label: 'Process Resource', icon: Layers, minRole: 'analyst' },
       { to: '/batch', label: 'Batch Processing', icon: Activity, minRole: 'analyst' },
+      { to: '/bulk-deidentify', label: 'Bulk Jobs', icon: PackageOpen, minRole: 'analyst' },
     ],
   },
   {
@@ -59,6 +66,12 @@ const NAV_SECTIONS: NavSection[] = [
     items: [
       { to: '/risk', label: 'Risk Assessment', icon: Shield, minRole: 'analyst' },
       { to: '/synthetic', label: 'Synthetic Data', icon: FlaskConical, minRole: 'analyst' },
+    ],
+  },
+  {
+    label: 'Configure',
+    items: [
+      { to: '/configs', label: 'Rule Configs', icon: SlidersHorizontal, minRole: 'viewer' },
     ],
   },
   {
@@ -106,6 +119,13 @@ export function Sidebar({ onNavigate }: SidebarProps) {
   const { hasRole } = useAuth();
   const { configProfile, setConfigProfile } = useConfig();
   const health = useHealth();
+  const [profiles, setProfiles] = useState<ConfigMeta[]>([]);
+
+  useEffect(() => {
+    listConfigs()
+      .then(setProfiles)
+      .catch(() => {/* fallback: dropdown shows only "Auto" */});
+  }, []);
 
   return (
     <div className="flex h-full flex-col">
@@ -161,23 +181,14 @@ export function Sidebar({ onNavigate }: SidebarProps) {
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {CONFIG_PROFILES.map((profile) => (
-              <SelectItem key={profile.key} value={profile.key}>
-                {profile.label}
+            <SelectItem value="auto">Auto</SelectItem>
+            {profiles.map((p) => (
+              <SelectItem key={p.name} value={p.name}>
+                {p.name}{!p.is_system && ' *'}
               </SelectItem>
             ))}
           </SelectContent>
         </Select>
-      </div>
-
-      {/* Connection info footer */}
-      <div className="border-t px-4 py-3">
-        <p className="text-xs text-muted-foreground">
-          API: <span className="font-mono">/api</span>
-        </p>
-        <p className="text-xs text-muted-foreground">
-          FHIR: <span className="font-mono">/fhir</span>
-        </p>
       </div>
     </div>
   );

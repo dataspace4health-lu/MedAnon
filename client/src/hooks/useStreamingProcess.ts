@@ -16,6 +16,9 @@ const initialState: StreamState = {
   progress: 0,
 };
 
+// Throttle UI updates during streaming to avoid excessive re-renders
+const UPDATE_INTERVAL_MS = 250;
+
 export function useStreamingProcess() {
   const [state, setState] = useState<StreamState>(initialState);
   const abortRef = useRef<AbortController | null>(null);
@@ -31,6 +34,18 @@ export function useStreamingProcess() {
       const errors: string[] = [];
       const counts: Record<string, number> = {};
       let processed = 0;
+      let lastUpdate = 0;
+
+      const flush = () => {
+        lastUpdate = Date.now();
+        setState({
+          lines: collected.slice(),
+          errors: errors.slice(),
+          resourceCounts: { ...counts },
+          isStreaming: true,
+          progress: processed,
+        });
+      };
 
       try {
         for await (const item of generator) {
@@ -46,13 +61,11 @@ export function useStreamingProcess() {
             counts[resourceType] = (counts[resourceType] ?? 0) + 1;
           }
 
-          setState({
-            lines: [...collected],
-            errors: [...errors],
-            resourceCounts: { ...counts },
-            isStreaming: true,
-            progress: processed,
-          });
+          // Throttle state updates — flush at most every UPDATE_INTERVAL_MS
+          const now = Date.now();
+          if (now - lastUpdate >= UPDATE_INTERVAL_MS) {
+            flush();
+          }
         }
       } catch (err) {
         if (!signal.aborted) {
@@ -60,8 +73,8 @@ export function useStreamingProcess() {
         }
       } finally {
         setState({
-          lines: [...collected],
-          errors: [...errors],
+          lines: collected.slice(),
+          errors: errors.slice(),
           resourceCounts: { ...counts },
           isStreaming: false,
           progress: processed,

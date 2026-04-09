@@ -4,7 +4,7 @@ import asyncio
 import logging
 import os
 
-from analytics.risk import assess_risk_resources
+from medanon_core.analytics.risk import assess_risk_resources
 from pipeline.io_formats import parse_payload_bytes
 
 logger = logging.getLogger("medanon")
@@ -26,9 +26,10 @@ class RiskAnalysisService:
             from integrations.analytics.client import proxy_analyse_risk
             return await asyncio.to_thread(proxy_analyse_risk, body, content_type)
 
-        payload = parse_payload_bytes(body, content_type=content_type)
+        def _local_analyse():
+            payload = parse_payload_bytes(body, content_type=content_type)
+            from api.deps import _unwrap_to_resources
+            resources = _unwrap_to_resources(payload)
+            return assess_risk_resources(resources)
 
-        from api.deps import _unwrap_to_resources
-        resources = _unwrap_to_resources(payload)
-
-        return assess_risk_resources(resources)
+        return await asyncio.to_thread(_local_analyse)

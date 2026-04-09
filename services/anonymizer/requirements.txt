@@ -3,7 +3,9 @@
 fastapi==0.135.1
 pydantic==2.12.5
 uvicorn==0.42.0
+gunicorn==23.0.0
 python-multipart==0.0.22    # required for Form fields (SMART /oauth2/introspect)
+orjson==3.10.18            # Rust-based JSON — 3-10x faster than stdlib (hot paths)
 PyYAML==6.0.3              # CVE history in older versions — always pin exactly
 fhirpathpy==0.1.0
 rich==14.3.3
@@ -14,8 +16,14 @@ prometheus-client==0.24.1
 slowapi==0.1.9
 urllib3==2.3.0             # FHIR client connection pooling
 
-# Redis — L2 gPAS cache + scalable job queue (BLPOP event-driven worker)
+# Redis — L2 gPAS cache + scalable job queue (Streams event-driven worker)
 redis==5.2.1
+
+# MinIO S3-compatible object storage client (opt-in: MEDANON_RESULT_STORAGE=s3)
+minio==7.2.15
+
+# PostgreSQL — staging table for large-scale bulk export/cohort processing
+psycopg2-binary>=2.9
 
 # HL7 v2 message parsing
 hl7==0.4.5

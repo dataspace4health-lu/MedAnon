@@ -8,6 +8,7 @@ When MEDANON_API_KEY is not set:
   - Open access (all users get admin role).
 """
 
+import hmac
 import json
 import logging
 import logging.handlers
@@ -25,6 +26,13 @@ log = logging.getLogger("medanon.auth")
 # Configuration from env
 # ---------------------------------------------------------------------------
 _API_KEY = os.environ.get("MEDANON_API_KEY", "").strip()
+
+if not _API_KEY:
+    log.warning(
+        "MEDANON_API_KEY is not set — running in open mode. "
+        "All callers are granted admin privileges. "
+        "This is only safe for local development. Set MEDANON_API_KEY in production."
+    )
 
 OPEN_PATHS = frozenset({
     "/health", "/ready", "/metrics", "/docs", "/openapi.json", "/redoc", "/",
@@ -64,6 +72,8 @@ ENDPOINT_ROLES: dict[str, str] = {
 # Checked when ENDPOINT_ROLES produces no exact match.
 ENDPOINT_ROLE_PREFIXES: dict[str, str] = {
     "/v1/jobs/bulk-export": "admin",   # exact — listed first for priority
+    "/v1/jobs/bulk-import": "admin",   # uploads to target FHIR server — requires admin
+    "/v1/jobs/batch-patient-export": "analyst",
     "/v1/jobs/cohort": "analyst",
     "/v1/jobs/": "analyst",            # covers /v1/jobs/{id} and /v1/jobs/{id}/result
     "/v1/configs/": "viewer",          # covers /v1/configs/{name} — writes enforce admin in router
@@ -127,7 +137,7 @@ def get_auth_context(request: Request) -> AuthContext:
 
     if _API_KEY:
         # API-key auth
-        if api_key_header == _API_KEY:
+        if hmac.compare_digest(api_key_header, _API_KEY):
             return AuthContext(subject="api-key-user", roles=frozenset({"admin"}), auth_method="api-key")
         # SMART bearer token auth
         if bearer_token:
@@ -175,11 +185,20 @@ def _resolve_bearer_context(token: str) -> AuthContext:
             return AuthContext(subject=sub, roles=frozenset({role}), auth_method="smart-bearer")
         except HTTPException:
             raise
+        except urllib.error.URLError as exc:
+            # Network-level failure (DNS, timeout, connection refused) — report
+            # as a service unavailability, not a 401.
+            log.warning("smart_introspection_unreachable url=%s: %s", introspection_url, exc)
+            raise HTTPException(status_code=503, detail="Token introspection service unavailable")
+        except (ValueError, KeyError) as exc:
+            # Malformed response from introspection endpoint
+            log.warning("smart_introspection_bad_response: %s", exc)
+            raise HTTPException(status_code=503, detail="Token introspection service unavailable")
         except Exception:
             raise HTTPException(status_code=401, detail="Unauthorized")
 
     # Fallback: accept the API key as a bearer token
-    if _API_KEY and token == _API_KEY:
+    if _API_KEY and hmac.compare_digest(token, _API_KEY):
         return AuthContext(subject="api-key-user", roles=frozenset({"admin"}), auth_method="bearer-apikey")
 
     raise HTTPException(status_code=401, detail="Unauthorized")

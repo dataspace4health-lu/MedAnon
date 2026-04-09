@@ -5,11 +5,20 @@ dependencies:
 - name: fhir-server
   repository: file://../charts/fhir-server
   version: 0.1.0
+- name: fhir-server
+  repository: file://../charts/fhir-server
+  version: 0.1.0
 - name: gpas
   repository: file://../charts/gpas
   version: 0.1.0
 - name: ui
   repository: file://../charts/ui
   version: 0.1.0
-digest: sha256:ed0f8219a1ec96d9cb26afa97105e0d4bbd8a2b5cac1d55ef9fd44370d34e2fb
-generated: "2026-03-26T10:30:24.955099777+01:00"
+- name: worker
+  repository: file://../charts/worker
+  version: 0.1.0
+- name: analytics
+  repository: file://../charts/analytics
+  version: 0.1.0
+digest: sha256:9623c35f3e44805ef5f6a00f616c827c357fb462c0d5cf3b0e079a6867c85ad2
+generated: "2026-04-09T14:46:36.732896505+02:00"

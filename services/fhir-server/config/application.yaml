@@ -9,17 +9,17 @@ spring:
     allow-circular-references: true
 
   datasource:
-    url: jdbc:h2:mem:fhir;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
-    username: sa
-    password: ""
-    driver-class-name: org.h2.Driver
+    url: jdbc:postgresql://hapi-db:5432/${HAPI_DB_NAME:hapi}
+    username: ${HAPI_DB_USER:hapi}
+    password: ${HAPI_DB_PASSWORD:}
+    driver-class-name: org.postgresql.Driver
     hikari:
       maximum-pool-size: 10
 
   jpa:
     properties:
       hibernate:
-        dialect: ca.uhn.fhir.jpa.model.dialect.HapiFhirH2Dialect
+        dialect: ca.uhn.fhir.jpa.model.dialect.HapiFhirPostgres94Dialect
         hbm2ddl:
           auto: update
 

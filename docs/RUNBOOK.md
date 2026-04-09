@@ -1,318 +1,107 @@
-# MedAnon Operations Runbook
+# MedAnon — Operations Runbook
 
-## Table of Contents
+## Daily operations
 
-1. [Prerequisites](#1-prerequisites)
-2. [Starting the Stack](#2-starting-the-stack)
-3. [Config Profile Selection](#3-config-profile-selection)
-4. [Processing Workflows](#4-processing-workflows)
-5. [Verifying Output Quality](#5-verifying-output-quality)
-6. [Risk Assessment](#6-risk-assessment)
-7. [Monitoring](#7-monitoring)
-8. [Backup and Recovery](#8-backup-and-recovery)
-9. [Secret Rotation](#9-secret-rotation)
-10. [Troubleshooting](#10-troubleshooting)
-11. [Make Commands Reference](#11-make-commands-reference)
-12. [Security Checklist](#12-security-checklist)
+### Start / stop
+
+```bash
+make up       # start full stack (preflight + docker compose + smoke verify)
+make dev      # start with hot-reload (source mounted, HAPI uses in-memory H2)
+make down     # stop containers; volumes preserved
+make logs     # tail all container logs
+make verify   # smoke-test a running stack
+```
+
+**gPAS (WildFly) takes ~90 seconds on first boot.** Wait until `docker compose ps` shows all services as `healthy` before processing data.
+
+### Opt-in profiles
+
+```bash
+docker compose --profile analytics up   # analytics microservice
+docker compose --profile nlp up         # Presidio NLP microservice (~800 MB)
+docker compose --profile ha up          # gPAS MySQL read replica
+```
+
+### Check health
+
+```bash
+docker compose ps                          # all containers, health status
+curl -s http://localhost:8000/health       # {"status":"ok"} — liveness (fast, no external calls)
+curl -s http://localhost:8000/ready        # {"ready":true} — readiness (probes FHIR + gPAS)
+docker compose exec anonymizer tail -f /output/audit.log  # structured JSON audit log
+```
+
+`/health` vs `/ready`: Health is a lightweight liveness check used by Docker's healthcheck. Ready probes FHIR and gPAS with a 5 s timeout each — use it to confirm the stack is actually operational, not just started.
 
 ---
 
-## 1. Prerequisites
+## Make commands
 
-| Requirement | Minimum Version | Notes |
-|---|---|---|
-| Docker Engine | 24+ | Required for full stack |
-| Docker Compose | v2 | `docker compose` (not `docker-compose`) |
-| Python | 3.11+ | Local dev / CLI tools only |
-| GNU Make | 4+ | For make targets |
-| RAM | 8 GB | Comfortable: 12 GB+ for full stack |
-| Disk | 10 GB | Docker images ~4 GB + gPAS MySQL data |
-| CPU | 2 cores | 4+ recommended for production |
-
----
-
-## 2. Starting the Stack
-
-### Step 1: Configure
-
-```bash
-git clone <repo-url> && cd privacy-toolkit
-cp .env.example .env
-```
-
-Edit `.env` and replace every `REPLACE_WITH_...` placeholder:
-
-```bash
-# Generate secrets
-openssl rand -hex 32       # for MEDANON_HASH_KEY
-openssl rand -base64 24    # for GPAS_BASIC_PASS, GPAS_MYSQL_ROOT_PASSWORD
-```
-
-### Step 2: Build and Start
-
-```bash
-make build       # build anonymizer + UI images
-make up          # start all five services
-```
-
-### Step 3: Wait for Healthy Status
-
-gPAS (WildFly) takes up to 90 seconds to deploy. Monitor:
-
-```bash
-docker compose ps     # all should show "healthy"
-```
-
-### Step 4: Verify
-
-```bash
-# Anonymizer
-curl -s http://localhost:8000/health | python3 -m json.tool
-# {"status": "ok"}
-
-curl -s http://localhost:8000/ready | python3 -m json.tool
-# {"ready": true}
-
-# HAPI FHIR
-curl -s http://localhost:8081/fhir/metadata | head -5
-
-# gPAS
-curl -s http://localhost:8080/ttp-fhir/fhir/gpas/metadata | head -5
-
-# Web UI
-curl -s http://localhost:8501/healthz
-```
-
-### Step 5: Initialize gPAS Domain
-
-```bash
-make init-domains
-```
-
-Or manually at `http://localhost:8080/gpas-web/` (login: `admin@ths`).
-
-### Development Mode
-
-Hot-reload with source mounted into the container:
-
-```bash
-make dev
-```
-
-This applies `docker-compose.dev.yml` overrides:
-- Anonymizer: source directory mounted live, uvicorn `--reload`
-- HAPI FHIR: in-memory H2 (data resets on restart)
-- gPAS: management console exposed on `127.0.0.1:9990`
-
----
-
-## 3. Config Profile Selection
-
-Choose the profile that matches your use case:
-
-| Use Case | Config File |
+| Command | Description |
 |---|---|
-| Local dev / testing | `config.yaml` |
-| Production (reversible pseudonyms, requires gPAS) | `config_gpas.yaml` |
-| EU patient data (GDPR Art. 4(5)) | `config_gdpr_eu.yaml` |
-| US patient data (HIPAA Safe Harbor) | `config_hipaa_safe_harbor.yaml` |
-| Research under IRB | `config_research_pseudonymous.yaml` |
-| Full FHIR structure intact (requires gPAS) | `config_structure_preserving.yaml` |
-
-See [policies.md](policies.md) for a full comparison of ID strategy, date handling, compliance notes, and limitations.
-
-The active config is auto-selected:
-- `GPAS_URL` set -> `config_gpas.yaml`
-- `GPAS_URL` not set -> `config.yaml`
-
-Override in CLI: `--config config/<profile>.yaml`
+| `make up` | Start full Docker stack |
+| `make dev` | Start with hot-reload |
+| `make down` | Stop containers |
+| `make build` | Rebuild anonymizer + UI images |
+| `make logs` | Tail container logs |
+| `make verify` | Smoke-test running stack |
+| `make init-domains` | Create gPAS pseudonymization domain |
+| `make setup` | Create Python venv, install deps, download spaCy model |
+| `make test` | Run full pytest suite |
+| `make test-cov` | Run tests with coverage |
+| `make lint` | ruff check anonymizer source |
+| `make format` | ruff format anonymizer source |
+| `make batch` | Run batch pipeline + generate analytics |
+| `make fetch` | Fetch FHIR resources, anonymize, write NDJSON |
+| `make helm-lint` | Validate Helm chart (no cluster needed) |
+| `make helm-template` | Dry-run rendered K8s YAML |
+| `make helm-install` | Install/upgrade on active cluster |
+| `make helm-uninstall` | Remove Helm release |
 
 ---
 
-## 4. Processing Workflows
+## Config profile selection
 
-### Option A: Web UI (Recommended for Interactive Use)
+Auto-selection: `GPAS_URL` set → `config_gpas.yaml`; otherwise → `config.yaml`.
 
-1. Open `http://localhost:8501`
-2. The UI uses API key authentication automatically when configured
-3. Navigate to the appropriate page:
+Override per-request: `?config_profile=<name>` — values: `auto`, `minimal`, `gpas`, `gdpr`, `hipaa`, `research`, `structural`.
 
-| Task | Page |
-|---|---|
-| Search and de-identify a patient | Patient Browser |
-| Search by diagnosis | Condition Browser |
-| Paste and de-identify a single resource | Process Resource |
-| Upload and process a file | Batch Processing |
-| Measure risk of de-identified data | Risk Assessment |
-| Generate synthetic patients | Synthetic Data |
-| Check service health | Status Dashboard |
+See [policies.md](policies.md) for full compliance details per profile.
 
-### Option B: REST API (Scripted / Automated)
+---
+
+## Monitoring
+
+### Prometheus metrics
 
 ```bash
-# Single resource
-curl -s -X POST http://localhost:8000/process \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <jwt>" \
-  -d '{"resourceType":"Patient","id":"p1","name":[{"family":"Smith"}],"birthDate":"1985-03-12"}'
-
-# NDJSON batch (streaming)
-curl -s -X POST http://localhost:8000/process/batch \
-  -H "Content-Type: application/x-ndjson" \
-  -H "X-API-Key: <key>" \
-  --data-binary @input.ndjson -o output.ndjson
-
-# JSON Bundle
-curl -s -X POST http://localhost:8000/process/batch \
-  -H "Content-Type: application/json" \
-  --data-binary @bundle.json -o output.ndjson
-
-# Fetch from FHIR server, de-identify, stream back
-curl -s -X POST http://localhost:8000/process/from-server \
-  -H "Content-Type: application/json" \
-  -d '{"server_url":"http://localhost:8081/fhir","resource_types":["Patient","Observation"]}'
-
-# Risk assessment
-curl -s -X POST http://localhost:8000/analyse/risk \
-  -H "Content-Type: application/x-ndjson" \
-  --data-binary @output.ndjson | python3 -m json.tool
+curl -s http://localhost:8000/metrics
 ```
 
-### Option C: CLI (Bulk Processing)
+Key metrics exposed:
+- `medanon_requests_total{method,path,status}` — request counts
+- `medanon_request_duration_seconds{path}` — latency histogram
+- `medanon_gpas_calls_total{operation,cached}` — gPAS call rate + cache hit rate
+- `medanon_gpas_latency_seconds` — gPAS round-trip latency
+- `medanon_fhir_calls_total{operation,server}` — FHIR client call counts
+
+All pods have Prometheus scrape annotations (`prometheus.io/scrape: "true"`) in the Helm charts.
+
+### Audit log
+
+The anonymizer writes a structured JSON audit log to `/output/audit.log` (mapped to `./output/audit.log` on the host). Each line records: timestamp, HTTP method, path, status code, request ID, auth subject, auth method. **PHI is never logged.**
 
 ```bash
-cd services/anonymizer
-
-# Process a local file
-python3 -m cli.main process input.ndjson output.ndjson --config config/config_hipaa_safe_harbor.yaml
-
-# Fetch from server and de-identify
-python3 -m cli.main fetch --server http://localhost:8081/fhir \
-  --resource-type Patient,Observation --output output/all.ndjson \
-  --config config/config_gpas.yaml
-
-# Full batch pipeline
-make batch
+docker compose exec anonymizer tail -f /output/audit.log | python3 -m json.tool
 ```
 
 ---
 
-## 5. Verifying Output Quality
+## Backup
 
-After de-identification, run the analytics tool to compare input vs. output:
+### gPAS MySQL (pseudonym mappings — critical)
 
-```bash
-cd services/anonymizer
-
-python3 tools/analyze_results.py \
-  --input  tests/data/TestBase/Patient.000.ndjson \
-  --output /tmp/Patient.deid.ndjson \
-  --operator "Your Name" \
-  --config config/config_hipaa_safe_harbor.yaml \
-  --report-json /tmp/evidence.json \
-  --report-md   /tmp/evidence.md
-
-cat /tmp/evidence.md
-```
-
-**What to check:**
-- `ids_changed` should equal `comparable_resource_ids` (all IDs transformed)
-- `reference_changes` > 0 if `rewrite_references: true` is set
-- `token_counts` should list NLP entity tokens (PERSON, GPE, etc.) if NLP rules are active
-- `config_sha256` provides an audit-proof fingerprint of the exact config used
-
----
-
-## 6. Risk Assessment
-
-Always run a risk assessment after de-identification:
-
-```bash
-# Patient resources only (k-anonymity)
-curl -s -X POST http://localhost:8000/analyse/risk \
-  -H "Content-Type: application/x-ndjson" \
-  --data-binary @output.ndjson | python3 -m json.tool
-
-# Patient + Condition resources (k-anonymity + l-diversity)
-cat Patient.deid.ndjson Condition.deid.ndjson | \
-  curl -s -X POST http://localhost:8000/analyse/risk \
-    -H "Content-Type: application/x-ndjson" \
-    --data-binary @- | python3 -m json.tool
-```
-
-### Interpreting Results
-
-| Risk Level | min_k | Action |
-|---|---|---|
-| `low` | >= 5 | No action required. Meets basic k-anonymity. |
-| `medium` | 3 or 4 | Consider broader date generalization or additional suppression. |
-| `high` | 2 | Suppress records in pair groups or apply stronger generalization. |
-| `critical` | 1 | Unique records exist. Do not release data without remediation. |
-
-### Remediation Steps
-
-1. **Increase generalization**: Switch from `date_year_month` to `date_year`, or use broader zip prefixes.
-2. **Suppress small groups**: Remove patients who form singleton or pair groups.
-3. **Combine datasets**: Merge with additional cohorts to increase group sizes.
-4. **Use synthetic data**: Generate synthetic patients via `/generate/synthetic` as a replacement.
-
----
-
-## 7. Monitoring
-
-### Prometheus Metrics
-
-All services expose metrics for Prometheus scraping:
-
-| Service | Metrics Endpoint | Annotations |
-|---|---|---|
-| Anonymizer | `http://anonymizer:8000/metrics` | Request count, latency, gPAS/FHIR call stats |
-| HAPI FHIR | `http://fhir-server:8080/actuator/prometheus` | JVM, HTTP, DB pool |
-| gPAS | `http://gpas:8080/metrics` | WildFly metrics |
-
-Helm charts include Prometheus scrape annotations on all pods.
-
-### Health Checks
-
-```bash
-# Quick health check for all services
-docker compose ps
-
-# Detailed anonymizer readiness
-curl -s http://localhost:8000/ready | python3 -m json.tool
-
-# Individual container health
-docker inspect --format='{{.State.Health.Status}}' anonymizer
-docker inspect --format='{{.State.Health.Status}}' fhir-server
-docker inspect --format='{{.State.Health.Status}}' gpas
-docker inspect --format='{{.State.Health.Status}}' gpas-db
-```
-
-### Audit Log
-
-Structured JSON audit log at `/output/audit.log` (inside the anonymizer container):
-
-```bash
-docker compose exec anonymizer tail -f /output/audit.log
-```
-
-Each line records: timestamp, HTTP method, path, status code, request ID, authenticated subject, auth method. PHI is never logged.
-
-### Container Logs
-
-```bash
-make logs                           # tail all container logs
-docker compose logs anonymizer      # single service
-docker compose logs gpas --tail 50  # last 50 lines
-```
-
----
-
-## 8. Backup and Recovery
-
-### gPAS MySQL (Pseudonym Mappings)
-
-**This is the most critical data.** If lost, pseudonym-to-original mappings are unrecoverable.
+Loss of the gPAS database means pseudonym-to-original mappings are unrecoverable. Back up before any destructive operation.
 
 ```bash
 # Backup
@@ -321,7 +110,7 @@ docker run --rm \
   -v $(pwd)/backup:/backup \
   busybox tar czf /backup/gpas-db-$(date +%Y%m%d).tar.gz -C /data .
 
-# Restore
+# Restore (stack must be down)
 docker compose down
 docker run --rm \
   -v gpas-db-data:/data \
@@ -330,200 +119,160 @@ docker run --rm \
 docker compose up -d
 ```
 
-### HAPI FHIR Data
+### HAPI FHIR data
 
-With the default H2 in-memory database, data is lost on every container restart. For persistence:
+With the default H2 in-memory database, FHIR data is lost on every container restart (intentional for dev). For production, the `hapi-postgres` and `hapi-target-postgres` containers provide persistent storage. Back up with `pg_dump`.
 
-1. Switch to PostgreSQL (see DEPLOYMENT.md)
-2. Back up the PostgreSQL database using standard `pg_dump` tools
-
-### Config and Keys
+### Config and keys
 
 ```bash
-# Back up the config directory
 cp -r services/anonymizer/config/ backup/config-$(date +%Y%m%d)/
-
-# Back up RSA keys (if used)
 cp services/anonymizer/keys/id_rsa* backup/keys-$(date +%Y%m%d)/
 ```
 
 ---
 
-## 9. Secret Rotation
+## Secret rotation
 
-| Secret | How to Rotate | Impact |
+| Secret | How to rotate | Impact |
 |---|---|---|
-| `MEDANON_HASH_KEY` | Update in `.env`, restart anonymizer | All existing cryptohash pseudonyms become invalid. Rotate intentionally. |
-| `MEDANON_RSA_PRIVATE_KEY` | Generate new keypair, update paths in `.env` | Old encrypted values become unreadable. Keep old key for historical data. |
-| `GPAS_BASIC_PASS` | Update in `.env` + run SQL `CALL changePassword('user','new-pass');` in gRAS, restart anonymizer | Existing gPAS sessions invalidated. |
-| `GPAS_MYSQL_ROOT_PASSWORD` | Requires `docker compose down -v` to recreate MySQL volume | Destroys all pseudonym mappings. Back up first. |
-| `MEDANON_API_KEY` | Update in `.env`, restart anonymizer | All existing API key users must update their key. |
+| `MEDANON_HASH_KEY` | Update `.env`, restart anonymizer | All existing cryptohash pseudonyms change — old output cannot be re-linked to new |
+| RSA private key | Generate new keypair, update `.env` paths | Old encrypted values become unreadable; keep old key for historical data |
+| `GPAS_BASIC_PASS` | Update `.env` + `CALL changePassword('user@ths','new');` in gRAS | Existing gPAS sessions invalidated |
+| `GPAS_MYSQL_ROOT_PASSWORD` | `docker compose down -v` to recreate MySQL | **Destroys all pseudonym mappings** — back up first |
+| `MEDANON_API_KEY` | Update `.env`, restart anonymizer | All API clients must update their key |
 
 ---
 
-## 10. Troubleshooting
+## Troubleshooting
 
-### gPAS Connection Failure
+### gPAS connection failure
 
-**Symptom:** `/ready` returns `{"ready": false}`, requests with `gpas_pseudonymize` return 500.
+**Symptom:** `/ready` returns `false`; requests with `gpas_pseudonymize` return 500.
 
-1. Check container health: `docker compose ps gpas`
-2. Verify env vars: `GPAS_URL`, `GPAS_BASIC_USER`, `GPAS_BASIC_PASS`
-3. Test connectivity: `curl -v http://localhost:8080/ttp-fhir/fhir/gpas/metadata`
-4. Check domain exists: log into gPAS web UI and verify
-5. Review logs: `docker compose logs gpas`
+```bash
+docker compose ps gpas                             # check health status
+curl -v http://localhost:8080/ttp-fhir/fhir/gpas/metadata   # direct connectivity test
+docker compose logs gpas --tail 50                 # check for deployment errors
+```
 
-### gPAS Circuit Breaker Open
-
-**Symptom:** "gPAS circuit breaker is OPEN" error.
-
-1. gPAS has failed 5+ times in 60 seconds (default thresholds)
-2. Wait 30 seconds for automatic recovery probe
-3. Or fix the underlying gPAS issue and restart: `docker compose restart gpas`
-4. Adjust: `GPAS_CB_FAILURE_THRESHOLD`, `GPAS_CB_RECOVERY_TIMEOUT_SEC`, `GPAS_CB_WINDOW_SEC`
+Verify env: `GPAS_URL`, `GPAS_DOMAIN`, `GPAS_BASIC_USER`, `GPAS_BASIC_PASS` in `.env`.
 
 ### gPAS "Unknown Domain"
 
-The domain does not exist. Run `make init-domains` or create it manually in the gPAS web UI.
+Domain not created yet. Run `make init-domains` or create it via `http://localhost:8080/gpas-web/`. **Never insert domains directly into MySQL** — gPAS maintains an in-memory `domainLocks HashMap` that is only populated via its own API. Direct SQL inserts bypass this and cause "domain not found" errors at runtime even though the row exists in the DB.
 
-### gPAS Container Keeps Restarting
+### gPAS circuit breaker open
 
-MySQL is still initializing (first boot creates schemas):
+**Symptom:** "gPAS circuit breaker is OPEN" in logs/response.
 
-```bash
-docker compose ps gpas-db                    # wait for "healthy"
-docker compose logs gpas-db | tail -20       # check init progress
-docker compose restart gpas                  # restart once MySQL is ready
-```
-
-### spaCy Model Missing
-
-**Symptom:** `nlp_detect` errors, `/ready` shows NLP failure.
+gPAS failed 5+ times within 60 s (default thresholds). The circuit opens to fail-fast subsequent calls instead of waiting for timeouts. It recovers automatically: after 30 s, one probe call is attempted. If successful, the circuit closes.
 
 ```bash
-docker compose exec anonymizer python3 -m spacy download en_core_web_lg
-# Or: make build   (model is included in the prod image)
+docker compose restart gpas    # force recovery if the issue is resolved
 ```
 
-### Port Conflicts
+Tune thresholds: `GPAS_CB_FAILURE_THRESHOLD`, `GPAS_CB_RECOVERY_TIMEOUT_SEC`, `GPAS_CB_WINDOW_SEC`.
 
-**Symptom:** `docker compose up` fails with "address already in use".
+### gPAS keeps restarting
+
+MySQL is still initializing (schema creation on first boot takes 15–30 s):
+
+```bash
+docker compose ps gpas-db             # wait for "healthy"
+docker compose logs gpas-db --tail 20 # check init progress
+docker compose restart gpas           # restart once gpas-db is healthy
+```
+
+### 503 on job endpoints (`/v1/jobs/*`)
+
+Job store not initialized. Check:
+- `MEDANON_REDIS_URL` is correct and Redis is reachable: `docker compose ps redis`
+- SQLite fallback: `MEDANON_JOB_DB` path is writable inside the container
+
+Root cause of past bug: `from pipeline.jobs.store import _job_store` captured `None` at import time. `init_job_store()` wrote to `pipeline.jobs.store._job_store` but the re-exported name stayed `None`. Fixed by reading directly from the authoritative module. If you see this error, ensure you're on a version after this fix.
+
+### Bulk export is slow
+
+Tune these variables in `.env`:
+
+```bash
+MEDANON_BATCH_SIZE=300          # resources per gPAS batch (smaller = more frequent gPAS calls)
+FHIR_PAGE_SIZE=500              # resources per FHIR paginated fetch
+MEDANON_FHIR_FETCH_PARALLEL=1   # keep at 1 — more threads compete for GIL without benefit
+MEDANON_COHORT_PARALLEL=2       # parallel $everything calls (safe, I/O-bound)
+MEDANON_JOB_WORKERS=10          # concurrent background jobs
+```
+
+**Why `FHIR_FETCH_PARALLEL=1`?** The bottleneck is gPAS (sequential HTTP per batch). Adding parallel FHIR fetch threads makes them compete for the GIL and queue lock while waiting for gPAS — this increases overhead without reducing total time. Observed: 4 parallel threads was slower than 1.
+
+### FHIR upload failures (HAPI-1094 — referenced resource not found)
+
+This error means a resource was uploaded before a resource it references. The uploader computes a topological sort based on `reference` fields. If you see this error in logs, it indicates a reference pattern the topological sort didn't catch. Check `docker compose logs anonymizer` for `tier map:` debug output.
+
+### FHIR gender rejection (HAPI-1821)
+
+**Symptom:** `Patient` or `Practitioner` resources rejected: "not a valid code for `http://hl7.org/fhir/ValueSet/administrative-gender`".
+
+FHIR R4 binds `Patient.gender` and `Practitioner.gender` to the `AdministrativeGender` value set (`male | female | other | unknown`). The `config_structure_preserving.yaml` profile uses `substitute_with: "unknown"` for gender fields — this is correct. If you use a custom profile that substitutes `[REDACTED]`, HAPI will reject it. Always use a valid code value.
+
+### 413 Request Too Large
+
+```bash
+MEDANON_MAX_BODY_BYTES=20971520    # 20 MB
+```
+
+### OOM killed container
+
+```bash
+docker inspect --format='{{.State.OOMKilled}}' <container>
+```
+
+Increase the memory limit in `docker-compose.yml` (anonymizer: 6 GB, HAPI: 3 GB, gPAS: 6 GB).
+
+### Port conflicts
 
 ```bash
 lsof -i :8000    # find conflicting process
 ```
 
-Edit `.env` to change port mappings (`ANONYMIZER_PORT`, `UI_PORT`, etc.).
+Override port mappings in `.env`: `ANONYMIZER_PORT`, `UI_PORT`, `HAPI_PORT`, `GPAS_PORT`.
 
-### Body Size Limit (413 Error)
+### Docker healthcheck failure: "container has no healthcheck configured"
 
-Split large files or increase the limit:
-
-```bash
-# .env
-MEDANON_MAX_BODY_BYTES=20971520    # 20 MB
-```
-
-### Out of Memory (OOM) Kills
-
-Check which container was killed:
-
-```bash
-docker compose ps                                   # look for "Exited" status
-docker inspect --format='{{.State.OOMKilled}}' <container>
-```
-
-Current memory limits:
-
-| Service | Limit |
-|---|---|
-| Anonymizer | 2 GB |
-| HAPI FHIR | 3 GB |
-| gPAS | 6 GB (JVM: -Xmx4G) |
-| MySQL | 4 GB (InnoDB: 512 MB) |
-| UI | 128 MB |
-
-If a service is consistently OOM-killed, increase its memory limit in `docker-compose.yml`.
+If `depends_on: condition: service_healthy` is configured, the target container must have a healthcheck defined. Setting `healthcheck: disable: true` breaks the dependency chain. The anonymizer healthcheck must target `/health` (not `/ready` — `/ready` calls FHIR and gPAS and may time out during startup).
 
 ---
 
-## 11. Make Commands Reference
+## Go-live checklist
 
-| Command | Description |
-|---|---|
-| `make up` | Start full Docker stack (5 services) |
-| `make dev` | Start with hot-reload (source mounted into container) |
-| `make down` | Stop and remove containers (volumes preserved) |
-| `make build` | Rebuild Docker images (anonymizer + UI) |
-| `make build-sdv` | Build anonymizer image with SDV synthetic engine |
-| `make up-sdv` | Build SDV image and start full stack with SDV engine |
-| `make logs` | Tail all container logs |
-| `make verify` | Smoke-test a running stack (all 5 services) |
-| `make setup` | Create Python venv, install deps, download spaCy model |
-| `make test` | Run full test suite via pytest |
-| `make test-cov` | Run tests with coverage report |
-| `make lint` | Run ruff linter on anonymizer source |
-| `make format` | Run ruff formatter on anonymizer source |
-| `make clean` | Remove `__pycache__` and `.pytest_cache` |
-| `make batch` | Run batch_process.sh + generate analytics report |
-| `make fetch` | Pull resources from HAPI FHIR, anonymize, write NDJSON |
-| `make init-domains` | Create gPAS pseudonymization domain |
-| `make helm-lint` | Validate Helm chart (no cluster needed) |
-| `make helm-template` | Dry-run rendered Kubernetes YAML |
-| `make helm-install` | Install/upgrade chart on active cluster |
-| `make helm-uninstall` | Remove the Helm release |
+### Secrets and auth
+- [ ] `MEDANON_HASH_KEY` set (`openssl rand -hex 32`)
+- [ ] `MEDANON_API_KEY` set for authenticated access
+- [ ] `GPAS_BASIC_PASS` rotated from default
+- [ ] `GPAS_MYSQL_ROOT_PASSWORD` rotated from default
+- [ ] `HAPI_DB_PASSWORD` and `HAPI_TARGET_DB_PASSWORD` set
+- [ ] No secrets in git (check `.env` is gitignored)
 
-### Testing
+### Network and TLS
+- [ ] TLS termination at reverse proxy
+- [ ] `MEDANON_CORS_ORIGINS` restricted to known origins
+- [ ] gPAS web UI (8080) not publicly accessible
 
-```bash
-cd services/anonymizer
-
-# Full local test suite (no Docker needed)
-python3 -m pytest tests/test_api.py tests/test_auth.py tests/test_io_formats.py tests/test_config_profiles.py -q
-
-# Full suite with coverage
-python3 -m pytest tests/ --cov=src --cov-report=term-missing
-
-# Single test
-python3 -m pytest tests/test_api.py::test_health -q
-```
-
----
-
-## 12. Security & Go-Live Checklist
-
-### Secrets & Keys
-- [ ] `MEDANON_HASH_KEY` set to a strong random secret (`openssl rand -hex 32`)
-- [ ] `MEDANON_API_KEY` set for authenticated API access
-- [ ] `GPAS_BASIC_PASS` and `GPAS_MYSQL_ROOT_PASSWORD` rotated from defaults
-- [ ] RSA keys generated if using `encrypt`/`decrypt` actions (`openssl genrsa -out private.pem 4096`)
-- [ ] All secrets injected via environment or Kubernetes Secrets — never committed to git
-
-### Network & TLS
-- [ ] TLS termination configured at reverse proxy (nginx / Caddy / Traefik)
-- [ ] All service ports bound to `127.0.0.1` (not `0.0.0.0`)
-- [ ] Only port 443 (HTTPS) exposed externally
-- [ ] `MEDANON_CORS_ORIGINS` restricted to known frontend origin(s)
-
-### Logging & Monitoring
+### Logging and monitoring
 - [ ] `LOG_LEVEL=INFO` (DEBUG may expose PHI)
-- [ ] Audit log volume mounted; rotation configured (`MEDANON_AUDIT_LOG_MAX_BYTES`, `MEDANON_AUDIT_LOG_BACKUP_COUNT`)
-- [ ] Prometheus scraping enabled and alerting rules configured
-- [ ] gPAS MySQL volume backed up before first production run
+- [ ] `MEDANON_MANIFEST_ENABLED=true` (GDPR Art. 30 accountability)
+- [ ] Audit log volume mounted
+- [ ] Prometheus scraping configured
 
-### Compliance
-- [ ] `MEDANON_MANIFEST_ENABLED=true` for GDPR Art. 30 accountability
-- [ ] Appropriate config profile selected for regulatory context — see [policies.md](policies.md)
-- [ ] Risk assessment (`/analyse/risk`) run on every de-identified batch before data sharing
-- [ ] Evidence report (`docs/EVIDENCE_REPORT_TEMPLATE.md`) completed and archived
+### gPAS
+- [ ] Domain created via web UI or `make init-domains` (not direct SQL)
+- [ ] `GPAS_DOMAIN` matches exactly
+- [ ] gPAS MySQL backed up before first production run
+- [ ] `curl http://localhost:8080/ttp-fhir/fhir/gpas/metadata` returns 200
 
-### gPAS Setup
-- [ ] gPAS domain created via web UI (`/gpas-web`), **not** via direct SQL insert
-- [ ] `GPAS_DOMAIN` matches the domain name exactly
-- [ ] gPAS connectivity verified: `curl http://localhost:8080/ttp-fhir/fhir/gpas/`
-
-### Load & Capacity
-- [ ] `/ready` returns `{"ready": true}` for all configured services
-- [ ] Batch processing tested with a representative dataset size
-- [ ] Memory limits adequate for NLP model if `nlp_detect` is used (add ~800 MB to anonymizer)
-- [ ] Helm chart security settings reviewed for Kubernetes deployments
+### Validation
+- [ ] `/ready` returns `{"ready": true}`
+- [ ] End-to-end: POST a sample Patient to `/process`, verify output
+- [ ] `/analyse/risk` run on de-identified output before data sharing
+- [ ] Appropriate config profile selected — see [policies.md](policies.md)

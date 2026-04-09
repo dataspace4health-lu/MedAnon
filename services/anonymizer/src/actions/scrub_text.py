@@ -203,6 +203,15 @@ _PATTERNS = {
         re.compile(r'(?<![.\d])\b\d{5}(?:-\d{4})?\b(?!\d)'),
         '[ZIP]',
     ),
+    # Synthea simulation seeds — large integers (positive or negative) labelled
+    # "Person seed:" or "Population seed:" in generated narrative text
+    'synthea_seed': (
+        re.compile(
+            r'\b(?:Person|Population)\s+seed\s*:\s*-?\d{5,}\b',
+            re.IGNORECASE,
+        ),
+        '[SEED]',
+    ),
 }
 
 # Patterns applied when params['patterns'] == 'all'
@@ -279,6 +288,7 @@ def _token_prefix_for_pattern(pattern_key):
         'political': 'POLITICAL',
         'url': 'URL',
         'zipcode': 'ZIP',
+        'synthea_seed': 'SEED',
     }.get(pattern_key, pattern_key.upper())
 
 

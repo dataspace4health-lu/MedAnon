@@ -1,6 +1,0 @@
-# Remove the patient name
-general:
-  appname: SPE-FHIR-BlackBox
-rules:
-  - match: Patient.name
-    action: redact

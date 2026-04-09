@@ -4,7 +4,7 @@ import io
 import logging
 import zipfile
 
-from pipeline.dicom_deidentify import deidentify_dicom
+from formats.dicom import deidentify_dicom
 
 logger = logging.getLogger("medanon")
 

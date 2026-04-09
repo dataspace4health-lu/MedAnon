@@ -5,18 +5,18 @@ metadata:
   name: {{ include "fhir-server.fullname" . }}
   labels:
     {{- include "fhir-server.labels" . | nindent 4 }}
-    app.kubernetes.io/component: fhir-server
+    app.kubernetes.io/component: {{ include "fhir-server.name" . }}
 spec:
   replicas: {{ .Values.replicas }}
   selector:
     matchLabels:
-      {{- include "fhir-server.selectorLabels" (dict "Release" .Release "component" "fhir-server") | nindent 6 }}
+      {{- include "fhir-server.selectorLabels" (dict "Release" .Release "component" (include "fhir-server.name" .)) | nindent 6 }}
   template:
     metadata:
       labels:
-        {{- include "fhir-server.selectorLabels" (dict "Release" .Release "component" "fhir-server") | nindent 8 }}
+        {{- include "fhir-server.selectorLabels" (dict "Release" .Release "component" (include "fhir-server.name" .)) | nindent 8 }}
         {{- include "fhir-server.labels" . | nindent 8 }}
-        app.kubernetes.io/component: fhir-server
+        app.kubernetes.io/component: {{ include "fhir-server.name" . }}
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
         # Prometheus scraping (HAPI FHIR exposes metrics at /actuator/prometheus when enabled)
@@ -61,7 +61,7 @@ spec:
             - name: SPRING_JPA_PROPERTIES_HIBERNATE_DIALECT
               value: "ca.uhn.fhir.jpa.model.dialect.HapiFhirPostgres94Dialect"
             - name: SPRING_JPA_HIBERNATE_DDL_AUTO
-              value: "validate"
+              value: "update"
             {{- if .Values.db.postgresql.existingSecret }}
             - name: SPRING_DATASOURCE_USERNAME
               valueFrom:

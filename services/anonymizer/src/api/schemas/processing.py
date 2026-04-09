@@ -21,6 +21,7 @@ class RuntimeSettings:
     rewrite_references: bool = False
     rewrite_text_ids: bool = False
     dynamic_rule_settings: dict = field(default_factory=dict)
+    filename: str | None = None
 
 
 class DynamicSettings(BaseModel):

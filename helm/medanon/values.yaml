@@ -35,8 +35,12 @@ anonymizer:
     # In-cluster FHIR source URL — set to http://<release>-fhir-server:8080/fhir
     FHIR_SOURCE_URL: ""
     FHIR_SOURCE_TOKEN: ""
+    # In-cluster FHIR target URL — set to http://<release>-fhir-target:8080/fhir
     FHIR_TARGET_URL: ""
     FHIR_TARGET_TOKEN: ""
+    # Profile used by /process/and-upload and /process/round-trip.
+    # structural keeps full FHIR structure, pseudonymizes IDs, rewrites all references.
+    MEDANON_TARGET_CONFIG_PROFILE: "structural"
     # Opt-in microservice URLs. Leave empty to run analytics/NLP in-process.
     # When analytics sub-chart is enabled, set to http://<release>-analytics:8100
     ANALYTICS_SERVICE_URL: ""
@@ -54,10 +58,40 @@ anonymizer:
     rsaPublicKey: ""
     rsaPrivateKey: ""
 
+# ─── Worker overrides ───────────────────────────────────────────────────────
+worker:
+  env:
+    GPAS_URL: ""
+    FHIR_SOURCE_URL: ""
+    FHIR_SOURCE_TOKEN: ""
+    FHIR_TARGET_URL: ""
+    FHIR_TARGET_TOKEN: ""
+    MEDANON_REDIS_URL: ""
+    MEDANON_JOB_WORKERS: "3"
+    MEDANON_MANIFEST_ENABLED: "false"
+  secrets:
+    MEDANON_HASH_KEY: ""
+    GPAS_BASIC_USER: ""
+    GPAS_BASIC_PASS: ""
+
 # ─── FHIR Server overrides ────────────────────────────────────────────────────
 fhir-server:
   # Public base URL for Bundle fullUrl and pagination links.
   serverAddress: ""
+
+# ─── FHIR Target Server overrides (de-identified data store) ─────────────────
+# Uses the same fhir-server sub-chart via Helm alias.
+# Set db.postgresql.host to the PostgreSQL service for the target instance.
+fhir-target:
+  serverAddress: ""
+  db:
+    type: postgresql
+    postgresql:
+      host: ""
+      port: 5432
+      database: hapi_target
+      username: hapi
+      password: ""
 
 # ─── gPAS overrides ───────────────────────────────────────────────────────────
 gpas:
@@ -88,15 +122,19 @@ ui:
   # Set to "<release>-anonymizer" and "<release>-fhir-server".
   anonymizerServiceName: ""
   fhirServerServiceName: ""
+  # Target FHIR server proxy — set to "<release>-fhir-target" to expose /fhir-target/ in nginx.
+  fhirTargetServiceName: ""
+  fhirTargetPort: 8080
 
 # ─── Ingress (optional) ───────────────────────────────────────────────────────
 # Routes external traffic to the correct sub-chart service.
 # Service names are computed as: <release>-<chart-name>
-#   /           → <release>-ui             :8501  (React SPA + nginx proxy)
-#   /api        → <release>-anonymizer     :8000  (direct API access)
-#   /fhir       → <release>-fhir-server    :8080
-#   /gpas-web   → <release>-gpas           :8080
-#   /ttp-fhir   → <release>-gpas           :8080
+#   /             → <release>-ui             :8501  (React SPA + nginx proxy)
+#   /api          → <release>-anonymizer     :8000  (direct API access)
+#   /fhir         → <release>-fhir-server    :8080
+#   /fhir-target  → <release>-fhir-target    :8080
+#   /gpas-web     → <release>-gpas           :8080
+#   /ttp-fhir     → <release>-gpas           :8080
 #
 # NOTE: fullnameOverride is not supported for sub-charts when ingress is enabled,
 # as service names are derived from the release name.
