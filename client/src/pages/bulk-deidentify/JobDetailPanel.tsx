@@ -33,10 +33,9 @@ import {
   FORMAT_OPTIONS,
   buildPatientBundlesNdjson,
   triggerDownload,
-  StatusIcon,
-  statusBadge,
 } from "./bulkHelpers.tsx";
 import type { BulkFormat } from "./bulkHelpers.tsx";
+import { StatusIcon, statusBadge } from "./bulkStatusComponents.tsx";
 
 export function JobDetailPanel({ job }: { job: ExportJob }) {
   const { cancelJob, dismissJob, reprocessJob, setJobBackendScore } = useBulkExport();

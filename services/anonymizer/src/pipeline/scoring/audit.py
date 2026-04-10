@@ -28,7 +28,7 @@ from typing import Any
 
 from pipeline.scoring.engine import ScoreCollector
 from pipeline.scoring.models import ScoreResult
-from pipeline.scoring.constants import INFO_LOSS_WEIGHTS, HIPAA_SENSITIVE_PATHS, RISK_THRESHOLD
+from pipeline.scoring.constants import INFO_LOSS_WEIGHTS, RISK_THRESHOLD
 
 # Cap per-failure example lists to bound memory for very large exports.
 _MAX_EXAMPLES = 15
@@ -358,8 +358,8 @@ def _render_report(
 
         W("### Batch Privacy (k-Anonymity across all Patients)")
         W("")
-        W(f"| Sub-score | Value | Threshold |")
-        W(f"|-----------|-------|-----------|")
+        W("| Sub-score | Value | Threshold |")
+        W("|-----------|-------|-----------|")
         W(f"| Attacker model risk    | {attacker:.4f} | {RISK_THRESHOLD} |")
         W(f"| Identifier coverage risk | {identifier:.4f} | {RISK_THRESHOLD} |")
         W(f"| Text risk              | {text_r:.4f} | {RISK_THRESHOLD} |")

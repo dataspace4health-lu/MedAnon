@@ -27,7 +27,6 @@ Common labels
 {{- define "analytics.labels" -}}
 helm.sh/chart: {{ include "analytics.name" . }}-{{ .Chart.Version }}
 app.kubernetes.io/name: {{ include "analytics.name" . }}
-app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
 

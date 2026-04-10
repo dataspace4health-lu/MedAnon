@@ -2,9 +2,8 @@ import os
 import secrets
 import threading
 
-from Crypto.PublicKey import RSA
-from Crypto.Cipher import PKCS1_OAEP
-from Crypto.Hash import SHA256
+from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives import hashes, serialization
 
 # RSA key cache: {resolved_path: (mtime, key_object)}
 _key_cache = {}
@@ -18,11 +17,19 @@ def _load_key(resolved_path, import_fn):
         cached = _key_cache.get(resolved_path)
         if cached and cached[0] == mtime:
             return cached[1]
-    with open(resolved_path, encoding='utf-8') as fin:
+    with open(resolved_path, 'rb') as fin:
         key = import_fn(fin.read())
     with _key_cache_lock:
         _key_cache[resolved_path] = (mtime, key)
     return key
+
+
+def _import_public_key(data: bytes):
+    return serialization.load_pem_public_key(data)
+
+
+def _import_private_key(data: bytes):
+    return serialization.load_pem_private_key(data, password=None)
 
 
 def bounded_random(min_val, max_val):
@@ -74,23 +81,28 @@ def _validate_key_path(key_path):
     return resolved
 
 
+_OAEP_PADDING = padding.OAEP(
+    mgf=padding.MGF1(algorithm=hashes.SHA256()),
+    algorithm=hashes.SHA256(),
+    label=None,
+)
+
+
 def rsa_encrypt(plaintext, enc_params):
     key_path = _validate_key_path(enc_params['public_key'])
-    public_key = _load_key(key_path, RSA.import_key)
-    if public_key.size_in_bits() < 2048:
+    public_key = _load_key(key_path, _import_public_key)
+    if public_key.key_size < 2048:
         raise ValueError(
-            f"RSA public key is {public_key.size_in_bits()} bits; minimum 2048 required"
+            f"RSA public key is {public_key.key_size} bits; minimum 2048 required"
         )
-    cipher_rsa = PKCS1_OAEP.new(public_key, hashAlgo=SHA256)
-    return cipher_rsa.encrypt(plaintext)
+    return public_key.encrypt(plaintext, _OAEP_PADDING)
 
 
 def rsa_decrypt(ciphertext, dec_params):
     key_path = _validate_key_path(dec_params['private_key'])
-    private_key = _load_key(key_path, RSA.import_key)
-    if private_key.size_in_bits() < 2048:
+    private_key = _load_key(key_path, _import_private_key)
+    if private_key.key_size < 2048:
         raise ValueError(
-            f"RSA private key is {private_key.size_in_bits()} bits; minimum 2048 required"
+            f"RSA private key is {private_key.key_size} bits; minimum 2048 required"
         )
-    cipher_rsa = PKCS1_OAEP.new(private_key, hashAlgo=SHA256)
-    return cipher_rsa.decrypt(ciphertext)
+    return private_key.decrypt(ciphertext, _OAEP_PADDING)

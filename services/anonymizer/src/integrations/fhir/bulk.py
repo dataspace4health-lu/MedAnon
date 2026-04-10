@@ -110,7 +110,7 @@ def _download_bulk_ndjson(file_url, token=None, timeout=60):
     from ._transport import _fhir_cb, FhirCircuitBreakerOpen
     if not _fhir_cb.allow_request():
         raise FhirCircuitBreakerOpen(
-            f"FHIR server unavailable — circuit breaker OPEN (bulk_download)"
+            "FHIR server unavailable — circuit breaker OPEN (bulk_download)"
         )
     headers = _make_headers(token)
     headers["Accept"] = "application/fhir+ndjson"

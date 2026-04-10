@@ -18,7 +18,6 @@ from typing import Any
 from utils.json_fast import loads as _json_loads
 from pipeline.scoring.engine import score_resource
 from pipeline.scoring.audit import ScoreAuditCollector
-from pipeline.scoring.models import ScoreResult
 from pipeline.manifest import MANIFEST_SYSTEM
 
 logger = logging.getLogger("medanon")
