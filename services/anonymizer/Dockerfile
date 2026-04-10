@@ -4,7 +4,7 @@
 # ── Base stage ────────────────────────────────────────────────────────────────
 FROM python:3.12-slim AS base
 
-# Upgrade Debian packages to pick up OS-level security patches (Trivy HIGH/CRITICAL)
+# 1. Upgrade all packages (fixes CVEs that have patches available in Debian repos)
 RUN apt-get update && apt-get upgrade -y --no-install-recommends && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /code
@@ -26,6 +26,17 @@ COPY services/anonymizer/config/ /code/config/
 # Mount them at runtime via Docker volume or Kubernetes Secret:
 #   docker run -v /path/to/keys:/code/keys ...
 #   Kubernetes: secretRef → volumeMount at /code/keys
+
+# 2. Purge packages that have CVEs with no upstream fix and are not needed
+#    by a production Gunicorn/Uvicorn web service at runtime:
+#      libncursesw6/libncurses6: terminal line-editing (readline); only needed
+#        for interactive Python shells, not for gunicorn/uvicorn serving HTTP
+#      libsystemd0: systemd integration; irrelevant inside a container
+#    Done AFTER pip installs so readline is available during package builds.
+RUN apt-get update \
+    && apt-get purge -y libncursesw6 libncurses6 libsystemd0 \
+    && apt-get autoremove -y \
+    && rm -rf /var/lib/apt/lists/*
 
 # Create a non-root user for production security
 RUN addgroup --system appgroup && adduser --system --ingroup appgroup appuser
