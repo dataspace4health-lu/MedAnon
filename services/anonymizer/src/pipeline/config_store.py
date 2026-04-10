@@ -31,7 +31,8 @@ _SYSTEM_CONFIGS: list[dict] = [
     {"name": "gdpr",       "description": "GDPR Art. 4(5) HMAC pseudonymization profile."},
     {"name": "hipaa",      "description": "HIPAA Safe Harbor (45 CFR §164.514(b)): 18 PHI categories."},
     {"name": "research",   "description": "IRB-grade: dates→year-month, IDs cryptohashed for longitudinal linkage."},
-    {"name": "structural", "description": "Structure-preserving: IDs via gPAS, PII→[REDACTED], dates→year."},
+    {"name": "structural",    "description": "Structure-preserving: IDs via gPAS, PII→[REDACTED], dates→year."},
+    {"name": "value-masking", "description": "Field-complete masking: no fields removed, all PII values replaced in place. IDs via gPAS, binary payloads cleared."},
 ]
 
 

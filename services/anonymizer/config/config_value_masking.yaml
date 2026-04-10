@@ -1,0 +1,1118 @@
+# =============================================================================
+# MedAnon Value-Masking De-identification Profile
+# =============================================================================
+# Version: 1.0
+# Use case: Field-complete de-identification — every field present in the input
+#           resource is present in the output. PII values are replaced in place;
+#           no fields or array elements are removed.
+#           Suitable for downstream systems that validate FHIR structure (e.g.
+#           conformance-checking pipelines, diff-based audit tools) or when the
+#           exact shape of a resource must be preserved for processing.
+#
+# Key properties:
+#   - Every field stays present — no redact (field-removal) actions
+#   - IDs and cross-references: gPAS pseudonymization (deterministic, reversible)
+#   - PII string values (names, addresses, telecom): replaced with [REDACTED]
+#   - Boolean PHI (deceasedBoolean, multipleBirthBoolean): masked to false
+#   - Integer PHI (multipleBirthInteger): masked to 0
+#   - Coordinates (Location.position lat/lon): masked to 0.0
+#   - Dates (birth, death, clinical, encounter): generalised to year only
+#   - Binary attachment payload (base64 data, hash): replaced with ""
+#   - Attachment URL/title: replaced with [REDACTED]
+#   - Clinical codes, values, measurements: unchanged
+#   - Free text (narrative, notes, comments): scrub_text + nlp_scrub
+#
+# Differences from the 'structural' profile:
+#   - No bare redact actions — every field that existed in the input exists in output
+#   - Photo/binary fields: data payload cleared, object stays present
+#   - Extension PHI (race, ethnicity, birth sex): value masked, extension kept
+#   - Boolean/integer PHI: replaced with neutral value, field stays
+#   - Catch-all name/telecom/address: leaf values masked, parent array kept
+#
+# Required env vars:
+#   GPAS_URL        — gPAS server base URL (e.g. http://gpas:8080/ttp-fhir/fhir)
+#   GPAS_DOMAIN     — pseudonym domain name configured in gPAS
+#   GPAS_BASIC_USER — HTTP Basic Auth username
+#   GPAS_BASIC_PASS — HTTP Basic Auth password
+#
+# Usage:
+#   POST /process?config_profile=value-masking
+#   POST /process/raw?config_profile=value-masking
+# =============================================================================
+
+general:
+  appname: SPE-FHIR-BlackBox
+  rewrite_references: true
+  rewrite_text_ids: true
+
+rules:
+
+# ==========================================================
+# 1. PSEUDONYMIZE ALL RESOURCE IDS
+# ==========================================================
+
+- name: pseudonymize resource ids
+  match: "*.id"
+  action: gpas_pseudonymize
+  params: &gpas
+    gpas_url: ${GPAS_URL}
+    gpas_domain: ${GPAS_DOMAIN}
+    gpas_operation: ${GPAS_OPERATION:-pseudonymizeAllowCreate}
+    gpas_timeout_sec: ${GPAS_TIMEOUT_SEC:-30}
+
+# ==========================================================
+# 2. SUBJECT / PATIENT REFERENCE DISPLAY NAMES
+# ==========================================================
+
+- name: mask subject display
+  match: "*.subject.display"
+  action: cryptohash
+
+- name: mask patient display
+  match: "*.patient.display"
+  action: cryptohash
+
+# ==========================================================
+# 3. PATIENT DIRECT IDENTIFIERS
+# ==========================================================
+
+- name: mask patient name family
+  match: Patient.name.family
+  action: substitute
+  params: &redacted
+    substitute_with: "[REDACTED]"
+
+- name: mask patient name given
+  match: Patient.name.given
+  action: substitute
+  params: *redacted
+
+- name: mask patient name text
+  match: Patient.name.text
+  action: substitute
+  params: *redacted
+
+- name: mask patient name prefix
+  match: Patient.name.prefix
+  action: substitute
+  params: *redacted
+
+- name: mask patient name suffix
+  match: Patient.name.suffix
+  action: substitute
+  params: *redacted
+
+- name: mask patient telecom value
+  match: Patient.telecom.value
+  action: substitute
+  params: *redacted
+
+- name: mask patient address line
+  match: Patient.address.line
+  action: substitute
+  params: *redacted
+
+- name: mask patient address city
+  match: Patient.address.city
+  action: substitute
+  params: *redacted
+
+- name: mask patient address district
+  match: Patient.address.district
+  action: substitute
+  params: *redacted
+
+- name: mask patient address postal code
+  match: Patient.address.postalCode
+  action: substitute
+  params: *redacted
+
+- name: mask patient address text
+  match: Patient.address.text
+  action: substitute
+  params: *redacted
+
+- name: mask patient address state
+  match: Patient.address.state
+  action: substitute
+  params: *redacted
+
+- name: mask patient address country
+  match: Patient.address.country
+  action: substitute
+  params: *redacted
+
+- name: pseudonymize patient identifier value
+  match: Patient.identifier.value
+  action: gpas_pseudonymize
+  params: *gpas
+
+# Photo: clear payload but keep the Attachment object present
+- name: mask patient photo data
+  match: Patient.photo.data
+  action: substitute
+  params:
+    substitute_with: ""
+
+- name: mask patient photo url
+  match: Patient.photo.url
+  action: substitute
+  params: *redacted
+
+- name: mask patient photo title
+  match: Patient.photo.title
+  action: substitute
+  params: *redacted
+
+- name: mask patient contact name family
+  match: Patient.contact.name.family
+  action: substitute
+  params: *redacted
+
+- name: mask patient contact name given
+  match: Patient.contact.name.given
+  action: substitute
+  params: *redacted
+
+- name: mask patient contact name text
+  match: Patient.contact.name.text
+  action: substitute
+  params: *redacted
+
+- name: mask patient contact telecom value
+  match: Patient.contact.telecom.value
+  action: substitute
+  params: *redacted
+
+- name: mask patient gender
+  match: Patient.gender
+  action: substitute
+  params:
+    substitute_with: "unknown"
+
+# Marital status: mask display text; coded value kept (code+system are not direct PHI)
+- name: mask patient marital status text
+  match: Patient.maritalStatus.text
+  action: substitute
+  params: *redacted
+
+- name: mask patient marital status coding display
+  match: Patient.maritalStatus.coding.display
+  action: cryptohash
+
+# Booleans/integers: replace with neutral value so the field stays valid
+- name: mask patient multiple birth boolean
+  match: Patient.multipleBirthBoolean
+  action: substitute
+  params:
+    substitute_with: false
+
+- name: mask patient multiple birth integer
+  match: Patient.multipleBirthInteger
+  action: substitute
+  params:
+    substitute_with: 0
+
+# Communication: mask language display; the array entry stays present
+- name: mask patient communication language text
+  match: Patient.communication.language.text
+  action: substitute
+  params: *redacted
+
+- name: mask patient communication language coding display
+  match: Patient.communication.language.coding.display
+  action: cryptohash
+
+- name: mask patient deceased boolean
+  match: Patient.deceasedBoolean
+  action: substitute
+  params:
+    substitute_with: false
+
+- name: mask patient general practitioner display
+  match: Patient.generalPractitioner.display
+  action: cryptohash
+
+- name: mask patient managing organization display
+  match: Patient.managingOrganization.display
+  action: cryptohash
+
+# Patient links: mask display; the link entry stays; reference rewritten by rewrite_references
+- name: mask patient link other display
+  match: Patient.link.other.display
+  action: cryptohash
+
+# ==========================================================
+# 4. PATIENT EXTENSIONS — mask values in place
+#    Extensions are never removed. Only the PII-bearing leaf
+#    values are replaced so the extension object stays valid.
+# ==========================================================
+
+# US Core Race — mask the categorical code and display; text valueString masked
+- name: mask race omb category coding display
+  match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-race').extension.where(url='ombCategory').valueCoding.display
+  action: cryptohash
+
+- name: mask race omb category coding code
+  match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-race').extension.where(url='ombCategory').valueCoding.code
+  action: substitute
+  params:
+    substitute_with: "UNK"
+
+- name: mask race text value
+  match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-race').extension.where(url='text').valueString
+  action: substitute
+  params: *redacted
+
+# US Core Ethnicity — same pattern as race
+- name: mask ethnicity omb category coding display
+  match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-ethnicity').extension.where(url='ombCategory').valueCoding.display
+  action: cryptohash
+
+- name: mask ethnicity omb category coding code
+  match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-ethnicity').extension.where(url='ombCategory').valueCoding.code
+  action: substitute
+  params:
+    substitute_with: "UNK"
+
+- name: mask ethnicity text value
+  match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-ethnicity').extension.where(url='text').valueString
+  action: substitute
+  params: *redacted
+
+# Mother's Maiden Name
+- name: mask mothers maiden name
+  match: Patient.extension.where(url='http://hl7.org/fhir/StructureDefinition/patient-mothersMaidenName').valueString
+  action: substitute
+  params: *redacted
+
+# Birth Sex — replace valueCode with UNK (unknown); extension object stays
+- name: mask birth sex value code
+  match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-birthsex').valueCode
+  action: substitute
+  params:
+    substitute_with: "UNK"
+
+# Birth Place
+- name: mask birth place city
+  match: Patient.extension.where(url='http://hl7.org/fhir/StructureDefinition/patient-birthPlace').valueAddress.city
+  action: substitute
+  params: *redacted
+
+- name: mask birth place state
+  match: Patient.extension.where(url='http://hl7.org/fhir/StructureDefinition/patient-birthPlace').valueAddress.state
+  action: substitute
+  params: *redacted
+
+- name: mask birth place country
+  match: Patient.extension.where(url='http://hl7.org/fhir/StructureDefinition/patient-birthPlace').valueAddress.country
+  action: substitute
+  params: *redacted
+
+# Synthea synthetic metrics — replace numeric value with 0.0; extension stays
+- name: mask synthea disability adjusted life years
+  match: Patient.extension.where(url='http://synthetichealth.github.io/synthea/disability-adjusted-life-years').valueDecimal
+  action: substitute
+  params:
+    substitute_with: 0.0
+
+- name: mask synthea quality adjusted life years
+  match: Patient.extension.where(url='http://synthetichealth.github.io/synthea/quality-adjusted-life-years').valueDecimal
+  action: substitute
+  params:
+    substitute_with: 0.0
+
+# ==========================================================
+# 5. BIRTH DATE / DECEASED DATE — year only
+# ==========================================================
+
+- name: generalise birth date to year
+  match: Patient.birthDate
+  action: generalize
+  params:
+    strategy: date_year
+
+- name: generalise deceased date to year
+  match: Patient.deceasedDateTime
+  action: generalize
+  params:
+    strategy: date_year
+
+# ==========================================================
+# 6. PRACTITIONER IDENTIFIERS
+# ==========================================================
+
+- name: mask practitioner name family
+  match: Practitioner.name.family
+  action: substitute
+  params: *redacted
+
+- name: mask practitioner name given
+  match: Practitioner.name.given
+  action: substitute
+  params: *redacted
+
+- name: mask practitioner name text
+  match: Practitioner.name.text
+  action: substitute
+  params: *redacted
+
+- name: mask practitioner name prefix
+  match: Practitioner.name.prefix
+  action: substitute
+  params: *redacted
+
+- name: mask practitioner name suffix
+  match: Practitioner.name.suffix
+  action: substitute
+  params: *redacted
+
+- name: mask practitioner telecom value
+  match: Practitioner.telecom.value
+  action: substitute
+  params: *redacted
+
+- name: mask practitioner address line
+  match: Practitioner.address.line
+  action: substitute
+  params: *redacted
+
+- name: mask practitioner address city
+  match: Practitioner.address.city
+  action: substitute
+  params: *redacted
+
+- name: mask practitioner address postal code
+  match: Practitioner.address.postalCode
+  action: substitute
+  params: *redacted
+
+- name: mask practitioner address state
+  match: Practitioner.address.state
+  action: substitute
+  params: *redacted
+
+- name: mask practitioner address country
+  match: Practitioner.address.country
+  action: substitute
+  params: *redacted
+
+- name: pseudonymize practitioner identifier value
+  match: Practitioner.identifier.value
+  action: gpas_pseudonymize
+  params: *gpas
+
+# Photo: clear payload, keep object
+- name: mask practitioner photo data
+  match: Practitioner.photo.data
+  action: substitute
+  params:
+    substitute_with: ""
+
+- name: mask practitioner photo url
+  match: Practitioner.photo.url
+  action: substitute
+  params: *redacted
+
+- name: mask practitioner photo title
+  match: Practitioner.photo.title
+  action: substitute
+  params: *redacted
+
+- name: mask practitioner gender
+  match: Practitioner.gender
+  action: substitute
+  params:
+    substitute_with: "unknown"
+
+- name: generalise practitioner birth date
+  match: Practitioner.birthDate
+  action: generalize
+  params:
+    strategy: date_year
+
+# Qualification: mask identifying text, pseudonymize identifier; the qualification entry stays
+- name: pseudonymize practitioner qualification identifier value
+  match: Practitioner.qualification.identifier.value
+  action: gpas_pseudonymize
+  params: *gpas
+
+- name: mask practitioner qualification code text
+  match: Practitioner.qualification.code.text
+  action: substitute
+  params: *redacted
+
+- name: mask practitioner qualification code coding display
+  match: Practitioner.qualification.code.coding.display
+  action: cryptohash
+
+- name: mask practitioner qualification issuer display
+  match: Practitioner.qualification.issuer.display
+  action: cryptohash
+
+# PractitionerRole: mask display text of code and organization; objects stay
+- name: mask practitioner role code text
+  match: PractitionerRole.code.text
+  action: substitute
+  params: *redacted
+
+- name: mask practitioner role code coding display
+  match: PractitionerRole.code.coding.display
+  action: cryptohash
+
+- name: mask practitioner role organization display
+  match: PractitionerRole.organization.display
+  action: cryptohash
+
+# ==========================================================
+# 7. RELATED PERSON
+# ==========================================================
+
+- name: mask related person name family
+  match: RelatedPerson.name.family
+  action: substitute
+  params: *redacted
+
+- name: mask related person name given
+  match: RelatedPerson.name.given
+  action: substitute
+  params: *redacted
+
+- name: mask related person name text
+  match: RelatedPerson.name.text
+  action: substitute
+  params: *redacted
+
+- name: mask related person telecom value
+  match: RelatedPerson.telecom.value
+  action: substitute
+  params: *redacted
+
+# ==========================================================
+# 8. ORGANIZATION / LOCATION
+# ==========================================================
+
+- name: mask organization name
+  match: Organization.name
+  action: cryptohash
+
+- name: mask organization telecom value
+  match: Organization.telecom.value
+  action: substitute
+  params: *redacted
+
+- name: mask organization address line
+  match: Organization.address.line
+  action: substitute
+  params: *redacted
+
+- name: mask organization address city
+  match: Organization.address.city
+  action: substitute
+  params: *redacted
+
+- name: mask organization address postal code
+  match: Organization.address.postalCode
+  action: substitute
+  params: *redacted
+
+- name: mask organization address state
+  match: Organization.address.state
+  action: substitute
+  params: *redacted
+
+- name: mask organization address country
+  match: Organization.address.country
+  action: substitute
+  params: *redacted
+
+- name: pseudonymize organization identifier value
+  match: Organization.identifier.value
+  action: gpas_pseudonymize
+  params: *gpas
+
+- name: mask location name
+  match: Location.name
+  action: cryptohash
+
+- name: mask location address line
+  match: Location.address.line
+  action: substitute
+  params: *redacted
+
+- name: mask location address city
+  match: Location.address.city
+  action: substitute
+  params: *redacted
+
+- name: mask location address postal code
+  match: Location.address.postalCode
+  action: substitute
+  params: *redacted
+
+- name: mask location address state
+  match: Location.address.state
+  action: substitute
+  params: *redacted
+
+- name: mask location address country
+  match: Location.address.country
+  action: substitute
+  params: *redacted
+
+- name: mask location telecom value
+  match: Location.telecom.value
+  action: substitute
+  params: *redacted
+
+# Coordinates: replace with (0.0, 0.0) — clearly non-geographic, field stays present
+- name: mask location position latitude
+  match: Location.position.latitude
+  action: substitute
+  params:
+    substitute_with: 0.0
+
+- name: mask location position longitude
+  match: Location.position.longitude
+  action: substitute
+  params:
+    substitute_with: 0.0
+
+- name: mask location position altitude
+  match: Location.position.altitude
+  action: substitute
+  params:
+    substitute_with: 0.0
+
+- name: mask location managing org display
+  match: Location.managingOrganization.display
+  action: cryptohash
+
+# ==========================================================
+# 9. CLINICAL ACTOR DISPLAY NAMES
+# ==========================================================
+
+- name: mask performer display
+  match: "*.performer.display"
+  action: cryptohash
+
+- name: mask author display
+  match: "*.author.display"
+  action: cryptohash
+
+- name: mask requester display
+  match: "*.requester.display"
+  action: cryptohash
+
+- name: mask recorder display
+  match: "*.recorder.display"
+  action: cryptohash
+
+- name: mask participant display
+  match: "*.participant.individual.display"
+  action: cryptohash
+
+- name: mask asserter display
+  match: "*.asserter.display"
+  action: cryptohash
+
+- name: mask care team participant display
+  match: CareTeam.participant.individual.display
+  action: cryptohash
+
+- name: mask encounter participant display
+  match: Encounter.participant.individual.display
+  action: cryptohash
+
+# ==========================================================
+# 10. CLINICAL DATES — generalise to year only
+# ==========================================================
+
+- name: generalise effective date to year
+  match: "*.effectiveDateTime"
+  action: generalize
+  params:
+    strategy: date_year
+
+- name: generalise issued date to year
+  match: "*.issued"
+  action: generalize
+  params:
+    strategy: date_year
+
+- name: generalise authored on to year
+  match: "*.authoredOn"
+  action: generalize
+  params:
+    strategy: date_year
+
+- name: generalise recorded date to year
+  match: "*.recordedDate"
+  action: generalize
+  params:
+    strategy: date_year
+
+- name: generalise onset date to year
+  match: "*.onsetDateTime"
+  action: generalize
+  params:
+    strategy: date_year
+
+- name: generalise abatement date to year
+  match: "*.abatementDateTime"
+  action: generalize
+  params:
+    strategy: date_year
+
+- name: generalise performed date to year
+  match: "*.performedDateTime"
+  action: generalize
+  params:
+    strategy: date_year
+
+- name: generalise performed period start to year
+  match: "*.performedPeriod.start"
+  action: generalize
+  params:
+    strategy: date_year
+
+- name: generalise performed period end to year
+  match: "*.performedPeriod.end"
+  action: generalize
+  params:
+    strategy: date_year
+
+- name: generalise occurrence date to year
+  match: "*.occurrenceDateTime"
+  action: generalize
+  params:
+    strategy: date_year
+
+- name: generalise encounter period start to year
+  match: Encounter.period.start
+  action: generalize
+  params:
+    strategy: date_year
+
+- name: generalise encounter period end to year
+  match: Encounter.period.end
+  action: generalize
+  params:
+    strategy: date_year
+
+- name: generalise participant period start to year
+  match: "*.participant.period.start"
+  action: generalize
+  params:
+    strategy: date_year
+
+- name: generalise participant period end to year
+  match: "*.participant.period.end"
+  action: generalize
+  params:
+    strategy: date_year
+
+- name: generalise document date to year
+  match: DocumentReference.date
+  action: generalize
+  params:
+    strategy: date_year
+
+- name: generalise document context period start to year
+  match: DocumentReference.context.period.start
+  action: generalize
+  params:
+    strategy: date_year
+
+- name: generalise document context period end to year
+  match: DocumentReference.context.period.end
+  action: generalize
+  params:
+    strategy: date_year
+
+# ==========================================================
+# 11. SERVER METADATA
+# ==========================================================
+
+- name: mask meta last updated
+  match: "*.meta.lastUpdated"
+  action: generalize
+  params:
+    strategy: date_year_instant
+
+- name: mask meta version id
+  match: "*.meta.versionId"
+  action: substitute
+  params: *redacted
+
+- name: mask meta source
+  match: "*.meta.source"
+  action: substitute
+  params:
+    substitute_with: "urn:void:masked"
+
+# ==========================================================
+# 12. BINARY / DOCUMENT BLOBS — clear payload, keep field
+#     The attachment object stays present; the base64 data and
+#     any identifying URL or title are cleared/replaced.
+# ==========================================================
+
+# Generic attachment (any resource with a top-level .attachment field)
+- name: mask attachment data
+  match: "*.attachment.data"
+  action: substitute
+  params:
+    substitute_with: ""
+
+- name: mask attachment url
+  match: "*.attachment.url"
+  action: substitute
+  params: *redacted
+
+- name: mask attachment title
+  match: "*.attachment.title"
+  action: substitute
+  params: *redacted
+
+- name: mask attachment hash
+  match: "*.attachment.hash"
+  action: substitute
+  params:
+    substitute_with: ""
+
+# DocumentReference nests attachment under content[*].attachment
+- name: mask document reference content attachment data
+  match: DocumentReference.content.attachment.data
+  action: substitute
+  params:
+    substitute_with: ""
+
+- name: mask document reference content attachment url
+  match: DocumentReference.content.attachment.url
+  action: substitute
+  params: *redacted
+
+- name: mask document reference content attachment title
+  match: DocumentReference.content.attachment.title
+  action: substitute
+  params: *redacted
+
+- name: mask document reference content attachment hash
+  match: DocumentReference.content.attachment.hash
+  action: substitute
+  params:
+    substitute_with: ""
+
+- name: mask binary data
+  match: Binary.data
+  action: substitute
+  params:
+    substitute_with: ""
+
+# ==========================================================
+# 13. FREE-TEXT NARRATIVE — scrub PII tokens in place
+# ==========================================================
+
+- name: scrub narrative text
+  match: "*.text"
+  action: scrub_text
+  params:
+    mode: html_tokenize
+    patterns: all
+    extract_names: true
+
+- name: nlp scrub narrative text
+  match: "*.text"
+  action: nlp_scrub
+  params:
+    mode: tokenize
+    html: true
+    threshold: 0.4
+
+- name: scrub note text
+  match: "*.note.text"
+  action: scrub_text
+  params:
+    mode: text
+    patterns: all
+
+- name: nlp scrub note text
+  match: "*.note.text"
+  action: nlp_scrub
+  params:
+    mode: tokenize
+    threshold: 0.4
+
+- name: scrub comment fields
+  match: "*.comment"
+  action: scrub_text
+  params:
+    mode: text
+    patterns: all
+
+- name: nlp scrub code text
+  match: "*.code.text"
+  action: nlp_scrub
+  params:
+    mode: tokenize
+    threshold: 0.4
+
+- name: nlp scrub substance text
+  match: "*.substance.text"
+  action: nlp_scrub
+  params:
+    mode: tokenize
+    threshold: 0.4
+
+- name: nlp scrub value codeable concept text
+  match: "*.valueCodeableConcept.text"
+  action: nlp_scrub
+  params:
+    mode: tokenize
+    threshold: 0.4
+
+- name: nlp scrub medication codeable concept text
+  match: "*.medicationCodeableConcept.text"
+  action: nlp_scrub
+  params:
+    mode: tokenize
+    threshold: 0.4
+
+- name: scrub dosage text
+  match: "*.dosage.text"
+  action: scrub_text
+  params:
+    mode: text
+    patterns: all
+
+- name: scrub dosage patient instruction
+  match: "*.dosage.patientInstruction"
+  action: scrub_text
+  params:
+    mode: text
+    patterns: all
+
+- name: scrub reaction description
+  match: "*.reaction.description"
+  action: scrub_text
+  params:
+    mode: text
+    patterns: all
+
+# ==========================================================
+# 14. COMMUNICATION / MESSAGES
+# ==========================================================
+
+- name: mask communication sender display
+  match: Communication.sender.display
+  action: cryptohash
+
+- name: mask communication recipient display
+  match: Communication.recipient.display
+  action: cryptohash
+
+- name: scrub communication payload
+  match: Communication.payload.contentString
+  action: scrub_text
+  params:
+    mode: text
+    patterns: all
+
+# ==========================================================
+# 15. TASK / REQUEST WORKFLOW
+# ==========================================================
+
+- name: mask task requester display
+  match: Task.requester.display
+  action: cryptohash
+
+- name: mask task owner display
+  match: Task.owner.display
+  action: cryptohash
+
+- name: mask service request requester display
+  match: ServiceRequest.requester.display
+  action: cryptohash
+
+# ==========================================================
+# 16. PROVENANCE / AUDIT — mask agent identity values in place
+# ==========================================================
+
+- name: mask provenance agent who display
+  match: Provenance.agent.who.display
+  action: cryptohash
+
+- name: mask provenance agent on behalf of display
+  match: Provenance.agent.onBehalfOf.display
+  action: cryptohash
+
+- name: mask audit event agent name
+  match: AuditEvent.agent.name
+  action: cryptohash
+
+- name: mask audit event agent who display
+  match: AuditEvent.agent.who.display
+  action: cryptohash
+
+- name: mask audit event agent network address
+  match: AuditEvent.agent.network.address
+  action: substitute
+  params: *redacted
+
+- name: mask audit event source observer display
+  match: AuditEvent.source.observer.display
+  action: cryptohash
+
+# ==========================================================
+# 17. DEVICE IDENTIFIERS
+# ==========================================================
+
+# UDI carrier: pseudonymize device ID, clear encoded carrier strings
+- name: pseudonymize device udi carrier device identifier
+  match: Device.udiCarrier.deviceIdentifier
+  action: gpas_pseudonymize
+  params: *gpas
+
+- name: mask device udi carrier hrf
+  match: Device.udiCarrier.carrierHRF
+  action: substitute
+  params: *redacted
+
+- name: mask device udi carrier aidc
+  match: Device.udiCarrier.carrierAIDC
+  action: substitute
+  params:
+    substitute_with: ""
+
+- name: mask device serial number
+  match: Device.serialNumber
+  action: substitute
+  params: *redacted
+
+- name: mask device lot number
+  match: Device.lotNumber
+  action: substitute
+  params: *redacted
+
+- name: mask device distinct identifier
+  match: Device.distinctIdentifier
+  action: substitute
+  params: *redacted
+
+- name: generalise device manufacture date
+  match: Device.manufactureDate
+  action: generalize
+  params:
+    strategy: date_year
+
+- name: generalise device expiration date
+  match: Device.expirationDate
+  action: generalize
+  params:
+    strategy: date_year
+
+- name: pseudonymize device identifier value
+  match: Device.identifier.value
+  action: gpas_pseudonymize
+  params: *gpas
+
+# ==========================================================
+# 18. GLOBAL CATCH-ALL: names, telecom, addresses, identifiers
+#     Fires last for any resource type not explicitly listed above
+#     (e.g. Coverage, Claim, ExplanationOfBenefit).
+#     The parent array is never removed — only the PII-bearing
+#     leaf string values are replaced in place.
+# ==========================================================
+
+- name: pseudonymize all identifier values
+  match: "*.identifier.value"
+  action: gpas_pseudonymize
+  params: *gpas
+
+- name: mask all name family
+  match: "*.name.family"
+  action: substitute
+  params: *redacted
+
+- name: mask all name given
+  match: "*.name.given"
+  action: substitute
+  params: *redacted
+
+- name: mask all name text
+  match: "*.name.text"
+  action: substitute
+  params: *redacted
+
+- name: mask all name prefix
+  match: "*.name.prefix"
+  action: substitute
+  params: *redacted
+
+- name: mask all name suffix
+  match: "*.name.suffix"
+  action: substitute
+  params: *redacted
+
+- name: mask all telecom values
+  match: "*.telecom.value"
+  action: substitute
+  params: *redacted
+
+- name: mask all address line
+  match: "*.address.line"
+  action: substitute
+  params: *redacted
+
+- name: mask all address city
+  match: "*.address.city"
+  action: substitute
+  params: *redacted
+
+- name: mask all address district
+  match: "*.address.district"
+  action: substitute
+  params: *redacted
+
+- name: mask all address postal code
+  match: "*.address.postalCode"
+  action: substitute
+  params: *redacted
+
+- name: mask all address state
+  match: "*.address.state"
+  action: substitute
+  params: *redacted
+
+- name: mask all address country
+  match: "*.address.country"
+  action: substitute
+  params: *redacted
+
+- name: mask all address text
+  match: "*.address.text"
+  action: substitute
+  params: *redacted
+
+# Coverage / insurance reference display names and direct identifiers
+- name: mask coverage subscriber id
+  match: Coverage.subscriberId
+  action: substitute
+  params: *redacted
+
+- name: mask coverage dependent
+  match: Coverage.dependent
+  action: substitute
+  params: *redacted
+
+- name: mask coverage subscriber display
+  match: Coverage.subscriber.display
+  action: cryptohash
+
+- name: mask coverage beneficiary display
+  match: Coverage.beneficiary.display
+  action: cryptohash
+
+- name: mask coverage payor display
+  match: Coverage.payor.display
+  action: cryptohash

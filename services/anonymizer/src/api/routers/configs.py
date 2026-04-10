@@ -24,6 +24,8 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
+from api.auth import AuthContext
+
 router = APIRouter()
 logger = logging.getLogger("medanon")
 
@@ -41,7 +43,7 @@ _USER_CONFIG_DIR = os.environ.get(
 _VALID_ACTIONS = frozenset({
     "redact", "cryptohash", "encrypt", "decrypt",
     "perturb", "substitute", "generalize",
-    "scrub_text", "nlp_detect", "gpas_pseudonymize",
+    "scrub_text", "nlp_scrub", "nlp_detect", "gpas_pseudonymize",
 })
 
 
@@ -86,6 +88,13 @@ def _validate_name(name: str) -> None:
 
 def _user_config_path(name: str) -> str:
     return os.path.join(_USER_CONFIG_DIR, f"{name}.yaml")
+
+
+def _require_admin(request: Request) -> None:
+    """Raise 403 if the caller does not have admin role."""
+    auth: AuthContext | None = getattr(request.state, "auth", None)
+    if auth is None or not auth.has_role("admin"):
+        raise HTTPException(status_code=403, detail="Admin role required for config writes.")
 
 
 def _rules_to_yaml(
@@ -183,7 +192,8 @@ def _read_yaml(name: str, is_system: bool) -> str:
             "gdpr":       "config_gdpr_eu.yaml",
             "hipaa":      "config_hipaa_safe_harbor.yaml",
             "research":   "config_research_pseudonymous.yaml",
-            "structural": "config_structure_preserving.yaml",
+            "structural":    "config_structure_preserving.yaml",
+            "value-masking": "config_value_masking.yaml",
         }
         filename = profile_map.get(name)
         if not filename:
@@ -230,6 +240,7 @@ def create_config(body: ConfigCreateRequest, request: Request):
     Validates every rule through the existing Settings validator before
     writing to disk. Requires admin role.
     """
+    _require_admin(request)
     _validate_name(body.name)
     store = _get_store()
 
@@ -252,6 +263,7 @@ def update_config(name: str, body: ConfigUpdateRequest, request: Request):
 
     System configs are read-only and return 403. Requires admin role.
     """
+    _require_admin(request)
     _validate_name(name)
     store = _get_store()
 
@@ -280,6 +292,7 @@ def delete_config(name: str, request: Request):
 
     System configs cannot be deleted (403). Requires admin role.
     """
+    _require_admin(request)
     _validate_name(name)
     store = _get_store()
 

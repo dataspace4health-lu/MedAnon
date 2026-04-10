@@ -38,7 +38,8 @@ _PROFILE_MAP = {
     'gdpr':       'config_gdpr_eu.yaml',
     'hipaa':      'config_hipaa_safe_harbor.yaml',
     'research':   'config_research_pseudonymous.yaml',
-    'structural': 'config_structure_preserving.yaml',
+    'structural':    'config_structure_preserving.yaml',
+    'value-masking': 'config_value_masking.yaml',
 }
 
 # TTL in seconds (0 = disabled; cache lives for the process lifetime).
@@ -100,7 +101,7 @@ def get_settings(profile: str = 'auto') -> Settings:
 
     Args:
         profile: A built-in profile name (auto, minimal, gpas, gdpr, hipaa, research,
-                 structural) or a user-defined profile name created via POST /v1/configs.
+                 structural, value-masking) or a user-defined profile name created via POST /v1/configs.
                  'auto' selects config_gpas.yaml when GPAS_URL is set, else config.yaml.
                  The 'auto' alias is resolved on every call so it always reflects the
                  current environment — it is never cached under the key 'auto'.

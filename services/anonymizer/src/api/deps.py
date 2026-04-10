@@ -191,7 +191,7 @@ async def _validate_dynamic_settings(dynamic_settings: dict) -> None:
 def get_settings_dep(
     config_profile: str = Query(
         'auto',
-        description="Config profile: auto, minimal, gpas, gdpr, hipaa, research, structural"
+        description="Config profile: auto, minimal, gpas, gdpr, hipaa, research, structural, value-masking"
     ),
 ) -> config.Settings:
     """FastAPI dependency that reads config_profile from the query string."""
