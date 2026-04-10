@@ -9,6 +9,11 @@ Supported generalization strategies (set via ``params['strategy']``):
   date_year_month — truncate to year-month
                     "1980-02-04"         → "1980-02"
 
+  date_year_instant — truncate to year but keep a valid FHIR instant format
+                    "2024-03-15T10:30:00Z" → "2024-01-01T00:00:00Z"
+                    Use for fields typed as instant (e.g. meta.lastUpdated)
+                    where year-only would fail FHIR schema validation.
+
   age_bracket     — convert a date to an age bracket string
                     "1991-01-04" → "30-39"  (bracket_size defaults to 10)
 
@@ -39,6 +44,17 @@ def _generalize_date_year(value):
     s = str(value).strip()
     m = re.match(r'(\d{4})', s)
     return m.group(1) if m else s
+
+
+def _generalize_date_year_instant(value):
+    """Truncate an instant/dateTime to year, returning a valid FHIR instant.
+
+    "2024-03-15T10:30:00Z"   → "2024-01-01T00:00:00Z"
+    "2024-03-15T10:30:00+02" → "2024-01-01T00:00:00Z"
+    """
+    s = str(value).strip()
+    m = re.match(r'(\d{4})', s)
+    return f"{m.group(1)}-01-01T00:00:00Z" if m else s
 
 
 def _generalize_date_year_month(value):
@@ -93,6 +109,7 @@ def _generalize_category(value, mapping):
 _STRATEGIES = {
     'date_year': lambda v, p: _generalize_date_year(v),
     'date_year_month': lambda v, p: _generalize_date_year_month(v),
+    'date_year_instant': lambda v, p: _generalize_date_year_instant(v),
     'age_bracket': lambda v, p: _generalize_age_bracket(v, p.get('bracket_size', 10)),
     'number_round': lambda v, p: _generalize_number_round(v, p.get('precision', 10)),
     'zip_prefix': lambda v, p: _generalize_zip_prefix(v, p.get('prefix_len', 3)),
