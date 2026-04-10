@@ -233,7 +233,7 @@ class ProcessingService:
         rewriting that _process_bundle() performs after all entries are processed.
         """
         try:
-            result = await asyncio.to_thread(process_data, bundle, settings)
+            result = await asyncio.to_thread(process_data, bundle, settings, None, True)
         except GpasUnavailableError as exc:
             logger.error("bundle_stream: gPAS unavailable: %s", exc, exc_info=False)
             yield GPAS_FATAL_JSON

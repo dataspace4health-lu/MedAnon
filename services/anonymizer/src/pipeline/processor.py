@@ -80,6 +80,7 @@ def _finalize_resource(
     precompiled_text_id_regex=None,
     precomputed_ref_mapping: dict | None = None,
     prebuilt_text_id_automaton=None,
+    attach_manifest: bool = False,
 ) -> dict:
     """Run Pass 2 (gPAS) + post-processing for one resource.
 
@@ -141,8 +142,8 @@ def _finalize_resource(
                 automaton=prebuilt_text_id_automaton,
             )
 
-    # Attach transformation manifest (when enabled)
-    if _MANIFEST_ENABLED and manifest_entries:
+    # Attach transformation manifest (when enabled or forced for scoring)
+    if (attach_manifest or _MANIFEST_ENABLED) and manifest_entries:
         _attach_manifest(resource, manifest_entries)
 
     return resource
@@ -176,6 +177,7 @@ def process_data_batch(
     resources: list[dict],
     settings,
     pseudonymizer=None,
+    attach_manifest: bool = False,
 ) -> list[dict]:
     """De-identify / pseudonymize a batch of FHIR resources with cross-resource
     gPAS batching.
@@ -252,6 +254,7 @@ def process_data_batch(
                 gpas_work, manifest_entries, processing_mode,
                 precomputed_mapping=combined_mapping,
                 precomputed_ref_mapping=precomputed_ref_mapping,
+                attach_manifest=attach_manifest,
             )]
         except Exception as exc:
             rtype = resource.get("resourceType", "Unknown") if isinstance(resource, dict) else "Unknown"
@@ -363,6 +366,7 @@ def process_data_batch(
                     precompiled_text_id_regex=_batch_text_id_regex,
                     precomputed_ref_mapping=_batch_ref_mapping,
                     prebuilt_text_id_automaton=_batch_text_id_automaton,
+                    attach_manifest=attach_manifest,
                 )
                 results.append(result)
             except Exception as exc:
@@ -383,7 +387,7 @@ def process_data_batch(
 # Bundle processing
 # ---------------------------------------------------------------------------
 
-def _process_bundle(resource: dict, settings, pseudonymizer) -> dict:
+def _process_bundle(resource: dict, settings, pseudonymizer, attach_manifest: bool = False) -> dict:
     entries = resource.get("entry", [])
 
     # Snapshot original resource IDs before any processing
@@ -406,7 +410,7 @@ def _process_bundle(resource: dict, settings, pseudonymizer) -> dict:
     # the entire Bundle (not per-chunk).  process_data_batch already handles
     # memory-bounded chunking internally via _BATCH_SIZE for the gPAS HTTP call.
     if inner_resources:
-        all_processed = process_data_batch(inner_resources, settings, pseudonymizer)
+        all_processed = process_data_batch(inner_resources, settings, pseudonymizer, attach_manifest=attach_manifest)
         for idx, result in zip(entry_indices, all_processed):
             entries[idx]["resource"] = result
 
@@ -446,14 +450,16 @@ def _process_bundle(resource: dict, settings, pseudonymizer) -> dict:
 # Public entry point (backward-compatible)
 # ---------------------------------------------------------------------------
 
-def process_data(resource, settings, pseudonymizer=None):
+def process_data(resource, settings, pseudonymizer=None, attach_manifest: bool = False):
     """De-identify / pseudonymize *resource* according to *settings*.
 
     Args:
-        resource:      A FHIR resource dict, a Bundle dict, or a list of resources.
-        settings:      Loaded :class:`~pipeline.config.Settings` instance.
-        pseudonymizer: Optional :class:`~pipeline.ports.PseudonymizerPort` override.
-                       Defaults to :class:`~integrations.gpas.adapter.GpasPseudonymizerAdapter`.
+        resource:        A FHIR resource dict, a Bundle dict, or a list of resources.
+        settings:        Loaded :class:`~pipeline.config.Settings` instance.
+        pseudonymizer:   Optional :class:`~pipeline.ports.PseudonymizerPort` override.
+                         Defaults to :class:`~integrations.gpas.adapter.GpasPseudonymizerAdapter`.
+        attach_manifest: When True, attaches transformation manifests to every output
+                         resource (required for manifest-based summary in the UI).
 
     Returns:
         The transformed resource (same type as input).
@@ -461,13 +467,13 @@ def process_data(resource, settings, pseudonymizer=None):
     if pseudonymizer is None:
         pseudonymizer = _get_default_pseudonymizer()
     if isinstance(resource, list):
-        return process_data_batch(resource, settings, pseudonymizer)
+        return process_data_batch(resource, settings, pseudonymizer, attach_manifest=attach_manifest)
     if isinstance(resource, dict) and resource.get("resourceType") == "Bundle":
-        return _process_bundle(resource, settings, pseudonymizer)
-    return process_data_batch([resource], settings, pseudonymizer)[0]
+        return _process_bundle(resource, settings, pseudonymizer, attach_manifest=attach_manifest)
+    return process_data_batch([resource], settings, pseudonymizer, attach_manifest=attach_manifest)[0]
 
 
-def process_data_stream(resources_iter, settings, pseudonymizer=None, chunk_size=None):
+def process_data_stream(resources_iter, settings, pseudonymizer=None, chunk_size=None, attach_manifest=False):
     """Generator that de-identifies resources from *resources_iter* in chunks.
 
     Yields one processed resource dict at a time.  Memory usage is bounded by
@@ -478,6 +484,7 @@ def process_data_stream(resources_iter, settings, pseudonymizer=None, chunk_size
         settings:       Loaded Settings instance.
         pseudonymizer:  Optional PseudonymizerPort override.
         chunk_size:     Resources per batch (default: ``_BATCH_SIZE``).
+        attach_manifest: Always attach transformation manifests (for scoring support).
 
     Yields:
         Processed resource dicts, one at a time.
@@ -491,7 +498,7 @@ def process_data_stream(resources_iter, settings, pseudonymizer=None, chunk_size
     for resource in resources_iter:
         chunk.append(resource)
         if len(chunk) >= chunk_size:
-            yield from process_data_batch(chunk, settings, pseudonymizer)
+            yield from process_data_batch(chunk, settings, pseudonymizer, attach_manifest=attach_manifest)
             chunk = []
     if chunk:
-        yield from process_data_batch(chunk, settings, pseudonymizer)
+        yield from process_data_batch(chunk, settings, pseudonymizer, attach_manifest=attach_manifest)
