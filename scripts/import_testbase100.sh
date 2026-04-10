@@ -46,7 +46,7 @@ _LOAD_ORDER = [t for tier in LOAD_TIERS for t in tier]
 _local = threading.local()
 
 def _get_conn():
-    if not hasattr(_local, "conn"):
+    if not hasattr(_local, "conn") or _local.conn is None:
         parsed = urlparse(fhir_url)
         host = parsed.hostname
         port = parsed.port
