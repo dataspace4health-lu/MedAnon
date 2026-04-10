@@ -263,7 +263,7 @@ rules:
       patterns: all
 
   - match: "*.text.div"
-    action: nlp_detect
+    action: nlp_scrub
     params:
       mode: tokenize
       html: true
@@ -276,7 +276,7 @@ rules:
       patterns: all
 
   - match: "*.note.text"
-    action: nlp_detect
+    action: nlp_scrub
     params:
       mode: tokenize
       threshold: 0.4
