@@ -8,6 +8,7 @@ Usage::
     print(result.decision)  # "PASS" or "FAIL"
     print(result.composite)  # 0-100
 """
+
 from pipeline.scoring.engine import (  # noqa: F401
     ScoreCollector,
     compute_composite,

@@ -78,7 +78,10 @@ class CircuitBreaker:
                     self._state = self.HALF_OPEN
                     self._probes_in_flight = 0
                     self._successful_probes = 0
-                    _log.info("circuit_breaker[%s] state=half_open (recovery probes allowed)", self._name)
+                    _log.info(
+                        "circuit_breaker[%s] state=half_open (recovery probes allowed)",
+                        self._name,
+                    )
 
             if self._state == self.CLOSED:
                 return True
@@ -98,7 +101,9 @@ class CircuitBreaker:
                 if self._successful_probes >= self._half_open_probes:
                     _log.info(
                         "circuit_breaker[%s] state=closed (%d/%d probes succeeded)",
-                        self._name, self._successful_probes, self._half_open_probes,
+                        self._name,
+                        self._successful_probes,
+                        self._half_open_probes,
                     )
                     self._failure_count = 0
                     self._state = self.CLOSED
@@ -122,7 +127,10 @@ class CircuitBreaker:
                 self._state = self.OPEN
                 _log.warning(
                     "circuit_breaker[%s] state=open failures=%d threshold=%d total_trips=%d",
-                    self._name, self._failure_count, self._threshold, self._total_trips,
+                    self._name,
+                    self._failure_count,
+                    self._threshold,
+                    self._total_trips,
                 )
 
     def reset(self) -> None:
@@ -134,4 +142,8 @@ class CircuitBreaker:
             self._probes_in_flight = 0
             self._successful_probes = 0
             if prev != self.CLOSED:
-                _log.info("circuit_breaker[%s] manually reset from %s to closed", self._name, prev)
+                _log.info(
+                    "circuit_breaker[%s] manually reset from %s to closed",
+                    self._name,
+                    prev,
+                )

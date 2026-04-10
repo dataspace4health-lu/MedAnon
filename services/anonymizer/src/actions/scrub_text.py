@@ -61,156 +61,156 @@ from utils.fhirpath import find_nodes
 
 _PATTERNS = {
     # ISO date / dateTime: 2023-01-15, 1991-01-04T00:00:00Z
-    'date_iso': (
+    "date_iso": (
         re.compile(
-            r'\b\d{4}-\d{2}-\d{2}'
-            r'(?:T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)?\b'
+            r"\b\d{4}-\d{2}-\d{2}"
+            r"(?:T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)?\b"
         ),
-        '[DATE]',
+        "[DATE]",
     ),
     # US short date: 01/15/2023, 1/5/23
-    'date_us': (
-        re.compile(r'\b\d{1,2}/\d{1,2}/\d{2,4}\b'),
-        '[DATE]',
+    "date_us": (
+        re.compile(r"\b\d{1,2}/\d{1,2}/\d{2,4}\b"),
+        "[DATE]",
     ),
     # Written date: January 15, 2023
-    'date_written': (
+    "date_written": (
         re.compile(
-            r'\b(?:January|February|March|April|May|June|July|August|September|'
-            r'October|November|December)\s+\d{1,2},?\s+\d{4}\b',
+            r"\b(?:January|February|March|April|May|June|July|August|September|"
+            r"October|November|December)\s+\d{1,2},?\s+\d{4}\b",
             re.IGNORECASE,
         ),
-        '[DATE]',
+        "[DATE]",
     ),
     # US phone: (555) 867-5309, 555-867-5309, +1 555 867 5309
     # ReDoS note: use a plain character class [.\- ] instead of \s to avoid
     # nested quantifier paths that cause catastrophic backtracking.
-    'phone': (
+    "phone": (
         re.compile(
-            r'(?<!\d)'
-            r'(?:\+?1[.\- ]?)?'
-            r'(?:\(\d{3}\)|\d{3})'
-            r'[.\- ]?\d{3}[.\- ]?\d{4}'
-            r'(?!\d)'
+            r"(?<!\d)"
+            r"(?:\+?1[.\- ]?)?"
+            r"(?:\(\d{3}\)|\d{3})"
+            r"[.\- ]?\d{3}[.\- ]?\d{4}"
+            r"(?!\d)"
         ),
-        '[PHONE]',
+        "[PHONE]",
     ),
     # US Social Security Number: 123-45-6789
-    'ssn': (
-        re.compile(r'\b(?!000|666|9\d{2})\d{3}-(?!00)\d{2}-(?!0000)\d{4}\b'),
-        '[SSN]',
+    "ssn": (
+        re.compile(r"\b(?!000|666|9\d{2})\d{3}-(?!00)\d{2}-(?!0000)\d{4}\b"),
+        "[SSN]",
     ),
     # E-mail address
-    'email': (
-        re.compile(r'\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b'),
-        '[EMAIL]',
+    "email": (
+        re.compile(r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b"),
+        "[EMAIL]",
     ),
     # IPv4 address (avoid matching version strings like "1.2.3")
-    'ip': (
+    "ip": (
         re.compile(
-            r'\b(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}'
-            r'(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\b'
+            r"\b(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}"
+            r"(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\b"
         ),
-        '[IP]',
+        "[IP]",
     ),
     # IPv6 addresses: full, compressed (::), and IPv4-mapped (::ffff:x.x.x.x)
-    'ipv6': (
+    "ipv6": (
         re.compile(
-            r'(?<![:\w])'
-            r'(?:'
+            r"(?<![:\w])"
+            r"(?:"
             # Full 8-group: 2001:0db8:85a3:0000:0000:8a2e:0370:7334
-            r'(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}'
-            r'|'
+            r"(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}"
+            r"|"
             # Compressed with :: anywhere
-            r'(?:[0-9a-fA-F]{1,4}:){1,7}:'
-            r'|'
-            r'(?:[0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}'
-            r'|'
-            r'(?:[0-9a-fA-F]{1,4}:){1,5}(?::[0-9a-fA-F]{1,4}){1,2}'
-            r'|'
-            r'(?:[0-9a-fA-F]{1,4}:){1,4}(?::[0-9a-fA-F]{1,4}){1,3}'
-            r'|'
-            r'(?:[0-9a-fA-F]{1,4}:){1,3}(?::[0-9a-fA-F]{1,4}){1,4}'
-            r'|'
-            r'(?:[0-9a-fA-F]{1,4}:){1,2}(?::[0-9a-fA-F]{1,4}){1,5}'
-            r'|'
-            r'[0-9a-fA-F]{1,4}:(?::[0-9a-fA-F]{1,4}){1,6}'
-            r'|'
+            r"(?:[0-9a-fA-F]{1,4}:){1,7}:"
+            r"|"
+            r"(?:[0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}"
+            r"|"
+            r"(?:[0-9a-fA-F]{1,4}:){1,5}(?::[0-9a-fA-F]{1,4}){1,2}"
+            r"|"
+            r"(?:[0-9a-fA-F]{1,4}:){1,4}(?::[0-9a-fA-F]{1,4}){1,3}"
+            r"|"
+            r"(?:[0-9a-fA-F]{1,4}:){1,3}(?::[0-9a-fA-F]{1,4}){1,4}"
+            r"|"
+            r"(?:[0-9a-fA-F]{1,4}:){1,2}(?::[0-9a-fA-F]{1,4}){1,5}"
+            r"|"
+            r"[0-9a-fA-F]{1,4}:(?::[0-9a-fA-F]{1,4}){1,6}"
+            r"|"
             # :: alone or with trailing groups
-            r':(?::[0-9a-fA-F]{1,4}){1,7}'
-            r'|'
-            r'::(?:[fF]{4}:)?(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)'
-            r')'
-            r'(?![:\w])'
+            r":(?::[0-9a-fA-F]{1,4}){1,7}"
+            r"|"
+            r"::(?:[fF]{4}:)?(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)"
+            r")"
+            r"(?![:\w])"
         ),
-        '[IP]',
+        "[IP]",
     ),
     # MRN markers: "MRN: 123456", "MR#67890", "MRN123456"
-    'mrn': (
-        re.compile(r'\b(?:MRN|MR)\s*[:#]?\s*\d+\b', re.IGNORECASE),
-        '[MRN]',
+    "mrn": (
+        re.compile(r"\b(?:MRN|MR)\s*[:#]?\s*\d+\b", re.IGNORECASE),
+        "[MRN]",
     ),
     # National/passport identifiers when explicitly labeled
     # Upper bound on token length avoids ReDoS on non-matching long strings.
-    'national_id': (
+    "national_id": (
         re.compile(
-            r'\b(?:national\s*id|nid|passport(?:\s*number)?|id(?:\s*number)?)\s*'
-            r'[:#-]?\s*[A-Z0-9\-]{4,50}\b',
+            r"\b(?:national\s*id|nid|passport(?:\s*number)?|id(?:\s*number)?)\s*"
+            r"[:#-]?\s*[A-Z0-9\-]{4,50}\b",
             re.IGNORECASE,
         ),
-        '[NATIONAL_ID]',
+        "[NATIONAL_ID]",
     ),
     # Account / insurance / policy identifiers when explicitly labeled
-    'account': (
+    "account": (
         re.compile(
-            r'\b(?:account|acct|insurance|member|policy)\s*'
-            r'(?:id|number|no\.?|#)?\s*[:#-]?\s*[A-Z0-9\-]{4,50}\b',
+            r"\b(?:account|acct|insurance|member|policy)\s*"
+            r"(?:id|number|no\.?|#)?\s*[:#-]?\s*[A-Z0-9\-]{4,50}\b",
             re.IGNORECASE,
         ),
-        '[ACCOUNT]',
+        "[ACCOUNT]",
     ),
     # GDPR Art. 9 special categories (NRP) when explicitly labeled
-    'nationality': (
+    "nationality": (
         re.compile(
-            r'\b(?:nationality|citizenship)\s*[:\-]\s*[A-Za-z][A-Za-z\-\s]{1,40}\b',
+            r"\b(?:nationality|citizenship)\s*[:\-]\s*[A-Za-z][A-Za-z\-\s]{1,40}\b",
             re.IGNORECASE,
         ),
-        '[NATIONALITY]',
+        "[NATIONALITY]",
     ),
-    'religion': (
+    "religion": (
         re.compile(
-            r'\b(?:religion|faith)\s*[:\-]\s*[A-Za-z][A-Za-z\-\s]{1,40}\b',
+            r"\b(?:religion|faith)\s*[:\-]\s*[A-Za-z][A-Za-z\-\s]{1,40}\b",
             re.IGNORECASE,
         ),
-        '[RELIGION]',
+        "[RELIGION]",
     ),
-    'political': (
+    "political": (
         re.compile(
-            r'\b(?:political(?:\s+opinion|\s+affiliation)?|party)\s*[:\-]\s*'
-            r'[A-Za-z][A-Za-z\-\s]{1,80}\b',
+            r"\b(?:political(?:\s+opinion|\s+affiliation)?|party)\s*[:\-]\s*"
+            r"[A-Za-z][A-Za-z\-\s]{1,80}\b",
             re.IGNORECASE,
         ),
-        '[POLITICAL]',
+        "[POLITICAL]",
     ),
     # Bare HTTP/HTTPS URLs
-    'url': (
+    "url": (
         re.compile(r'\bhttps?://[^\s<>"\')\]]+'),
-        '[URL]',
+        "[URL]",
     ),
     # US ZIP code: 12345 or 12345-6789
     # Negative lookbehind/lookahead prevents matching within longer numbers or decimals
-    'zipcode': (
-        re.compile(r'(?<![.\d])\b\d{5}(?:-\d{4})?\b(?!\d)'),
-        '[ZIP]',
+    "zipcode": (
+        re.compile(r"(?<![.\d])\b\d{5}(?:-\d{4})?\b(?!\d)"),
+        "[ZIP]",
     ),
     # Synthea simulation seeds — large integers (positive or negative) labelled
     # "Person seed:" or "Population seed:" in generated narrative text
-    'synthea_seed': (
+    "synthea_seed": (
         re.compile(
-            r'\b(?:Person|Population)\s+seed\s*:\s*-?\d{5,}\b',
+            r"\b(?:Person|Population)\s+seed\s*:\s*-?\d{5,}\b",
             re.IGNORECASE,
         ),
-        '[SEED]',
+        "[SEED]",
     ),
 }
 
@@ -220,11 +220,11 @@ _ALL_PATTERNS = list(_PATTERNS.keys())
 # FHIR text.div must be valid XHTML with the FHIR namespace on the root element.
 _REDACTED_DIV = (
     '<div xmlns="http://www.w3.org/1999/xhtml">'
-    'This resource has been de-identified.'
-    '</div>'
+    "This resource has been de-identified."
+    "</div>"
 )
 
-_GLOBAL_TOKEN_STATE = {'next': {}, 'map': {}, 'reverse': {}}
+_GLOBAL_TOKEN_STATE = {"next": {}, "map": {}, "reverse": {}}
 _GLOBAL_TOKEN_LOCK = threading.Lock()
 _TOKEN_STATE_MAX_ENTRIES = 100_000
 
@@ -232,33 +232,34 @@ _TOKEN_STATE_MAX_ENTRIES = 100_000
 def reset_global_token_state():
     """Clear the global token state. Call between batch runs to prevent unbounded growth."""
     with _GLOBAL_TOKEN_LOCK:
-        _GLOBAL_TOKEN_STATE['next'].clear()
-        _GLOBAL_TOKEN_STATE['map'].clear()
-        _GLOBAL_TOKEN_STATE['reverse'].clear()
+        _GLOBAL_TOKEN_STATE["next"].clear()
+        _GLOBAL_TOKEN_STATE["map"].clear()
+        _GLOBAL_TOKEN_STATE["reverse"].clear()
 
 
 def _evict_if_needed(token_state, limit=_TOKEN_STATE_MAX_ENTRIES):
     """Drop the oldest 25% of entries when the map exceeds *limit*."""
-    if len(token_state['map']) <= limit:
+    if len(token_state["map"]) <= limit:
         return
-    evict_count = len(token_state['map']) // 4
-    keys_to_drop = list(token_state['map'].keys())[:evict_count]
+    evict_count = len(token_state["map"]) // 4
+    keys_to_drop = list(token_state["map"].keys())[:evict_count]
     for key in keys_to_drop:
-        token = token_state['map'].pop(key, None)
+        token = token_state["map"].pop(key, None)
         if token:
-            token_state['reverse'].pop(token, None)
+            token_state["reverse"].pop(token, None)
 
 
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
 
+
 def _resolve_patterns(patterns_param):
     """Return a list of pattern keys to apply."""
-    if patterns_param == 'all':
+    if patterns_param == "all":
         return _ALL_PATTERNS
     if isinstance(patterns_param, str):
-        keys = [p.strip() for p in patterns_param.split(',')]
+        keys = [p.strip() for p in patterns_param.split(",")]
     else:
         keys = list(patterns_param)
     unknown = set(keys) - set(_PATTERNS)
@@ -272,23 +273,23 @@ def _resolve_patterns(patterns_param):
 
 def _token_prefix_for_pattern(pattern_key):
     return {
-        'date_iso': 'DATE',
-        'date_us': 'DATE',
-        'date_written': 'DATE',
-        'phone': 'PHONE',
-        'ssn': 'SSN',
-        'email': 'EMAIL',
-        'ip': 'IP',
-        'ipv6': 'IP',
-        'mrn': 'MRN',
-        'national_id': 'NID',
-        'account': 'ACCOUNT',
-        'nationality': 'NATIONALITY',
-        'religion': 'RELIGION',
-        'political': 'POLITICAL',
-        'url': 'URL',
-        'zipcode': 'ZIP',
-        'synthea_seed': 'SEED',
+        "date_iso": "DATE",
+        "date_us": "DATE",
+        "date_written": "DATE",
+        "phone": "PHONE",
+        "ssn": "SSN",
+        "email": "EMAIL",
+        "ip": "IP",
+        "ipv6": "IP",
+        "mrn": "MRN",
+        "national_id": "NID",
+        "account": "ACCOUNT",
+        "nationality": "NATIONALITY",
+        "religion": "RELIGION",
+        "political": "POLITICAL",
+        "url": "URL",
+        "zipcode": "ZIP",
+        "synthea_seed": "SEED",
     }.get(pattern_key, pattern_key.upper())
 
 
@@ -303,19 +304,27 @@ def _tokenize_value(value, token_prefix, token_state, lock=None):
 def _tokenize_value_unlocked(value, token_prefix, token_state):
     """Internal helper for _tokenize_value — assumes lock is already held if needed."""
     key = (token_prefix, value)
-    if key in token_state['map']:
-        return token_state['map'][key]
+    if key in token_state["map"]:
+        return token_state["map"][key]
 
     _evict_if_needed(token_state)
-    current = token_state['next'].get(token_prefix, 0) + 1
-    token_state['next'][token_prefix] = current
+    current = token_state["next"].get(token_prefix, 0) + 1
+    token_state["next"][token_prefix] = current
     token = f"[[{token_prefix}_{current}]]"
-    token_state['map'][key] = token
-    token_state['reverse'][token] = value
+    token_state["map"][key] = token
+    token_state["reverse"][token] = value
     return token
 
 
-def _scrub(text, pattern_keys, names, placeholder_overrides, tokenize, token_state, token_lock=None):
+def _scrub(
+    text,
+    pattern_keys,
+    names,
+    placeholder_overrides,
+    tokenize,
+    token_state,
+    token_lock=None,
+):
     """Apply PHI regex patterns and name tokenization/redaction to *text*."""
     for key in pattern_keys:
         compiled, default_ph = _PATTERNS[key]
@@ -339,11 +348,11 @@ def _scrub(text, pattern_keys, names, placeholder_overrides, tokenize, token_sta
             regex = re.compile(re.escape(name), re.IGNORECASE)
 
             def repl_name(match, lock=token_lock):
-                return _tokenize_value(match.group(0), 'NAME', token_state, lock)
+                return _tokenize_value(match.group(0), "NAME", token_state, lock)
 
             text = regex.sub(repl_name, text)
         else:
-            text = re.sub(re.escape(name), '[NAME]', text, flags=re.IGNORECASE)
+            text = re.sub(re.escape(name), "[NAME]", text, flags=re.IGNORECASE)
 
     return text
 
@@ -351,12 +360,12 @@ def _scrub(text, pattern_keys, names, placeholder_overrides, tokenize, token_sta
 def _extract_names_from_resource(resource):
     """Return a flat list of given/family name strings from a FHIR resource."""
     names = []
-    for entry in resource.get('name', []):
+    for entry in resource.get("name", []):
         if not isinstance(entry, dict):
             continue
-        if entry.get('family'):
-            names.append(entry['family'])
-        for given in entry.get('given', []):
+        if entry.get("family"):
+            names.append(entry["family"])
+        for given in entry.get("given", []):
             if given:
                 names.append(given)
     return names
@@ -365,6 +374,7 @@ def _extract_names_from_resource(resource):
 # ---------------------------------------------------------------------------
 # Node walker
 # ---------------------------------------------------------------------------
+
 
 def _apply_to_node(node, key, scrub_fn, mode):
     """Walk the found node(s) and apply *scrub_fn* or HTML redaction."""
@@ -376,17 +386,17 @@ def _apply_to_node(node, key, scrub_fn, mode):
     if not isinstance(node, dict) or key not in node:
         return
 
-    if mode == 'html':
+    if mode == "html":
         # Replace the entire XHTML narrative with a safe placeholder.
         # FHIR Narrative is usually an object at *.text with a nested div.
-        if isinstance(node[key], dict) and isinstance(node[key].get('div'), str):
-            node[key]['div'] = _REDACTED_DIV
+        if isinstance(node[key], dict) and isinstance(node[key].get("div"), str):
+            node[key]["div"] = _REDACTED_DIV
         elif isinstance(node[key], str):
             node[key] = _REDACTED_DIV
-    elif mode == 'html_tokenize':
+    elif mode == "html_tokenize":
         # Preserve XHTML structure and tokenize only text nodes.
-        if isinstance(node[key], dict) and isinstance(node[key].get('div'), str):
-            node[key]['div'] = _scrub_xhtml_text_nodes(node[key]['div'], scrub_fn)
+        if isinstance(node[key], dict) and isinstance(node[key].get("div"), str):
+            node[key]["div"] = _scrub_xhtml_text_nodes(node[key]["div"], scrub_fn)
         elif isinstance(node[key], str):
             node[key] = _scrub_xhtml_text_nodes(node[key], scrub_fn)
     else:
@@ -408,14 +418,14 @@ def _get_token_state(params, mapping_scope):
       between separate batch runs to prevent unbounded memory growth.
     - 'bundle'/'resource': uses per-call state (safe for API use).
     """
-    if mapping_scope == 'global_run':
+    if mapping_scope == "global_run":
         return _GLOBAL_TOKEN_STATE
 
     # 'bundle' and 'resource' both get fresh state per action call.
     # Bundle-level consistency is preserved because scrub_text_by_path is
     # called once per matched field across the whole bundle in a single
     # process_data invocation.
-    return {'next': {}, 'map': {}, 'reverse': {}}
+    return {"next": {}, "map": {}, "reverse": {}}
 
 
 def _scrub_xhtml_text_nodes(div_html, scrub_fn):
@@ -425,8 +435,8 @@ def _scrub_xhtml_text_nodes(div_html, scrub_fn):
     narrative text content.
     """
     return re.sub(
-        r'>([^<>]+)<',
-        lambda m: '>' + scrub_fn(m.group(1)) + '<',
+        r">([^<>]+)<",
+        lambda m: ">" + scrub_fn(m.group(1)) + "<",
         div_html,
     )
 
@@ -434,6 +444,7 @@ def _scrub_xhtml_text_nodes(div_html, scrub_fn):
 # ---------------------------------------------------------------------------
 # Public action entry point
 # ---------------------------------------------------------------------------
+
 
 def scrub_text_by_path(resource, el, params):
     """Scrub PHI from a free-text or HTML field matched by FHIRPath.
@@ -451,26 +462,26 @@ def scrub_text_by_path(resource, el, params):
         mapping_scope : resource (default), bundle, or global_run
                         (bundle currently aliases global_run)
     """
-    path = el['path'].split('.')[1:]
+    path = el["path"].split(".")[1:]
     if not path:
         return
 
-    mode = params.get('mode', 'text')
-    pattern_keys = _resolve_patterns(params.get('patterns', 'all'))
-    placeholder_overrides = params.get('placeholders', {})
-    tokenize = params.get('tokenize', True)
-    mapping_scope = params.get('mapping_scope', 'resource')
-    _VALID_SCOPES = {'resource', 'bundle', 'global_run'}
+    mode = params.get("mode", "text")
+    pattern_keys = _resolve_patterns(params.get("patterns", "all"))
+    placeholder_overrides = params.get("placeholders", {})
+    tokenize = params.get("tokenize", True)
+    mapping_scope = params.get("mapping_scope", "resource")
+    _VALID_SCOPES = {"resource", "bundle", "global_run"}
     if mapping_scope not in _VALID_SCOPES:
         raise ValueError(
             f"Invalid mapping_scope {mapping_scope!r}. Must be one of: {sorted(_VALID_SCOPES)}"
         )
     token_state = _get_token_state(params, mapping_scope)
     # Use lock when accessing global state for thread safety
-    token_lock = _GLOBAL_TOKEN_LOCK if mapping_scope == 'global_run' else None
+    token_lock = _GLOBAL_TOKEN_LOCK if mapping_scope == "global_run" else None
 
-    names = list(params.get('names', []))
-    if params.get('extract_names', False):
+    names = list(params.get("names", []))
+    if params.get("extract_names", False):
         names.extend(_extract_names_from_resource(resource))
 
     def _scrub_value(text):
@@ -487,6 +498,6 @@ def scrub_text_by_path(resource, el, params):
     parent_nodes = find_nodes(resource, path[:-1], [])
     _apply_to_node(parent_nodes, path[-1], _scrub_value, mode)
 
-    if params.get('reversible', False):
+    if params.get("reversible", False):
         # Keep reverse mapping in-memory for this run only.
-        params['_token_reverse_map'] = deepcopy(token_state['reverse'])
+        params["_token_reverse_map"] = deepcopy(token_state["reverse"])

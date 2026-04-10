@@ -5,6 +5,7 @@ Implements the constraint-based scoring model:
 2. If privacy FAILs → composite = 0, utility and quality are NOT evaluated
 3. If privacy PASSes → composite = privacy_norm × utility × quality (multiplicative)
 """
+
 from __future__ import annotations
 
 import logging
@@ -21,7 +22,13 @@ _log = logging.getLogger(__name__)
 _audit = logging.getLogger("medanon.audit")
 
 try:
-    from utils.metrics import SCORE_COMPOSITE, SCORE_PRIVACY_RISK, SCORE_DECISIONS, SCORE_DURATION
+    from utils.metrics import (
+        SCORE_COMPOSITE,
+        SCORE_PRIVACY_RISK,
+        SCORE_DECISIONS,
+        SCORE_DURATION,
+    )
+
     _HAS_METRICS = True
 except ImportError:
     _HAS_METRICS = False
@@ -69,7 +76,11 @@ def score_resource(
     if privacy.passed:
         utility = _utility_eval.evaluate(original, deidentified, manifest_entries)
         quality = _quality_eval.evaluate(
-            deidentified, manifest_entries, error_count, total_count, settings,
+            deidentified,
+            manifest_entries,
+            error_count,
+            total_count,
+            settings,
         )
         composite, decision = compute_composite(privacy, utility, quality)
 
@@ -88,12 +99,19 @@ def score_resource(
     elapsed = time.monotonic() - t0
     _log.debug(
         "scored resource_type=%s decision=%s composite=%.1f in %.3fs",
-        result.resource_type, result.decision, result.composite, elapsed,
+        result.resource_type,
+        result.decision,
+        result.composite,
+        elapsed,
     )
 
     if _HAS_METRICS:
-        SCORE_COMPOSITE.labels(resource_type=result.resource_type, decision=result.decision).observe(result.composite)
-        SCORE_PRIVACY_RISK.labels(resource_type=result.resource_type).observe(privacy.risk_score)
+        SCORE_COMPOSITE.labels(
+            resource_type=result.resource_type, decision=result.decision
+        ).observe(result.composite)
+        SCORE_PRIVACY_RISK.labels(resource_type=result.resource_type).observe(
+            privacy.risk_score
+        )
         SCORE_DECISIONS.labels(decision=result.decision).inc()
         SCORE_DURATION.labels(resource_type=result.resource_type).observe(elapsed)
 
@@ -109,10 +127,17 @@ class ScoreCollector:
     """
 
     __slots__ = (
-        "_pass_count", "_fail_count", "_composite_sum", "_min_composite",
-        "_utility_sum", "_quality_sum",
-        "_patients", "_patient_manifests",
-        "_error_count", "_total_count", "_config_profile",
+        "_pass_count",
+        "_fail_count",
+        "_composite_sum",
+        "_min_composite",
+        "_utility_sum",
+        "_quality_sum",
+        "_patients",
+        "_patient_manifests",
+        "_error_count",
+        "_total_count",
+        "_config_profile",
     )
 
     def __init__(self, config_profile: str = "auto") -> None:
@@ -145,15 +170,23 @@ class ScoreCollector:
                 composite=0.0,
                 decision="FAIL",
                 privacy=PrivacyDecision(
-                    risk_score=1.0, passed=False, threshold=RISK_THRESHOLD,
-                    attacker_risk=0.0, identifier_risk=1.0, text_risk=0.0,
-                    evidence=[Evidence(
-                        check="processing_error", value=1.0,
-                        details={"error": deidentified.get("error", "unknown")},
-                        severity="critical",
-                    )],
+                    risk_score=1.0,
+                    passed=False,
+                    threshold=RISK_THRESHOLD,
+                    attacker_risk=0.0,
+                    identifier_risk=1.0,
+                    text_risk=0.0,
+                    evidence=[
+                        Evidence(
+                            check="processing_error",
+                            value=1.0,
+                            details={"error": deidentified.get("error", "unknown")},
+                            severity="critical",
+                        )
+                    ],
                 ),
-                utility=None, quality=None,
+                utility=None,
+                quality=None,
                 resource_type=deidentified.get("resourceType", "Unknown"),
                 resource_id=None,
                 scored_at=ScoreResult.now_iso(),
@@ -164,8 +197,11 @@ class ScoreCollector:
             return result
 
         result = score_resource(
-            original, deidentified, manifest_entries,
-            settings, self._config_profile,
+            original,
+            deidentified,
+            manifest_entries,
+            settings,
+            self._config_profile,
         )
 
         # Accumulate running totals
@@ -201,11 +237,14 @@ class ScoreCollector:
         batch_privacy: PrivacyDecision | None = None
         if self._patients:
             batch_privacy = _privacy_eval.evaluate_batch(
-                self._patients, self._patient_manifests,
+                self._patients,
+                self._patient_manifests,
             )
 
         avg_composite = self._composite_sum / total if total else 0.0
-        min_composite = self._min_composite if self._min_composite != float("inf") else 0.0
+        min_composite = (
+            self._min_composite if self._min_composite != float("inf") else 0.0
+        )
 
         # Per-module averages (only from PASS resources)
         avg_utility = self._utility_sum / max(self._pass_count, 1)

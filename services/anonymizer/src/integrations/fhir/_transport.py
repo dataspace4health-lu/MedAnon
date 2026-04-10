@@ -21,21 +21,33 @@ from utils.metrics import FHIR_CALL_COUNT, FHIR_LATENCY
 class FhirCircuitBreakerOpen(Exception):
     """Raised when the FHIR circuit breaker is OPEN and requests are rejected."""
 
+
 __all__ = [
     # Connection pool & logger
-    "_pool", "log",
+    "_pool",
+    "log",
     # Configuration constants
-    "_FHIR_MAX_PAGES", "_FHIR_PAGE_SIZE",
-    "_FHIR_BULK_POLL_INTERVAL", "_FHIR_BULK_POLL_TIMEOUT",
-    "_RESOURCE_TYPE_RE", "_RESOURCE_ID_RE", "_FHIR_ID_INVALID_RE",
+    "_FHIR_MAX_PAGES",
+    "_FHIR_PAGE_SIZE",
+    "_FHIR_BULK_POLL_INTERVAL",
+    "_FHIR_BULK_POLL_TIMEOUT",
+    "_RESOURCE_TYPE_RE",
+    "_RESOURCE_ID_RE",
+    "_FHIR_ID_INVALID_RE",
     # Validators
-    "_validate_resource_type", "_validate_resource_id", "_sanitise_resource_id",
+    "_validate_resource_type",
+    "_validate_resource_id",
+    "_sanitise_resource_id",
     # Header helpers
-    "_make_headers", "_make_post_headers",
+    "_make_headers",
+    "_make_post_headers",
     # HTTP helpers
-    "_do_request", "_do_raw_request",
+    "_do_request",
+    "_do_raw_request",
     # Pagination / I/O helpers
-    "_safe_next_url", "_get_json", "_write_json",
+    "_safe_next_url",
+    "_get_json",
+    "_write_json",
 ]
 
 # ---------------------------------------------------------------------------
@@ -84,24 +96,25 @@ _FHIR_RETRY_BACKOFF = float(os.environ.get("FHIR_RETRY_BACKOFF_SEC", 0.3))
 # ---------------------------------------------------------------------------
 
 _FHIR_MAX_PAGES = int(os.environ.get("FHIR_MAX_PAGES", "1000"))
-_FHIR_PAGE_SIZE = int(os.environ.get("FHIR_PAGE_SIZE", "500"))  # default 500; set to 0 to let server decide
+_FHIR_PAGE_SIZE = int(
+    os.environ.get("FHIR_PAGE_SIZE", "500")
+)  # default 500; set to 0 to let server decide
 _FHIR_BULK_POLL_INTERVAL = float(os.environ.get("FHIR_BULK_POLL_INTERVAL_SEC", "2"))
 _FHIR_BULK_POLL_TIMEOUT = float(os.environ.get("FHIR_BULK_POLL_TIMEOUT_SEC", "3600"))
-_RESOURCE_TYPE_RE = re.compile(r'^[A-Z][a-zA-Z]+$')
+_RESOURCE_TYPE_RE = re.compile(r"^[A-Z][a-zA-Z]+$")
 # FHIR R4 §2.1.0.1: id  ::=  [A-Za-z0-9\-\.]{1,64}
 # Underscores (_) are NOT part of the spec and HAPI 7.x rejects them.
-_RESOURCE_ID_RE = re.compile(r'^[A-Za-z0-9.\-]{1,64}$')
+_RESOURCE_ID_RE = re.compile(r"^[A-Za-z0-9.\-]{1,64}$")
 # Characters not allowed in a FHIR ID — used to sanitise gPAS pseudonyms
 # that may contain underscores (e.g. rid_1234567890 → rid-1234567890).
-_FHIR_ID_INVALID_RE = re.compile(r'[^A-Za-z0-9.\-]')
+_FHIR_ID_INVALID_RE = re.compile(r"[^A-Za-z0-9.\-]")
 
 
 def _validate_resource_type(resource_type: str) -> str:
     """Validate that resource_type is a valid FHIR resource type name."""
     if not _RESOURCE_TYPE_RE.match(resource_type):
         raise ValueError(
-            f"Invalid FHIR resource type: {resource_type!r}. "
-            f"Must match [A-Z][a-zA-Z]+"
+            f"Invalid FHIR resource type: {resource_type!r}. Must match [A-Z][a-zA-Z]+"
         )
     return resource_type
 
@@ -132,6 +145,7 @@ def _validate_resource_id(resource_id: str) -> str:
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_headers(token=None, target: bool = False):
     headers = {
         "Accept": "application/fhir+json",
@@ -157,7 +171,10 @@ def _make_post_headers(token=None, target: bool = False):
 # Unified retry loop (DRY: shared by _do_request and _do_raw_request)
 # ---------------------------------------------------------------------------
 
-def _retry_request(method, url, headers, timeout, body, operation, parse_json, target=False):
+
+def _retry_request(
+    method, url, headers, timeout, body, operation, parse_json, target=False
+):
     """Execute an HTTP request with retry, circuit breaker, and timeout separation.
 
     When *parse_json* is True, parses the response as JSON and raises on HTTP >= 400.
@@ -167,13 +184,18 @@ def _retry_request(method, url, headers, timeout, body, operation, parse_json, t
     cb = _fhir_target_cb if target else _fhir_cb
     if not cb.allow_request():
         FHIR_CALL_COUNT.labels(operation=operation, status="error").inc()
-        raise FhirCircuitBreakerOpen(f"FHIR server unavailable — circuit breaker OPEN ({operation})")
+        raise FhirCircuitBreakerOpen(
+            f"FHIR server unavailable — circuit breaker OPEN ({operation})"
+        )
 
     t0 = time.perf_counter()
     for attempt in range(_FHIR_RETRY_COUNT + 1):
         try:
             resp = _pool.request(
-                method, url, headers=headers, body=body,
+                method,
+                url,
+                headers=headers,
+                body=body,
                 timeout=urllib3.Timeout(connect=5, read=timeout),
             )
             if resp.status >= 400:
@@ -181,16 +203,29 @@ def _retry_request(method, url, headers, timeout, body, operation, parse_json, t
                 if should_retry and attempt < _FHIR_RETRY_COUNT:
                     log.warning(
                         "FHIR request %s HTTP %d — retrying (%d/%d)",
-                        url, resp.status, attempt + 1, _FHIR_RETRY_COUNT,
+                        url,
+                        resp.status,
+                        attempt + 1,
+                        _FHIR_RETRY_COUNT,
                     )
-                    time.sleep(_FHIR_RETRY_BACKOFF * (2 ** attempt) * (0.5 + random.random()))
+                    time.sleep(
+                        _FHIR_RETRY_BACKOFF * (2**attempt) * (0.5 + random.random())
+                    )
                     continue
-                FHIR_LATENCY.labels(operation=operation).observe(time.perf_counter() - t0)
+                FHIR_LATENCY.labels(operation=operation).observe(
+                    time.perf_counter() - t0
+                )
                 FHIR_CALL_COUNT.labels(operation=operation, status="error").inc()
                 if should_retry:
                     cb.record_failure()
-                body_snippet = resp.data[:400].decode("utf-8", errors="replace") if resp.data else ""
-                raise ValueError(f"FHIR server HTTP {resp.status} for {url}: {body_snippet}")
+                body_snippet = (
+                    resp.data[:400].decode("utf-8", errors="replace")
+                    if resp.data
+                    else ""
+                )
+                raise ValueError(
+                    f"FHIR server HTTP {resp.status} for {url}: {body_snippet}"
+                )
 
             FHIR_LATENCY.labels(operation=operation).observe(time.perf_counter() - t0)
             FHIR_CALL_COUNT.labels(operation=operation, status="ok").inc()
@@ -203,9 +238,11 @@ def _retry_request(method, url, headers, timeout, body, operation, parse_json, t
             if attempt < _FHIR_RETRY_COUNT:
                 log.warning(
                     "FHIR request %s connection error — retrying (%d/%d)",
-                    url, attempt + 1, _FHIR_RETRY_COUNT,
+                    url,
+                    attempt + 1,
+                    _FHIR_RETRY_COUNT,
                 )
-                time.sleep(_FHIR_RETRY_BACKOFF * (2 ** attempt) * (0.5 + random.random()))
+                time.sleep(_FHIR_RETRY_BACKOFF * (2**attempt) * (0.5 + random.random()))
                 continue
             FHIR_LATENCY.labels(operation=operation).observe(time.perf_counter() - t0)
             FHIR_CALL_COUNT.labels(operation=operation, status="error").inc()
@@ -213,17 +250,27 @@ def _retry_request(method, url, headers, timeout, body, operation, parse_json, t
             raise ValueError(f"FHIR server connection error for {url}: {exc}") from exc
 
 
-def _do_request(method, url, headers, timeout, body=None, operation="request", target=False):
+def _do_request(
+    method, url, headers, timeout, body=None, operation="request", target=False
+):
     """Execute an HTTP request and return parsed JSON. Raises ValueError on errors."""
-    return _retry_request(method, url, headers, timeout, body, operation, parse_json=True, target=target)
+    return _retry_request(
+        method, url, headers, timeout, body, operation, parse_json=True, target=target
+    )
 
 
-def _do_raw_request(method, url, headers, timeout, body=None, operation="request", target=False):
+def _do_raw_request(
+    method, url, headers, timeout, body=None, operation="request", target=False
+):
     """Execute HTTP request and return the raw urllib3 response object."""
-    return _retry_request(method, url, headers, timeout, body, operation, parse_json=False, target=target)
+    return _retry_request(
+        method, url, headers, timeout, body, operation, parse_json=False, target=target
+    )
 
 
-def _safe_next_url(next_url: str, current_url: str, pinned_origin: list | None = None) -> str:
+def _safe_next_url(
+    next_url: str, current_url: str, pinned_origin: list | None = None
+) -> str:
     """Return *next_url* with its origin normalised to the working origin.
 
     HAPI FHIR embeds its own configured hostname in ``link[rel=next]`` URLs,
@@ -263,10 +310,15 @@ def _safe_next_url(next_url: str, current_url: str, pinned_origin: list | None =
 
     # Origin differs: HAPI returned its external hostname.  Rewrite to the
     # authoritative origin so the request reaches the reachable endpoint.
-    rewritten = urlunparse((auth_origin[0], auth_origin[1], n.path, n.params, n.query, n.fragment))
+    rewritten = urlunparse(
+        (auth_origin[0], auth_origin[1], n.path, n.params, n.query, n.fragment)
+    )
     log.debug(
         "Pagination link origin rewritten: %s://%s → %s://%s",
-        n.scheme, n.netloc, auth_origin[0], auth_origin[1],
+        n.scheme,
+        n.netloc,
+        auth_origin[0],
+        auth_origin[1],
     )
     return rewritten
 
@@ -276,8 +328,18 @@ def _get_json(url, token=None, timeout=30, operation="get"):
     return _do_request("GET", url, headers, timeout, operation=operation)
 
 
-def _write_json(url, payload, method, token=None, timeout=30, operation="write", target: bool = False):
+def _write_json(
+    url,
+    payload,
+    method,
+    token=None,
+    timeout=30,
+    operation="write",
+    target: bool = False,
+):
     """POST or PUT JSON payload to a FHIR server URL; returns parsed response dict."""
     body = _json_dumps_bytes(payload)
     headers = _make_post_headers(token, target=target)
-    return _do_request(method, url, headers, timeout, body=body, operation=operation, target=target)
+    return _do_request(
+        method, url, headers, timeout, body=body, operation=operation, target=target
+    )

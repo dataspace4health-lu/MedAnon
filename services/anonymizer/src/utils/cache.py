@@ -25,6 +25,7 @@ _DEFAULT_MAX = 50_000
 # Protocol (structural typing — no ABC overhead)
 # ---------------------------------------------------------------------------
 
+
 @runtime_checkable
 class CacheBackend(Protocol):
     def get(self, key: tuple) -> str | None: ...
@@ -34,6 +35,7 @@ class CacheBackend(Protocol):
 # ---------------------------------------------------------------------------
 # Local LRU (default — wraps the existing dict+lock approach)
 # ---------------------------------------------------------------------------
+
 
 class LocalLruCache:
     """Thread-safe per-process LRU cache with insertion-order eviction."""
@@ -68,6 +70,7 @@ class LocalLruCache:
 # Redis L2 (opt-in for multi-replica deployments)
 # ---------------------------------------------------------------------------
 
+
 class RedisCache:
     """Redis-backed cache for cross-replica pseudonym sharing.
 
@@ -85,6 +88,7 @@ class RedisCache:
         key_prefix: str = "medanon:gpas:",
     ) -> None:
         import redis as _redis  # lazy import — redis package is optional
+
         self._client = _redis.StrictRedis.from_url(
             redis_url,
             decode_responses=True,
@@ -115,6 +119,7 @@ class RedisCache:
 # ---------------------------------------------------------------------------
 # Tiered L1/L2 cache (local in front of Redis)
 # ---------------------------------------------------------------------------
+
 
 class TieredCache:
     """L1 local LRU in front of L2 Redis — read: L1 → L2 → miss (promote on L2 hit), write: both."""

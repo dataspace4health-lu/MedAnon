@@ -29,7 +29,7 @@ REQUEST_LATENCY = Histogram(
 GPAS_CALL_COUNT = Counter(
     "medanon_gpas_calls_total",
     "Total gPAS HTTP calls",
-    ["operation", "status"],   # status: "ok" | "error"
+    ["operation", "status"],  # status: "ok" | "error"
 )
 
 GPAS_LATENCY = Histogram(
@@ -53,7 +53,7 @@ GPAS_CACHE_MISSES = Counter(
 FHIR_CALL_COUNT = Counter(
     "medanon_fhir_calls_total",
     "Total FHIR server HTTP calls",
-    ["operation", "status"],   # status: "ok" | "error"
+    ["operation", "status"],  # status: "ok" | "error"
 )
 
 FHIR_LATENCY = Histogram(
@@ -74,7 +74,7 @@ JOB_QUEUE_DEPTH = Gauge(
 WORKER_JOBS_TOTAL = Counter(
     "medanon_worker_jobs_total",
     "Total jobs processed by the worker, by type and outcome",
-    ["job_type", "status"],   # status: "done" | "error" | "cancelled"
+    ["job_type", "status"],  # status: "done" | "error" | "cancelled"
 )
 
 WORKER_JOB_DURATION = Histogram(

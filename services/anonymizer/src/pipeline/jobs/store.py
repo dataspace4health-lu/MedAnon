@@ -62,8 +62,12 @@ class SqliteJobStore:
             except Exception:
                 pass  # Column already exists — nothing to do.
             # Indexes for next_pending() and list_jobs() to avoid full table scans
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_status_created ON jobs(status, created_at)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_type_created ON jobs(type, created_at)")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_jobs_status_created ON jobs(status, created_at)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_jobs_type_created ON jobs(type, created_at)"
+            )
 
     def create(self, job_type: str, params: dict) -> Job:
         """Persist a new PENDING job and return it."""
@@ -80,7 +84,9 @@ class SqliteJobStore:
                     job.updated_at,
                     job.result_path,
                     job.error,
-                    json.dumps(job.checkpoint_data) if job.checkpoint_data is not None else None,
+                    json.dumps(job.checkpoint_data)
+                    if job.checkpoint_data is not None
+                    else None,
                 ),
             )
         _jobs_log.info("job_created id=%s type=%s", job.id, job.type)
@@ -89,9 +95,7 @@ class SqliteJobStore:
     def get(self, job_id: str) -> Job | None:
         """Fetch a job by ID; returns None if not found."""
         with self._connect() as conn:
-            row = conn.execute(
-                "SELECT * FROM jobs WHERE id=?", (job_id,)
-            ).fetchone()
+            row = conn.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
         return _row_to_job(row) if row else None
 
     def update(self, job: Job) -> None:
@@ -105,7 +109,9 @@ class SqliteJobStore:
                     job.updated_at,
                     job.result_path,
                     job.error,
-                    json.dumps(job.checkpoint_data) if job.checkpoint_data is not None else None,
+                    json.dumps(job.checkpoint_data)
+                    if job.checkpoint_data is not None
+                    else None,
                     job.id,
                 ),
             )

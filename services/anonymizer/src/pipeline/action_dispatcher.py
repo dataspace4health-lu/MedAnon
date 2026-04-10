@@ -46,11 +46,13 @@ GPAS_PSEUDO_ACTIONS = frozenset({"gpas_pseudonymize"})
 # Work item for deferred gPAS batch call
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class BatchWork:
     """A single element deferred to the gPAS batch pass."""
+
     rule: dict
-    element: dict   # FHIRPath node with ``path`` and ``value`` keys
+    element: dict  # FHIRPath node with ``path`` and ``value`` keys
     params: dict
     serialized_value: str = field(default="", repr=False)
 
@@ -58,6 +60,7 @@ class BatchWork:
 # ---------------------------------------------------------------------------
 # Pass 1: evaluate rules, dispatch non-gPAS actions, collect gPAS work
 # ---------------------------------------------------------------------------
+
 
 def dispatch_pass1(
     resource: dict,
@@ -99,7 +102,9 @@ def dispatch_pass1(
                             "fhirpath_eval_failed_skip expression=%s resource_type=%s error=%s — "
                             "redacting matched path as safety fallback",
                             candidate.replace("\n", " ").replace("\r", " "),
-                            resource.get("resourceType", "unknown") if isinstance(resource, dict) else "unknown",
+                            resource.get("resourceType", "unknown")
+                            if isinstance(resource, dict)
+                            else "unknown",
                             type(exc).__name__,
                         )
                         # Fail-safe: construct a synthetic element targeting the
@@ -108,7 +113,9 @@ def dispatch_pass1(
                         # silently passes the element through unprocessed.
                         fallback_el = {"path": candidate, "value": None}
                         try:
-                            perform_deidentification("redact", resource, fallback_el, {})
+                            perform_deidentification(
+                                "redact", resource, fallback_el, {}
+                            )
                         except Exception:
                             audit_log.error(
                                 "fhirpath_fallback_redact_failed expression=%s — PHI may be exposed",
@@ -125,7 +132,8 @@ def dispatch_pass1(
             if path_key in processed_paths:
                 audit_log.debug(
                     "rule_skipped_duplicate action=%s path=%s",
-                    action, el_path,
+                    action,
+                    el_path,
                 )
                 continue
             elements_to_process.append(el)
@@ -141,23 +149,31 @@ def dispatch_pass1(
                 action,
                 rule["match"],
                 el_path,
-                resource.get("resourceType", "unknown") if isinstance(resource, dict) else "unknown",
+                resource.get("resourceType", "unknown")
+                if isinstance(resource, dict)
+                else "unknown",
             )
 
             if action in GPAS_PSEUDO_ACTIONS:
                 val = el["value"]
                 serialized = str(val) if not isinstance(val, dict) else _json_dumps(val)
-                gpas_work.append(BatchWork(
-                    rule=rule, element=el, params=params,
-                    serialized_value=serialized,
-                ))
+                gpas_work.append(
+                    BatchWork(
+                        rule=rule,
+                        element=el,
+                        params=params,
+                        serialized_value=serialized,
+                    )
+                )
                 # Record manifest at deferral time (gPAS batch succeeds/fails together)
                 if _MANIFEST_ENABLED:
-                    manifest_entries.append({
-                        "rule": rule.get("name", rule["match"]),
-                        "action": action,
-                        "path": el_path,
-                    })
+                    manifest_entries.append(
+                        {
+                            "rule": rule.get("name", rule["match"]),
+                            "action": action,
+                            "path": el_path,
+                        }
+                    )
                 continue
 
             actual_action = action
@@ -174,7 +190,10 @@ def dispatch_pass1(
                 if processing_mode == "skip":
                     audit_log.warning(
                         "rule_failed_skip action=%s match=%s path=%s error_type=%s",
-                        action, rule.get("match"), el_path, type(exc).__name__,
+                        action,
+                        rule.get("match"),
+                        el_path,
+                        type(exc).__name__,
                         exc_info=False,
                     )
                     try:
@@ -188,20 +207,24 @@ def dispatch_pass1(
                         raise
                     # Record the fallback action in manifest, then continue
                     if _MANIFEST_ENABLED:
-                        manifest_entries.append({
-                            "rule": rule.get("name", rule["match"]),
-                            "action": actual_action,
-                            "path": el_path,
-                        })
+                        manifest_entries.append(
+                            {
+                                "rule": rule.get("name", rule["match"]),
+                                "action": actual_action,
+                                "path": el_path,
+                            }
+                        )
                     continue
                 raise
 
             # Record manifest after successful action execution
             if _MANIFEST_ENABLED:
-                manifest_entries.append({
-                    "rule": rule.get("name", rule["match"]),
-                    "action": actual_action,
-                    "path": el_path,
-                })
+                manifest_entries.append(
+                    {
+                        "rule": rule.get("name", rule["match"]),
+                        "action": actual_action,
+                        "path": el_path,
+                    }
+                )
 
     return gpas_work

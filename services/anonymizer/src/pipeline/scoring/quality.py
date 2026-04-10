@@ -7,6 +7,7 @@ Measures correctness of the transformation process via four sub-evaluators:
 3. Lightweight FHIR schema validation
 4. Reference integrity
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -29,7 +30,9 @@ class QualityEvaluator:
         gates: list[str] = []
 
         success = self._success_rate(error_count, total_count, evidence)
-        coverage = self._rule_coverage(deidentified, manifest_entries, settings, evidence)
+        coverage = self._rule_coverage(
+            deidentified, manifest_entries, settings, evidence
+        )
         validation = self._schema_validation(deidentified, evidence)
         integrity = self._reference_integrity(deidentified, evidence)
 
@@ -45,19 +48,28 @@ class QualityEvaluator:
             gates.append("error_rate_above_5pct")
 
         return ModuleScore(
-            name="quality", score=raw, evidence=evidence, gates_applied=gates,
+            name="quality",
+            score=raw,
+            evidence=evidence,
+            gates_applied=gates,
         )
 
     # ----- 3a: Success rate -------------------------------------------------
 
     def _success_rate(
-        self, error_count: int, total_count: int, evidence: list[Evidence],
+        self,
+        error_count: int,
+        total_count: int,
+        evidence: list[Evidence],
     ) -> float:
         if total_count <= 0:
-            evidence.append(Evidence(
-                check="success_rate", value=0.0,
-                details={"reason": "no resources processed — insufficient data"},
-            ))
+            evidence.append(
+                Evidence(
+                    check="success_rate",
+                    value=0.0,
+                    details={"reason": "no resources processed — insufficient data"},
+                )
+            )
             return 0.0
         rate = 1.0 - (error_count / total_count)
         severity = "info"
@@ -65,11 +77,14 @@ class QualityEvaluator:
             severity = "critical"
         elif error_count / total_count > 0.05:
             severity = "warning"
-        evidence.append(Evidence(
-            check="success_rate", value=rate,
-            details={"errors": error_count, "total": total_count},
-            severity=severity,
-        ))
+        evidence.append(
+            Evidence(
+                check="success_rate",
+                value=rate,
+                details={"errors": error_count, "total": total_count},
+                severity=severity,
+            )
+        )
         return max(0.0, rate)
 
     # ----- 3b: Rule coverage ------------------------------------------------
@@ -82,11 +97,14 @@ class QualityEvaluator:
         evidence: list[Evidence],
     ) -> float:
         if settings is None or not hasattr(settings, "rules"):
-            evidence.append(Evidence(
-                check="rule_coverage", value=0.5,
-                details={"reason": "no settings available — indeterminate"},
-                severity="warning",
-            ))
+            evidence.append(
+                Evidence(
+                    check="rule_coverage",
+                    value=0.5,
+                    details={"reason": "no settings available — indeterminate"},
+                    severity="warning",
+                )
+            )
             return 0.5
 
         rtype = deidentified.get("resourceType", "")
@@ -103,30 +121,38 @@ class QualityEvaluator:
                 applicable.add(name)
 
         if not applicable:
-            evidence.append(Evidence(
-                check="rule_coverage", value=1.0,
-                details={"reason": f"no rules applicable to {rtype}"},
-            ))
+            evidence.append(
+                Evidence(
+                    check="rule_coverage",
+                    value=1.0,
+                    details={"reason": f"no rules applicable to {rtype}"},
+                )
+            )
             return 1.0
 
         fired = {e.get("rule", "") for e in manifest_entries}
         covered = applicable & fired
         score = len(covered) / len(applicable)
 
-        evidence.append(Evidence(
-            check="rule_coverage", value=score,
-            details={
-                "applicable": len(applicable),
-                "fired": len(covered),
-                "missed": sorted(applicable - fired)[:10],
-            },
-        ))
+        evidence.append(
+            Evidence(
+                check="rule_coverage",
+                value=score,
+                details={
+                    "applicable": len(applicable),
+                    "fired": len(covered),
+                    "missed": sorted(applicable - fired)[:10],
+                },
+            )
+        )
         return score
 
     # ----- 3c: Schema validation (lightweight) ------------------------------
 
     def _schema_validation(
-        self, deidentified: dict, evidence: list[Evidence],
+        self,
+        deidentified: dict,
+        evidence: list[Evidence],
     ) -> float:
         checks: list[bool] = []
 
@@ -144,23 +170,31 @@ class QualityEvaluator:
 
         score = sum(checks) / len(checks) if checks else 1.0
 
-        evidence.append(Evidence(
-            check="schema_validation", value=score,
-            details={"passed": sum(checks), "total": len(checks)},
-        ))
+        evidence.append(
+            Evidence(
+                check="schema_validation",
+                value=score,
+                details={"passed": sum(checks), "total": len(checks)},
+            )
+        )
         return score
 
     # ----- 3d: Reference integrity ------------------------------------------
 
     def _reference_integrity(
-        self, deidentified: dict, evidence: list[Evidence],
+        self,
+        deidentified: dict,
+        evidence: list[Evidence],
     ) -> float:
         refs = self._collect_references(deidentified)
         if not refs:
-            evidence.append(Evidence(
-                check="reference_integrity", value=1.0,
-                details={"total_refs": 0},
-            ))
+            evidence.append(
+                Evidence(
+                    check="reference_integrity",
+                    value=1.0,
+                    details={"total_refs": 0},
+                )
+            )
             return 1.0
 
         valid = 0
@@ -169,10 +203,13 @@ class QualityEvaluator:
                 valid += 1
 
         score = valid / len(refs)
-        evidence.append(Evidence(
-            check="reference_integrity", value=score,
-            details={"valid": valid, "total": len(refs)},
-        ))
+        evidence.append(
+            Evidence(
+                check="reference_integrity",
+                value=score,
+                details={"valid": valid, "total": len(refs)},
+            )
+        )
         return score
 
     def evaluate_batch_refs(
@@ -201,10 +238,13 @@ class QualityEvaluator:
                 dangling += 1
 
         score = 1.0 - (dangling / len(all_refs))
-        evidence.append(Evidence(
-            check="batch_reference_integrity", value=max(0.0, score),
-            details={"dangling": dangling, "total": len(all_refs)},
-        ))
+        evidence.append(
+            Evidence(
+                check="batch_reference_integrity",
+                value=max(0.0, score),
+                details={"dangling": dangling, "total": len(all_refs)},
+            )
+        )
         return max(0.0, score)
 
     # ----- Helpers ----------------------------------------------------------

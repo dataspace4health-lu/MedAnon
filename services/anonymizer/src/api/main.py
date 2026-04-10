@@ -20,8 +20,10 @@ try:
     from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 except ImportError:
     CONTENT_TYPE_LATEST = "text/plain"
+
     def generate_latest():
         return b""
+
 
 import pipeline.config as config
 from utils.logging import REQUEST_ID, setup_logging
@@ -34,7 +36,19 @@ from api.deps import (
     get_settings,
     limiter,
 )
-from api.routers import analytics, audit, configs, dicom, fhir_bulk, fhir_server, hl7v2, jobs, process, scoring, synthetic
+from api.routers import (
+    analytics,
+    audit,
+    configs,
+    dicom,
+    fhir_bulk,
+    fhir_server,
+    hl7v2,
+    jobs,
+    process,
+    scoring,
+    synthetic,
+)
 from api.routers import fhir_subscriptions, smart
 
 # Refresh fhir_bulk's module-level URL cache so that re-imports (e.g. during
@@ -44,9 +58,11 @@ fhir_bulk._FHIR_SOURCE_URL = os.environ.get("FHIR_SOURCE_URL", "").strip()
 setup_logging(os.environ.get("LOG_LEVEL", "INFO"))
 logger = logging.getLogger("medanon")
 
-_ALLOWED_ORIGINS = [o.strip() for o in os.environ.get(
-    "MEDANON_CORS_ORIGINS", ""
-).split(",") if o.strip()]
+_ALLOWED_ORIGINS = [
+    o.strip()
+    for o in os.environ.get("MEDANON_CORS_ORIGINS", "").split(",")
+    if o.strip()
+]
 
 # ---------------------------------------------------------------------------
 # App setup
@@ -86,7 +102,9 @@ async def _supervised_worker_loop(worker_module) -> None:
             _worker_healthy = False
             logger.error(
                 "worker_loop crashed (attempt %d): %s — restarting in %.1fs",
-                consecutive_failures, exc, backoff,
+                consecutive_failures,
+                exc,
+                backoff,
             )
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, max_backoff)
@@ -98,7 +116,13 @@ async def _startup() -> None:
     redis_url = os.environ.get("MEDANON_REDIS_URL", "").strip()
     if redis_url:
         try:
-            from utils.cache import LocalLruCache, RedisCache, TieredCache, configure_cache
+            from utils.cache import (
+                LocalLruCache,
+                RedisCache,
+                TieredCache,
+                configure_cache,
+            )
+
             l1 = LocalLruCache()
             l2 = RedisCache(redis_url)
             configure_cache(TieredCache(l1, l2))
@@ -116,6 +140,7 @@ async def _startup() -> None:
         if redis_url:
             try:
                 from integrations.redis.job_store import RedisJobStore
+
                 job_store = RedisJobStore(redis_url)
                 logger.info("job_store=redis")
             except Exception as exc:
@@ -133,25 +158,39 @@ async def _startup() -> None:
             for attempt in range(1, retries + 1):
                 try:
                     from integrations.staging.store import StagingStore
-                    retention_days = int(os.environ.get("MEDANON_STAGING_RETENTION_DAYS", "30"))
-                    staging_store = StagingStore(staging_url, retention_days=retention_days)
+
+                    retention_days = int(
+                        os.environ.get("MEDANON_STAGING_RETENTION_DAYS", "30")
+                    )
+                    staging_store = StagingStore(
+                        staging_url, retention_days=retention_days
+                    )
                     staging_store.ensure_schema()
                     _worker.init_staging(staging_store)
                     app.state.staging_store = staging_store
-                    logger.info("staging_store=postgres retention_days=%d", retention_days)
+                    logger.info(
+                        "staging_store=postgres retention_days=%d", retention_days
+                    )
                     break
                 except Exception as exc:
                     if attempt < retries:
                         logger.warning(
                             "staging_store_setup_failed attempt=%d/%d: %s — retrying in %.0fs",
-                            attempt, retries, exc, backoff,
+                            attempt,
+                            retries,
+                            exc,
+                            backoff,
                         )
                         await asyncio.sleep(backoff)
                         backoff *= 2
                     else:
-                        logger.warning("staging_store_setup_failed falling_back=streaming: %s", exc)
+                        logger.warning(
+                            "staging_store_setup_failed falling_back=streaming: %s", exc
+                        )
 
-        worker_enabled = os.environ.get("MEDANON_WORKER_ENABLED", "false").strip().lower() in ("true", "1", "yes")
+        worker_enabled = os.environ.get(
+            "MEDANON_WORKER_ENABLED", "false"
+        ).strip().lower() in ("true", "1", "yes")
         if worker_enabled:
             asyncio.create_task(_supervised_worker_loop(_worker))
             logger.info("job_worker started max_concurrent=%d", max_concurrent)
@@ -163,6 +202,7 @@ async def _startup() -> None:
     # FHIR Subscription store
     try:
         from pipeline.subscriptions import init_subscription_store
+
         sub_db = os.environ.get("MEDANON_SUBSCRIPTION_DB", "/output/subscriptions.db")
         init_subscription_store(sub_db)
         logger.info("subscription_store started path=%s", sub_db)
@@ -172,7 +212,10 @@ async def _startup() -> None:
     # Config metadata store (user-defined config profiles)
     try:
         from pipeline.config.store import init_config_store
-        config_store_db = os.environ.get("MEDANON_CONFIG_STORE_DB", "/output/config_store.db")
+
+        config_store_db = os.environ.get(
+            "MEDANON_CONFIG_STORE_DB", "/output/config_store.db"
+        )
         init_config_store(config_store_db)
         logger.info("config_store started path=%s", config_store_db)
     except Exception as exc:
@@ -184,11 +227,17 @@ async def _startup() -> None:
     # en_core_web_lg (~700 MB). Set MEDANON_NLP_PREWARM=false to skip prewarm
     # and load lazily on first request — saves N_workers × 700 MB at startup
     # cost of ~5 s cold-start on the first NLP request per worker.
-    if os.environ.get("MEDANON_NLP_PREWARM", "false").lower() not in ("false", "0", "no"):
+    if os.environ.get("MEDANON_NLP_PREWARM", "false").lower() not in (
+        "false",
+        "0",
+        "no",
+    ):
+
         async def _prewarm_nlp() -> None:
             try:
                 loop = asyncio.get_event_loop()
                 from pipeline.deidentify import _get_nlp_adapter
+
                 await loop.run_in_executor(None, _get_nlp_adapter)
                 logger.info("nlp_prewarm complete")
             except Exception as exc:
@@ -263,7 +312,7 @@ async def enforce_body_size(request: Request, call_next):
         if cl_int > MAX_BODY_BYTES:
             raise HTTPException(
                 status_code=413,
-                detail=f"Request body exceeds the {MAX_BODY_BYTES // (1024*1024)} MB limit",
+                detail=f"Request body exceeds the {MAX_BODY_BYTES // (1024 * 1024)} MB limit",
             )
     elif request.method in ("POST", "PUT", "PATCH"):
         # No Content-Length header (chunked transfer) — wrap the receive
@@ -279,7 +328,7 @@ async def enforce_body_size(request: Request, call_next):
             if byte_counter[0] > MAX_BODY_BYTES:
                 raise HTTPException(
                     status_code=413,
-                    detail=f"Request body exceeds the {MAX_BODY_BYTES // (1024*1024)} MB limit",
+                    detail=f"Request body exceeds the {MAX_BODY_BYTES // (1024 * 1024)} MB limit",
                 )
             return message
 
@@ -302,14 +351,16 @@ async def request_id_middleware(request: Request, call_next):
 
 # Pattern to normalize UUID and numeric segments in URL paths for Prometheus labels,
 # preventing cardinality explosion from parameterized routes like /v1/jobs/{id}.
-_PATH_NORMALIZE_RE = re.compile(r'/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}', re.IGNORECASE)
-_PATH_NUMERIC_RE = re.compile(r'/\d+(?=/|$)')
+_PATH_NORMALIZE_RE = re.compile(
+    r"/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", re.IGNORECASE
+)
+_PATH_NUMERIC_RE = re.compile(r"/\d+(?=/|$)")
 
 
 def _normalize_metric_path(path: str) -> str:
     """Replace UUID and numeric segments with placeholders to bound label cardinality."""
-    path = _PATH_NORMALIZE_RE.sub('/{id}', path)
-    path = _PATH_NUMERIC_RE.sub('/{id}', path)
+    path = _PATH_NORMALIZE_RE.sub("/{id}", path)
+    path = _PATH_NUMERIC_RE.sub("/{id}", path)
     return path
 
 
@@ -319,9 +370,7 @@ async def metrics_middleware(request: Request, call_next):
     start = time.perf_counter()
     response = await call_next(request)
     normalized = _normalize_metric_path(request.url.path)
-    REQUEST_LATENCY.labels(endpoint=normalized).observe(
-        time.perf_counter() - start
-    )
+    REQUEST_LATENCY.labels(endpoint=normalized).observe(time.perf_counter() - start)
     REQUEST_COUNT.labels(
         endpoint=normalized,
         status_code=str(response.status_code),
@@ -332,6 +381,7 @@ async def metrics_middleware(request: Request, call_next):
 # ---------------------------------------------------------------------------
 # Health / status endpoints
 # ---------------------------------------------------------------------------
+
 
 @app.get("/")
 async def read_root(settings: config.Settings = Depends(get_settings)):
@@ -357,6 +407,7 @@ def readiness(request: Request):
     leaking internal network topology.
     """
     from api.services.health import HealthCheckService
+
     checks = HealthCheckService().check_readiness()
     ready = all(v == "ok" for v in checks.values())
 
@@ -364,6 +415,7 @@ def readiness(request: Request):
     # Resolve auth explicitly here: in open mode (no API key) everyone is admin;
     # with an API key only valid-key callers see the dependency details.
     from api.auth import get_auth_context as _get_auth_ctx
+
     try:
         _get_auth_ctx(request)
         caller_authenticated = True

@@ -353,7 +353,7 @@ export default function StatusPage() {
 
   // ── Derived values ────────────────────────────────────────────────────────
 
-  const checks = state.ready.data?.checks ?? {};
+  const checks = useMemo(() => state.ready.data?.checks ?? {}, [state.ready.data]);
 
   const services: ServiceDef[] = useMemo(() => {
     const CHECK_META: Record<string, { name: string; description: string; icon: React.ReactNode }> = {
@@ -421,7 +421,7 @@ export default function StatusPage() {
   const totalResources = state.resourceCounts.data?.reduce((s, r) => s + r.count, 0) ?? 0;
   const topResources   = state.resourceCounts.data?.slice(0, 14) ?? [];
 
-  const jobData = state.jobs.data ?? [];
+  const jobData = useMemo(() => state.jobs.data ?? [], [state.jobs.data]);
   const jobStats = useMemo(() => ({
     total:     jobData.length,
     pending:   jobData.filter((j) => j.status === 'pending').length,

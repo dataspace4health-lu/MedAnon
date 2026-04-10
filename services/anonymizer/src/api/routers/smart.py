@@ -56,9 +56,13 @@ async def smart_configuration(request: Request) -> JSONResponse:
     """
     base_url = str(request.base_url).rstrip("/")
     issuer = os.environ.get("SMART_ISSUER", base_url)
-    authorization_url = os.environ.get("SMART_AUTHORIZATION_URL", f"{base_url}/oauth2/authorize")
+    authorization_url = os.environ.get(
+        "SMART_AUTHORIZATION_URL", f"{base_url}/oauth2/authorize"
+    )
     token_url = os.environ.get("SMART_TOKEN_URL", f"{base_url}/oauth2/token")
-    introspection_url = os.environ.get("SMART_INTROSPECTION_URL", f"{base_url}/oauth2/introspect")
+    introspection_url = os.environ.get(
+        "SMART_INTROSPECTION_URL", f"{base_url}/oauth2/introspect"
+    )
     jwks_url = os.environ.get("SMART_JWKS_URL", f"{base_url}/.well-known/jwks.json")
 
     config = {
@@ -110,7 +114,9 @@ async def introspect_token(
 
     api_key = os.environ.get("MEDANON_API_KEY", "").strip()
     if api_key and hmac.compare_digest(token, api_key):
-        return JSONResponse(content={"active": True, "scope": "user/*.*", "token_type": "bearer"})
+        return JSONResponse(
+            content={"active": True, "scope": "user/*.*", "token_type": "bearer"}
+        )
 
     return JSONResponse(content={"active": False})
 
@@ -135,7 +141,11 @@ async def _proxy_introspect(upstream_url: str, token: str) -> JSONResponse:
         return JSONResponse(content=data, status_code=status)
     except urllib.error.HTTPError as exc:
         _log.warning("smart_introspect_upstream_error status=%d", exc.code)
-        raise HTTPException(status_code=502, detail=f"Upstream introspection server returned {exc.code}")
+        raise HTTPException(
+            status_code=502, detail=f"Upstream introspection server returned {exc.code}"
+        )
     except Exception as exc:
         _log.warning("smart_introspect_upstream_failure: %s", type(exc).__name__)
-        raise HTTPException(status_code=502, detail="Failed to reach upstream introspection server")
+        raise HTTPException(
+            status_code=502, detail="Failed to reach upstream introspection server"
+        )

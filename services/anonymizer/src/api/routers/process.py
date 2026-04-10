@@ -36,6 +36,7 @@ _service = ProcessingService()
 # Endpoints
 # ---------------------------------------------------------------------------
 
+
 @router.post("/process")
 @limiter.limit(_RATE_PROCESS)
 async def process(
@@ -74,7 +75,10 @@ async def process_ndjson(
     """
     body = await request.body()
     if len(body) > MAX_BODY_BYTES:
-        raise HTTPException(status_code=413, detail=f"Request body exceeds the {MAX_BODY_BYTES // (1024*1024)} MB limit")
+        raise HTTPException(
+            status_code=413,
+            detail=f"Request body exceeds the {MAX_BODY_BYTES // (1024 * 1024)} MB limit",
+        )
 
     lines = body.decode("utf-8").splitlines()
     runtime_settings = _runtime_settings(settings)
@@ -95,12 +99,12 @@ async def process_ndjson(
     return StreamingResponse(_generate(), media_type="application/x-ndjson")
 
 
-@router.post('/process/raw')
+@router.post("/process/raw")
 @limiter.limit(_RATE_RAW)
 async def process_raw(
     request: Request,
-    output_format: str = 'json',
-    input_format: str = 'auto',
+    output_format: str = "json",
+    input_format: str = "auto",
     settings: config.Settings = Depends(get_settings_dep),
 ):
     """Black-box endpoint supporting JSON, XML, and NDJSON input/output.
@@ -114,13 +118,16 @@ async def process_raw(
     """
     body = await request.body()
     if len(body) > MAX_BODY_BYTES:
-        raise HTTPException(status_code=413, detail=f"Request body exceeds the {MAX_BODY_BYTES // (1024*1024)} MB limit")
+        raise HTTPException(
+            status_code=413,
+            detail=f"Request body exceeds the {MAX_BODY_BYTES // (1024 * 1024)} MB limit",
+        )
 
     try:
         payload = parse_payload_bytes(
             body,
             in_format=input_format,
-            content_type=request.headers.get('content-type'),
+            content_type=request.headers.get("content-type"),
         )
     except ValueError as exc:
         logger.warning("parse error in /process/raw: %s", exc)
@@ -144,8 +151,12 @@ async def process_raw(
         raise HTTPException(status_code=422, detail="Invalid input") from exc
     except Exception as exc:
         # Do not use logger.exception — traceback may contain PHI
-        logger.error('Unexpected error in /process/raw: %s', type(exc).__name__, exc_info=False)
-        raise HTTPException(status_code=500, detail='Unexpected processing error') from exc
+        logger.error(
+            "Unexpected error in /process/raw: %s", type(exc).__name__, exc_info=False
+        )
+        raise HTTPException(
+            status_code=500, detail="Unexpected processing error"
+        ) from exc
 
 
 @router.post("/process/batch")
@@ -175,7 +186,9 @@ async def process_batch(
     try:
         payload = parse_payload_bytes(body, content_type=content_type)
     except Exception as exc:
-        raise HTTPException(status_code=422, detail=f"Could not parse input: {exc}") from exc
+        raise HTTPException(
+            status_code=422, detail=f"Could not parse input: {exc}"
+        ) from exc
 
     runtime_settings = _runtime_settings(settings)
 
@@ -196,7 +209,9 @@ async def process_batch(
                 count += 1
         else:
             resources = _unwrap_to_resources(payload)
-            async for line in _service.process_resource_stream(resources, runtime_settings):
+            async for line in _service.process_resource_stream(
+                resources, runtime_settings
+            ):
                 if await request.is_disconnected():
                     logger.info("process_batch: client disconnected")
                     disconnected = True
@@ -207,4 +222,3 @@ async def process_batch(
             yield stream_trailer(count) + "\n"
 
     return StreamingResponse(_generate(), media_type="application/x-ndjson")
-

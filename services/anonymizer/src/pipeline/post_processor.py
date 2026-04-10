@@ -18,6 +18,7 @@ _MAX_NESTING_DEPTH = 50
 
 try:
     import ahocorasick as _aho
+
     _HAS_AHO = True
 except ImportError:
     _HAS_AHO = False
@@ -74,6 +75,7 @@ def _aho_replace(text: str, automaton, id_map: dict) -> str:
 # Reference rewriting (after bundle processing)
 # ---------------------------------------------------------------------------
 
+
 def _rewrite_references(obj, ref_map: dict, _depth: int = 0) -> None:
     """Deep-walk *obj* and rewrite FHIR ``reference`` / ``url`` strings via *ref_map*."""
     if _depth > _MAX_NESTING_DEPTH:
@@ -82,7 +84,11 @@ def _rewrite_references(obj, ref_map: dict, _depth: int = 0) -> None:
         )
     if isinstance(obj, dict):
         for key, value in obj.items():
-            if isinstance(value, str) and value in ref_map and key in ("reference", "url"):
+            if (
+                isinstance(value, str)
+                and value in ref_map
+                and key in ("reference", "url")
+            ):
                 audit_log.debug("reference_rewritten field=%s", key)
                 obj[key] = ref_map[value]
             else:
@@ -95,6 +101,7 @@ def _rewrite_references(obj, ref_map: dict, _depth: int = 0) -> None:
 # ---------------------------------------------------------------------------
 # Text-ID rewriting (replace bare original IDs in free-text fields)
 # ---------------------------------------------------------------------------
+
 
 def _replace_text_ids(text: str, id_map: dict, automaton=None, compiled=None) -> str:
     """Replace all bare original IDs in *text* using Aho-Corasick or regex."""
@@ -124,7 +131,10 @@ def _build_text_id_matcher(id_map: dict) -> tuple:
 
 _STRUCTURAL_FIELDS = frozenset(("id", "reference", "url", "resourceType"))
 
-def _rewrite_text_ids(obj, id_map: dict, compiled=None, automaton=None, _depth: int = 0) -> None:
+
+def _rewrite_text_ids(
+    obj, id_map: dict, compiled=None, automaton=None, _depth: int = 0
+) -> None:
     """Walk all string values and replace any bare original ID with its pseudonym.
 
     Skips structural fields (``id``, ``reference``, ``url``, ``resourceType``)
@@ -156,7 +166,13 @@ def _rewrite_text_ids(obj, id_map: dict, compiled=None, automaton=None, _depth: 
                     audit_log.debug("text_id_rewritten field=%s", key)
                     obj[key] = new_val
             else:
-                _rewrite_text_ids(value, id_map, automaton=automaton, compiled=compiled, _depth=_depth + 1)
+                _rewrite_text_ids(
+                    value,
+                    id_map,
+                    automaton=automaton,
+                    compiled=compiled,
+                    _depth=_depth + 1,
+                )
     elif isinstance(obj, list):
         for i, item in enumerate(obj):
             if isinstance(item, str):
@@ -164,12 +180,19 @@ def _rewrite_text_ids(obj, id_map: dict, compiled=None, automaton=None, _depth: 
                 if new_val != item:
                     obj[i] = new_val
             else:
-                _rewrite_text_ids(item, id_map, automaton=automaton, compiled=compiled, _depth=_depth + 1)
+                _rewrite_text_ids(
+                    item,
+                    id_map,
+                    automaton=automaton,
+                    compiled=compiled,
+                    _depth=_depth + 1,
+                )
 
 
 # ---------------------------------------------------------------------------
 # gPAS-based reference pseudonymization (cross-resource / NDJSON / bulk)
 # ---------------------------------------------------------------------------
+
 
 def _collect_reference_ids(obj, ids: set, _depth: int = 0) -> None:
     """Collect all reference IDs from *obj* for batch pseudonymization."""
@@ -179,7 +202,7 @@ def _collect_reference_ids(obj, ids: set, _depth: int = 0) -> None:
         ref = obj.get("reference")
         if isinstance(ref, str) and ref and "?" not in ref and not ref.startswith("#"):
             if ref.startswith("urn:uuid:"):
-                resource_id = ref[len("urn:uuid:"):]
+                resource_id = ref[len("urn:uuid:") :]
                 if resource_id:
                     ids.add(resource_id)
             elif "/" in ref and not ref.startswith("http"):
@@ -201,7 +224,7 @@ def _pseudonymize_reference_string(ref: str, ref_mapping: dict) -> str:
         return ref
 
     if ref.startswith("urn:uuid:"):
-        resource_id = ref[len("urn:uuid:"):]
+        resource_id = ref[len("urn:uuid:") :]
         if resource_id and resource_id in ref_mapping:
             return f"urn:uuid:{ref_mapping[resource_id]}"
         return ref
@@ -312,7 +335,12 @@ def _post_process_resource(
                         obj[key] = new_val
             else:
                 _post_process_resource(
-                    value, ref_mapping, id_map, automaton, compiled, _depth + 1,
+                    value,
+                    ref_mapping,
+                    id_map,
+                    automaton,
+                    compiled,
+                    _depth + 1,
                 )
 
     elif isinstance(obj, list):
@@ -324,5 +352,10 @@ def _post_process_resource(
                         obj[i] = new_val
             else:
                 _post_process_resource(
-                    item, ref_mapping, id_map, automaton, compiled, _depth + 1,
+                    item,
+                    ref_mapping,
+                    id_map,
+                    automaton,
+                    compiled,
+                    _depth + 1,
                 )

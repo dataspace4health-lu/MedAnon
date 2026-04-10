@@ -1,7 +1,7 @@
 """HL7 v2 de-identification endpoints.
 
-    POST /process/hl7v2        — de-identify a single HL7 v2 message
-    POST /process/hl7v2/batch  — de-identify a batch of HL7 v2 messages
+POST /process/hl7v2        — de-identify a single HL7 v2 message
+POST /process/hl7v2/batch  — de-identify a batch of HL7 v2 messages
 """
 
 import logging
@@ -42,7 +42,9 @@ async def process_hl7v2(request: Request):
     try:
         message_text = body.decode("utf-8")
     except UnicodeDecodeError as exc:
-        raise HTTPException(status_code=422, detail="Request body must be UTF-8 encoded") from exc
+        raise HTTPException(
+            status_code=422, detail="Request body must be UTF-8 encoded"
+        ) from exc
 
     try:
         result = await _service.process_single(message_text)
@@ -78,7 +80,9 @@ async def process_hl7v2_batch(request: Request):
     try:
         batch_text = body.decode("utf-8")
     except UnicodeDecodeError as exc:
-        raise HTTPException(status_code=422, detail="Request body must be UTF-8 encoded") from exc
+        raise HTTPException(
+            status_code=422, detail="Request body must be UTF-8 encoded"
+        ) from exc
 
     try:
         result = await _service.process_batch(batch_text)
@@ -86,8 +90,12 @@ async def process_hl7v2_batch(request: Request):
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
         logger.error(
-            "process_hl7v2_batch: unexpected error: %s", type(exc).__name__, exc_info=False
+            "process_hl7v2_batch: unexpected error: %s",
+            type(exc).__name__,
+            exc_info=False,
         )
-        raise HTTPException(status_code=500, detail="HL7 v2 batch processing error") from exc
+        raise HTTPException(
+            status_code=500, detail="HL7 v2 batch processing error"
+        ) from exc
 
     return Response(content=result, media_type="text/plain; charset=utf-8")

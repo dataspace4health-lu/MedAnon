@@ -15,7 +15,9 @@ from utils.circuit_breaker import CircuitBreaker
 _analytics_cb = CircuitBreaker(
     name="analytics",
     failure_threshold=int(os.environ.get("ANALYTICS_CB_FAILURE_THRESHOLD", "5")),
-    recovery_timeout_sec=float(os.environ.get("ANALYTICS_CB_RECOVERY_TIMEOUT_SEC", "30")),
+    recovery_timeout_sec=float(
+        os.environ.get("ANALYTICS_CB_RECOVERY_TIMEOUT_SEC", "30")
+    ),
     window_sec=float(os.environ.get("ANALYTICS_CB_WINDOW_SEC", "60")),
 )
 

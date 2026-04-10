@@ -37,10 +37,17 @@ _MAX_DIMENSION_SAMPLES = 5000  # cap sum-list length per sub-dimension
 
 class _TypeStats:
     """Per-resource-type accumulator."""
+
     __slots__ = (
-        "total", "pass_count", "fail_count",
-        "composite_sum", "utility_sum", "quality_sum",
-        "privacy_fail_reasons", "uncovered_hipaa", "text_detections",
+        "total",
+        "pass_count",
+        "fail_count",
+        "composite_sum",
+        "utility_sum",
+        "quality_sum",
+        "privacy_fail_reasons",
+        "uncovered_hipaa",
+        "text_detections",
     )
 
     def __init__(self) -> None:
@@ -168,12 +175,16 @@ class ScoreAuditCollector:
                     pattern_name = det.get("type", "unknown")
                     self._text_pattern_counts[pattern_name] += 1
                     if len(self._text_detection_examples) < _MAX_EXAMPLES:
-                        self._text_detection_examples.append({
-                            "resource_type": rtype,
-                            **det,
-                        })
+                        self._text_detection_examples.append(
+                            {
+                                "resource_type": rtype,
+                                **det,
+                            }
+                        )
                 ts.text_detections.extend(
-                    ev.details.get("detections", [])[:_MAX_EXAMPLES - len(ts.text_detections)]
+                    ev.details.get("detections", [])[
+                        : _MAX_EXAMPLES - len(ts.text_detections)
+                    ]
                 )
                 ts.privacy_fail_reasons["text_risk"] += 1
 
@@ -233,6 +244,7 @@ class ScoreAuditCollector:
 # ---------------------------------------------------------------------------
 # Report renderer
 # ---------------------------------------------------------------------------
+
 
 def _avg(samples: list[float]) -> float | None:
     return round(sum(samples) / len(samples), 4) if samples else None
@@ -309,12 +321,16 @@ def _render_report(
     W(f"| **Quality**   | {_pct(avg_quality)} | {qual_icon} |")
     W("")
     W(f"**Resources scored:** {total}  ")
-    W(f"**PASS:** {pass_count} ✓  **FAIL:** {fail_count} ✗  **Errors:** {error_count}  ")
+    W(
+        f"**PASS:** {pass_count} ✓  **FAIL:** {fail_count} ✗  **Errors:** {error_count}  "
+    )
     W("")
     if fail_count > 0:
         pct_fail = fail_count / max(total, 1) * 100
-        W(f"> ⚠ **{pct_fail:.0f}% of resources failed the privacy gate.** "
-          f"See [Privacy Analysis](#privacy-analysis) below.")
+        W(
+            f"> ⚠ **{pct_fail:.0f}% of resources failed the privacy gate.** "
+            f"See [Privacy Analysis](#privacy-analysis) below."
+        )
         W("")
 
     # -----------------------------------------------------------------------
@@ -344,8 +360,10 @@ def _render_report(
     W("")
     W("## Privacy Analysis (Hard Gate — PASS/FAIL)")
     W("")
-    W(f"*Risk threshold: {RISK_THRESHOLD}  "
-      f"Resources above this threshold score composite = 0.*")
+    W(
+        f"*Risk threshold: {RISK_THRESHOLD}  "
+        f"Resources above this threshold score composite = 0.*"
+    )
     W("")
 
     # k-anonymity (batch)
@@ -364,7 +382,9 @@ def _render_report(
         W(f"| Identifier coverage risk | {identifier:.4f} | {RISK_THRESHOLD} |")
         W(f"| Text risk              | {text_r:.4f} | {RISK_THRESHOLD} |")
         W(f"| **Overall risk**       | **{r_score:.4f}** | **{RISK_THRESHOLD}** |")
-        W(f"| **Result**             | {'**PASS** ✓' if r_passed else '**FAIL** ✗'} | — |")
+        W(
+            f"| **Result**             | {'**PASS** ✓' if r_passed else '**FAIL** ✗'} | — |"
+        )
         W("")
 
         # k-anonymity detail from evidence
@@ -377,16 +397,22 @@ def _render_report(
                 min_k = details.get("min_k", "?")
                 singletons = details.get("singleton_groups", 0)
                 risk_level = details.get("risk_level", "?")
-                W(f"- **min_k:** {min_k} — smallest group of patients with identical quasi-identifiers")
+                W(
+                    f"- **min_k:** {min_k} — smallest group of patients with identical quasi-identifiers"
+                )
                 W(f"- **Risk level:** {risk_level}")
-                W(f"- **Singleton groups:** {singletons} "
-                  f"(patients uniquely identifiable from quasi-identifiers)")
+                W(
+                    f"- **Singleton groups:** {singletons} "
+                    f"(patients uniquely identifiable from quasi-identifiers)"
+                )
                 W(f"- **Prosecutor risk:** {details.get('prosecutor_risk', 0):.4f}")
                 W(f"- **Journalist risk:** {details.get('journalist_risk', 0):.4f}")
                 W(f"- **Marketer risk:** {details.get('marketer_risk', 0):.4f}")
                 W("")
                 if min_k is not None and isinstance(min_k, int) and min_k < 5:
-                    W("> ⚠ **k < 5:** Patients in small groups are vulnerable to linkage attacks.")
+                    W(
+                        "> ⚠ **k < 5:** Patients in small groups are vulnerable to linkage attacks."
+                    )
                     W("> Quasi-identifiers are: `gender`, `birth_year`, `zip_prefix`.")
                     W("")
                     W("**To raise k-anonymity:**")
@@ -412,8 +438,10 @@ def _render_report(
     W("### HIPAA Identifier Coverage")
     W("")
     if uncovered_hipaa:
-        W(f"**{sum(uncovered_hipaa.values())} instances** where sensitive fields were "
-          f"present in a resource but not covered by any transformation rule:")
+        W(
+            f"**{sum(uncovered_hipaa.values())} instances** where sensitive fields were "
+            f"present in a resource but not covered by any transformation rule:"
+        )
         W("")
         W("| FHIR Path | Resources Affected |")
         W("|-----------|-------------------|")
@@ -428,23 +456,27 @@ def _render_report(
             parts = path.split(".")
             rtype = parts[0] if len(parts) > 1 else "*"
             field = parts[1] if len(parts) > 1 else parts[0]
-            W(f"- name: \"{action} {rtype.lower()} {field}\"")
-            W(f"  match: \"{path}\"  # {action_note}")
-            W(f"  action: \"{action}\"")
+            W(f'- name: "{action} {rtype.lower()} {field}"')
+            W(f'  match: "{path}"  # {action_note}')
+            W(f'  action: "{action}"')
             W("")
         W("```")
     else:
-        W("✓ All sensitive HIPAA fields present in resources were covered by "
-          "at least one transformation rule.")
+        W(
+            "✓ All sensitive HIPAA fields present in resources were covered by "
+            "at least one transformation rule."
+        )
     W("")
 
     # Text risk detections
     W("### Text Risk Detections")
     W("")
     if text_pattern_counts:
-        W(f"**{sum(text_pattern_counts.values())} PII pattern matches** found in "
-          f"narrative or text fields across {len(set(e.get('resource_type') for e in text_detection_examples))} "
-          f"resource type(s):")
+        W(
+            f"**{sum(text_pattern_counts.values())} PII pattern matches** found in "
+            f"narrative or text fields across {len(set(e.get('resource_type') for e in text_detection_examples))} "
+            f"resource type(s):"
+        )
         W("")
         W("| Pattern | Occurrences | Example |")
         W("|---------|-------------|---------|")
@@ -460,11 +492,11 @@ def _render_report(
         W("**To fix — scrub narrative text:**")
         W("```yaml")
         W("- name: scrub narrative text")
-        W("  match: \"*.text.div\"")
+        W('  match: "*.text.div"')
         W("  action: scrub_text")
         W("")
         W("- name: scrub note text")
-        W("  match: \"*.note.text\"")
+        W('  match: "*.note.text"')
         W("  action: scrub_text")
         W("```")
     else:
@@ -478,8 +510,10 @@ def _render_report(
     W("")
     W("## Utility Analysis")
     W("")
-    W(f"**Average utility score: {_pct(avg_utility)}**  "
-      f"*(higher = more analytical value is preserved)*")
+    W(
+        f"**Average utility score: {_pct(avg_utility)}**  "
+        f"*(higher = more analytical value is preserved)*"
+    )
     W("")
 
     fr = _avg(dim_samples.get("field_retention", []))
@@ -502,8 +536,10 @@ def _render_report(
         total_actions = sum(action_totals.values())
         W("### Action Distribution (information loss drivers)")
         W("")
-        W("Actions with higher loss weights (>0.4) reduce utility most. "
-          "Consider substituting destructive actions with lower-loss equivalents where safe.")
+        W(
+            "Actions with higher loss weights (>0.4) reduce utility most. "
+            "Consider substituting destructive actions with lower-loss equivalents where safe."
+        )
         W("")
         W("| Action | Count | Info Loss Weight | Contribution to Loss |")
         W("|--------|-------|-----------------|----------------------|")
@@ -521,11 +557,21 @@ def _render_report(
             W("")
             W("| Instead of | Use | Loss | Use when |")
             W("|------------|-----|------|----------|")
-            W("| `redact` on patient IDs | `cryptohash` | 0.1 | Longitudinal linkage needed |")
-            W("| `redact` on birth date | `generalize` | 0.5 | Age-band analysis sufficient |")
-            W("| `redact` on birth date | `perturb` | 0.3 | Date shift preserves relative timing |")
-            W("| `redact` on zip/city | `generalize` | 0.5 | Regional analysis needed |")
-            W("| `redact` on practitioner name | `substitute` | 0.4 | Structure must be preserved |")
+            W(
+                "| `redact` on patient IDs | `cryptohash` | 0.1 | Longitudinal linkage needed |"
+            )
+            W(
+                "| `redact` on birth date | `generalize` | 0.5 | Age-band analysis sufficient |"
+            )
+            W(
+                "| `redact` on birth date | `perturb` | 0.3 | Date shift preserves relative timing |"
+            )
+            W(
+                "| `redact` on zip/city | `generalize` | 0.5 | Regional analysis needed |"
+            )
+            W(
+                "| `redact` on practitioner name | `substitute` | 0.4 | Structure must be preserved |"
+            )
             W("")
 
     # -----------------------------------------------------------------------
@@ -535,8 +581,10 @@ def _render_report(
     W("")
     W("## Quality Analysis")
     W("")
-    W(f"**Average quality score: {_pct(avg_quality)}**  "
-      f"*(measures pipeline correctness, rule coverage, schema validity)*")
+    W(
+        f"**Average quality score: {_pct(avg_quality)}**  "
+        f"*(measures pipeline correctness, rule coverage, schema validity)*"
+    )
     W("")
 
     sr = _avg(dim_samples.get("success_rate", []))
@@ -548,7 +596,9 @@ def _render_report(
     W("")
     W("| Sub-dimension | Score | Weight | Interpretation |")
     W("|---------------|-------|--------|----------------|")
-    W(f"| Success rate       | {_pct(sr)} | 40% | {_interpret_sr(sr, error_count, total)} |")
+    W(
+        f"| Success rate       | {_pct(sr)} | 40% | {_interpret_sr(sr, error_count, total)} |"
+    )
     W(f"| Rule coverage      | {_pct(rc)} | 30% | {_interpret_rc(rc, missed_rules)} |")
     W(f"| Schema validation  | {_pct(sv)} | 15% | {_interpret_sv(sv)} |")
     W(f"| Reference integrity| {_pct(ri)} | 15% | {_interpret_ri(ri)} |")
@@ -558,9 +608,11 @@ def _render_report(
     if missed_rules:
         W("### Missed Rules (fired 0 times on at least one applicable resource)")
         W("")
-        W("These rules were defined in the config but never fired for at least "
-          "one resource type they should apply to.  This could mean the target "
-          "field was absent, or the FHIRPath expression needs adjustment.")
+        W(
+            "These rules were defined in the config but never fired for at least "
+            "one resource type they should apply to.  This could mean the target "
+            "field was absent, or the FHIRPath expression needs adjustment."
+        )
         W("")
         W("| Rule name | Resources where missed |")
         W("|-----------|----------------------|")
@@ -579,10 +631,12 @@ def _render_report(
         W("")
 
     if ri is not None and ri < 0.98:
-        W("> ⚠ **Reference integrity below 98%.**  "
-          "Some FHIR references may be dangling after de-identification.  "
-          "Enable `rewrite_references: true` in your config profile to "
-          "automatically rewrite references when IDs change.")
+        W(
+            "> ⚠ **Reference integrity below 98%.**  "
+            "Some FHIR references may be dangling after de-identification.  "
+            "Enable `rewrite_references: true` in your config profile to "
+            "automatically rewrite references when IDs change."
+        )
         W("")
 
     # -----------------------------------------------------------------------
@@ -605,8 +659,10 @@ def _render_report(
             else:
                 primary = "processing error"
             pass_icon = "✓" if ts.fail_count == 0 else "⚠" if ts.pass_count > 0 else "✗"
-            W(f"| `{rtype}` | {ts.total} | {ts.pass_count} {pass_icon} | {ts.fail_count} | "
-              f"{avg_comp:.1f}% | {primary} |")
+            W(
+                f"| `{rtype}` | {ts.total} | {ts.pass_count} {pass_icon} | {ts.fail_count} | "
+                f"{avg_comp:.1f}% | {primary} |"
+            )
         W("")
     W("")
 
@@ -659,7 +715,9 @@ def _render_report(
     W("| `perturb`          | 0.3           | Numeric values (add noise) |")
     W("| `cryptohash`       | 0.1 (low)     | IDs that need longitudinal linkage |")
     W("| `gpas_pseudonymize`| 0.1 (low)     | IDs with external pseudonym registry |")
-    W("| `encrypt`          | 0.0 (none)    | Reversible encryption — data still usable |")
+    W(
+        "| `encrypt`          | 0.0 (none)    | Reversible encryption — data still usable |"
+    )
     W("")
     W("*Lower info loss = more utility preserved.*")
     W("")
@@ -672,6 +730,7 @@ def _render_report(
 # ---------------------------------------------------------------------------
 # Interpretation helpers
 # ---------------------------------------------------------------------------
+
 
 def _interpret_fr(v: float | None) -> str:
     if v is None:
@@ -781,6 +840,7 @@ def _suggest_action(path: str) -> tuple[str, str]:
 # Recommendations builder
 # ---------------------------------------------------------------------------
 
+
 def _build_recommendations(
     summary: dict,
     by_type: dict[str, _TypeStats],
@@ -806,13 +866,15 @@ def _build_recommendations(
             f'  match: "{p}"\n  action: "{_suggest_action(p)[0]}"'
             for p, _ in uncovered_hipaa.most_common(6)
         )
-        recs.append((
-            "CRITICAL",
-            f"Cover {len(uncovered_hipaa)} uncovered HIPAA-sensitive path(s)",
-            f"The following paths contain PHI but are not transformed by any rule.\n"
-            f"Resources with these paths will always FAIL the privacy gate (composite = 0).\n\n"
-            f"**Add to your config:**\n```yaml\n{paths_yaml}\n```",
-        ))
+        recs.append(
+            (
+                "CRITICAL",
+                f"Cover {len(uncovered_hipaa)} uncovered HIPAA-sensitive path(s)",
+                f"The following paths contain PHI but are not transformed by any rule.\n"
+                f"Resources with these paths will always FAIL the privacy gate (composite = 0).\n\n"
+                f"**Add to your config:**\n```yaml\n{paths_yaml}\n```",
+            )
+        )
 
     # ---- CRITICAL: k-anonymity singletons -----------------------------------
     if batch_privacy:
@@ -821,103 +883,117 @@ def _build_recommendations(
                 min_k = ev.get("details", {}).get("min_k", 99)
                 singletons = ev.get("details", {}).get("singleton_groups", 0)
                 if isinstance(min_k, int) and min_k < 3 and singletons > 0:
-                    recs.append((
-                        "CRITICAL",
-                        f"k-anonymity too low (min_k={min_k}, {singletons} singleton group(s))",
-                        "Some patients are uniquely re-identifiable from quasi-identifiers "
-                        "(gender + birth_year + zip_prefix).\n\n"
-                        "**Fix:** Generalize `Patient.birthDate` to year-only and/or apply "
-                        "`config_hipaa_safe_harbor` profile which enforces 3-digit zip prefix.",
-                    ))
+                    recs.append(
+                        (
+                            "CRITICAL",
+                            f"k-anonymity too low (min_k={min_k}, {singletons} singleton group(s))",
+                            "Some patients are uniquely re-identifiable from quasi-identifiers "
+                            "(gender + birth_year + zip_prefix).\n\n"
+                            "**Fix:** Generalize `Patient.birthDate` to year-only and/or apply "
+                            "`config_hipaa_safe_harbor` profile which enforces 3-digit zip prefix.",
+                        )
+                    )
 
     # ---- CRITICAL: text PII detections -------------------------------------
     if text_pattern_counts:
         patterns = ", ".join(f"`{p}`" for p in list(text_pattern_counts)[:5])
-        recs.append((
-            "CRITICAL",
-            f"PII patterns detected in text fields ({patterns})",
-            f"{sum(text_pattern_counts.values())} pattern matches across "
-            f"{len(text_pattern_counts)} pattern type(s) found in narrative/text fields.\n\n"
-            "**Add scrub_text rules:**\n```yaml\n"
-            "- name: scrub narrative text\n"
-            "  match: \"*.text.div\"\n  action: scrub_text\n\n"
-            "- name: scrub note text\n"
-            "  match: \"*.note.text\"\n  action: scrub_text\n```",
-        ))
+        recs.append(
+            (
+                "CRITICAL",
+                f"PII patterns detected in text fields ({patterns})",
+                f"{sum(text_pattern_counts.values())} pattern matches across "
+                f"{len(text_pattern_counts)} pattern type(s) found in narrative/text fields.\n\n"
+                "**Add scrub_text rules:**\n```yaml\n"
+                "- name: scrub narrative text\n"
+                '  match: "*.text.div"\n  action: scrub_text\n\n'
+                "- name: scrub note text\n"
+                '  match: "*.note.text"\n  action: scrub_text\n```',
+            )
+        )
 
     # ---- HIGH: high information loss from redact ---------------------------
     il_samples = dim_samples.get("information_loss", [])
     il_avg = sum(il_samples) / len(il_samples) if il_samples else None
     if il_avg is not None and il_avg < 0.55 and action_totals.get("redact", 0) > 0:
         redact_pct = action_totals["redact"] / max(sum(action_totals.values()), 1) * 100
-        recs.append((
-            "HIGH",
-            f"High information loss from `redact` ({redact_pct:.0f}% of actions) — utility {_pct(il_avg)}",
-            "Most of your utility loss comes from `redact` actions.  "
-            "Consider lower-loss alternatives for fields where structure must be preserved:\n\n"
-            "| Replace `redact` on | With | Why |\n"
-            "|---------------------|------|-----|\n"
-            "| `*.id`, `Patient.identifier` | `cryptohash` or `gpas_pseudonymize` | "
-            "Preserves linkage across datasets |\n"
-            "| `Patient.birthDate` | `generalize` (year-only) or `perturb` | "
-            "Age band sufficient for most analysis |\n"
-            "| Address fields | `generalize` | Regional analysis preserved |\n"
-            "| Practitioner names | `substitute` | Structure preserved, PHI removed |",
-        ))
+        recs.append(
+            (
+                "HIGH",
+                f"High information loss from `redact` ({redact_pct:.0f}% of actions) — utility {_pct(il_avg)}",
+                "Most of your utility loss comes from `redact` actions.  "
+                "Consider lower-loss alternatives for fields where structure must be preserved:\n\n"
+                "| Replace `redact` on | With | Why |\n"
+                "|---------------------|------|-----|\n"
+                "| `*.id`, `Patient.identifier` | `cryptohash` or `gpas_pseudonymize` | "
+                "Preserves linkage across datasets |\n"
+                "| `Patient.birthDate` | `generalize` (year-only) or `perturb` | "
+                "Age band sufficient for most analysis |\n"
+                "| Address fields | `generalize` | Regional analysis preserved |\n"
+                "| Practitioner names | `substitute` | Structure preserved, PHI removed |",
+            )
+        )
 
     # ---- HIGH: low field retention -----------------------------------------
     fr_samples = dim_samples.get("field_retention", [])
     fr_avg = sum(fr_samples) / len(fr_samples) if fr_samples else None
     if fr_avg is not None and fr_avg < 0.60:
-        recs.append((
-            "HIGH",
-            f"Low field retention ({_pct(fr_avg)}) — many fields removed",
-            "A large proportion of fields are being redacted entirely.  "
-            "Fields with value=`[REDACTED]` or removed from the resource reduce "
-            "utility for downstream analytics.\n\n"
-            "Review which rules use `action: redact` and consider whether "
-            "`generalize`, `cryptohash`, or `substitute` could replace them.",
-        ))
+        recs.append(
+            (
+                "HIGH",
+                f"Low field retention ({_pct(fr_avg)}) — many fields removed",
+                "A large proportion of fields are being redacted entirely.  "
+                "Fields with value=`[REDACTED]` or removed from the resource reduce "
+                "utility for downstream analytics.\n\n"
+                "Review which rules use `action: redact` and consider whether "
+                "`generalize`, `cryptohash`, or `substitute` could replace them.",
+            )
+        )
 
     # ---- MEDIUM: missed rules ----------------------------------------------
     if missed_rules:
         top_missed = "\n".join(f"- `{r}`" for r, _ in missed_rules.most_common(10))
-        recs.append((
-            "MEDIUM",
-            f"{len(missed_rules)} rule(s) never fired on applicable resources",
-            "These rules are defined in your config but were not applied to any "
-            "resources of the types they target.  This may mean:\n"
-            "1. The target field is absent from your exported data\n"
-            "2. The FHIRPath expression has a typo or wrong resource type prefix\n"
-            "3. The rule condition (`where`) filtered out all matches\n\n"
-            f"**Missed rules:**\n{top_missed}\n\n"
-            "Check the FHIRPath expressions against your actual data "
-            "using `GET /fhir/{ResourceType}/{id}`.",
-        ))
+        recs.append(
+            (
+                "MEDIUM",
+                f"{len(missed_rules)} rule(s) never fired on applicable resources",
+                "These rules are defined in your config but were not applied to any "
+                "resources of the types they target.  This may mean:\n"
+                "1. The target field is absent from your exported data\n"
+                "2. The FHIRPath expression has a typo or wrong resource type prefix\n"
+                "3. The rule condition (`where`) filtered out all matches\n\n"
+                f"**Missed rules:**\n{top_missed}\n\n"
+                "Check the FHIRPath expressions against your actual data "
+                "using `GET /fhir/{ResourceType}/{id}`.",
+            )
+        )
 
     # ---- MEDIUM: reference integrity ---------------------------------------
     if ri is not None and ri < 0.95:
-        recs.append((
-            "MEDIUM",
-            f"Reference integrity {_pct(ri)} — dangling references after de-identification",
-            "When resource IDs are replaced by pseudonyms/hashes, `reference` fields "
-            "pointing to those resources become invalid.\n\n"
-            "**Fix:** Enable in your config:\n```yaml\nrewrite_references: true\n```\n\n"
-            "This causes the pipeline to automatically rewrite all internal references "
-            "to match new pseudonymized IDs.",
-        ))
+        recs.append(
+            (
+                "MEDIUM",
+                f"Reference integrity {_pct(ri)} — dangling references after de-identification",
+                "When resource IDs are replaced by pseudonyms/hashes, `reference` fields "
+                "pointing to those resources become invalid.\n\n"
+                "**Fix:** Enable in your config:\n```yaml\nrewrite_references: true\n```\n\n"
+                "This causes the pipeline to automatically rewrite all internal references "
+                "to match new pseudonymized IDs.",
+            )
+        )
 
     # ---- LOW: schema validation ----------------------------------------------
     sv_samples = dim_samples.get("schema_validation", [])
     sv_avg = sum(sv_samples) / len(sv_samples) if sv_samples else None
     if sv_avg is not None and sv_avg < 0.95:
-        recs.append((
-            "LOW",
-            f"Schema validation {_pct(sv_avg)} — some resources missing required fields",
-            "Some de-identified resources are missing `id` or `resourceType` fields, "
-            "or contain empty required arrays (e.g. `name: []`).\n\n"
-            "Check that rules do not redact `*.id` without replacing it with a pseudonym, "
-            "or use `cryptohash`/`gpas_pseudonymize` for ID fields instead of `redact`.",
-        ))
+        recs.append(
+            (
+                "LOW",
+                f"Schema validation {_pct(sv_avg)} — some resources missing required fields",
+                "Some de-identified resources are missing `id` or `resourceType` fields, "
+                "or contain empty required arrays (e.g. `name: []`).\n\n"
+                "Check that rules do not redact `*.id` without replacing it with a pseudonym, "
+                "or use `cryptohash`/`gpas_pseudonymize` for ID fields instead of `redact`.",
+            )
+        )
 
     return recs

@@ -30,17 +30,27 @@ try:
 except ImportError:
     # slowapi is optional — no-op fallback for tests and lightweight deployments.
     class _NoOpLimiter:
-        def __init__(self, **kw): pass
+        def __init__(self, **kw):
+            pass
+
         def limit(self, *a, **kw):
-            def decorator(fn): return fn
+            def decorator(fn):
+                return fn
+
             return decorator
+
     Limiter = _NoOpLimiter
     RateLimitExceeded = None
-    def get_remote_address(r): return "127.0.0.1"
+
+    def get_remote_address(r):
+        return "127.0.0.1"
+
     _rate_limit_exceeded_handler = None
 
 _RATE_LIMIT_ENABLED = os.environ.get("MEDANON_RATE_LIMIT_ENABLED", "true").lower() in (
-    "1", "true", "yes"
+    "1",
+    "true",
+    "yes",
 )
 
 # Use Redis-backed storage when available so rate-limit counters are shared
@@ -69,7 +79,7 @@ _PRIVATE_NETS = [
     ipaddress.ip_network("172.16.0.0/12"),
     ipaddress.ip_network("192.168.0.0/16"),
     ipaddress.ip_network("127.0.0.0/8"),
-    ipaddress.ip_network("169.254.0.0/16"),   # link-local / AWS metadata
+    ipaddress.ip_network("169.254.0.0/16"),  # link-local / AWS metadata
     ipaddress.ip_network("0.0.0.0/8"),
     ipaddress.ip_network("::1/128"),
     ipaddress.ip_network("fc00::/7"),
@@ -95,7 +105,9 @@ async def _validate_server_url(url: str) -> str:
         )
     hostname = parsed.hostname or ""
     if not hostname:
-        raise HTTPException(status_code=422, detail="server_url must contain a hostname")
+        raise HTTPException(
+            status_code=422, detail="server_url must contain a hostname"
+        )
     try:
         addr = ipaddress.ip_address(hostname)
         if any(addr in net for net in _PRIVATE_NETS):
@@ -123,7 +135,9 @@ def check_hostname_ssrf(hostname: str) -> str | None:
     or ``None`` when the hostname is safe.
     """
     try:
-        results = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+        results = socket.getaddrinfo(
+            hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM
+        )
     except socket.gaierror:
         return f"Cannot resolve hostname: {hostname}"
     for family, _, _, _, sockaddr in results:
@@ -165,6 +179,7 @@ async def _get_url_from_request_or_env(
 # settings validation — prevents SSRF via FHIR Parameters wrapper
 # ---------------------------------------------------------------------------
 
+
 async def _validate_dynamic_settings(dynamic_settings: dict) -> None:
     """Raise HTTP 422 for unknown or unsafe URL-valued dynamic settings.
 
@@ -190,8 +205,8 @@ async def _validate_dynamic_settings(dynamic_settings: dict) -> None:
 
 def get_settings_dep(
     config_profile: str = Query(
-        'auto',
-        description="Config profile: auto, minimal, gpas, gdpr, hipaa, research, structural, value-masking"
+        "auto",
+        description="Config profile: auto, minimal, gpas, gdpr, hipaa, research, structural, value-masking",
     ),
 ) -> config.Settings:
     """FastAPI dependency that reads config_profile from the query string."""
@@ -202,16 +217,18 @@ def get_settings_dep(
 # Shared processing helpers
 # ---------------------------------------------------------------------------
 
+
 def _runtime_settings(base_settings, dynamic_settings=None):
     """Build a lightweight runtime settings object merging base config + dynamic overrides."""
     from api.schemas.processing import RuntimeSettings
+
     # Propagate filename so the rule_matcher index cache can use a stable key.
-    filename = getattr(base_settings, 'filename', None)
+    filename = getattr(base_settings, "filename", None)
     return RuntimeSettings(
-        rules=getattr(base_settings, 'rules', []),
-        processing_errors=getattr(base_settings, 'processing_errors', 'raise'),
-        rewrite_references=getattr(base_settings, 'rewrite_references', False),
-        rewrite_text_ids=getattr(base_settings, 'rewrite_text_ids', False),
+        rules=getattr(base_settings, "rules", []),
+        processing_errors=getattr(base_settings, "processing_errors", "raise"),
+        rewrite_references=getattr(base_settings, "rewrite_references", False),
+        rewrite_text_ids=getattr(base_settings, "rewrite_text_ids", False),
         dynamic_rule_settings=dynamic_settings or {},
         filename=filename,
     )
@@ -244,22 +261,22 @@ def _unwrap_parameters_payload(payload):
     Mirrors a useful pattern from miracum/fhir-pseudonymizer while keeping the
     core processing engine unchanged.
     """
-    if not isinstance(payload, dict) or payload.get('resourceType') != 'Parameters':
+    if not isinstance(payload, dict) or payload.get("resourceType") != "Parameters":
         return payload, None
 
-    parameters = payload.get('parameter', [])
+    parameters = payload.get("parameter", [])
     dynamic_settings = {}
     wrapped_resource = None
 
     for p in parameters:
         if not isinstance(p, dict):
             continue
-        if p.get('name') == 'settings':
-            for part in p.get('part', []):
-                if isinstance(part, dict) and part.get('name'):
-                    dynamic_settings[part['name']] = _extract_value_part(part)
-        elif p.get('name') == 'resource' and isinstance(p.get('resource'), dict):
-            wrapped_resource = p['resource']
+        if p.get("name") == "settings":
+            for part in p.get("part", []):
+                if isinstance(part, dict) and part.get("name"):
+                    dynamic_settings[part["name"]] = _extract_value_part(part)
+        elif p.get("name") == "resource" and isinstance(p.get("resource"), dict):
+            wrapped_resource = p["resource"]
 
     if wrapped_resource is None:
         return payload, None
@@ -268,6 +285,6 @@ def _unwrap_parameters_payload(payload):
 
 def _extract_value_part(part):
     for key, value in part.items():
-        if key.startswith('value'):
+        if key.startswith("value"):
             return value
     return None

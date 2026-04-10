@@ -22,7 +22,9 @@ class SqliteSubscriptionStore:
     """SQLite-backed FHIR R4 Subscription store. Thread-safe via WAL journal mode."""
 
     def __init__(self, db_path: str | None = None) -> None:
-        self._path = db_path or os.environ.get("MEDANON_SUBSCRIPTION_DB", _DEFAULT_SUB_DB)
+        self._path = db_path or os.environ.get(
+            "MEDANON_SUBSCRIPTION_DB", _DEFAULT_SUB_DB
+        )
         Path(self._path).parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 

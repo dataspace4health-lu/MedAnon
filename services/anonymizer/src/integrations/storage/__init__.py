@@ -46,15 +46,19 @@ def _init_from_env():
     mode = os.environ.get("MEDANON_RESULT_STORAGE", "local").lower().strip()
     if mode == "s3":
         from integrations.storage.s3 import S3ResultStorage
+
         endpoint = os.environ.get("MINIO_ENDPOINT", "minio:9000")
         access_key = os.environ.get("MINIO_ROOT_USER", "minioadmin")
         secret_key = os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin")
         bucket = os.environ.get("MINIO_BUCKET", "medanon-results")
         secure = os.environ.get("MINIO_SECURE", "false").lower() == "true"
-        storage = S3ResultStorage(endpoint, access_key, secret_key, bucket, secure=secure)
+        storage = S3ResultStorage(
+            endpoint, access_key, secret_key, bucket, secure=secure
+        )
         _log.info("result_storage=s3 endpoint=%s bucket=%s", endpoint, bucket)
         return storage
     from integrations.storage.local import LocalResultStorage
+
     _log.info("result_storage=local")
     return LocalResultStorage()
 

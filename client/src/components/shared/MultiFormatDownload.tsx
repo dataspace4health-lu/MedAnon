@@ -59,6 +59,28 @@ interface MultiFormatDownloadProps {
   onXmlDownload?: () => void; // Callback for XML download via API
 }
 
+function _generateUuid(): string {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = Math.random() * 16 | 0;
+    const v = c === 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
+}
+
+function _createBundle(resources: Record<string, unknown>[]): Record<string, unknown> {
+  return {
+    resourceType: "Bundle",
+    id: `deidentified-${Date.now()}`,
+    type: "collection",
+    timestamp: new Date().toISOString(),
+    total: resources.length,
+    entry: resources.map((resource) => ({
+      fullUrl: `urn:uuid:${_generateUuid()}`,
+      resource,
+    })),
+  };
+}
+
 export function MultiFormatDownload({
   resources,
   baseFilename,
@@ -72,35 +94,11 @@ export function MultiFormatDownload({
     const data: Record<DownloadFormat, string> = {
       ndjson: resources.map(r => JSON.stringify(r)).join('\n'),
       json: JSON.stringify(resources, null, 2),
-      bundle: JSON.stringify(createBundle(resources), null, 2),
+      bundle: JSON.stringify(_createBundle(resources), null, 2),
       xml: "", // XML handled via API
     };
     return data;
   }, [resources]);
-
-  // Create FHIR Bundle from resources
-  function createBundle(resources: Record<string, unknown>[]): Record<string, unknown> {
-    return {
-      resourceType: "Bundle",
-      id: `deidentified-${Date.now()}`,
-      type: "collection",
-      timestamp: new Date().toISOString(),
-      total: resources.length,
-      entry: resources.map((resource) => ({
-        fullUrl: `urn:uuid:${generateUuid()}`,
-        resource: resource,
-      })),
-    };
-  }
-
-  // Simple UUID v4 generator
-  function generateUuid(): string {
-    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-      const r = Math.random() * 16 | 0;
-      const v = c === 'x' ? r : (r & 0x3 | 0x8);
-      return v.toString(16);
-    });
-  }
 
   const handleDownload = useCallback((format: DownloadFormat) => {
     const option = DOWNLOAD_OPTIONS.find(opt => opt.format === format);

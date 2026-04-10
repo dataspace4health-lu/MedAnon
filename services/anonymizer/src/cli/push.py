@@ -1,4 +1,5 @@
 """CLI push subcommand — upload resources to a FHIR server."""
+
 import os
 from pathlib import Path
 
@@ -12,19 +13,40 @@ from pipeline.processor import process_data
 
 def add_push_args(p):
     """Add push-subcommand arguments to an argparse parser."""
-    p.add_argument("input_file", nargs="?", default=None,
-                   help="Input file (NDJSON or JSON). Each line / resource is uploaded individually.")
-    p.add_argument("--input", dest="input_flag", default=None,
-                   help="Input file (alternative to positional argument).")
-    p.add_argument("--server",
-                   help="Target FHIR base URL (overrides FHIR_TARGET_URL env). "
-                        "E.g. http://host:8080/fhir")
-    p.add_argument("--config", "-c", dest="config_filename",
-                   help="YAML config for de-identification rules. If omitted, resources are uploaded as-is.")
-    p.add_argument("--token", dest="fhir_token",
-                   help="Bearer token for target FHIR server auth (overrides FHIR_TARGET_TOKEN env).")
-    p.add_argument("--timeout", type=float, default=30.0,
-                   help="HTTP timeout in seconds (default 30).")
+    p.add_argument(
+        "input_file",
+        nargs="?",
+        default=None,
+        help="Input file (NDJSON or JSON). Each line / resource is uploaded individually.",
+    )
+    p.add_argument(
+        "--input",
+        dest="input_flag",
+        default=None,
+        help="Input file (alternative to positional argument).",
+    )
+    p.add_argument(
+        "--server",
+        help="Target FHIR base URL (overrides FHIR_TARGET_URL env). "
+        "E.g. http://host:8080/fhir",
+    )
+    p.add_argument(
+        "--config",
+        "-c",
+        dest="config_filename",
+        help="YAML config for de-identification rules. If omitted, resources are uploaded as-is.",
+    )
+    p.add_argument(
+        "--token",
+        dest="fhir_token",
+        help="Bearer token for target FHIR server auth (overrides FHIR_TARGET_TOKEN env).",
+    )
+    p.add_argument(
+        "--timeout",
+        type=float,
+        default=30.0,
+        help="HTTP timeout in seconds (default 30).",
+    )
     return p
 
 
@@ -58,7 +80,9 @@ def run_push(args):
             yield res
 
     total = errors = 0
-    for result in upload_resources(server, _deidentify_and_yield(), token=token, timeout=timeout):
+    for result in upload_resources(
+        server, _deidentify_and_yield(), token=token, timeout=timeout
+    ):
         total += 1
         if result["success"]:
             print(

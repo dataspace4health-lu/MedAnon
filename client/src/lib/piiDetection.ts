@@ -330,7 +330,8 @@ export function stripManifestTag(
   const newMeta = { ...meta, tag: filtered.length > 0 ? filtered : undefined };
   const metaKeys = Object.values(newMeta).filter((v) => v !== undefined);
   if (metaKeys.length === 0) {
-    const { meta: _, ...rest } = resource;
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { meta: _meta, ...rest } = resource;
     return rest;
   }
   return { ...resource, meta: newMeta };

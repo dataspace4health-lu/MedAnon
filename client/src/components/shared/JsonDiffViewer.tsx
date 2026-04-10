@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { diffLines, diffWords } from "diff";
-import { highlightJsonHtml } from "./FhirCodeViewer";
+import { highlightJsonHtml } from "./highlightJson";
 
 // ---------------------------------------------------------------------------
 // Types

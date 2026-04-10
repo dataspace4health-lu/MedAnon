@@ -4,7 +4,6 @@ Handles resource creation/update, manifest tag stripping, ID sanitisation,
 topological upload ordering, and cross-resource reference rewriting.
 """
 
-
 import os
 
 from ._transport import (
@@ -55,7 +54,11 @@ def _strip_manifest_tags(resource: dict) -> dict:
     if not tags or not isinstance(tags, list):
         return resource
 
-    filtered = [t for t in tags if not (isinstance(t, dict) and t.get("system") == _MANIFEST_SYSTEM)]
+    filtered = [
+        t
+        for t in tags
+        if not (isinstance(t, dict) and t.get("system") == _MANIFEST_SYSTEM)
+    ]
     if len(filtered) == len(tags):
         return resource  # nothing removed — avoid copy
 
@@ -91,7 +94,9 @@ def post_resource(base_url, resource, token=None, timeout=30):
         method = "POST"
         log.info("POST %s (no id)", rt)
 
-    return _write_json(url, resource, method, token=token, timeout=timeout, operation="write")
+    return _write_json(
+        url, resource, method, token=token, timeout=timeout, operation="write"
+    )
 
 
 def post_bundle(base_url, bundle, token=None, timeout=30):
@@ -106,10 +111,14 @@ def post_bundle(base_url, bundle, token=None, timeout=30):
         )
     url = base_url.rstrip("/") + "/"
     log.info("POST Bundle type=%s to %s", bundle.get("type"), url)
-    return _write_json(url, bundle, "POST", token=token, timeout=timeout, operation="bundle")
+    return _write_json(
+        url, bundle, "POST", token=token, timeout=timeout, operation="bundle"
+    )
 
 
-_UPLOAD_BATCH_SIZE = int(os.environ.get("MEDANON_UPLOAD_BATCH_SIZE", "500"))  # resources per FHIR batch Bundle
+_UPLOAD_BATCH_SIZE = int(
+    os.environ.get("MEDANON_UPLOAD_BATCH_SIZE", "500")
+)  # resources per FHIR batch Bundle
 
 
 def _infer_upload_tiers(resources: list[dict]) -> dict[str, int]:
@@ -293,10 +302,15 @@ def _parse_batch_response(resp_bundle: dict, meta_list: list) -> list:
 
     for j, (rt, source_id) in enumerate(meta_list):
         if j >= len(resp_entries):
-            results.append({
-                "resourceType": rt, "source_id": source_id, "server_id": None,
-                "success": False, "error": "entry missing from batch-response Bundle",
-            })
+            results.append(
+                {
+                    "resourceType": rt,
+                    "source_id": source_id,
+                    "server_id": None,
+                    "success": False,
+                    "error": "entry missing from batch-response Bundle",
+                }
+            )
             continue
 
         resp_meta = resp_entries[j].get("response", {})
@@ -317,25 +331,39 @@ def _parse_batch_response(resp_bundle: dict, meta_list: list) -> list:
                 server_id = parts[1]
 
         if success:
-            results.append({
-                "resourceType": rt, "source_id": source_id, "server_id": server_id,
-                "success": True, "error": None,
-            })
+            results.append(
+                {
+                    "resourceType": rt,
+                    "source_id": source_id,
+                    "server_id": server_id,
+                    "success": True,
+                    "error": None,
+                }
+            )
         else:
             # Extract OperationOutcome diagnostics from response.outcome
             outcome = resp_meta.get("outcome") or {}
             issues = outcome.get("issue", []) if isinstance(outcome, dict) else []
             diag = "; ".join(
-                str(iss.get("diagnostics") or (iss.get("details") or {}).get("text") or "")
+                str(
+                    iss.get("diagnostics")
+                    or (iss.get("details") or {}).get("text")
+                    or ""
+                )
                 for iss in issues
                 if iss.get("diagnostics") or iss.get("details")
             )
             error_msg = f"HTTP {status_str}" + (f": {diag}" if diag else "")
             log.warning("upload_resources %s/%s: %s", rt, source_id or "?", error_msg)
-            results.append({
-                "resourceType": rt, "source_id": source_id, "server_id": None,
-                "success": False, "error": error_msg,
-            })
+            results.append(
+                {
+                    "resourceType": rt,
+                    "source_id": source_id,
+                    "server_id": None,
+                    "success": False,
+                    "error": error_msg,
+                }
+            )
 
     return results
 
@@ -354,11 +382,15 @@ def _post_bundle_batch(base: str, chunk: list[dict], token, timeout) -> list[dic
         raw_rt = resource.get("resourceType") if resource else None
         if not raw_rt or not _RESOURCE_TYPE_RE.match(str(raw_rt)):
             source_id = resource.get("id") if resource else None
-            results.append({
-                "resourceType": str(raw_rt or "Unknown"), "source_id": source_id,
-                "server_id": None, "success": False,
-                "error": f"invalid or missing resourceType: {raw_rt!r}",
-            })
+            results.append(
+                {
+                    "resourceType": str(raw_rt or "Unknown"),
+                    "source_id": source_id,
+                    "server_id": None,
+                    "success": False,
+                    "error": f"invalid or missing resourceType: {raw_rt!r}",
+                }
+            )
             continue
         entry, rt, source_id = _build_batch_entry(resource)
         entries.append(entry)
@@ -370,23 +402,40 @@ def _post_bundle_batch(base: str, chunk: list[dict], token, timeout) -> list[dic
     bundle = {"resourceType": "Bundle", "type": "batch", "entry": entries}
     try:
         resp_bundle = _write_json(
-            base + "/", bundle, "POST", token=token, timeout=timeout,
-            operation="batch_upload", target=True,
+            base + "/",
+            bundle,
+            "POST",
+            token=token,
+            timeout=timeout,
+            operation="batch_upload",
+            target=True,
         )
     except ValueError as exc:
         log.warning("batch_upload chunk failed: %s", exc)
         for rt, source_id in meta_list:
-            results.append({
-                "resourceType": rt, "source_id": source_id, "server_id": None,
-                "success": False, "error": str(exc),
-            })
+            results.append(
+                {
+                    "resourceType": rt,
+                    "source_id": source_id,
+                    "server_id": None,
+                    "success": False,
+                    "error": str(exc),
+                }
+            )
         return results
 
     results.extend(_parse_batch_response(resp_bundle, meta_list))
     return results
 
 
-def upload_resources(base_url, resources, token=None, timeout=30, parallel: int = 1, batch_size: int | None = None):
+def upload_resources(
+    base_url,
+    resources,
+    token=None,
+    timeout=30,
+    parallel: int = 1,
+    batch_size: int | None = None,
+):
     """Upload FHIR resources to a server using FHIR batch Bundles.
 
     Consumes *resources* in two passes:
@@ -431,13 +480,17 @@ def upload_resources(base_url, resources, token=None, timeout=30, parallel: int 
     # Compute topological upload order: tier 0 first (no deps), tier N last
     tiers = _infer_upload_tiers(all_resources)
     all_resources.sort(key=lambda r: tiers.get(r.get("resourceType", ""), 0))
-    log.debug("upload_resources: tier map: %s",
-              {rt: t for rt, t in sorted(tiers.items(), key=lambda x: x[1])})
+    log.debug(
+        "upload_resources: tier map: %s",
+        {rt: t for rt, t in sorted(tiers.items(), key=lambda x: x[1])},
+    )
 
     # Rewrite cross-resource references so they match the sanitised server IDs.
     id_map = _compute_id_map(all_resources)
     if id_map:
-        log.debug("upload_resources: rewriting %d changed ids in references", len(id_map))
+        log.debug(
+            "upload_resources: rewriting %d changed ids in references", len(id_map)
+        )
         all_resources = [_rewrite_references(r, id_map) for r in all_resources]
 
     total = len(all_resources)
@@ -447,8 +500,13 @@ def upload_resources(base_url, resources, token=None, timeout=30, parallel: int 
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
         # Group resources into per-tier buckets (already sorted; order is preserved)
-        tier_levels = sorted(set(tiers.get(r.get("resourceType", ""), 0)
-                                 for r in all_resources if r is not None))
+        tier_levels = sorted(
+            set(
+                tiers.get(r.get("resourceType", ""), 0)
+                for r in all_resources
+                if r is not None
+            )
+        )
         tier_buckets: dict[int, list[dict]] = {t: [] for t in tier_levels}
         for r in all_resources:
             if r is not None:
@@ -457,12 +515,16 @@ def upload_resources(base_url, resources, token=None, timeout=30, parallel: int 
 
         for tier_level in tier_levels:
             tier_resources = tier_buckets.pop(tier_level)
-            batches = [tier_resources[i:i + chunk_size]
-                       for i in range(0, len(tier_resources), chunk_size)]
+            batches = [
+                tier_resources[i : i + chunk_size]
+                for i in range(0, len(tier_resources), chunk_size)
+            ]
             effective = min(parallel, len(batches))
             with ThreadPoolExecutor(max_workers=effective) as pool:
-                futs = [pool.submit(_post_bundle_batch, base, b, token, timeout)
-                        for b in batches]
+                futs = [
+                    pool.submit(_post_bundle_batch, base, b, token, timeout)
+                    for b in batches
+                ]
                 # as_completed yields futures as they finish; pool.__exit__ (shutdown wait=True)
                 # guarantees all tier-N futures complete before the next tier begins.
                 for fut in as_completed(futs):
@@ -473,7 +535,7 @@ def upload_resources(base_url, resources, token=None, timeout=30, parallel: int 
                             log.info("upload_resources: %d/%d processed", done, total)
     else:
         for i in range(0, total, chunk_size):
-            chunk = all_resources[i:i + chunk_size]
+            chunk = all_resources[i : i + chunk_size]
             # Free the consumed slice to reduce peak memory
             for j in range(i, min(i + chunk_size, total)):
                 all_resources[j] = None

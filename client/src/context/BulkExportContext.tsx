@@ -140,10 +140,12 @@ export function BulkExportProvider({ children }: { children: ReactNode }) {
 
   // Cleanup on unmount
   useEffect(() => {
+    const refs = pollRefs.current;
+    const elapsed = pollElapsedRef.current;
     return () => {
-      for (const [, timer] of pollRefs.current) clearTimeout(timer);
-      pollRefs.current.clear();
-      pollElapsedRef.current.clear();
+      for (const [, timer] of refs) clearTimeout(timer);
+      refs.clear();
+      elapsed.clear();
     };
   }, []);
 

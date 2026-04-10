@@ -26,13 +26,31 @@ _DEFAULT_DB = "/output/config_store.db"
 
 # The six bundled profiles shipped with the application.
 _SYSTEM_CONFIGS: list[dict] = [
-    {"name": "minimal",    "description": "SHA3-256 hash + regex scrubbing. No external services required."},
-    {"name": "gpas",       "description": "Production pseudonymization via gPAS with dual-pass NLP scrubbing."},
-    {"name": "gdpr",       "description": "GDPR Art. 4(5) HMAC pseudonymization profile."},
-    {"name": "hipaa",      "description": "HIPAA Safe Harbor (45 CFR §164.514(b)): 18 PHI categories."},
-    {"name": "research",   "description": "IRB-grade: dates→year-month, IDs cryptohashed for longitudinal linkage."},
-    {"name": "structural",    "description": "Structure-preserving: IDs via gPAS, PII→[REDACTED], dates→year."},
-    {"name": "value-masking", "description": "Field-complete masking: no fields removed, all PII values replaced in place. IDs via gPAS, binary payloads cleared."},
+    {
+        "name": "minimal",
+        "description": "SHA3-256 hash + regex scrubbing. No external services required.",
+    },
+    {
+        "name": "gpas",
+        "description": "Production pseudonymization via gPAS with dual-pass NLP scrubbing.",
+    },
+    {"name": "gdpr", "description": "GDPR Art. 4(5) HMAC pseudonymization profile."},
+    {
+        "name": "hipaa",
+        "description": "HIPAA Safe Harbor (45 CFR §164.514(b)): 18 PHI categories.",
+    },
+    {
+        "name": "research",
+        "description": "IRB-grade: dates→year-month, IDs cryptohashed for longitudinal linkage.",
+    },
+    {
+        "name": "structural",
+        "description": "Structure-preserving: IDs via gPAS, PII→[REDACTED], dates→year.",
+    },
+    {
+        "name": "value-masking",
+        "description": "Field-complete masking: no fields removed, all PII values replaced in place. IDs via gPAS, binary payloads cleared.",
+    },
 ]
 
 
@@ -79,10 +97,10 @@ class ConfigStore:
     @staticmethod
     def _row_to_dict(row: sqlite3.Row) -> dict:
         return {
-            "name":        row["name"],
+            "name": row["name"],
             "description": row["description"],
-            "created_at":  row["created_at"],
-            "is_system":   bool(row["is_system"]),
+            "created_at": row["created_at"],
+            "is_system": bool(row["is_system"]),
         }
 
     # ------------------------------------------------------------------
@@ -100,9 +118,7 @@ class ConfigStore:
     def get(self, name: str) -> dict | None:
         """Return metadata for *name*, or None if not found."""
         with self._connect() as conn:
-            row = conn.execute(
-                "SELECT * FROM configs WHERE name=?", (name,)
-            ).fetchone()
+            row = conn.execute("SELECT * FROM configs WHERE name=?", (name,)).fetchone()
         return self._row_to_dict(row) if row else None
 
     def create(self, name: str, description: str = "") -> dict:
@@ -117,7 +133,12 @@ class ConfigStore:
         except sqlite3.IntegrityError:
             raise ValueError(f"Config '{name}' already exists.")
         _log.info("config_created name=%s", name)
-        return {"name": name, "description": description, "created_at": now, "is_system": False}
+        return {
+            "name": name,
+            "description": description,
+            "created_at": now,
+            "is_system": False,
+        }
 
     def update_description(self, name: str, description: str) -> None:
         """Update the description of an existing config."""

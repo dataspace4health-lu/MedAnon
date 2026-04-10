@@ -22,7 +22,9 @@ class HttpFhirClientAdapter:
         token: str | None = None,
         timeout: float = 30.0,
     ) -> list[dict]:
-        return _fhir.fetch_resource_type(server_url, resource_type, params, token, timeout)
+        return _fhir.fetch_resource_type(
+            server_url, resource_type, params, token, timeout
+        )
 
     def fetch_everything(
         self,
@@ -33,7 +35,9 @@ class HttpFhirClientAdapter:
         token: str | None = None,
         timeout: float = 30.0,
     ) -> list[dict]:
-        return _fhir.fetch_everything(server_url, resource_type, resource_id, params, token, timeout)
+        return _fhir.fetch_everything(
+            server_url, resource_type, resource_id, params, token, timeout
+        )
 
     def post_resource(
         self,
@@ -63,7 +67,9 @@ class HttpFhirClientAdapter:
         token: str | None = None,
         timeout: float = 30.0,
     ) -> list[dict]:
-        return _fhir.bulk_export(server_url, level, resource_type, type_filter, since, token, timeout)
+        return _fhir.bulk_export(
+            server_url, level, resource_type, type_filter, since, token, timeout
+        )
 
     def fetch_cohort(
         self,
@@ -74,7 +80,9 @@ class HttpFhirClientAdapter:
         token: str | None = None,
         timeout: float = 30.0,
     ) -> list[dict]:
-        return _fhir.fetch_cohort(server_url, search_type, search_params, everything_params, token, timeout)
+        return _fhir.fetch_cohort(
+            server_url, search_type, search_params, everything_params, token, timeout
+        )
 
     def get_capability_statement(
         self,
@@ -92,4 +100,6 @@ class HttpFhirClientAdapter:
         token: str | None = None,
         timeout: float = 30.0,
     ) -> list[dict]:
-        return _fhir.fetch_all_resource_types(server_url, resource_types, params, token, timeout)
+        return _fhir.fetch_all_resource_types(
+            server_url, resource_types, params, token, timeout
+        )

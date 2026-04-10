@@ -14,7 +14,7 @@ from rich import print
 def read_resource_from_file(filename: str):
     """Read a FHIR resource from a JSON file and return the parsed dict."""
     try:
-        with open(filename, 'r') as jfile:
+        with open(filename, "r") as jfile:
             json_data = json.load(jfile)
             print(f":thumbs_up: json {filename} read")
             return json_data

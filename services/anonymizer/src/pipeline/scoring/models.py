@@ -4,6 +4,7 @@ Dataclasses for the constraint-based scoring engine output.
 Privacy produces a PrivacyDecision (pass/fail gate), utility and quality
 produce ModuleScore values, and ScoreResult combines everything.
 """
+
 from __future__ import annotations
 
 import datetime as _dt
@@ -15,6 +16,7 @@ SCORE_EXTENSION_URL = "https://medanon.local/StructureDefinition/deidentificatio
 @dataclass(slots=True)
 class Evidence:
     """Single piece of scoring evidence."""
+
     check: str
     value: float
     details: dict = field(default_factory=dict)
@@ -24,6 +26,7 @@ class Evidence:
 @dataclass(slots=True)
 class PrivacyDecision:
     """Result of the privacy risk evaluation (hard constraint)."""
+
     risk_score: float
     passed: bool
     threshold: float
@@ -41,8 +44,12 @@ class PrivacyDecision:
             "identifier_risk": round(self.identifier_risk, 4),
             "text_risk": round(self.text_risk, 4),
             "evidence": [
-                {"check": e.check, "value": round(e.value, 4),
-                 "details": e.details, "severity": e.severity}
+                {
+                    "check": e.check,
+                    "value": round(e.value, 4),
+                    "details": e.details,
+                    "severity": e.severity,
+                }
                 for e in self.evidence
             ],
         }
@@ -51,6 +58,7 @@ class PrivacyDecision:
 @dataclass(slots=True)
 class ModuleScore:
     """Result of a continuous scoring module (utility or quality)."""
+
     name: str
     score: float
     evidence: list[Evidence] = field(default_factory=list)
@@ -61,8 +69,12 @@ class ModuleScore:
             "name": self.name,
             "score": round(self.score, 4),
             "evidence": [
-                {"check": e.check, "value": round(e.value, 4),
-                 "details": e.details, "severity": e.severity}
+                {
+                    "check": e.check,
+                    "value": round(e.value, 4),
+                    "details": e.details,
+                    "severity": e.severity,
+                }
                 for e in self.evidence
             ],
             "gates_applied": self.gates_applied,
@@ -72,6 +84,7 @@ class ModuleScore:
 @dataclass(slots=True)
 class ScoreResult:
     """Complete scoring output for one resource or an aggregated batch."""
+
     composite: float
     decision: str  # "PASS" | "FAIL"
     privacy: PrivacyDecision
@@ -103,9 +116,13 @@ class ScoreResult:
             {"url": "privacy-risk", "valueDecimal": round(self.privacy.risk_score, 4)},
         ]
         if self.utility is not None:
-            exts.append({"url": "utility", "valueDecimal": round(self.utility.score, 4)})
+            exts.append(
+                {"url": "utility", "valueDecimal": round(self.utility.score, 4)}
+            )
         if self.quality is not None:
-            exts.append({"url": "quality", "valueDecimal": round(self.quality.score, 4)})
+            exts.append(
+                {"url": "quality", "valueDecimal": round(self.quality.score, 4)}
+            )
         exts.append({"url": "scored-at", "valueDateTime": self.scored_at})
         return {"url": SCORE_EXTENSION_URL, "extension": exts}
 

@@ -45,14 +45,13 @@ class SubscriptionService:
             raise SubscriptionValidationError("criteria is required")
         endpoint = channel.get("endpoint", "")
         if not endpoint.startswith(("http://", "https://")):
-            raise SubscriptionValidationError(
-                "channel.endpoint must be an http(s) URL"
-            )
+            raise SubscriptionValidationError("channel.endpoint must be an http(s) URL")
         # SSRF protection: resolve hostname and reject private/loopback addresses
         parsed = urllib.parse.urlparse(endpoint)
         hostname = parsed.hostname or ""
         if hostname:
             from api.deps import check_hostname_ssrf
+
             ssrf_error = check_hostname_ssrf(hostname)
             if ssrf_error:
                 raise SubscriptionValidationError(

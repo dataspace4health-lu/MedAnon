@@ -72,7 +72,9 @@ class StagingStore:
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(_DDL)
-            logger.info("staging schema ready (retention_days=%d)", self._retention_days)
+            logger.info(
+                "staging schema ready (retention_days=%d)", self._retention_days
+            )
         finally:
             self._pool.putconn(conn)
 
@@ -123,8 +125,10 @@ class StagingStore:
                         VALUES %s
                         ON CONFLICT (job_id, resource_id) DO NOTHING
                         """,
-                        [(job_id, rid, rtype, rjson, None)
-                         for job_id, rid, rtype, rjson in rows],
+                        [
+                            (job_id, rid, rtype, rjson, None)
+                            for job_id, rid, rtype, rjson in rows
+                        ],
                         template=f"(%s, %s, %s, %s::jsonb, {expires_sql})",
                     )
                     return cur.rowcount
@@ -332,7 +336,11 @@ class StagingStore:
                     )
                     recovered = cur.rowcount
             if recovered:
-                logger.info("recovered %d stale processing rows (timeout=%dmin)", recovered, timeout_minutes)
+                logger.info(
+                    "recovered %d stale processing rows (timeout=%dmin)",
+                    recovered,
+                    timeout_minutes,
+                )
             return recovered
         finally:
             self._put_conn(conn)

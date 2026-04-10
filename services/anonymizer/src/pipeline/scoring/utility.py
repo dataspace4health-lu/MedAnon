@@ -8,6 +8,7 @@ sub-evaluators:
 3. Temporal consistency — event date ordering preserved
 4. Information loss — aggregate action severity
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -34,7 +35,9 @@ class UtilityEvaluator:
     ) -> ModuleScore:
         evidence: list[Evidence] = []
 
-        retention = self._field_retention(original, deidentified, manifest_entries, evidence)
+        retention = self._field_retention(
+            original, deidentified, manifest_entries, evidence
+        )
         semantic = self._semantic_preservation(deidentified, evidence)
         temporal = self._temporal_consistency(original, deidentified, evidence)
         info_loss = self._information_loss(manifest_entries, evidence)
@@ -62,19 +65,29 @@ class UtilityEvaluator:
         else:
             # Estimate from manifest (no original available)
             if not manifest_entries:
-                evidence.append(Evidence(
-                    check="field_retention", value=0.5,
-                    details={"reason": "no original and no manifest — indeterminate"},
-                ))
+                evidence.append(
+                    Evidence(
+                        check="field_retention",
+                        value=0.5,
+                        details={
+                            "reason": "no original and no manifest — indeterminate"
+                        },
+                    )
+                )
                 return 0.5
-            redact_count = sum(1 for e in manifest_entries if e.get("action") == "redact")
+            redact_count = sum(
+                1 for e in manifest_entries if e.get("action") == "redact"
+            )
             total = len(manifest_entries)
             score = 1.0 - (redact_count / total) if total > 0 else 1.0
 
-        evidence.append(Evidence(
-            check="field_retention", value=score,
-            details={"has_original": original is not None},
-        ))
+        evidence.append(
+            Evidence(
+                check="field_retention",
+                value=score,
+                details={"has_original": original is not None},
+            )
+        )
         return score
 
     # ----- 2b: Semantic preservation ----------------------------------------
@@ -115,15 +128,18 @@ class UtilityEvaluator:
 
         score = checks_pass / checks_total if checks_total > 0 else 1.0
 
-        evidence.append(Evidence(
-            check="semantic_preservation", value=score,
-            details={
-                "coding_count": len(codings),
-                "reference_count": len(refs),
-                "checks_pass": checks_pass,
-                "checks_total": checks_total,
-            },
-        ))
+        evidence.append(
+            Evidence(
+                check="semantic_preservation",
+                value=score,
+                details={
+                    "coding_count": len(codings),
+                    "reference_count": len(refs),
+                    "checks_pass": checks_pass,
+                    "checks_total": checks_total,
+                },
+            )
+        )
         return score
 
     # ----- 2c: Temporal consistency -----------------------------------------
@@ -165,10 +181,13 @@ class UtilityEvaluator:
 
         score = valid / total if total > 0 else 1.0
 
-        evidence.append(Evidence(
-            check="temporal_consistency", value=score,
-            details={"valid_orderings": valid, "total_orderings": total},
-        ))
+        evidence.append(
+            Evidence(
+                check="temporal_consistency",
+                value=score,
+                details={"valid_orderings": valid, "total_orderings": total},
+            )
+        )
         return score
 
     # ----- 2d: Information loss ---------------------------------------------
@@ -179,27 +198,32 @@ class UtilityEvaluator:
         evidence: list[Evidence],
     ) -> float:
         if not manifest_entries:
-            evidence.append(Evidence(
-                check="information_loss", value=0.5,
-                details={"reason": "no manifest entries — indeterminate"},
-                severity="warning",
-            ))
+            evidence.append(
+                Evidence(
+                    check="information_loss",
+                    value=0.5,
+                    details={"reason": "no manifest entries — indeterminate"},
+                    severity="warning",
+                )
+            )
             return 0.5
 
         total_loss = sum(
-            INFO_LOSS_WEIGHTS.get(e.get("action", ""), 0.5)
-            for e in manifest_entries
+            INFO_LOSS_WEIGHTS.get(e.get("action", ""), 0.5) for e in manifest_entries
         )
         avg_loss = total_loss / len(manifest_entries)
         score = 1.0 - avg_loss
 
-        evidence.append(Evidence(
-            check="information_loss", value=score,
-            details={
-                "total_actions": len(manifest_entries),
-                "avg_loss": round(avg_loss, 4),
-            },
-        ))
+        evidence.append(
+            Evidence(
+                check="information_loss",
+                value=score,
+                details={
+                    "total_actions": len(manifest_entries),
+                    "avg_loss": round(avg_loss, 4),
+                },
+            )
+        )
         return score
 
     # ----- Helpers ----------------------------------------------------------

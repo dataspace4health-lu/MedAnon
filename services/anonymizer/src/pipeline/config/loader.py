@@ -7,8 +7,7 @@ import yaml
 _config_log = logging.getLogger("medanon.config")
 
 
-class Settings():
-
+class Settings:
     _ENV_EXPR = re.compile(r"\$\{([A-Z0-9_]+)(?::-(.*?))?\}")
 
     def __init__(self, filename=""):
@@ -33,18 +32,18 @@ class Settings():
                 # Backward-compatible processing error setting inspired by
                 # Microsoft anonymizer's processingErrors policy.
                 self.processing_errors = str(
-                    cfg.get('processing_errors', cfg.get('processingError', 'raise'))
+                    cfg.get("processing_errors", cfg.get("processingError", "raise"))
                 ).lower()
-                if self.processing_errors not in ('raise', 'skip'):
+                if self.processing_errors not in ("raise", "skip"):
                     raise ValueError("processing_errors must be one of: raise, skip")
 
                 # Cross-resource reference rewriting: when enabled, the
                 # processor deep-walks each resource after rule application
                 # and pseudonymizes all FHIR reference IDs via gPAS.
-                general = cfg.get('general', {})
+                general = cfg.get("general", {})
                 if isinstance(general, dict):
-                    self.rewrite_references = general.get('rewrite_references', False)
-                    self.rewrite_text_ids = general.get('rewrite_text_ids', False)
+                    self.rewrite_references = general.get("rewrite_references", False)
+                    self.rewrite_text_ids = general.get("rewrite_text_ids", False)
                 else:
                     self.rewrite_references = False
                     self.rewrite_text_ids = False
@@ -52,7 +51,8 @@ class Settings():
                 self._validate_rules()
                 _config_log.info(
                     "Settings loaded: %d rules from %s",
-                    len(getattr(self, 'rules', [])), filename,
+                    len(getattr(self, "rules", [])),
+                    filename,
                 )
         except IOError as e:
             _config_log.error("Settings file %s does not exist.", filename)
@@ -87,20 +87,20 @@ class Settings():
         return self._ENV_EXPR.sub(repl, value)
 
     def _validate_rules(self):
-        rules = getattr(self, 'rules', None)
+        rules = getattr(self, "rules", None)
         if not isinstance(rules, list):
             raise ValueError("rules must be a list")
 
         for idx, rule in enumerate(rules, start=1):
             if not isinstance(rule, dict):
                 raise ValueError(f"rules[{idx}] must be a mapping")
-            if 'match' not in rule or 'action' not in rule:
+            if "match" not in rule or "action" not in rule:
                 raise ValueError(f"rules[{idx}] requires both 'match' and 'action'")
-            if not isinstance(rule['match'], str) or not rule['match'].strip():
+            if not isinstance(rule["match"], str) or not rule["match"].strip():
                 raise ValueError(f"rules[{idx}].match must be a non-empty string")
-            if not isinstance(rule['action'], str) or not rule['action'].strip():
+            if not isinstance(rule["action"], str) or not rule["action"].strip():
                 raise ValueError(f"rules[{idx}].action must be a non-empty string")
-            if 'params' in rule and not isinstance(rule['params'], dict):
+            if "params" in rule and not isinstance(rule["params"], dict):
                 raise ValueError(f"rules[{idx}].params must be a mapping when provided")
 
         # Warn about potentially conflicting rules (same match, different actions)
@@ -117,8 +117,17 @@ class Settings():
         # Mutually exclusive action groups — applying two from the same group
         # to the same path is almost certainly a misconfiguration.
         _CONFLICTING_GROUPS = [
-            frozenset({"redact", "cryptohash", "encrypt", "substitute",
-                        "generalize", "gpas_pseudonymize", "perturb"}),
+            frozenset(
+                {
+                    "redact",
+                    "cryptohash",
+                    "encrypt",
+                    "substitute",
+                    "generalize",
+                    "gpas_pseudonymize",
+                    "perturb",
+                }
+            ),
         ]
         seen = {}  # match_expr -> (action, rule_name, index)
         for idx, rule in enumerate(rules, start=1):
@@ -136,8 +145,13 @@ class Settings():
                             "Potentially conflicting rules on '%s': "
                             "%s (action=%s, #%d) vs %s (action=%s, #%d). "
                             "Only the first rule will apply due to duplicate-path prevention.",
-                            match_expr, prev_name, prev_action, prev_idx,
-                            name, action, idx,
+                            match_expr,
+                            prev_name,
+                            prev_action,
+                            prev_idx,
+                            name,
+                            action,
+                            idx,
                         )
                         break
             else:

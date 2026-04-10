@@ -105,7 +105,7 @@ class S3ResultStorage:
         """
         if result_key.startswith(_S3_PREFIX):
             # s3://bucket/object_name → object_name
-            return result_key[len(_S3_PREFIX) + len(self._bucket) + 1:]
+            return result_key[len(_S3_PREFIX) + len(self._bucket) + 1 :]
         return f"{result_key}.ndjson"
 
     def write_from_path(self, job_id: str, local_path: str) -> str:

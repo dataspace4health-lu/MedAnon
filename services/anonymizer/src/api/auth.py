@@ -34,10 +34,18 @@ if not _API_KEY:
         "This is only safe for local development. Set MEDANON_API_KEY in production."
     )
 
-OPEN_PATHS = frozenset({
-    "/health", "/ready", "/metrics", "/docs", "/openapi.json", "/redoc", "/",
-    "/.well-known/smart-configuration",
-})
+OPEN_PATHS = frozenset(
+    {
+        "/health",
+        "/ready",
+        "/metrics",
+        "/docs",
+        "/openapi.json",
+        "/redoc",
+        "/",
+        "/.well-known/smart-configuration",
+    }
+)
 
 ENDPOINT_ROLES: dict[str, str] = {
     "/v1/process": "analyst",
@@ -72,14 +80,14 @@ ENDPOINT_ROLES: dict[str, str] = {
 # Prefix-based role mapping for parameterized paths (e.g. /v1/jobs/{job_id}).
 # Checked when ENDPOINT_ROLES produces no exact match.
 ENDPOINT_ROLE_PREFIXES: dict[str, str] = {
-    "/v1/jobs/bulk-export": "admin",   # exact — listed first for priority
-    "/v1/jobs/bulk-import": "admin",   # uploads to target FHIR server — requires admin
+    "/v1/jobs/bulk-export": "admin",  # exact — listed first for priority
+    "/v1/jobs/bulk-import": "admin",  # uploads to target FHIR server — requires admin
     "/v1/jobs/batch-patient-export": "analyst",
     "/v1/jobs/cohort": "analyst",
-    "/v1/jobs/": "analyst",            # covers /v1/jobs/{id} and /v1/jobs/{id}/result
-    "/v1/configs/": "viewer",          # covers /v1/configs/{name} — writes enforce admin in router
-    "/fhir/Group/": "admin",           # /fhir/Group/{id}/$export
-    "/fhir/export-status/": "analyst", # /fhir/export-status/{job_id}
+    "/v1/jobs/": "analyst",  # covers /v1/jobs/{id} and /v1/jobs/{id}/result
+    "/v1/configs/": "viewer",  # covers /v1/configs/{name} — writes enforce admin in router
+    "/fhir/Group/": "admin",  # /fhir/Group/{id}/$export
+    "/fhir/export-status/": "analyst",  # /fhir/export-status/{job_id}
     "/fhir/Subscription/": "analyst",  # /fhir/Subscription/{id} CRUD
 }
 
@@ -118,7 +126,9 @@ class AuthContext:
         required = _ROLE_MAP.get(role_name.lower())
         if required is None:
             return False
-        best = max((_ROLE_MAP[r] for r in self.roles if r in _ROLE_MAP), default=Role.VIEWER)
+        best = max(
+            (_ROLE_MAP[r] for r in self.roles if r in _ROLE_MAP), default=Role.VIEWER
+        )
         return best >= required
 
 
@@ -139,14 +149,20 @@ def get_auth_context(request: Request) -> AuthContext:
     if _API_KEY:
         # API-key auth
         if hmac.compare_digest(api_key_header, _API_KEY):
-            return AuthContext(subject="api-key-user", roles=frozenset({"admin"}), auth_method="api-key")
+            return AuthContext(
+                subject="api-key-user",
+                roles=frozenset({"admin"}),
+                auth_method="api-key",
+            )
         # SMART bearer token auth
         if bearer_token:
             return _resolve_bearer_context(bearer_token)
         raise HTTPException(status_code=401, detail="Unauthorized")
 
     # Open access — no auth configured
-    return AuthContext(subject="anonymous", roles=frozenset({"admin"}), auth_method="none")
+    return AuthContext(
+        subject="anonymous", roles=frozenset({"admin"}), auth_method="none"
+    )
 
 
 def _extract_bearer(request: Request) -> str | None:
@@ -181,26 +197,39 @@ def _resolve_bearer_context(token: str) -> AuthContext:
                 raise HTTPException(status_code=401, detail="Token inactive")
             scope = data.get("scope", "")
             from api.smart_scopes import parse_smart_scopes
+
             role = parse_smart_scopes(scope)
             sub = data.get("sub", data.get("username", "smart-user"))
-            return AuthContext(subject=sub, roles=frozenset({role}), auth_method="smart-bearer")
+            return AuthContext(
+                subject=sub, roles=frozenset({role}), auth_method="smart-bearer"
+            )
         except HTTPException:
             raise
         except urllib.error.URLError as exc:
             # Network-level failure (DNS, timeout, connection refused) — report
             # as a service unavailability, not a 401.
-            log.warning("smart_introspection_unreachable url=%s: %s", introspection_url, exc)
-            raise HTTPException(status_code=503, detail="Token introspection service unavailable")
+            log.warning(
+                "smart_introspection_unreachable url=%s: %s", introspection_url, exc
+            )
+            raise HTTPException(
+                status_code=503, detail="Token introspection service unavailable"
+            )
         except (ValueError, KeyError) as exc:
             # Malformed response from introspection endpoint
             log.warning("smart_introspection_bad_response: %s", exc)
-            raise HTTPException(status_code=503, detail="Token introspection service unavailable")
+            raise HTTPException(
+                status_code=503, detail="Token introspection service unavailable"
+            )
         except Exception:
             raise HTTPException(status_code=401, detail="Unauthorized")
 
     # Fallback: accept the API key as a bearer token
     if _API_KEY and hmac.compare_digest(token, _API_KEY):
-        return AuthContext(subject="api-key-user", roles=frozenset({"admin"}), auth_method="bearer-apikey")
+        return AuthContext(
+            subject="api-key-user",
+            roles=frozenset({"admin"}),
+            auth_method="bearer-apikey",
+        )
 
     raise HTTPException(status_code=401, detail="Unauthorized")
 

@@ -2,14 +2,16 @@ from datetime import timedelta
 from utils.fhirpath import error, find_nodes, get_date
 from utils.crypto import bounded_random
 
-expected_params = ['min', 'max']
+expected_params = ["min", "max"]
 date_format = "%Y-%m-%d"
+
 
 def _perturb(real_value, noise_range, is_date=False):
     noise = bounded_random(noise_range[0], noise_range[1])
     if not is_date:
         return real_value + noise
     return (real_value + timedelta(days=noise)).strftime(date_format)
+
 
 def _perturb_nodes(node, key, value, noise_range):
     if isinstance(node, list):
@@ -23,9 +25,11 @@ def _perturb_nodes(node, key, value, noise_range):
                     if isinstance(elem, (int, float)) and not isinstance(elem, bool):
                         node[key][idx] = _perturb(elem, noise_range)
                     elif get_date(elem, date_format):
-                        node[key][idx] = _perturb(get_date(elem, date_format), noise_range, True)
+                        node[key][idx] = _perturb(
+                            get_date(elem, date_format), noise_range, True
+                        )
                     else:
-                        error(f'{type(node[key][idx])} is not a number')
+                        error(f"{type(node[key][idx])} is not a number")
         else:
             elem = node[key]
             if isinstance(elem, (int, float)) and not isinstance(elem, bool):
@@ -33,16 +37,19 @@ def _perturb_nodes(node, key, value, noise_range):
             elif get_date(elem, date_format):
                 node[key] = _perturb(get_date(elem, date_format), noise_range, True)
             else:
-                error(f'{type(node[key])} is not a number')
+                error(f"{type(node[key])} is not a number")
 
-def perturb_by_path(resource, el, params): # ONLY FOR NUMBERS AND DATES
+
+def perturb_by_path(resource, el, params):  # ONLY FOR NUMBERS AND DATES
     if not all(param in params for param in expected_params):
-        error(f'Missing params (expected {expected_params})')
+        error(f"Missing params (expected {expected_params})")
     ret = resource
-    path = el['path']
-    path = path.split('.')[1:] # Remove root
+    path = el["path"]
+    path = path.split(".")[1:]  # Remove root
     if len(path) == 0:
         ret.clear()
         return
     ret = find_nodes(ret, path[:-1], [])
-    _perturb_nodes(ret, path[-1], el['value'], [params[elem] for elem in expected_params])
+    _perturb_nodes(
+        ret, path[-1], el["value"], [params[elem] for elem in expected_params]
+    )

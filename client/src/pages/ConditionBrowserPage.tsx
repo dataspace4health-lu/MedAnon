@@ -177,7 +177,7 @@ export default function ConditionBrowserPage() {
     }
     const params: Record<string, string> = {};
     if (committedQuery) {
-      const isCode = /^\d[\d.\-]*$/.test(committedQuery.trim());
+      const isCode = /^\d[\d.-]*$/.test(committedQuery.trim());
       params[isCode ? 'code' : 'code:text'] = committedQuery;
     }
     if (committedStatus !== 'any') params['clinical-status'] = committedStatus;

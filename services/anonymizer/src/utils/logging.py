@@ -27,14 +27,16 @@ class JsonFormatter(logging.Formatter):
     """
 
     def format(self, record: logging.LogRecord) -> str:
-        return json.dumps({
-            "ts": self.formatTime(record, "%Y-%m-%dT%H:%M:%S"),
-            "level": record.levelname,
-            "logger": record.name,
-            "service": "medanon",
-            "request_id": REQUEST_ID.get("-"),
-            "msg": record.getMessage(),
-        })
+        return json.dumps(
+            {
+                "ts": self.formatTime(record, "%Y-%m-%dT%H:%M:%S"),
+                "level": record.levelname,
+                "logger": record.name,
+                "service": "medanon",
+                "request_id": REQUEST_ID.get("-"),
+                "msg": record.getMessage(),
+            }
+        )
 
 
 def setup_logging(level: str = "INFO") -> None:

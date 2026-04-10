@@ -11,6 +11,7 @@ Spec: https://hl7.org/fhir/uv/bulkdata/
 All export-trigger endpoints return HTTP 202 with a ``Content-Location``
 header pointing to the polling URL, as required by the spec.
 """
+
 from __future__ import annotations
 
 from utils.json_fast import loads as _json_loads, dumps as _json_dumps
@@ -41,6 +42,7 @@ _FHIR_SOURCE_URL: str = os.environ.get("FHIR_SOURCE_URL", "").strip()
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _operation_outcome(severity: str, code: str, diagnostics: str) -> dict:
     """Return a minimal FHIR OperationOutcome dict."""
@@ -121,12 +123,17 @@ def _collect_resource_types(result_path: str) -> list[str]:
 # Export-trigger endpoints
 # ---------------------------------------------------------------------------
 
+
 @router.get("/$export")
 @limiter.limit("5/minute")
 async def system_export(
     request: Request,
-    _since: str | None = Query(None, description="Only include resources modified after this datetime"),
-    _type: str | None = Query(None, description="Comma-separated FHIR resource types to export"),
+    _since: str | None = Query(
+        None, description="Only include resources modified after this datetime"
+    ),
+    _type: str | None = Query(
+        None, description="Comma-separated FHIR resource types to export"
+    ),
     _outputFormat: str = Query(
         _SUPPORTED_OUTPUT_FORMAT,
         description="Output format; only application/fhir+ndjson is supported",
@@ -141,13 +148,16 @@ async def system_export(
     server_url = _require_fhir_source_url()
 
     try:
-        job_dict = _service.submit_bulk_export(server_url, {
-            "level": "system",
-            "since": _since,
-            "type_filter": _type,
-            "_fhir_bulk_spec": True,
-            "request_url": str(request.url),
-        })
+        job_dict = _service.submit_bulk_export(
+            server_url,
+            {
+                "level": "system",
+                "since": _since,
+                "type_filter": _type,
+                "_fhir_bulk_spec": True,
+                "request_url": str(request.url),
+            },
+        )
     except JobStoreUnavailable:
         raise HTTPException(status_code=503, detail="Job store not initialised")
 
@@ -160,8 +170,12 @@ async def system_export(
 @limiter.limit("5/minute")
 async def patient_export(
     request: Request,
-    _since: str | None = Query(None, description="Only include resources modified after this datetime"),
-    _type: str | None = Query(None, description="Comma-separated FHIR resource types to export"),
+    _since: str | None = Query(
+        None, description="Only include resources modified after this datetime"
+    ),
+    _type: str | None = Query(
+        None, description="Comma-separated FHIR resource types to export"
+    ),
     _outputFormat: str = Query(
         _SUPPORTED_OUTPUT_FORMAT,
         description="Output format; only application/fhir+ndjson is supported",
@@ -176,13 +190,16 @@ async def patient_export(
     server_url = _require_fhir_source_url()
 
     try:
-        job_dict = _service.submit_bulk_export(server_url, {
-            "level": "patient",
-            "since": _since,
-            "type_filter": _type,
-            "_fhir_bulk_spec": True,
-            "request_url": str(request.url),
-        })
+        job_dict = _service.submit_bulk_export(
+            server_url,
+            {
+                "level": "patient",
+                "since": _since,
+                "type_filter": _type,
+                "_fhir_bulk_spec": True,
+                "request_url": str(request.url),
+            },
+        )
     except JobStoreUnavailable:
         raise HTTPException(status_code=503, detail="Job store not initialised")
 
@@ -196,8 +213,12 @@ async def patient_export(
 async def group_export(
     request: Request,
     group_id: str,
-    _since: str | None = Query(None, description="Only include resources modified after this datetime"),
-    _type: str | None = Query(None, description="Comma-separated FHIR resource types to export"),
+    _since: str | None = Query(
+        None, description="Only include resources modified after this datetime"
+    ),
+    _type: str | None = Query(
+        None, description="Comma-separated FHIR resource types to export"
+    ),
     _outputFormat: str = Query(
         _SUPPORTED_OUTPUT_FORMAT,
         description="Output format; only application/fhir+ndjson is supported",
@@ -212,14 +233,17 @@ async def group_export(
     server_url = _require_fhir_source_url()
 
     try:
-        job_dict = _service.submit_bulk_export(server_url, {
-            "level": "group",
-            "resource_type": group_id,
-            "since": _since,
-            "type_filter": _type,
-            "_fhir_bulk_spec": True,
-            "request_url": str(request.url),
-        })
+        job_dict = _service.submit_bulk_export(
+            server_url,
+            {
+                "level": "group",
+                "resource_type": group_id,
+                "since": _since,
+                "type_filter": _type,
+                "_fhir_bulk_spec": True,
+                "request_url": str(request.url),
+            },
+        )
     except JobStoreUnavailable:
         raise HTTPException(status_code=503, detail="Job store not initialised")
 
@@ -231,6 +255,7 @@ async def group_export(
 # ---------------------------------------------------------------------------
 # Status polling + cancellation
 # ---------------------------------------------------------------------------
+
 
 @router.get("/export-status/{job_id}")
 @limiter.limit("60/minute")
@@ -267,8 +292,7 @@ async def export_status(request: Request, job_id: str) -> Response:
         resource_types = _collect_resource_types(result_path) if result_path else []
         if resource_types:
             output = [
-                BulkExportOutputFile(type=rt, url=download_url)
-                for rt in resource_types
+                BulkExportOutputFile(type=rt, url=download_url) for rt in resource_types
             ]
         else:
             output = [BulkExportOutputFile(type="Bundle", url=download_url)]

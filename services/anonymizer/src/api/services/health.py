@@ -54,8 +54,7 @@ class HealthCheckService:
         checks: dict[str, str] = {}
         executor = get_executor()
         futures = {
-            executor.submit(fn, *args): name
-            for name, (fn, args) in probes.items()
+            executor.submit(fn, *args): name for name, (fn, args) in probes.items()
         }
         for fut in as_completed(futures, timeout=timeout + 2):
             checks[futures[fut]] = fut.result()
@@ -102,6 +101,7 @@ class HealthCheckService:
     def _probe_nlp(self) -> str:
         try:
             from integrations.nlp.detector import _get_analyzer
+
             _get_analyzer()
             return "ok"
         except Exception as exc:

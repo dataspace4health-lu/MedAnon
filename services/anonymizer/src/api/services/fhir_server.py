@@ -63,19 +63,32 @@ class FhirServerService:
             # Per-resource fallback for the failed chunk
             for res in chunk:
                 try:
-                    result = await asyncio.to_thread(process_data_batch, [res], settings)
+                    result = await asyncio.to_thread(
+                        process_data_batch, [res], settings
+                    )
                     yield _json_dumps(result[0])
                 except GpasUnavailableError as gexc:
-                    logger.error("%s: gPAS unavailable: %s", label, gexc, exc_info=False)
+                    logger.error(
+                        "%s: gPAS unavailable: %s", label, gexc, exc_info=False
+                    )
                     yield GPAS_FATAL_JSON
                     return
                 except Exception as exc2:
-                    rtype = res.get("resourceType", "Unknown") if isinstance(res, dict) else "Unknown"
+                    rtype = (
+                        res.get("resourceType", "Unknown")
+                        if isinstance(res, dict)
+                        else "Unknown"
+                    )
                     logger.error(
                         "%s: error processing resource type=%s: %s",
-                        label, rtype, type(exc2).__name__, exc_info=False,
+                        label,
+                        rtype,
+                        type(exc2).__name__,
+                        exc_info=False,
                     )
-                    yield _json_dumps({"error": "processing error", "resourceType": rtype})
+                    yield _json_dumps(
+                        {"error": "processing error", "resourceType": rtype}
+                    )
 
     async def _stream_and_batch(
         self, gen, settings, *, label: str = "stream"
@@ -87,7 +100,9 @@ class FhirServerService:
         processes and yields batches.  This pipelines I/O with CPU processing.
         """
         if _PREFETCH_BATCHES <= 0:
-            async for line in self._stream_and_batch_sequential(gen, settings, label=label):
+            async for line in self._stream_and_batch_sequential(
+                gen, settings, label=label
+            ):
                 yield line
             return
 
@@ -180,12 +195,15 @@ class FhirServerService:
         gen = self._fhir.fetch_all_resource_types(
             server_url, resource_types, params=params, token=token, timeout=timeout
         )
+
         # Unwrap (resource_type, resource) tuples from the generator
         def _resources_only():
             for _rt, resource in gen:
                 yield resource
 
-        async for line in self._stream_and_batch(_resources_only(), settings, label="from_server"):
+        async for line in self._stream_and_batch(
+            _resources_only(), settings, label="from_server"
+        ):
             yield line
 
     async def stream_everything(
@@ -193,8 +211,12 @@ class FhirServerService:
     ) -> AsyncIterator[str]:
         """Fetch $everything, process in batches, yield JSON strings."""
         gen = self._fhir.fetch_everything(
-            server_url, resource_type, resource_id,
-            params=params, token=token, timeout=timeout,
+            server_url,
+            resource_type,
+            resource_id,
+            params=params,
+            token=token,
+            timeout=timeout,
         )
         async for line in self._stream_and_batch(gen, settings, label="everything"):
             yield line
@@ -210,7 +232,10 @@ class FhirServerService:
         deidentified = await asyncio.to_thread(process_data, resource, settings)
 
         # Flatten Bundle entries or wrap single resource into a list
-        if isinstance(deidentified, dict) and deidentified.get("resourceType") == "Bundle":
+        if (
+            isinstance(deidentified, dict)
+            and deidentified.get("resourceType") == "Bundle"
+        ):
             resources_to_upload = [
                 entry["resource"]
                 for entry in deidentified.get("entry", [])
@@ -224,8 +249,10 @@ class FhirServerService:
         def _collect_upload():
             results = []
             for r in self._fhir.upload_resources(
-                target_url, resources_to_upload,
-                token=target_token, timeout=timeout,
+                target_url,
+                resources_to_upload,
+                token=target_token,
+                timeout=timeout,
             ):
                 results.append(r)
             return results
@@ -236,13 +263,22 @@ class FhirServerService:
 
         logger.info(
             "process_and_upload: uploaded=%d errors=%d target=%s",
-            uploaded, errors, target_url,
+            uploaded,
+            errors,
+            target_url,
         )
         return {"uploaded": uploaded, "errors": errors, "results": results}
 
     async def stream_round_trip(
-        self, source_url, target_url, resource_types, params,
-        source_token, target_token, timeout, settings,
+        self,
+        source_url,
+        target_url,
+        resource_types,
+        params,
+        source_token,
+        target_token,
+        timeout,
+        settings,
     ) -> AsyncIterator[str]:
         """Fetch from source, process in batches, upload to target, yield status lines.
 
@@ -257,15 +293,20 @@ class FhirServerService:
         from the generator without materialising them all at once.
         """
         gen = self._fhir.fetch_all_resource_types(
-            source_url, resource_types, params=params,
-            token=source_token, timeout=timeout,
+            source_url,
+            resource_types,
+            params=params,
+            token=source_token,
+            timeout=timeout,
         )
 
         async def _deidentify(ch: list[tuple[str, dict]]) -> tuple[list[dict], bool]:
             """De-identify one chunk; returns (results, is_fatal)."""
             resources = [res for _, res in ch]
             try:
-                return await asyncio.to_thread(process_data_batch, resources, settings), False
+                return await asyncio.to_thread(
+                    process_data_batch, resources, settings
+                ), False
             except GpasUnavailableError as exc:
                 logger.error("round_trip: gPAS unavailable: %s", exc, exc_info=False)
                 return [], True
@@ -273,14 +314,21 @@ class FhirServerService:
                 collected: list[dict] = []
                 for rt, res in ch:
                     try:
-                        result = (await asyncio.to_thread(process_data_batch, [res], settings))[0]
+                        result = (
+                            await asyncio.to_thread(process_data_batch, [res], settings)
+                        )[0]
                         collected.append(result)
                     except GpasUnavailableError as exc:
-                        logger.error("round_trip: gPAS unavailable: %s", exc, exc_info=False)
+                        logger.error(
+                            "round_trip: gPAS unavailable: %s", exc, exc_info=False
+                        )
                         return collected, True
                     except Exception as exc2:
                         logger.error(
-                            "round_trip error type=%s: %s", rt, type(exc2).__name__, exc_info=False,
+                            "round_trip error type=%s: %s",
+                            rt,
+                            type(exc2).__name__,
+                            exc_info=False,
                         )
                 return collected, False
 
@@ -291,7 +339,9 @@ class FhirServerService:
 
         if _PREFETCH_BATCHES > 0:
             # Pipelined: fetch and process overlap via bounded queue
-            fetch_q: asyncio.Queue = asyncio.Queue(maxsize=_PREFETCH_BATCHES * _BATCH_SIZE)
+            fetch_q: asyncio.Queue = asyncio.Queue(
+                maxsize=_PREFETCH_BATCHES * _BATCH_SIZE
+            )
 
             async def _producer():
                 try:
@@ -321,14 +371,18 @@ class FhirServerService:
                         all_deidentified.extend(results)
                         chunk = []
                         if fatal:
-                            yield _json_dumps({"status": "error", "error": "gPAS unavailable"})
+                            yield _json_dumps(
+                                {"status": "error", "error": "gPAS unavailable"}
+                            )
                             return
 
                 if chunk:
                     results, fatal = await _deidentify(chunk)
                     all_deidentified.extend(results)
                     if fatal:
-                        yield _json_dumps({"status": "error", "error": "gPAS unavailable"})
+                        yield _json_dumps(
+                            {"status": "error", "error": "gPAS unavailable"}
+                        )
                         return
             except Exception:
                 producer_task.cancel()
@@ -354,7 +408,9 @@ class FhirServerService:
                     all_deidentified.extend(results)
                     chunk = []
                     if fatal:
-                        yield _json_dumps({"status": "error", "error": "gPAS unavailable"})
+                        yield _json_dumps(
+                            {"status": "error", "error": "gPAS unavailable"}
+                        )
                         return
 
             if chunk:
@@ -369,7 +425,10 @@ class FhirServerService:
         # instead of materialising all upload dicts at once.
         def _upload_gen():
             return self._fhir.upload_resources(
-                target_url, all_deidentified, token=target_token, timeout=timeout,
+                target_url,
+                all_deidentified,
+                token=target_token,
+                timeout=timeout,
             )
 
         upload_gen = await asyncio.to_thread(_upload_gen)
@@ -379,20 +438,37 @@ class FhirServerService:
             if r is _UP_SENTINEL:
                 break
             if r["success"]:
-                yield _json_dumps({
-                    "resourceType": r["resourceType"], "target_id": r.get("server_id"),
-                    "status": "ok",
-                })
+                yield _json_dumps(
+                    {
+                        "resourceType": r["resourceType"],
+                        "target_id": r.get("server_id"),
+                        "status": "ok",
+                    }
+                )
             else:
-                logger.error("round_trip upload error type=%s: %s", r["resourceType"], r.get("error"))
-                yield _json_dumps({
-                    "resourceType": r["resourceType"], "status": "error",
-                    "error": r.get("error", "upload error"),
-                })
+                logger.error(
+                    "round_trip upload error type=%s: %s",
+                    r["resourceType"],
+                    r.get("error"),
+                )
+                yield _json_dumps(
+                    {
+                        "resourceType": r["resourceType"],
+                        "status": "error",
+                        "error": r.get("error", "upload error"),
+                    }
+                )
 
     async def stream_bulk_export(
-        self, server_url, level, resource_type, type_filter,
-        since, token, timeout, settings,
+        self,
+        server_url,
+        level,
+        resource_type,
+        type_filter,
+        since,
+        token,
+        timeout,
+        settings,
     ) -> AsyncIterator[str]:
         """Run bulk export, process in batches, yield JSON strings.
 
@@ -411,12 +487,20 @@ class FhirServerService:
         # Phase 1: Kick off (single HTTP round-trip in thread)
         try:
             status_url = await asyncio.to_thread(
-                bulk_export_kick_off, server_url,
-                level, resource_type, type_filter, since, token, timeout,
+                bulk_export_kick_off,
+                server_url,
+                level,
+                resource_type,
+                type_filter,
+                since,
+                token,
+                timeout,
             )
         except Exception as exc:
             logger.error("bulk-export kick-off error: %s", exc, exc_info=False)
-            yield _json_dumps({"error": f"bulk export kick-off error: {type(exc).__name__}"})
+            yield _json_dumps(
+                {"error": f"bulk export kick-off error: {type(exc).__name__}"}
+            )
             return
 
         # Phase 2: Poll with asyncio.sleep (no thread held)
@@ -425,7 +509,10 @@ class FhirServerService:
             manifest = None
             while _time.monotonic() < deadline:
                 done, result = await asyncio.to_thread(
-                    _poll_bulk_status_single, status_url, token, timeout,
+                    _poll_bulk_status_single,
+                    status_url,
+                    token,
+                    timeout,
                 )
                 if done:
                     manifest = result
@@ -438,7 +525,9 @@ class FhirServerService:
 
             # Phase 3: Download and process
             gen = _download_manifest_files(manifest, token=token, timeout=timeout)
-            async for line in self._stream_and_batch(gen, settings, label="bulk_export"):
+            async for line in self._stream_and_batch(
+                gen, settings, label="bulk_export"
+            ):
                 yield line
         except Exception as exc:
             logger.error("bulk-export error: %s", exc, exc_info=False)
@@ -450,15 +539,23 @@ class FhirServerService:
                 pass  # best-effort cleanup
 
     async def stream_cohort(
-        self, server_url, search_type, search_params, everything_params,
-        token, timeout, settings,
+        self,
+        server_url,
+        search_type,
+        search_params,
+        everything_params,
+        token,
+        timeout,
+        settings,
     ) -> AsyncIterator[str]:
         """Run cohort search + $everything, process in batches, yield JSON strings."""
         gen = self._fhir.fetch_cohort(
-            server_url, search_type=search_type,
+            server_url,
+            search_type=search_type,
             search_params=search_params,
             everything_params=everything_params,
-            token=token, timeout=timeout,
+            token=token,
+            timeout=timeout,
         )
         try:
             async for line in self._stream_and_batch(gen, settings, label="cohort"):

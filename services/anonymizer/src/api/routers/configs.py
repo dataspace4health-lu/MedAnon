@@ -35,21 +35,30 @@ logger = logging.getLogger("medanon")
 
 _NAME_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 
-_USER_CONFIG_DIR = os.environ.get(
-    "MEDANON_USER_CONFIG_DIR", "/output/user-configs"
-)
+_USER_CONFIG_DIR = os.environ.get("MEDANON_USER_CONFIG_DIR", "/output/user-configs")
 
 # Valid action names — used for request validation.
-_VALID_ACTIONS = frozenset({
-    "redact", "cryptohash", "encrypt", "decrypt",
-    "perturb", "substitute", "generalize",
-    "scrub_text", "nlp_scrub", "nlp_detect", "gpas_pseudonymize",
-})
+_VALID_ACTIONS = frozenset(
+    {
+        "redact",
+        "cryptohash",
+        "encrypt",
+        "decrypt",
+        "perturb",
+        "substitute",
+        "generalize",
+        "scrub_text",
+        "nlp_scrub",
+        "nlp_detect",
+        "gpas_pseudonymize",
+    }
+)
 
 
 # ---------------------------------------------------------------------------
 # Request / response schemas
 # ---------------------------------------------------------------------------
+
 
 class RuleIn(BaseModel):
     match: str
@@ -75,6 +84,7 @@ class ConfigUpdateRequest(BaseModel):
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _validate_name(name: str) -> None:
     if not _NAME_RE.match(name):
         raise HTTPException(
@@ -94,7 +104,9 @@ def _require_admin(request: Request) -> None:
     """Raise 403 if the caller does not have admin role."""
     auth: AuthContext | None = getattr(request.state, "auth", None)
     if auth is None or not auth.has_role("admin"):
-        raise HTTPException(status_code=403, detail="Admin role required for config writes.")
+        raise HTTPException(
+            status_code=403, detail="Admin role required for config writes."
+        )
 
 
 def _rules_to_yaml(
@@ -127,10 +139,14 @@ def _rules_to_yaml(
         f"# {description}\n"
         f"# =============================================================================\n\n"
     )
-    return header + yaml.dump(doc, default_flow_style=False, allow_unicode=True, sort_keys=False)
+    return header + yaml.dump(
+        doc, default_flow_style=False, allow_unicode=True, sort_keys=False
+    )
 
 
-def _validate_and_write(name: str, description: str, rules: list[RuleIn], general: dict | None) -> str:
+def _validate_and_write(
+    name: str, description: str, rules: list[RuleIn], general: dict | None
+) -> str:
     """Validate rules via config.Settings then write to disk. Returns the YAML string."""
     import tempfile
 
@@ -142,7 +158,7 @@ def _validate_and_write(name: str, description: str, rules: list[RuleIn], genera
             raise HTTPException(
                 status_code=422,
                 detail=f"rules[{idx}].action '{rule.action}' is not a valid action. "
-                       f"Valid actions: {', '.join(sorted(_VALID_ACTIONS))}",
+                f"Valid actions: {', '.join(sorted(_VALID_ACTIONS))}",
             )
         if not rule.match.strip():
             raise HTTPException(
@@ -160,7 +176,7 @@ def _validate_and_write(name: str, description: str, rules: list[RuleIn], genera
         tmp_path = tmp.name
 
     try:
-        Settings(tmp_path)           # raises ValueError on schema errors
+        Settings(tmp_path)  # raises ValueError on schema errors
     except (ValueError, FileNotFoundError) as exc:
         raise HTTPException(status_code=422, detail=f"Invalid config: {exc}") from exc
     finally:
@@ -177,6 +193,7 @@ def _validate_and_write(name: str, description: str, rules: list[RuleIn], genera
 
 def _get_store():
     from pipeline.config.store import _config_store
+
     if _config_store is None:
         raise HTTPException(status_code=503, detail="Config store not initialised.")
     return _config_store
@@ -187,12 +204,12 @@ def _read_yaml(name: str, is_system: bool) -> str:
     if is_system:
         system_dir = os.environ.get("MEDANON_CONFIG_DIR", "/code/config")
         profile_map = {
-            "minimal":    "config.yaml",
-            "gpas":       "config_gpas.yaml",
-            "gdpr":       "config_gdpr_eu.yaml",
-            "hipaa":      "config_hipaa_safe_harbor.yaml",
-            "research":   "config_research_pseudonymous.yaml",
-            "structural":    "config_structure_preserving.yaml",
+            "minimal": "config.yaml",
+            "gpas": "config_gpas.yaml",
+            "gdpr": "config_gdpr_eu.yaml",
+            "hipaa": "config_hipaa_safe_harbor.yaml",
+            "research": "config_research_pseudonymous.yaml",
+            "structural": "config_structure_preserving.yaml",
             "value-masking": "config_value_masking.yaml",
         }
         filename = profile_map.get(name)
@@ -203,7 +220,9 @@ def _read_yaml(name: str, is_system: bool) -> str:
         path = _user_config_path(name)
 
     if not os.path.isfile(path):
-        raise HTTPException(status_code=404, detail=f"Config file for '{name}' not found on disk.")
+        raise HTTPException(
+            status_code=404, detail=f"Config file for '{name}' not found on disk."
+        )
 
     with open(path, "r", encoding="utf-8") as fh:
         return fh.read()
@@ -212,6 +231,7 @@ def _read_yaml(name: str, is_system: bool) -> str:
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+
 
 @router.get("/configs")
 def list_configs(request: Request):
@@ -276,7 +296,9 @@ def update_config(name: str, body: ConfigUpdateRequest, request: Request):
             detail=f"System config '{name}' is read-only. Duplicate it first to create a custom version.",
         )
 
-    description = body.description if body.description is not None else meta["description"]
+    description = (
+        body.description if body.description is not None else meta["description"]
+    )
     _validate_and_write(name, description, body.rules, body.general)
 
     if body.description is not None:

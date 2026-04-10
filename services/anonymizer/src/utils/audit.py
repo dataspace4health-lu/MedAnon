@@ -9,6 +9,7 @@ Audit events are:
 3. Optionally written to a local rotating file (backward compat) when
    ``MEDANON_AUDIT_LOG_FILE`` is set.
 """
+
 from __future__ import annotations
 
 import logging
@@ -36,11 +37,19 @@ def _get_redis():
         return None
     try:
         import redis as _redis_mod
-        _redis_client = _redis_mod.Redis.from_url(url, socket_timeout=2, decode_responses=True)
+
+        _redis_client = _redis_mod.Redis.from_url(
+            url, socket_timeout=2, decode_responses=True
+        )
         _redis_client.ping()
-        _log.info("audit_redis_connected stream=%s maxlen=%d", _REDIS_STREAM, _STREAM_MAXLEN)
+        _log.info(
+            "audit_redis_connected stream=%s maxlen=%d", _REDIS_STREAM, _STREAM_MAXLEN
+        )
     except Exception as exc:
-        _log.warning("audit_redis_unavailable: %s -- audit events will only go to stdout/file", exc)
+        _log.warning(
+            "audit_redis_unavailable: %s -- audit events will only go to stdout/file",
+            exc,
+        )
         _redis_client = None
     return _redis_client
 
@@ -93,8 +102,12 @@ def emit(
     r = _get_redis()
     if r is not None:
         try:
-            r.xadd(_REDIS_STREAM, entry if not detail else {**entry, "detail": _json_dumps(detail)},
-                   maxlen=_STREAM_MAXLEN, approximate=True)
+            r.xadd(
+                _REDIS_STREAM,
+                entry if not detail else {**entry, "detail": _json_dumps(detail)},
+                maxlen=_STREAM_MAXLEN,
+                approximate=True,
+            )
         except Exception:
             pass  # Best-effort; stdout log is the authoritative record
 
@@ -121,6 +134,7 @@ def query(
             if "detail" in fields and isinstance(fields["detail"], str):
                 try:
                     from utils.json_fast import loads as _json_loads
+
                     fields["detail"] = _json_loads(fields["detail"])
                 except (ValueError, TypeError):
                     pass

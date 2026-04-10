@@ -18,11 +18,11 @@ def _del_nodes(node, key, value):
 
 def redact_by_path(resource, el, params):
     ret = resource
-    path = el['path']  # "Patient.name"
-    path = path.split('.')[1:]  # Remove root
+    path = el["path"]  # "Patient.name"
+    path = path.split(".")[1:]  # Remove root
     if len(path) == 0:
         ret.clear()
         return
     ret = find_nodes(ret, path[:-1], [])
-    for node in (ret if isinstance(ret, list) else [ret]):
-        _del_nodes(node, path[-1], el['value'])
+    for node in ret if isinstance(ret, list) else [ret]:
+        _del_nodes(node, path[-1], el["value"])

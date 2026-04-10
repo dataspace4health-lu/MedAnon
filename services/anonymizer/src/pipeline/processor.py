@@ -58,6 +58,7 @@ _PARALLEL_WORKERS = int(os.environ.get("MEDANON_PARALLEL_WORKERS", "0"))
 
 def _get_default_pseudonymizer():
     from integrations.gpas.adapter import GpasPseudonymizerAdapter
+
     return GpasPseudonymizerAdapter()
 
 
@@ -68,6 +69,7 @@ def _processing_errors_mode(settings) -> str:
 # ---------------------------------------------------------------------------
 # Per-resource finalize (Pass 2 + post-processing)
 # ---------------------------------------------------------------------------
+
 
 def _finalize_resource(
     resource: dict,
@@ -99,7 +101,9 @@ def _finalize_resource(
             resource, gpas_work, precomputed_mapping, processing_mode
         )
     else:
-        batch_mapping = run_gpas_batch(resource, gpas_work, processing_mode, pseudonymizer)
+        batch_mapping = run_gpas_batch(
+            resource, gpas_work, processing_mode, pseudonymizer
+        )
 
     # Post-processing: determine what needs rewriting
     do_refs = getattr(settings, "rewrite_references", False)
@@ -137,7 +141,8 @@ def _finalize_resource(
 
         if id_text_map:
             _rewrite_text_ids(
-                resource, id_text_map,
+                resource,
+                id_text_map,
                 compiled=precompiled_text_id_regex,
                 automaton=prebuilt_text_id_automaton,
             )
@@ -153,6 +158,7 @@ def _finalize_resource(
 # Batch processing (unified)
 # ---------------------------------------------------------------------------
 
+
 def _pass1_single(resource, settings, processing_mode):
     """Run Pass 1 for a single resource — suitable for thread pool dispatch.
 
@@ -163,7 +169,9 @@ def _pass1_single(resource, settings, processing_mode):
     try:
         rules = _get_rules_for_resource(resource, settings)
         manifest_entries: list[dict] = []
-        gpas_work = dispatch_pass1(resource, rules, settings, manifest_entries, processing_mode)
+        gpas_work = dispatch_pass1(
+            resource, rules, settings, manifest_entries, processing_mode
+        )
         return resource, gpas_work, manifest_entries
     except Exception:
         if snapshot is not None:
@@ -232,7 +240,9 @@ def process_data_batch(
             # Build combined unique ID list: gpas_work values first, then any
             # reference IDs not already present (dedup via set membership).
             value_id_set = {item.serialized_value for item in gpas_work}
-            combined_ids = list(value_id_set) + [r for r in ref_ids if r not in value_id_set]
+            combined_ids = list(value_id_set) + [
+                r for r in ref_ids if r not in value_id_set
+            ]
 
             # Single gPAS call for all IDs (or zero calls if nothing to do).
             combined_mapping: dict = {}
@@ -249,15 +259,25 @@ def process_data_batch(
 
             precomputed_ref_mapping = combined_mapping if ref_ids else None
 
-            return [_finalize_resource(
-                resource, settings, pseudonymizer,
-                gpas_work, manifest_entries, processing_mode,
-                precomputed_mapping=combined_mapping,
-                precomputed_ref_mapping=precomputed_ref_mapping,
-                attach_manifest=attach_manifest,
-            )]
+            return [
+                _finalize_resource(
+                    resource,
+                    settings,
+                    pseudonymizer,
+                    gpas_work,
+                    manifest_entries,
+                    processing_mode,
+                    precomputed_mapping=combined_mapping,
+                    precomputed_ref_mapping=precomputed_ref_mapping,
+                    attach_manifest=attach_manifest,
+                )
+            ]
         except Exception as exc:
-            rtype = resource.get("resourceType", "Unknown") if isinstance(resource, dict) else "Unknown"
+            rtype = (
+                resource.get("resourceType", "Unknown")
+                if isinstance(resource, dict)
+                else "Unknown"
+            )
             audit_log.error("batch_single_error resource_type=%s: %s", rtype, exc)
             if processing_mode != "skip":
                 raise
@@ -297,7 +317,11 @@ def process_data_batch(
                     resource, settings, processing_mode
                 )
             except Exception as exc:
-                rtype = resource.get("resourceType", "Unknown") if isinstance(resource, dict) else "Unknown"
+                rtype = (
+                    resource.get("resourceType", "Unknown")
+                    if isinstance(resource, dict)
+                    else "Unknown"
+                )
                 audit_log.error("batch_pass1_error resource_type=%s: %s", rtype, exc)
                 if processing_mode != "skip":
                     raise
@@ -311,7 +335,9 @@ def process_data_batch(
             all_manifest_entries.append(manifest_entries_)
 
     # Step 2: ONE gPAS HTTP call for all unique values across all resources
-    shared_mapping = run_gpas_batch_for_batch(all_gpas_works, processing_mode, pseudonymizer, gpas_params)
+    shared_mapping = run_gpas_batch_for_batch(
+        all_gpas_works, processing_mode, pseudonymizer, gpas_params
+    )
 
     # Pre-compile the text-ID matcher once for the whole batch so each resource
     # doesn't rebuild independently on the same pattern.
@@ -320,7 +346,8 @@ def process_data_batch(
     _batch_text_id_automaton = None
     if getattr(settings, "rewrite_text_ids", False) and shared_mapping:
         _batch_id_text_map = {
-            k: v for k, v in shared_mapping.items()
+            k: v
+            for k, v in shared_mapping.items()
             if k and v and k != v and not k.startswith("{")
         }
         if _batch_id_text_map:
@@ -352,16 +379,20 @@ def process_data_batch(
 
     # Step 3+4: Per-resource finalize (write-back from shared mapping, zero HTTP)
     results: list[dict] = []
-    for i, (resource, gpas_work, manifest_entries_) in enumerate(zip(
-        parsed, all_gpas_works, all_manifest_entries
-    )):
+    for i, (resource, gpas_work, manifest_entries_) in enumerate(
+        zip(parsed, all_gpas_works, all_manifest_entries)
+    ):
         if resource is None:
             results.append({"error": "pass1 error", "resourceType": "Unknown"})
         else:
             try:
                 result = _finalize_resource(
-                    resource, settings, pseudonymizer,
-                    gpas_work, manifest_entries_, processing_mode,
+                    resource,
+                    settings,
+                    pseudonymizer,
+                    gpas_work,
+                    manifest_entries_,
+                    processing_mode,
                     precomputed_mapping=shared_mapping,
                     precompiled_text_id_regex=_batch_text_id_regex,
                     precomputed_ref_mapping=_batch_ref_mapping,
@@ -370,7 +401,11 @@ def process_data_batch(
                 )
                 results.append(result)
             except Exception as exc:
-                rtype = resource.get("resourceType", "Unknown") if isinstance(resource, dict) else "Unknown"
+                rtype = (
+                    resource.get("resourceType", "Unknown")
+                    if isinstance(resource, dict)
+                    else "Unknown"
+                )
                 audit_log.error("batch_process_error resource_type=%s: %s", rtype, exc)
                 if processing_mode != "skip":
                     raise
@@ -387,7 +422,10 @@ def process_data_batch(
 # Bundle processing
 # ---------------------------------------------------------------------------
 
-def _process_bundle(resource: dict, settings, pseudonymizer, attach_manifest: bool = False) -> dict:
+
+def _process_bundle(
+    resource: dict, settings, pseudonymizer, attach_manifest: bool = False
+) -> dict:
     entries = resource.get("entry", [])
 
     # Snapshot original resource IDs before any processing
@@ -410,7 +448,9 @@ def _process_bundle(resource: dict, settings, pseudonymizer, attach_manifest: bo
     # the entire Bundle (not per-chunk).  process_data_batch already handles
     # memory-bounded chunking internally via _BATCH_SIZE for the gPAS HTTP call.
     if inner_resources:
-        all_processed = process_data_batch(inner_resources, settings, pseudonymizer, attach_manifest=attach_manifest)
+        all_processed = process_data_batch(
+            inner_resources, settings, pseudonymizer, attach_manifest=attach_manifest
+        )
         for idx, result in zip(entry_indices, all_processed):
             entries[idx]["resource"] = result
 
@@ -450,6 +490,7 @@ def _process_bundle(resource: dict, settings, pseudonymizer, attach_manifest: bo
 # Public entry point (backward-compatible)
 # ---------------------------------------------------------------------------
 
+
 def process_data(resource, settings, pseudonymizer=None, attach_manifest: bool = False):
     """De-identify / pseudonymize *resource* according to *settings*.
 
@@ -467,13 +508,21 @@ def process_data(resource, settings, pseudonymizer=None, attach_manifest: bool =
     if pseudonymizer is None:
         pseudonymizer = _get_default_pseudonymizer()
     if isinstance(resource, list):
-        return process_data_batch(resource, settings, pseudonymizer, attach_manifest=attach_manifest)
+        return process_data_batch(
+            resource, settings, pseudonymizer, attach_manifest=attach_manifest
+        )
     if isinstance(resource, dict) and resource.get("resourceType") == "Bundle":
-        return _process_bundle(resource, settings, pseudonymizer, attach_manifest=attach_manifest)
-    return process_data_batch([resource], settings, pseudonymizer, attach_manifest=attach_manifest)[0]
+        return _process_bundle(
+            resource, settings, pseudonymizer, attach_manifest=attach_manifest
+        )
+    return process_data_batch(
+        [resource], settings, pseudonymizer, attach_manifest=attach_manifest
+    )[0]
 
 
-def process_data_stream(resources_iter, settings, pseudonymizer=None, chunk_size=None, attach_manifest=False):
+def process_data_stream(
+    resources_iter, settings, pseudonymizer=None, chunk_size=None, attach_manifest=False
+):
     """Generator that de-identifies resources from *resources_iter* in chunks.
 
     Yields one processed resource dict at a time.  Memory usage is bounded by
@@ -498,7 +547,11 @@ def process_data_stream(resources_iter, settings, pseudonymizer=None, chunk_size
     for resource in resources_iter:
         chunk.append(resource)
         if len(chunk) >= chunk_size:
-            yield from process_data_batch(chunk, settings, pseudonymizer, attach_manifest=attach_manifest)
+            yield from process_data_batch(
+                chunk, settings, pseudonymizer, attach_manifest=attach_manifest
+            )
             chunk = []
     if chunk:
-        yield from process_data_batch(chunk, settings, pseudonymizer, attach_manifest=attach_manifest)
+        yield from process_data_batch(
+            chunk, settings, pseudonymizer, attach_manifest=attach_manifest
+        )

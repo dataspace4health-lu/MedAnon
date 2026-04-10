@@ -40,6 +40,7 @@ _QUEUE_GET_TIMEOUT_SEC = int(os.environ.get("MEDANON_QUEUE_GET_TIMEOUT_SEC", "30
 # Read operations
 # ---------------------------------------------------------------------------
 
+
 def get_capability_statement(base_url, token=None, timeout=30):
     """Fetch /metadata and return the list of supported resource types."""
     url = base_url.rstrip("/") + "/metadata"
@@ -77,8 +78,15 @@ def preflight_resource_count(base_url, resource_type=None, token=None, timeout=1
         return -1
 
 
-def fetch_resource_type(base_url, resource_type, params=None, token=None, timeout=30,
-                        start_url=None, yield_cursors=False):
+def fetch_resource_type(
+    base_url,
+    resource_type,
+    params=None,
+    token=None,
+    timeout=30,
+    start_url=None,
+    yield_cursors=False,
+):
     """Generator that yields individual FHIR resource dicts for a given type.
 
     Follows Bundle pagination (link[rel=next]) until exhausted.
@@ -118,7 +126,8 @@ def fetch_resource_type(base_url, resource_type, params=None, token=None, timeou
         if page > _t._FHIR_MAX_PAGES:
             log.warning(
                 "fetch_resource_type %s: reached page limit (%d), stopping pagination",
-                resource_type, _t._FHIR_MAX_PAGES,
+                resource_type,
+                _t._FHIR_MAX_PAGES,
             )
             break
         current_url = url
@@ -150,8 +159,15 @@ def fetch_resource_type(base_url, resource_type, params=None, token=None, timeou
         url = next_url
 
 
-def fetch_everything(base_url, resource_type, resource_id, params=None, token=None, timeout=30,
-                     start_url=None):
+def fetch_everything(
+    base_url,
+    resource_type,
+    resource_id,
+    params=None,
+    token=None,
+    timeout=30,
+    start_url=None,
+):
     """Generator that yields all resources from a FHIR $everything operation.
 
     Calls ``GET {base_url}/{resource_type}/{resource_id}/$everything`` and follows
@@ -190,7 +206,9 @@ def fetch_everything(base_url, resource_type, resource_id, params=None, token=No
         if page > _t._FHIR_MAX_PAGES:
             log.warning(
                 "$everything %s/%s: reached page limit (%d), stopping pagination",
-                resource_type, resource_id, _t._FHIR_MAX_PAGES,
+                resource_type,
+                resource_id,
+                _t._FHIR_MAX_PAGES,
             )
             break
         current_url = url
@@ -217,7 +235,9 @@ def fetch_everything(base_url, resource_type, resource_id, params=None, token=No
                 break
 
 
-def fetch_all_resource_types(base_url, resource_types, params=None, token=None, timeout=30):
+def fetch_all_resource_types(
+    base_url, resource_types, params=None, token=None, timeout=30
+):
     """Generator that yields (resource_type, resource_dict) for all given types.
 
     When ``MEDANON_FHIR_FETCH_PARALLEL`` > 1, resource types are fetched
@@ -227,7 +247,9 @@ def fetch_all_resource_types(base_url, resource_types, params=None, token=None, 
     """
     if _FHIR_FETCH_PARALLEL <= 1 or len(resource_types) <= 1:
         for rt in resource_types:
-            for resource in fetch_resource_type(base_url, rt, params=params, token=token, timeout=timeout):
+            for resource in fetch_resource_type(
+                base_url, rt, params=params, token=token, timeout=timeout
+            ):
                 yield rt, resource
         return
 
@@ -238,7 +260,9 @@ def fetch_all_resource_types(base_url, resource_types, params=None, token=None, 
 
     def _fetch_one(rt):
         try:
-            for resource in fetch_resource_type(base_url, rt, params=params, token=token, timeout=timeout):
+            for resource in fetch_resource_type(
+                base_url, rt, params=params, token=token, timeout=timeout
+            ):
                 result_q.put((rt, resource))
         except Exception as exc:
             error_q.put(exc)
@@ -266,8 +290,9 @@ def fetch_all_resource_types(base_url, resource_types, params=None, token=None, 
         raise error_q.get_nowait()
 
 
-def fetch_cohort(base_url, search_type, search_params, everything_params=None,
-                 token=None, timeout=30):
+def fetch_cohort(
+    base_url, search_type, search_params, everything_params=None, token=None, timeout=30
+):
     """Generator: find patients by searching a resource type, then yield $everything for each.
 
     Two-phase cohort export:
@@ -291,7 +316,11 @@ def fetch_cohort(base_url, search_type, search_params, everything_params=None,
     patient_ids = set()
     log.info("cohort search: %s params=%s", search_type, search_params)
     for resource in fetch_resource_type(
-        base_url, search_type, params=search_params, token=token, timeout=timeout,
+        base_url,
+        search_type,
+        params=search_params,
+        token=token,
+        timeout=timeout,
     ):
         ref = resource.get("subject", {}).get("reference", "")
         if ref.startswith("Patient/"):
@@ -323,8 +352,12 @@ def fetch_cohort(base_url, search_type, search_params, everything_params=None,
         for i, pid in enumerate(sorted(patient_ids), 1):
             log.info("cohort $everything %d/%d: Patient/%s", i, len(patient_ids), pid)
             for resource in fetch_everything(
-                base_url, "Patient", pid,
-                params=everything_params, token=token, timeout=timeout,
+                base_url,
+                "Patient",
+                pid,
+                params=everything_params,
+                token=token,
+                timeout=timeout,
             ):
                 if _dedup(resource):
                     yield resource
@@ -338,8 +371,12 @@ def fetch_cohort(base_url, search_type, search_params, everything_params=None,
         def _fetch_patient(pid):
             try:
                 for resource in fetch_everything(
-                    base_url, "Patient", pid,
-                    params=everything_params, token=token, timeout=timeout,
+                    base_url,
+                    "Patient",
+                    pid,
+                    params=everything_params,
+                    token=token,
+                    timeout=timeout,
                 ):
                     result_q.put(resource)
             except Exception as exc:
@@ -369,7 +406,9 @@ def fetch_cohort(base_url, search_type, search_params, everything_params=None,
             raise error_q.get_nowait()
 
 
-def fetch_patients_everything(base_url, patient_ids, params=None, token=None, timeout=30):
+def fetch_patients_everything(
+    base_url, patient_ids, params=None, token=None, timeout=30
+):
     """Generator: yield $everything for each patient in *patient_ids*, with deduplication.
 
     Like the second phase of :func:`fetch_cohort` but skips the search phase
@@ -405,9 +444,16 @@ def fetch_patients_everything(base_url, patient_ids, params=None, token=None, ti
 
     if _COHORT_PARALLEL <= 1 or len(pid_list) <= 1:
         for i, pid in enumerate(pid_list, 1):
-            log.info("batch_patient $everything %d/%d: Patient/%s", i, len(pid_list), pid)
+            log.info(
+                "batch_patient $everything %d/%d: Patient/%s", i, len(pid_list), pid
+            )
             for resource in fetch_everything(
-                base_url, "Patient", pid, params=params, token=token, timeout=timeout,
+                base_url,
+                "Patient",
+                pid,
+                params=params,
+                token=token,
+                timeout=timeout,
             ):
                 if _dedup(resource):
                     yield resource
@@ -419,7 +465,12 @@ def fetch_patients_everything(base_url, patient_ids, params=None, token=None, ti
         def _fetch_patient(pid):
             try:
                 for resource in fetch_everything(
-                    base_url, "Patient", pid, params=params, token=token, timeout=timeout,
+                    base_url,
+                    "Patient",
+                    pid,
+                    params=params,
+                    token=token,
+                    timeout=timeout,
                 ):
                     result_q.put(resource)
             except Exception as exc:

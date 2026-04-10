@@ -59,6 +59,7 @@ def _ensure_nlp_detector_imports():
         _resolve_entities as _re,
         _scrub_xhtml_text_nodes as _sx,
     )
+
     _nlp_resolve_entities = _re
     _nlp_scrub_xhtml = _sx
 
@@ -83,16 +84,27 @@ def _get_nlp_adapter():
             return _nlp_adapter
         if os.environ.get("NLP_SERVICE_URL", ""):
             from integrations.nlp.adapter import RemoteNlpAdapter
+
             _nlp_adapter = RemoteNlpAdapter()
         else:
             try:
                 from integrations.nlp.adapter import LocalPresidioAdapter
+
                 adapter = LocalPresidioAdapter()
                 # Trigger lazy Presidio init to fail fast
-                adapter.analyze_and_replace("test", ["PERSON"], 0.4, "en", "tokenize", {"next": {}, "map": {}, "reverse": {}})
+                adapter.analyze_and_replace(
+                    "test",
+                    ["PERSON"],
+                    0.4,
+                    "en",
+                    "tokenize",
+                    {"next": {}, "map": {}, "reverse": {}},
+                )
                 _nlp_adapter = adapter
             except Exception as exc:
-                _log.warning("NLP adapter unavailable (Presidio/spaCy not installed): %s", exc)
+                _log.warning(
+                    "NLP adapter unavailable (Presidio/spaCy not installed): %s", exc
+                )
                 _nlp_adapter = _NLP_UNAVAILABLE
                 return None
     return _nlp_adapter
@@ -140,7 +152,9 @@ def nlp_scrub_by_path(resource: dict, el: dict, params: dict) -> None:
     try:
         nodes = find_nodes(resource, parent_path, [])
     except Exception:
-        _log.error("nlp_find_nodes_failed path=%s — redacting field as safety fallback", path)
+        _log.error(
+            "nlp_find_nodes_failed path=%s — redacting field as safety fallback", path
+        )
         redact_by_path(resource, el, {})
         return
 
@@ -157,13 +171,17 @@ def nlp_scrub_by_path(resource: dict, el: dict, params: dict) -> None:
                 try:
                     current["div"] = _nlp_scrub_xhtml(current["div"], scrub_fn)
                 except Exception:
-                    _log.error("nlp_scrub_failed path=%s.%s — redacting field", path, field)
+                    _log.error(
+                        "nlp_scrub_failed path=%s.%s — redacting field", path, field
+                    )
                     current["div"] = "[REDACTED]"
             elif isinstance(current, str):
                 try:
                     node[field] = _nlp_scrub_xhtml(current, scrub_fn)
                 except Exception:
-                    _log.error("nlp_scrub_failed path=%s.%s — redacting field", path, field)
+                    _log.error(
+                        "nlp_scrub_failed path=%s.%s — redacting field", path, field
+                    )
                     node[field] = "[REDACTED]"
         elif isinstance(current, str):
             try:
@@ -177,7 +195,12 @@ def nlp_scrub_by_path(resource: dict, el: dict, params: dict) -> None:
                     try:
                         current[i] = scrub_fn(v)
                     except Exception:
-                        _log.error("nlp_scrub_failed path=%s.%s[%d] — redacting field", path, field, i)
+                        _log.error(
+                            "nlp_scrub_failed path=%s.%s[%d] — redacting field",
+                            path,
+                            field,
+                            i,
+                        )
                         current[i] = "[REDACTED]"
 
     _apply(nodes, key)
@@ -203,7 +226,7 @@ deident_actions = {
 # ---------------------------------------------------------------------------
 
 pseudo_actions = {
-    "gpas_pseudonymize": None,   # sentinel — handled by batch Pass 2
+    "gpas_pseudonymize": None,  # sentinel — handled by batch Pass 2
     "encrypt": encrypt_by_path,
 }
 
@@ -224,11 +247,12 @@ actions = deident_actions
 # Dispatch helpers
 # ---------------------------------------------------------------------------
 
+
 def perform_deidentification(action, resource, el, params):
     if action in deident_actions:
         deident_actions[action](resource, el, params)
     else:
-        not_implemented(f'Method {action} is not implemented')
+        not_implemented(f"Method {action} is not implemented")
     return resource
 
 
@@ -237,12 +261,12 @@ def perform_pseudonymization(action, resource, el, params):
     if handler is None and action in pseudo_actions:
         # Sentinel action (gpas_pseudonymize) — should be deferred to batch pass
         not_implemented(
-            f'Action {action} must be dispatched via batch Pass 2, not per-element'
+            f"Action {action} must be dispatched via batch Pass 2, not per-element"
         )
     elif handler:
         handler(resource, el, params)
     else:
-        not_implemented(f'Method {action} is not implemented')
+        not_implemented(f"Method {action} is not implemented")
     return resource
 
 
@@ -254,7 +278,7 @@ def perform_depseudonymization(action, resource, el, params):
     elif handler:
         handler(resource, el, params)
     else:
-        not_implemented(f'Method {action} is not implemented')
+        not_implemented(f"Method {action} is not implemented")
     return resource
 
 
@@ -270,5 +294,6 @@ def _load_gpas_depseudo(action, resource, el, params):
             handler(resource, el, params)
             return
         from integrations.gpas.client import gpas_depseudonymize_by_path
+
         depseudo_actions["gpas_depseudonymize"] = gpas_depseudonymize_by_path
     gpas_depseudonymize_by_path(resource, el, params)

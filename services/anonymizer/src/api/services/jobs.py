@@ -18,6 +18,7 @@ class JobService:
 
     def _get_store(self):
         import pipeline.jobs.store as _store_mod
+
         if _store_mod._job_store is None:
             raise JobStoreUnavailable("Job store not initialised")
         return _store_mod._job_store
@@ -93,6 +94,7 @@ class JobService:
         if not job.result_path:
             raise JobResultMissing()
         from integrations.storage import get_result_storage
+
         if not get_result_storage().exists(job.result_path):
             raise JobResultMissing()
         return job.result_path
@@ -121,7 +123,9 @@ class JobService:
         job = store.get(job_id)
         return self._job_to_dict(job)
 
-    def submit_reprocess(self, source_job_id: str, config_profile: str = "auto") -> dict:
+    def submit_reprocess(
+        self, source_job_id: str, config_profile: str = "auto"
+    ) -> dict:
         """Queue a reprocess job that re-runs de-identification on staged rows.
 
         Raises JobNotFound if the source job does not exist.
@@ -130,10 +134,13 @@ class JobService:
         store = self._get_store()
         if store.get(source_job_id) is None:
             raise JobNotFound()
-        job = store.create("reprocess", {
-            "source_job_id": source_job_id,
-            "config_profile": config_profile,
-        })
+        job = store.create(
+            "reprocess",
+            {
+                "source_job_id": source_job_id,
+                "config_profile": config_profile,
+            },
+        )
         store.notify_new_job(job.id)
         return self._job_to_dict(job)
 
@@ -153,7 +160,13 @@ class JobService:
 
     _UPLOAD_CHUNK = 10_000
 
-    def upload_job_to_target(self, job_id: str, target_url: str, target_token: str | None = None, timeout: float = 30.0) -> dict:
+    def upload_job_to_target(
+        self,
+        job_id: str,
+        target_url: str,
+        target_token: str | None = None,
+        timeout: float = 30.0,
+    ) -> dict:
         """Read a completed job's NDJSON result and upload resources to target FHIR server.
 
         Uses idempotent PUT (via upload_resources) so repeated calls are safe.
@@ -163,7 +176,9 @@ class JobService:
         Streams the NDJSON in chunks of ``_UPLOAD_CHUNK`` resources to cap
         peak memory regardless of total file size.
         """
-        result_path = self.get_result_path(job_id)  # raises JobNotFound / JobNotComplete / JobResultMissing
+        result_path = self.get_result_path(
+            job_id
+        )  # raises JobNotFound / JobNotComplete / JobResultMissing
 
         from integrations.fhir.client import upload_resources
         from integrations.storage import get_result_storage
@@ -181,28 +196,57 @@ class JobService:
                     continue
                 try:
                     resource = json.loads(line)
-                    if isinstance(resource, dict) and resource.get("resourceType") and "error" not in resource:
+                    if (
+                        isinstance(resource, dict)
+                        and resource.get("resourceType")
+                        and "error" not in resource
+                    ):
                         chunk.append(resource)
                 except (json.JSONDecodeError, TypeError):
                     pass
                 if len(chunk) >= self._UPLOAD_CHUNK:
                     uploaded, errors = self._flush_upload_chunk(
-                        chunk, target_url, target_token, timeout, uploaded, errors, upload_resources,
+                        chunk,
+                        target_url,
+                        target_token,
+                        timeout,
+                        uploaded,
+                        errors,
+                        upload_resources,
                     )
                     chunk = []
             if chunk:
                 uploaded, errors = self._flush_upload_chunk(
-                    chunk, target_url, target_token, timeout, uploaded, errors, upload_resources,
+                    chunk,
+                    target_url,
+                    target_token,
+                    timeout,
+                    uploaded,
+                    errors,
+                    upload_resources,
                 )
         finally:
             if hasattr(stream, "close"):
                 stream.close()
 
-        logger.info("upload_job_to_target job=%s uploaded=%d errors=%d target=%s", job_id, uploaded, errors, target_url)
-        return {"job_id": job_id, "uploaded": uploaded, "errors": errors, "total": uploaded + errors}
+        logger.info(
+            "upload_job_to_target job=%s uploaded=%d errors=%d target=%s",
+            job_id,
+            uploaded,
+            errors,
+            target_url,
+        )
+        return {
+            "job_id": job_id,
+            "uploaded": uploaded,
+            "errors": errors,
+            "total": uploaded + errors,
+        }
 
     @staticmethod
-    def _flush_upload_chunk(chunk, target_url, target_token, timeout, uploaded, errors, upload_fn):
+    def _flush_upload_chunk(
+        chunk, target_url, target_token, timeout, uploaded, errors, upload_fn
+    ):
         for result in upload_fn(target_url, chunk, token=target_token, timeout=timeout):
             if result["success"]:
                 uploaded += 1
@@ -223,6 +267,7 @@ class JobService:
             raise JobNotFound()
 
         from pipeline.jobs import worker as _worker
+
         staging = _worker._staging
         if staging is None:
             return {"job_id": job_id, "staging": "unavailable"}
@@ -245,6 +290,7 @@ class JobService:
         if not job.result_path:
             raise JobResultMissing()
         from integrations.storage import get_result_storage
+
         storage = get_result_storage()
         deleted = storage.delete(job.result_path)
         if deleted:

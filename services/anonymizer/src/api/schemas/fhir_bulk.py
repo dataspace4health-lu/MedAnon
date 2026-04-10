@@ -1,12 +1,13 @@
 """FHIR Bulk Data Access IG response schemas."""
+
 from __future__ import annotations
 
 from pydantic import BaseModel
 
 
 class BulkExportOutputFile(BaseModel):
-    type: str   # FHIR resource type, e.g. "Patient"
-    url: str    # Download URL for this NDJSON file
+    type: str  # FHIR resource type, e.g. "Patient"
+    url: str  # Download URL for this NDJSON file
 
 
 class BulkExportManifest(BaseModel):

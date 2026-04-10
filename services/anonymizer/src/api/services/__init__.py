@@ -2,10 +2,12 @@
 
 from utils.json_fast import dumps as _json_dumps
 
-GPAS_FATAL_JSON = _json_dumps({
-    "error": "gPAS service unavailable \u2014 stream halted to prevent partial results",
-    "fatal": True,
-})
+GPAS_FATAL_JSON = _json_dumps(
+    {
+        "error": "gPAS service unavailable \u2014 stream halted to prevent partial results",
+        "fatal": True,
+    }
+)
 
 
 def stream_trailer(resource_count: int) -> str:

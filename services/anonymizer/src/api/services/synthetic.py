@@ -57,6 +57,7 @@ class SyntheticDataService:
         analytics_url = os.environ.get("ANALYTICS_SERVICE_URL", "")
         if analytics_url:
             from integrations.analytics.client import proxy_generate_synthetic
+
             params = {
                 "count": count,
                 "seed": seed,
@@ -72,6 +73,7 @@ class SyntheticDataService:
         payload = parse_payload_bytes(body, content_type=content_type)
 
         from api.deps import _unwrap_to_resources
+
         resources = _unwrap_to_resources(payload)
         patients = [r for r in resources if r.get("resourceType") == "Patient"]
 
@@ -100,14 +102,18 @@ class SyntheticDataService:
                     if use_sdv:
                         synthetic_conditions = await asyncio.to_thread(
                             generate_synthetic_conditions_sdv,
-                            conditions, synthetic,
-                            count_per_patient=count_per_patient, seed=seed,
+                            conditions,
+                            synthetic,
+                            count_per_patient=count_per_patient,
+                            seed=seed,
                         )
                     else:
                         synthetic_conditions = await asyncio.to_thread(
                             generate_synthetic_conditions,
-                            conditions, synthetic,
-                            count_per_patient=count_per_patient, seed=seed,
+                            conditions,
+                            synthetic,
+                            count_per_patient=count_per_patient,
+                            seed=seed,
                         )
                 except ValueError:
                     pass  # Silently skip if conditions input is insufficient
@@ -132,6 +138,4 @@ class SyntheticDataService:
         elif engine == "stdlib":
             return False
         else:
-            raise ValueError(
-                f"Unknown engine '{engine}'. Choose: auto, sdv, stdlib"
-            )
+            raise ValueError(f"Unknown engine '{engine}'. Choose: auto, sdv, stdlib")

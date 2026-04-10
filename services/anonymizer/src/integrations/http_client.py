@@ -42,7 +42,8 @@ def proxy_request(
     for attempt in range(_RETRY_COUNT + 1):
         try:
             resp = _pool.request(
-                method, url,
+                method,
+                url,
                 body=body,
                 headers=headers or {},
                 timeout=urllib3.Timeout(connect=5, read=timeout),
@@ -52,33 +53,50 @@ def proxy_request(
                 if should_retry and attempt < _RETRY_COUNT:
                     _log.warning(
                         "proxy request %s HTTP %d — retrying (%d/%d)",
-                        url, resp.status, attempt + 1, _RETRY_COUNT,
+                        url,
+                        resp.status,
+                        attempt + 1,
+                        _RETRY_COUNT,
                     )
-                    time.sleep(_RETRY_BACKOFF * (2 ** attempt) * (0.5 + random.random()))
+                    time.sleep(_RETRY_BACKOFF * (2**attempt) * (0.5 + random.random()))
                     continue
-                detail = resp.data[:200].decode("utf-8", errors="replace") if resp.data else ""
-                raise ValueError(f"Upstream service HTTP {resp.status} for {url}: {detail}")
+                detail = (
+                    resp.data[:200].decode("utf-8", errors="replace")
+                    if resp.data
+                    else ""
+                )
+                raise ValueError(
+                    f"Upstream service HTTP {resp.status} for {url}: {detail}"
+                )
             return resp
         except (urllib3.exceptions.HTTPError, OSError) as exc:
             if attempt < _RETRY_COUNT:
                 _log.warning(
                     "proxy request %s connection error — retrying (%d/%d)",
-                    url, attempt + 1, _RETRY_COUNT,
+                    url,
+                    attempt + 1,
+                    _RETRY_COUNT,
                 )
-                time.sleep(_RETRY_BACKOFF * (2 ** attempt) * (0.5 + random.random()))
+                time.sleep(_RETRY_BACKOFF * (2**attempt) * (0.5 + random.random()))
                 continue
             raise ValueError(f"Upstream service unreachable for {url}: {exc}") from exc
 
 
-def proxy_post_json(url: str, body: bytes, content_type: str = "application/json",
-                    timeout: float = 60) -> dict:
+def proxy_post_json(
+    url: str, body: bytes, content_type: str = "application/json", timeout: float = 60
+) -> dict:
     """POST body to URL, return parsed JSON response dict."""
-    resp = proxy_request("POST", url, body=body, headers={"Content-Type": content_type}, timeout=timeout)
+    resp = proxy_request(
+        "POST", url, body=body, headers={"Content-Type": content_type}, timeout=timeout
+    )
     return _json_loads(resp.data.decode("utf-8"))
 
 
-def proxy_post_raw(url: str, body: bytes, content_type: str = "application/json",
-                   timeout: float = 120) -> bytes:
+def proxy_post_raw(
+    url: str, body: bytes, content_type: str = "application/json", timeout: float = 120
+) -> bytes:
     """POST body to URL, return raw response bytes."""
-    resp = proxy_request("POST", url, body=body, headers={"Content-Type": content_type}, timeout=timeout)
+    resp = proxy_request(
+        "POST", url, body=body, headers={"Content-Type": content_type}, timeout=timeout
+    )
     return resp.data

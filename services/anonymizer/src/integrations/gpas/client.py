@@ -40,6 +40,7 @@ _log = logging.getLogger("medanon.gpas")
 # Batch pseudonymization
 # ---------------------------------------------------------------------------
 
+
 def gpas_pseudonymize_batch(values, params):
     """Pseudonymize multiple values via gPAS in a single HTTP call.
 
@@ -54,11 +55,13 @@ def gpas_pseudonymize_batch(values, params):
         return {}
 
     base_url = _resolve_gpas_base(params)
-    domain = params.get('gpas_domain') or os.environ.get('GPAS_DOMAIN')
+    domain = params.get("gpas_domain") or os.environ.get("GPAS_DOMAIN")
     if not domain:
-        raise ValueError('gPAS domain is required (params.gpas_domain or env GPAS_DOMAIN)')
+        raise ValueError(
+            "gPAS domain is required (params.gpas_domain or env GPAS_DOMAIN)"
+        )
 
-    operation = params.get('gpas_operation', 'pseudonymizeAllowCreate')
+    operation = params.get("gpas_operation", "pseudonymizeAllowCreate")
     use_cache = _is_cache_enabled(params)
 
     result = {}
@@ -68,7 +71,7 @@ def gpas_pseudonymize_batch(values, params):
         if use_cache:
             # Include base_url in the cache key so that different gPAS instances
             # (e.g. staging vs. production) never share cached pseudonyms.
-            cache_key = ('pseudonymize', base_url, domain, operation, s)
+            cache_key = ("pseudonymize", base_url, domain, operation, s)
             cached = _cache_get(cache_key)
             if cached is not None:
                 result[s] = cached
@@ -93,7 +96,7 @@ def gpas_pseudonymize_batch(values, params):
             #  2. Successful results are cached immediately per-chunk
             #  3. Only truly-failed chunks are retried
             chunks = [
-                unique_uncached[i:i + _GPAS_MAX_BATCH]
+                unique_uncached[i : i + _GPAS_MAX_BATCH]
                 for i in range(0, len(unique_uncached), _GPAS_MAX_BATCH)
             ]
             mapping = {}
@@ -110,7 +113,9 @@ def gpas_pseudonymize_batch(values, params):
                     # after the loop) so they survive even if later chunks fail.
                     if use_cache:
                         for orig, psn in partial.items():
-                            _cache_set(('pseudonymize', base_url, domain, operation, orig), psn)
+                            _cache_set(
+                                ("pseudonymize", base_url, domain, operation, orig), psn
+                            )
                 except GpasUnavailableError:
                     # Circuit breaker open — re-raise immediately, no retry
                     raise
@@ -118,7 +123,8 @@ def gpas_pseudonymize_batch(values, params):
                     failed_chunk = futures[future]
                     _log.warning(
                         "gpas sub-batch failed (%d values): %s — will retry",
-                        len(failed_chunk), type(exc).__name__,
+                        len(failed_chunk),
+                        type(exc).__name__,
                     )
                     failed_chunks.append(failed_chunk)
 
@@ -129,13 +135,16 @@ def gpas_pseudonymize_batch(values, params):
                     mapping.update(partial)
                     if use_cache:
                         for orig, psn in partial.items():
-                            _cache_set(('pseudonymize', base_url, domain, operation, orig), psn)
+                            _cache_set(
+                                ("pseudonymize", base_url, domain, operation, orig), psn
+                            )
                 except GpasUnavailableError:
                     raise
                 except Exception as exc:
                     _log.error(
                         "gpas sub-batch retry failed (%d values): %s",
-                        len(retry_chunk), type(exc).__name__,
+                        len(retry_chunk),
+                        type(exc).__name__,
                     )
                     raise
 
@@ -143,7 +152,7 @@ def gpas_pseudonymize_batch(values, params):
         # are already cached immediately per-chunk inside the parallel loop).
         if use_cache and len(unique_uncached) <= _GPAS_MAX_BATCH:
             for orig, psn in mapping.items():
-                _cache_set(('pseudonymize', base_url, domain, operation, orig), psn)
+                _cache_set(("pseudonymize", base_url, domain, operation, orig), psn)
 
         result.update(mapping)
 
@@ -162,37 +171,45 @@ def gpas_depseudonymize_by_path(resource, el, params):
         gpas_timeout_sec: HTTP timeout (default 30)
     """
     base_url = _resolve_gpas_base(params)
-    domain = params.get('gpas_domain') or os.environ.get('GPAS_DOMAIN')
+    domain = params.get("gpas_domain") or os.environ.get("GPAS_DOMAIN")
     if not domain:
-        raise ValueError('gPAS domain is required (params.gpas_domain or env GPAS_DOMAIN)')
+        raise ValueError(
+            "gPAS domain is required (params.gpas_domain or env GPAS_DOMAIN)"
+        )
 
-    pseudonym_value = str(el['value'])
+    pseudonym_value = str(el["value"])
 
     # Include base_url in the cache key so different gPAS instances don't collide.
-    cache_key = ('depseudonymize', base_url, domain, pseudonym_value)
+    cache_key = ("depseudonymize", base_url, domain, pseudonym_value)
     if _is_cache_enabled(params):
         cached = _cache_get(cache_key)
         if cached is not None:
             original = cached
         else:
             fhir_request = _build_depseudonymize_params(domain, [pseudonym_value])
-            resp_json = _call_gpas_operation(base_url, 'dePseudonymize', fhir_request, params)
+            resp_json = _call_gpas_operation(
+                base_url, "dePseudonymize", fhir_request, params
+            )
             mapping = _parse_depseudonymize_response(resp_json)
             original = mapping.get(pseudonym_value)
             if original is not None:
                 _cache_set(cache_key, original)
     else:
         fhir_request = _build_depseudonymize_params(domain, [pseudonym_value])
-        resp_json = _call_gpas_operation(base_url, 'dePseudonymize', fhir_request, params)
+        resp_json = _call_gpas_operation(
+            base_url, "dePseudonymize", fhir_request, params
+        )
         mapping = _parse_depseudonymize_response(resp_json)
         original = mapping.get(pseudonym_value)
 
     if original is None:
-        raise ValueError(f'gPAS did not return an original for pseudonym (path={el["path"]})')
+        raise ValueError(
+            f"gPAS did not return an original for pseudonym (path={el['path']})"
+        )
 
-    path = el['path'].split('.')[1:]
+    path = el["path"].split(".")[1:]
     if len(path) == 0:
         resource.clear()
         return
     ret = find_nodes(resource, path[:-1], [])
-    _substitute_nodes(ret, path[-1], el['value'], original)
+    _substitute_nodes(ret, path[-1], el["value"], original)

@@ -1,9 +1,9 @@
 """Scoring API endpoints.
 
-    POST  /score              — score a single de-identified resource (ad-hoc)
-    POST  /jobs/{job_id}/score — trigger on-demand scoring for a completed job
-    GET   /jobs/{job_id}/score — retrieve cached score for a job
-    GET   /jobs/{job_id}/score/report — retrieve Markdown audit report
+POST  /score              — score a single de-identified resource (ad-hoc)
+POST  /jobs/{job_id}/score — trigger on-demand scoring for a completed job
+GET   /jobs/{job_id}/score — retrieve cached score for a job
+GET   /jobs/{job_id}/score/report — retrieve Markdown audit report
 """
 
 from __future__ import annotations
@@ -34,9 +34,11 @@ async def score_resource(req: ScoreResourceRequest):
     # Build a minimal settings-like object for rule coverage checks
     settings = None
     if req.settings_rules:
+
         class _MinimalSettings:
             def __init__(self, rules):
                 self.rules = rules
+
         settings = _MinimalSettings(req.settings_rules)
 
     try:
@@ -66,12 +68,17 @@ async def score_job(job_id: str, config_profile: str | None = None):
 
     try:
         result = await asyncio.to_thread(
-            _service.score_job, job_id, config_profile,
+            _service.score_job,
+            job_id,
+            config_profile,
         )
     except JobNotFound:
         raise HTTPException(status_code=404, detail="Job not found")
     except JobNotComplete:
-        raise HTTPException(status_code=409, detail="Job not yet complete — scoring requires a finished job")
+        raise HTTPException(
+            status_code=409,
+            detail="Job not yet complete — scoring requires a finished job",
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except RuntimeError as exc:

@@ -242,7 +242,7 @@ export interface ConditionPageResult extends PagedResult<ConditionRow> {
  * matches the actual code system value rather than the display text.
  */
 function isCodeQuery(query: string): boolean {
-  return /^\d[\d.\-]*$/.test(query.trim());
+  return /^\d[\d.-]*$/.test(query.trim());
 }
 
 /** Parse a raw FHIR bundle into a ConditionPageResult. Shared by the initial

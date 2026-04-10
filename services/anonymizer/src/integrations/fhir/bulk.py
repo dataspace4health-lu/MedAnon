@@ -43,6 +43,7 @@ __all__ = [
 # Bulk Data Export ($export)
 # ---------------------------------------------------------------------------
 
+
 def _poll_bulk_status_single(status_url, token=None, timeout=30):
     """Execute a single poll request against a Bulk Data Export status URL.
 
@@ -95,7 +96,9 @@ def _poll_bulk_status(status_url, token=None, timeout=30):
             raise ValueError(
                 f"Bulk export poll timeout ({_t._FHIR_BULK_POLL_TIMEOUT}s) exceeded for {status_url}"
             )
-        done, result = _poll_bulk_status_single(status_url, token=token, timeout=timeout)
+        done, result = _poll_bulk_status_single(
+            status_url, token=token, timeout=timeout
+        )
         if done:
             return result
         time.sleep(result)
@@ -108,6 +111,7 @@ def _download_bulk_ndjson(file_url, token=None, timeout=60):
     Streams the response in 64 KB chunks to avoid buffering the entire file.
     """
     from ._transport import _fhir_cb, FhirCircuitBreakerOpen
+
     if not _fhir_cb.allow_request():
         raise FhirCircuitBreakerOpen(
             "FHIR server unavailable — circuit breaker OPEN (bulk_download)"
@@ -116,7 +120,11 @@ def _download_bulk_ndjson(file_url, token=None, timeout=60):
     headers["Accept"] = "application/fhir+ndjson"
     try:
         resp = _pool.urlopen(
-            "GET", file_url, headers=headers, preload_content=False, timeout=timeout,
+            "GET",
+            file_url,
+            headers=headers,
+            preload_content=False,
+            timeout=timeout,
         )
     except (Exception, OSError) as exc:
         _fhir_cb.record_failure()
@@ -154,8 +162,15 @@ def _download_bulk_ndjson(file_url, token=None, timeout=60):
         resp.release_conn()
 
 
-def bulk_export_kick_off(base_url, level="system", resource_type=None,
-                         type_filter=None, since=None, token=None, timeout=30):
+def bulk_export_kick_off(
+    base_url,
+    level="system",
+    resource_type=None,
+    type_filter=None,
+    since=None,
+    token=None,
+    timeout=30,
+):
     """Initiate a FHIR Bulk Data Export and return the status URL.
 
     This is the first phase of the bulk export protocol.  Returns the
@@ -185,7 +200,9 @@ def bulk_export_kick_off(base_url, level="system", resource_type=None,
     headers = _make_headers(token)
     headers["Prefer"] = "respond-async"
     log.info("bulk export kick-off: %s", kickoff_url)
-    resp = _do_raw_request("GET", kickoff_url, headers, timeout, operation="bulk_kickoff")
+    resp = _do_raw_request(
+        "GET", kickoff_url, headers, timeout, operation="bulk_kickoff"
+    )
 
     if resp.status != 202:
         raise ValueError(
@@ -220,8 +237,12 @@ def _download_manifest_files(manifest, token=None, timeout=60):
             if not file_url:
                 continue
             file_type = file_entry.get("type", "Unknown")
-            log.info("downloading bulk export file: type=%s url=%s", file_type, file_url)
-            for resource in _download_bulk_ndjson(file_url, token=token, timeout=timeout):
+            log.info(
+                "downloading bulk export file: type=%s url=%s", file_type, file_url
+            )
+            for resource in _download_bulk_ndjson(
+                file_url, token=token, timeout=timeout
+            ):
                 total += 1
                 yield resource
     else:
@@ -267,8 +288,15 @@ def _download_manifest_files(manifest, token=None, timeout=60):
     log.info("bulk export: yielded %d resource(s) total", total)
 
 
-def bulk_export(base_url, level="system", resource_type=None, type_filter=None,
-                since=None, token=None, timeout=30):
+def bulk_export(
+    base_url,
+    level="system",
+    resource_type=None,
+    type_filter=None,
+    since=None,
+    token=None,
+    timeout=30,
+):
     """Generator: initiate a FHIR Bulk Data Export and yield resource dicts.
 
     Implements the full Bulk Data Export protocol:
@@ -288,8 +316,13 @@ def bulk_export(base_url, level="system", resource_type=None, type_filter=None,
     Yields individual FHIR resource dicts from exported NDJSON files.
     """
     status_url = bulk_export_kick_off(
-        base_url, level=level, resource_type=resource_type,
-        type_filter=type_filter, since=since, token=token, timeout=timeout,
+        base_url,
+        level=level,
+        resource_type=resource_type,
+        type_filter=type_filter,
+        since=since,
+        token=token,
+        timeout=timeout,
     )
 
     # -- Poll until complete --

@@ -40,7 +40,7 @@ class RedisJobStore:
         self._client = _redis.StrictRedis.from_url(
             redis_url,
             decode_responses=True,
-            socket_timeout=30,       # must exceed XREADGROUP block timeout (5 s)
+            socket_timeout=30,  # must exceed XREADGROUP block timeout (5 s)
             socket_connect_timeout=2,
             retry_on_timeout=True,
         )
@@ -59,6 +59,7 @@ class RedisJobStore:
     def _ensure_stream_group(self) -> None:
         """Idempotent consumer-group creation.  BUSYGROUP = already exists, ignore."""
         import redis as _redis
+
         try:
             self._client.xgroup_create(
                 _STREAM_KEY, _STREAM_GROUP, id="$", mkstream=True
@@ -145,7 +146,9 @@ class RedisJobStore:
         return 1
         """
         self._client.eval(
-            lua, 1, key,
+            lua,
+            1,
+            key,
             job.status.value,
             job.updated_at,
             job.result_path or "",
@@ -322,7 +325,11 @@ class RedisJobStore:
         """
         try:
             info = self._client.xpending(_STREAM_KEY, _STREAM_GROUP)
-            return info.get("pending", 0) if isinstance(info, dict) else (info[0] if info else 0)
+            return (
+                info.get("pending", 0)
+                if isinstance(info, dict)
+                else (info[0] if info else 0)
+            )
         except Exception:
             return 0
 
@@ -380,7 +387,9 @@ class RedisJobStore:
         return 1
         """
         self._client.eval(
-            lua, 1, key,
+            lua,
+            1,
+            key,
             json.dumps(data),
             updated_at,
             str(self._ttl),

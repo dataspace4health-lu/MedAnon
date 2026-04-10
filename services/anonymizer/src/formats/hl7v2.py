@@ -61,6 +61,7 @@ HL7V2_SCRUB_FIELDS: dict[str, list[int]] = {
 # Internal helpers
 # ---------------------------------------------------------------------------
 
+
 def _blank_field(segment: "hl7.Segment", field_index: int) -> None:
     """Set *segment* field at 1-based *field_index* to an empty string.
 
@@ -89,6 +90,7 @@ def _scrub_segment(segment: "hl7.Segment") -> None:
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 def deidentify_hl7v2(message_text: str) -> str:
     """De-identify a single HL7 v2 message string.
@@ -156,6 +158,7 @@ def deidentify_hl7v2_batch(batch_text: str) -> str:
     # character position.  We scan for "MSH|" that is preceded by a newline
     # (or starts the string) to avoid matching MSH within a field value.
     import re
+
     parts = re.split(r"(?=(?:^|\n)MSH\|)", text, flags=re.MULTILINE)
     messages = [p.strip() for p in parts if p.strip()]
 

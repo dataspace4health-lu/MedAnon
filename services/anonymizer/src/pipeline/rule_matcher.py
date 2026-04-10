@@ -31,11 +31,14 @@ def _compile_fhirpath(expression: str):
     """
     global _fhirpathpy_log_registered
     import fhirpathpy
+
     if not _fhirpathpy_log_registered:
         with _fhirpathpy_log_lock:
             if not _fhirpathpy_log_registered:
                 fhirpathpy.engine.invocations["log"] = {
-                    "fn": lambda ctx, els: [{"path": x.path, "value": x.data} for x in els]
+                    "fn": lambda ctx, els: [
+                        {"path": x.path, "value": x.data} for x in els
+                    ]
                 }
                 _fhirpathpy_log_registered = True
     return fhirpathpy.compile(expression)
@@ -52,9 +55,9 @@ def _evaluate_fhirpath_cached(resource: dict, expression: str) -> list:
 # ---------------------------------------------------------------------------
 
 # Matches "Patient.name", "Observation.value.string" — typed dot-paths with no functions
-_SIMPLE_PATH_RE = _re.compile(r'^[A-Z][a-zA-Z]+(\.[a-zA-Z][a-zA-Z0-9]*)+$')
+_SIMPLE_PATH_RE = _re.compile(r"^[A-Z][a-zA-Z]+(\.[a-zA-Z][a-zA-Z0-9]*)+$")
 # Matches "*.meta.lastUpdated", "*.text.div" — wildcard dot-paths
-_WILDCARD_PATH_RE = _re.compile(r'^\*(\.[a-zA-Z][a-zA-Z0-9]*)+$')
+_WILDCARD_PATH_RE = _re.compile(r"^\*(\.[a-zA-Z][a-zA-Z0-9]*)+$")
 
 
 @lru_cache(maxsize=256)
@@ -84,9 +87,9 @@ def _classify_match(expression: str) -> str:
 _WHERE_SEGMENT_RE = _re.compile(
     r"\.where\("
     r"(?:"
-    r"url='([^']+)'"                          # group 1: exact url value
+    r"url='([^']+)'"  # group 1: exact url value
     r"|"
-    r"url\.startsWith\('([^']+)'\)"           # group 2: prefix value
+    r"url\.startsWith\('([^']+)'\)"  # group 2: prefix value
     r")"
     r"\)"
 )
@@ -119,7 +122,7 @@ def _parse_where_plan(expression: str):
     if dot < 1:
         return None
     resource_type = remaining[:dot]
-    if not _re.match(r'^[A-Z][a-zA-Z]+$', resource_type):
+    if not _re.match(r"^[A-Z][a-zA-Z]+$", resource_type):
         return None
     remaining = remaining[dot:]
 
@@ -130,7 +133,7 @@ def _parse_where_plan(expression: str):
             break
 
         # Path keys before this .where()
-        pre = remaining[:where_match.start()]
+        pre = remaining[: where_match.start()]
         if pre:
             path_keys = tuple(k for k in pre.split(".") if k)
         else:
@@ -146,7 +149,7 @@ def _parse_where_plan(expression: str):
         else:
             return None
 
-        remaining = remaining[where_match.end():]
+        remaining = remaining[where_match.end() :]
 
     if not segments:
         return None
@@ -208,7 +211,11 @@ def _evaluate_where_path(resource: dict, expression: str) -> list:
             val = node.get("url")
             if filter_mode == "eq" and val == filter_value:
                 filtered.append(node)
-            elif filter_mode == "startsWith" and isinstance(val, str) and val.startswith(filter_value):
+            elif (
+                filter_mode == "startsWith"
+                and isinstance(val, str)
+                and val.startswith(filter_value)
+            ):
                 filtered.append(node)
         nodes = filtered
         if not nodes:
@@ -309,6 +316,7 @@ def _traverse(node, path_parts: list[str], prefix: str) -> list:
 # Match candidate expansion
 # ---------------------------------------------------------------------------
 
+
 @lru_cache(maxsize=512)
 def _build_match_candidates_cached(match_expr: str, resource_type: str | None) -> tuple:
     """Expand match expression into concrete candidates (LRU-cached, thread-safe)."""
@@ -390,7 +398,9 @@ def _get_rules_for_resource(resource: dict, settings) -> list:
                             pass
                     _rule_index_cache[rules_key] = index
 
-    resource_type = resource.get("resourceType", "") if isinstance(resource, dict) else ""
+    resource_type = (
+        resource.get("resourceType", "") if isinstance(resource, dict) else ""
+    )
 
     # Per-type cache: lock-free read, lock only on miss
     per_type_key = (rules_key, resource_type)
@@ -425,6 +435,7 @@ def clear_rule_caches() -> None:
 # ---------------------------------------------------------------------------
 # Dynamic parameter interpolation
 # ---------------------------------------------------------------------------
+
 
 def _interpolate_dynamic(value, dynamic_settings: dict):
     """Replace ``{{key}}`` / ``${key}`` placeholders in *value* from *dynamic_settings*."""

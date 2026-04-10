@@ -9,7 +9,7 @@ orjson==3.11.6             # Rust-based JSON — 3-10x faster than stdlib (hot p
 PyYAML==6.0.3              # CVE history in older versions — always pin exactly
 fhirpathpy==0.1.0
 rich==14.3.3
-cryptography==44.0.3       # RSA encrypt/decrypt — pyca/cryptography (replaces pycryptodome)
+cryptography>=43.0.0       # RSA encrypt/decrypt — pyca/cryptography (replaces pycryptodome)
 python-dateutil==2.9.0.post0
 defusedxml==0.7.1           # Security XML parser — always pin exactly
 prometheus-client==0.24.1

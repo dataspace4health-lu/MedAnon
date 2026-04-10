@@ -57,8 +57,14 @@ def _parse_pseudonymize_response(resp_json):
             if orig is not None and psn is not None:
                 mapping[orig] = psn
         elif name == "error":
-            orig_id = parts.get("original", {}).get("valueIdentifier", {}).get("value", "?")
-            code = parts.get("error-code", {}).get("valueCoding", {}).get("code", "unknown")
+            orig_id = (
+                parts.get("original", {}).get("valueIdentifier", {}).get("value", "?")
+            )
+            code = (
+                parts.get("error-code", {})
+                .get("valueCoding", {})
+                .get("code", "unknown")
+            )
             errors.append(f"original={orig_id} error={code}")
     if errors:
         raise ValueError(f"gPAS returned errors: {'; '.join(errors)}")
@@ -82,8 +88,14 @@ def _parse_depseudonymize_response(resp_json):
             if psn is not None and orig is not None:
                 mapping[psn] = orig
         elif name == "error":
-            psn_id = parts.get("pseudonym", {}).get("valueIdentifier", {}).get("value", "?")
-            code = parts.get("error-code", {}).get("valueCoding", {}).get("code", "unknown")
+            psn_id = (
+                parts.get("pseudonym", {}).get("valueIdentifier", {}).get("value", "?")
+            )
+            code = (
+                parts.get("error-code", {})
+                .get("valueCoding", {})
+                .get("code", "unknown")
+            )
             errors.append(f"pseudonym={psn_id} error={code}")
     if errors:
         raise ValueError(f"gPAS returned errors: {'; '.join(errors)}")

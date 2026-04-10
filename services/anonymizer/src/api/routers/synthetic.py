@@ -23,12 +23,27 @@ _service = SyntheticDataService()
 @limiter.limit("30/minute")
 async def generate_synthetic(
     request: Request,
-    count: int = Query(100, ge=1, le=10000,
-                       description="Number of synthetic Patient resources to generate"),
+    count: int = Query(
+        100,
+        ge=1,
+        le=10000,
+        description="Number of synthetic Patient resources to generate",
+    ),
     seed: int | None = Query(None, description="Random seed for reproducibility"),
-    engine: str = Query("auto", description="Engine: 'sdv' (GaussianCopula), 'stdlib' (weighted sampling), or 'auto' (SDV if available, else stdlib)"),
-    include_conditions: bool = Query(False, description="Also generate synthetic Conditions linked to the synthetic Patients"),
-    count_per_patient: int = Query(2, ge=0, le=10, description="Max Conditions per Patient (when include_conditions=true)"),
+    engine: str = Query(
+        "auto",
+        description="Engine: 'sdv' (GaussianCopula), 'stdlib' (weighted sampling), or 'auto' (SDV if available, else stdlib)",
+    ),
+    include_conditions: bool = Query(
+        False,
+        description="Also generate synthetic Conditions linked to the synthetic Patients",
+    ),
+    count_per_patient: int = Query(
+        2,
+        ge=0,
+        le=10,
+        description="Max Conditions per Patient (when include_conditions=true)",
+    ),
 ):
     """Generate synthetic FHIR Patient resources from a de-identified input dataset.
 
@@ -56,8 +71,11 @@ async def generate_synthetic(
 
     try:
         result = await _service.generate(
-            body, content_type,
-            count=count, seed=seed, engine=engine,
+            body,
+            content_type,
+            count=count,
+            seed=seed,
+            engine=engine,
             include_conditions=include_conditions,
             count_per_patient=count_per_patient,
         )
@@ -67,13 +85,21 @@ async def generate_synthetic(
             raise HTTPException(status_code=502, detail=msg) from exc
         raise HTTPException(status_code=422, detail=msg) from exc
     except Exception as exc:
-        logger.error("generate_synthetic: unexpected error: %s", type(exc).__name__, exc_info=False)
-        raise HTTPException(status_code=500, detail="Synthetic generation error") from exc
+        logger.error(
+            "generate_synthetic: unexpected error: %s",
+            type(exc).__name__,
+            exc_info=False,
+        )
+        raise HTTPException(
+            status_code=500, detail="Synthetic generation error"
+        ) from exc
 
     # Proxy returns raw bytes
     if isinstance(result, bytes):
+
         async def _passthrough():
             yield result
+
         return StreamingResponse(_passthrough(), media_type="application/x-ndjson")
 
     # Local generation returns SyntheticResult
@@ -88,4 +114,3 @@ async def generate_synthetic(
         media_type="application/x-ndjson",
         headers={"X-Synthetic-Engine": result.engine_used},
     )
-

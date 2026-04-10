@@ -30,6 +30,7 @@ def _extract_manifest_entries(resource: dict) -> list[dict]:
             if display:
                 try:
                     from utils.json_fast import loads as _json_loads
+
                     entries = _json_loads(display)
                     if isinstance(entries, list):
                         return entries
@@ -41,7 +42,13 @@ def _extract_manifest_entries(resource: dict) -> list[dict]:
 class JobSummaryCollector:
     """Mutable accumulator used during job execution to track summary stats."""
 
-    __slots__ = ("_type_counts", "_error_count", "_config_profile", "_started_at", "_score_collector")
+    __slots__ = (
+        "_type_counts",
+        "_error_count",
+        "_config_profile",
+        "_started_at",
+        "_score_collector",
+    )
 
     def __init__(self, config_profile: str = "auto") -> None:
         self._type_counts: Counter[str] = Counter()
@@ -52,8 +59,10 @@ class JobSummaryCollector:
         # Try to initialize scoring (may be disabled via env)
         try:
             from pipeline.scoring.constants import SCORING_ENABLED
+
             if SCORING_ENABLED:
                 from pipeline.scoring.engine import ScoreCollector
+
                 self._score_collector = ScoreCollector(config_profile=config_profile)
         except Exception:
             _log.debug("scoring_init_skipped", exc_info=True)

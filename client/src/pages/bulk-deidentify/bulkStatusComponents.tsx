@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 import { Badge } from "@/components/ui/badge";
 import { Loader2, AlertCircle, CheckCircle2, XCircle } from "lucide-react";
 import type { ExportJobStatus } from "@/context/BulkExportContext";

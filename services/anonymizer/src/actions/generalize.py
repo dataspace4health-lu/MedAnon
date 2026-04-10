@@ -39,10 +39,11 @@ from utils.fhirpath import find_nodes
 
 # -- core generalization functions -------------------------------------------
 
+
 def _generalize_date_year(value):
     """Extract just the year from a FHIR date or dateTime string."""
     s = str(value).strip()
-    m = re.match(r'(\d{4})', s)
+    m = re.match(r"(\d{4})", s)
     return m.group(1) if m else s
 
 
@@ -53,14 +54,14 @@ def _generalize_date_year_instant(value):
     "2024-03-15T10:30:00+02" → "2024-01-01T00:00:00Z"
     """
     s = str(value).strip()
-    m = re.match(r'(\d{4})', s)
+    m = re.match(r"(\d{4})", s)
     return f"{m.group(1)}-01-01T00:00:00Z" if m else s
 
 
 def _generalize_date_year_month(value):
     """Extract year-month from a FHIR date or dateTime string."""
     s = str(value).strip()
-    m = re.match(r'(\d{4}-\d{2})', s)
+    m = re.match(r"(\d{4}-\d{2})", s)
     return m.group(1) if m else s
 
 
@@ -68,14 +69,16 @@ def _generalize_age_bracket(value, bracket_size=10):
     """Convert a birth date string to an age bracket like '30-39'."""
     s = str(value).strip()[:10]  # take date portion
     try:
-        birth = datetime.strptime(s, '%Y-%m-%d').date()
+        birth = datetime.strptime(s, "%Y-%m-%d").date()
     except ValueError:
         try:
-            birth = datetime.strptime(s[:4], '%Y').date().replace(month=1, day=1)
+            birth = datetime.strptime(s[:4], "%Y").date().replace(month=1, day=1)
         except ValueError:
             return s
     today = date.today()
-    age = today.year - birth.year - ((today.month, today.day) < (birth.month, birth.day))
+    age = (
+        today.year - birth.year - ((today.month, today.day) < (birth.month, birth.day))
+    )
     lower = (age // bracket_size) * bracket_size
     upper = lower + bracket_size - 1
     if upper >= 90:
@@ -90,7 +93,12 @@ def _generalize_number_round(value, precision=10):
     except (TypeError, ValueError):
         return value
     rounded = round(n / precision) * precision
-    return int(rounded) if isinstance(value, int) or (isinstance(value, float) and rounded == int(rounded)) else rounded
+    return (
+        int(rounded)
+        if isinstance(value, int)
+        or (isinstance(value, float) and rounded == int(rounded))
+        else rounded
+    )
 
 
 def _generalize_zip_prefix(value, prefix_len=3):
@@ -107,27 +115,30 @@ def _generalize_category(value, mapping):
 # -- strategy dispatcher -----------------------------------------------------
 
 _STRATEGIES = {
-    'date_year': lambda v, p: _generalize_date_year(v),
-    'date_year_month': lambda v, p: _generalize_date_year_month(v),
-    'date_year_instant': lambda v, p: _generalize_date_year_instant(v),
-    'age_bracket': lambda v, p: _generalize_age_bracket(v, p.get('bracket_size', 10)),
-    'number_round': lambda v, p: _generalize_number_round(v, p.get('precision', 10)),
-    'zip_prefix': lambda v, p: _generalize_zip_prefix(v, p.get('prefix_len', 3)),
-    'category': lambda v, p: _generalize_category(v, p.get('mapping', {})),
+    "date_year": lambda v, p: _generalize_date_year(v),
+    "date_year_month": lambda v, p: _generalize_date_year_month(v),
+    "date_year_instant": lambda v, p: _generalize_date_year_instant(v),
+    "age_bracket": lambda v, p: _generalize_age_bracket(v, p.get("bracket_size", 10)),
+    "number_round": lambda v, p: _generalize_number_round(v, p.get("precision", 10)),
+    "zip_prefix": lambda v, p: _generalize_zip_prefix(v, p.get("prefix_len", 3)),
+    "category": lambda v, p: _generalize_category(v, p.get("mapping", {})),
 }
 
 
 def _generalize_value(value, params):
     """Apply the configured generalization strategy to a single value."""
-    strategy = params.get('strategy', 'date_year')
+    strategy = params.get("strategy", "date_year")
     fn = _STRATEGIES.get(strategy)
     if fn is None:
-        raise ValueError(f"Unknown generalize strategy: {strategy}. "
-                         f"Supported: {', '.join(sorted(_STRATEGIES))}")
+        raise ValueError(
+            f"Unknown generalize strategy: {strategy}. "
+            f"Supported: {', '.join(sorted(_STRATEGIES))}"
+        )
     return fn(value, params)
 
 
 # -- node walker (same pattern as other SPE-FHIR-BlackBox actions) ------------------
+
 
 def _generalize_nodes(node, key, value, params):
     if isinstance(node, list):
@@ -145,6 +156,7 @@ def _generalize_nodes(node, key, value, params):
 
 # -- public action handler ---------------------------------------------------
 
+
 def generalize_by_path(resource, el, params):
     """Generalize a quasi-identifier matched by FHIRPath.
 
@@ -158,9 +170,9 @@ def generalize_by_path(resource, el, params):
         prefix_len: number of characters to keep for zip (default 3)
         mapping: dict for category strategy
     """
-    path = el['path'].split('.')[1:]
+    path = el["path"].split(".")[1:]
     if len(path) == 0:
         resource.clear()
         return
     ret = find_nodes(resource, path[:-1], [])
-    _generalize_nodes(ret, path[-1], el['value'], params)
+    _generalize_nodes(ret, path[-1], el["value"], params)

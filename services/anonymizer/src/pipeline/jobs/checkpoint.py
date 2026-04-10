@@ -16,6 +16,7 @@ Usage inside a job executor:
         if (i + 1) % CHECKPOINT_INTERVAL == 0:
             save_checkpoint(store, job, {"lines_written": i + 1})
 """
+
 from __future__ import annotations
 
 import logging

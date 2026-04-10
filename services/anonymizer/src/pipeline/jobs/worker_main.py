@@ -36,10 +36,13 @@ async def _main() -> None:
     if metrics_port > 0:
         try:
             from prometheus_client import start_http_server
+
             start_http_server(metrics_port)
             logger.info("worker_metrics_server started port=%d", metrics_port)
         except Exception as exc:
-            logger.warning("worker_metrics_server_failed port=%d: %s", metrics_port, exc)
+            logger.warning(
+                "worker_metrics_server_failed port=%d: %s", metrics_port, exc
+            )
 
     # Opt-in Redis L2 cache for gPAS pseudonym sharing (with retry)
     if redis_url:
@@ -47,7 +50,13 @@ async def _main() -> None:
         backoff = 2.0
         for attempt in range(1, retries + 1):
             try:
-                from utils.cache import RedisCache, LocalLruCache, TieredCache, configure_cache
+                from utils.cache import (
+                    RedisCache,
+                    LocalLruCache,
+                    TieredCache,
+                    configure_cache,
+                )
+
                 configure_cache(TieredCache(LocalLruCache(), RedisCache(redis_url)))
                 logger.info("gpas_cache=tiered(local+redis)")
                 break
@@ -55,12 +64,17 @@ async def _main() -> None:
                 if attempt < retries:
                     logger.warning(
                         "redis_cache_setup_failed attempt=%d/%d: %s — retrying in %.0fs",
-                        attempt, retries, exc, backoff,
+                        attempt,
+                        retries,
+                        exc,
+                        backoff,
                     )
                     await asyncio.sleep(backoff)
                     backoff = min(backoff * 2, 30.0)
                 else:
-                    logger.warning("redis_cache_setup_failed falling_back=local: %s", exc)
+                    logger.warning(
+                        "redis_cache_setup_failed falling_back=local: %s", exc
+                    )
 
     # Job store — prefer Redis (with retry), fall back to SQLite
     job_store = None
@@ -70,6 +84,7 @@ async def _main() -> None:
         for attempt in range(1, retries + 1):
             try:
                 from integrations.redis.job_store import RedisJobStore
+
                 job_store = RedisJobStore(redis_url)
                 logger.info("job_store=redis")
                 break
@@ -77,12 +92,17 @@ async def _main() -> None:
                 if attempt < retries:
                     logger.warning(
                         "redis_job_store_failed attempt=%d/%d: %s — retrying in %.0fs",
-                        attempt, retries, exc, backoff,
+                        attempt,
+                        retries,
+                        exc,
+                        backoff,
                     )
                     await asyncio.sleep(backoff)
                     backoff = min(backoff * 2, 30.0)
                 else:
-                    logger.warning("redis_job_store_failed falling_back=sqlite: %s", exc)
+                    logger.warning(
+                        "redis_job_store_failed falling_back=sqlite: %s", exc
+                    )
 
     store = init_job_store(store=job_store)
     _worker.init_worker(store, max_concurrent=max_concurrent)
@@ -95,7 +115,10 @@ async def _main() -> None:
         for attempt in range(1, retries + 1):
             try:
                 from integrations.staging.store import StagingStore
-                retention_days = int(os.environ.get("MEDANON_STAGING_RETENTION_DAYS", "30"))
+
+                retention_days = int(
+                    os.environ.get("MEDANON_STAGING_RETENTION_DAYS", "30")
+                )
                 staging_store = StagingStore(staging_url, retention_days=retention_days)
                 staging_store.ensure_schema()
                 _worker.init_staging(staging_store)
@@ -105,19 +128,26 @@ async def _main() -> None:
                 if attempt < retries:
                     logger.warning(
                         "staging_store_setup_failed attempt=%d/%d: %s — retrying in %.0fs",
-                        attempt, retries, exc, backoff,
+                        attempt,
+                        retries,
+                        exc,
+                        backoff,
                     )
                     await asyncio.sleep(backoff)
                     backoff *= 2
                 else:
-                    logger.warning("staging_store_setup_failed falling_back=streaming: %s", exc)
+                    logger.warning(
+                        "staging_store_setup_failed falling_back=streaming: %s", exc
+                    )
 
     # Graceful shutdown: stop accepting new jobs on SIGTERM/SIGINT,
     # let in-progress jobs finish (up to graceful-timeout).
     stop_event = asyncio.Event()
 
     def _signal_handler(sig, _frame):
-        logger.info("received %s — initiating graceful shutdown", signal.Signals(sig).name)
+        logger.info(
+            "received %s — initiating graceful shutdown", signal.Signals(sig).name
+        )
         stop_event.set()
 
     signal.signal(signal.SIGTERM, _signal_handler)
@@ -145,13 +175,18 @@ async def _main() -> None:
             if stop_event.is_set():
                 break
             # worker_loop returned unexpectedly — restart
-            logger.warning("worker_loop returned unexpectedly, restarting in %.1fs", backoff_restart)
+            logger.warning(
+                "worker_loop returned unexpectedly, restarting in %.1fs",
+                backoff_restart,
+            )
             await asyncio.sleep(backoff_restart)
             backoff_restart = min(backoff_restart * 2, max_backoff)
         except asyncio.CancelledError:
             break
         except Exception as exc:
-            logger.error("worker_loop crashed: %s — restarting in %.1fs", exc, backoff_restart)
+            logger.error(
+                "worker_loop crashed: %s — restarting in %.1fs", exc, backoff_restart
+            )
             await asyncio.sleep(backoff_restart)
             backoff_restart = min(backoff_restart * 2, max_backoff)
 

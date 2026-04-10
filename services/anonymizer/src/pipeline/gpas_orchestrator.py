@@ -16,7 +16,7 @@ from actions.substitute import _substitute_nodes
 from pipeline.action_dispatcher import BatchWork
 from pipeline.rule_matcher import _resolve_rule_params
 from pipeline.deidentify import perform_deidentification
-from integrations.gpas.circuit_breaker import GpasUnavailableError 
+from integrations.gpas.circuit_breaker import GpasUnavailableError
 
 audit_log = logging.getLogger("medanon.audit")
 
@@ -55,6 +55,7 @@ def _extract_gpas_params(settings) -> dict | None:
 #  batch runner
 # ---------------------------------------------------------------------------
 
+
 def run_gpas_batch(
     resource: dict,
     gpas_work: list[BatchWork],
@@ -88,14 +89,17 @@ def run_gpas_batch(
     # Batch call — GpasUnavailableError always propagates (gPAS is down, no partial results).
     # Other exceptions respect processing_mode: 'skip' falls back to redaction, 'raise' propagates.
     try:
-        batch_mapping = pseudonymizer.pseudonymize_batch(values_to_pseudonymize, gpas_params)
+        batch_mapping = pseudonymizer.pseudonymize_batch(
+            values_to_pseudonymize, gpas_params
+        )
     except GpasUnavailableError:
         raise  # never swallow — caller must surface HTTP 503 and stop all processing
     except Exception as exc:
         if processing_mode == "skip":
             audit_log.warning(
                 "gpas_batch_failed count=%d error_type=%s",
-                len(values_to_pseudonymize), type(exc).__name__,
+                len(values_to_pseudonymize),
+                type(exc).__name__,
                 exc_info=False,
             )
             for item in gpas_work:
@@ -104,7 +108,8 @@ def run_gpas_batch(
                 except Exception as exc2:
                     audit_log.warning(
                         "fallback_redact_failed path=%s error_type=%s",
-                        item.element.get("path", "?"), type(exc2).__name__,
+                        item.element.get("path", "?"),
+                        type(exc2).__name__,
                         exc_info=False,
                     )
             return {}
@@ -117,13 +122,16 @@ def run_gpas_batch(
 
         if pseudonym is None:
             if processing_mode == "skip":
-                audit_log.warning("gpas_no_pseudonym path=%s", item.element.get("path", "?"))
+                audit_log.warning(
+                    "gpas_no_pseudonym path=%s", item.element.get("path", "?")
+                )
                 try:
                     perform_deidentification("redact", resource, item.element, {})
                 except Exception as exc2:
                     audit_log.warning(
                         "fallback_redact_failed path=%s error_type=%s",
-                        item.element.get("path", "?"), type(exc2).__name__,
+                        item.element.get("path", "?"),
+                        type(exc2).__name__,
                         exc_info=False,
                     )
                 continue
@@ -165,13 +173,16 @@ def write_back_gpas_batch(
 
         if pseudonym is None:
             if processing_mode == "skip":
-                audit_log.warning("gpas_no_pseudonym path=%s", item.element.get("path", "?"))
+                audit_log.warning(
+                    "gpas_no_pseudonym path=%s", item.element.get("path", "?")
+                )
                 try:
                     perform_deidentification("redact", resource, item.element, {})
                 except Exception as exc2:
                     audit_log.warning(
                         "fallback_redact_failed path=%s error_type=%s",
-                        item.element.get("path", "?"), type(exc2).__name__,
+                        item.element.get("path", "?"),
+                        type(exc2).__name__,
                         exc_info=False,
                     )
                 continue
@@ -187,6 +198,7 @@ def write_back_gpas_batch(
         _substitute_nodes(ret, path[-1], item.element["value"], pseudonym)
 
     return batch_mapping
+
 
 def run_gpas_batch_for_batch(
     gpas_works: list[list[BatchWork]],
@@ -233,7 +245,8 @@ def run_gpas_batch_for_batch(
         if processing_mode == "skip":
             audit_log.warning(
                 "gpas_batch_for_batch_failed unique_values=%d error_type=%s",
-                len(unique_values), type(exc).__name__,
+                len(unique_values),
+                type(exc).__name__,
                 exc_info=False,
             )
             return {}
@@ -241,6 +254,7 @@ def run_gpas_batch_for_batch(
 
     audit_log.debug(
         "gpas_prefetch unique_values=%d batch_size=%d",
-        len(unique_values), len(gpas_works),
+        len(unique_values),
+        len(gpas_works),
     )
     return batch_mapping

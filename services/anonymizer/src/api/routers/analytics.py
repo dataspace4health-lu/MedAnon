@@ -53,11 +53,14 @@ async def analyse_risk(request: Request):
         if "service" in msg.lower() or "proxy" in msg.lower():
             raise HTTPException(status_code=502, detail=msg) from exc
         if "parse" in msg.lower() or "Could not" in msg:
-            raise HTTPException(status_code=422, detail=f"Could not parse input: {exc}") from exc
+            raise HTTPException(
+                status_code=422, detail=f"Could not parse input: {exc}"
+            ) from exc
         raise HTTPException(status_code=422, detail=msg) from exc
     except Exception as exc:
-        logger.error("analyse_risk: unexpected error type=%s", type(exc).__name__, exc_info=False)
+        logger.error(
+            "analyse_risk: unexpected error type=%s", type(exc).__name__, exc_info=False
+        )
         raise HTTPException(status_code=500, detail="Risk analysis error") from exc
 
     return JSONResponse(content=report)
-

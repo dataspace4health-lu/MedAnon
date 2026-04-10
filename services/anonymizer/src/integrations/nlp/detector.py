@@ -46,9 +46,9 @@ log = logging.getLogger("medanon.nlp")
 
 # Healthcare-relevant entity types for HIPAA Safe Harbor + GDPR Art.9(h)
 HEALTHCARE_ENTITIES = [
-    "PERSON",           # names — NER (cannot be caught by regex alone)
-    "DATE_TIME",        # dates mentioned in narrative prose
-    "LOCATION",         # addresses / cities from NER context
+    "PERSON",  # names — NER (cannot be caught by regex alone)
+    "DATE_TIME",  # dates mentioned in narrative prose
+    "LOCATION",  # addresses / cities from NER context
     "PHONE_NUMBER",
     "EMAIL_ADDRESS",
     "US_SSN",
@@ -56,7 +56,7 @@ HEALTHCARE_ENTITIES = [
     "US_DRIVER_LICENSE",
     "MEDICAL_LICENSE",
     "AGE",
-    "NRP",              # Nationality / Religion / Political opinion (GDPR Art.9)
+    "NRP",  # Nationality / Religion / Political opinion (GDPR Art.9)
     "CREDIT_CARD",
     "IBAN_CODE",
     "US_BANK_NUMBER",
@@ -93,15 +93,25 @@ def _get_analyzer():
                     "ner_model_configuration": {
                         # Non-PHI spaCy entity types — suppress Presidio mapping warnings
                         "labels_to_ignore": [
-                            "CARDINAL", "ORDINAL", "QUANTITY", "PERCENT",
-                            "MONEY", "PRODUCT", "WORK_OF_ART", "LAW",
-                            "LANGUAGE", "FAC", "EVENT",
+                            "CARDINAL",
+                            "ORDINAL",
+                            "QUANTITY",
+                            "PERCENT",
+                            "MONEY",
+                            "PRODUCT",
+                            "WORK_OF_ART",
+                            "LAW",
+                            "LANGUAGE",
+                            "FAC",
+                            "EVENT",
                         ],
                     },
                 }
             )
             _ANALYZER = AnalyzerEngine(nlp_engine=provider.create_engine())
-            log.info("Presidio ready — %d entity types available", len(HEALTHCARE_ENTITIES))
+            log.info(
+                "Presidio ready — %d entity types available", len(HEALTHCARE_ENTITIES)
+            )
         except Exception as exc:
             raise RuntimeError(
                 "Failed to initialize Presidio / spaCy.  "
@@ -129,7 +139,9 @@ _DETECTION_CACHE_MAX = 20_000
 _DETECTION_CACHE_LOCK = threading.Lock()
 
 
-def _detect_entities_cached(text: str, entities: tuple, threshold: float, language: str) -> list:
+def _detect_entities_cached(
+    text: str, entities: tuple, threshold: float, language: str
+) -> list:
     """Run Presidio entity detection, caching results by text content.
 
     The expensive spaCy NER pass is performed at most once per unique (text,
@@ -146,9 +158,15 @@ def _detect_entities_cached(text: str, entities: tuple, threshold: float, langua
         return result
 
     analyzer = _get_analyzer()
-    presidio_results = analyzer.analyze(text=text, entities=list(entities), language=language)
+    presidio_results = analyzer.analyze(
+        text=text, entities=list(entities), language=language
+    )
     hits = sorted(
-        [(r.start, r.end, r.entity_type) for r in presidio_results if r.score >= threshold],
+        [
+            (r.start, r.end, r.entity_type)
+            for r in presidio_results
+            if r.score >= threshold
+        ],
         key=lambda h: h[0],
         reverse=True,
     )
@@ -207,6 +225,7 @@ def _tokenize_unlocked(value: str, entity_type: str, token_state: dict) -> str:
 # Core analyzer
 # ---------------------------------------------------------------------------
 
+
 def _analyze_and_replace(
     text: str,
     entities: list,
@@ -247,6 +266,7 @@ def _analyze_and_replace(
 # XHTML text-node walker
 # ---------------------------------------------------------------------------
 
+
 class _XHTMLTextScrubber(HTMLParser):
     """Walk XHTML, applying *scrub_fn* to every text node."""
 
@@ -257,8 +277,7 @@ class _XHTMLTextScrubber(HTMLParser):
 
     def handle_starttag(self, tag, attrs):
         attr_str = "".join(
-            f" {n}" if v is None else f' {n}="{escape(v)}"'
-            for n, v in attrs
+            f" {n}" if v is None else f' {n}="{escape(v)}"' for n, v in attrs
         )
         self._parts.append(f"<{tag}{attr_str}>")
 
@@ -267,8 +286,7 @@ class _XHTMLTextScrubber(HTMLParser):
 
     def handle_startendtag(self, tag, attrs):
         attr_str = "".join(
-            f" {n}" if v is None else f' {n}="{escape(v)}"'
-            for n, v in attrs
+            f" {n}" if v is None else f' {n}="{escape(v)}"' for n, v in attrs
         )
         self._parts.append(f"<{tag}{attr_str}/>")
 
@@ -298,6 +316,7 @@ def _scrub_xhtml_text_nodes(xhtml: str, scrub_fn) -> str:
 # Parameter helpers
 # ---------------------------------------------------------------------------
 
+
 def _resolve_entities(param) -> list:
     if param in (None, "healthcare"):
         return list(HEALTHCARE_ENTITIES)
@@ -312,6 +331,7 @@ def _resolve_entities(param) -> list:
 # Public action entry point
 # ---------------------------------------------------------------------------
 
+
 def nlp_scrub_by_path(resource: dict, el: dict, params: dict) -> None:
     """Scrub PHI/PII from the field matched by *el* using NLP.
 
@@ -321,6 +341,7 @@ def nlp_scrub_by_path(resource: dict, el: dict, params: dict) -> None:
     microservice. Otherwise runs Presidio locally (default behaviour).
     """
     import os
+
     entities = _resolve_entities(params.get("entities", "healthcare"))
     threshold = float(params.get("threshold", 0.4))
     language = str(params.get("language", "en"))
@@ -342,8 +363,11 @@ def nlp_scrub_by_path(resource: dict, el: dict, params: dict) -> None:
                 text, entities, threshold, language, mode, token_state
             )
     else:
+
         def scrub_fn(text: str) -> str:
-            return _analyze_and_replace(text, entities, threshold, language, mode, token_state, token_lock)
+            return _analyze_and_replace(
+                text, entities, threshold, language, mode, token_state, token_lock
+            )
 
     path = el["path"]
     parts = path.split(".")
@@ -356,8 +380,12 @@ def nlp_scrub_by_path(resource: dict, el: dict, params: dict) -> None:
     try:
         nodes = find_nodes(resource, parent_path, [])
     except Exception:
-        log.error("nlp_find_nodes_failed path=%s — redacting field as safety fallback (detector.py)", path)
+        log.error(
+            "nlp_find_nodes_failed path=%s — redacting field as safety fallback (detector.py)",
+            path,
+        )
         from actions.redact import redact_by_path
+
         redact_by_path(resource, el, {})
         return
 
@@ -374,13 +402,17 @@ def nlp_scrub_by_path(resource: dict, el: dict, params: dict) -> None:
                 try:
                     current["div"] = _scrub_xhtml_text_nodes(current["div"], scrub_fn)
                 except Exception:
-                    log.error("nlp_scrub_failed path=%s.%s — redacting field", path, field)
+                    log.error(
+                        "nlp_scrub_failed path=%s.%s — redacting field", path, field
+                    )
                     current["div"] = "[REDACTED]"
             elif isinstance(current, str):
                 try:
                     node[field] = _scrub_xhtml_text_nodes(current, scrub_fn)
                 except Exception:
-                    log.error("nlp_scrub_failed path=%s.%s — redacting field", path, field)
+                    log.error(
+                        "nlp_scrub_failed path=%s.%s — redacting field", path, field
+                    )
                     node[field] = "[REDACTED]"
         elif isinstance(current, str):
             try:
@@ -394,7 +426,12 @@ def nlp_scrub_by_path(resource: dict, el: dict, params: dict) -> None:
                     try:
                         current[i] = scrub_fn(v)
                     except Exception:
-                        log.error("nlp_scrub_failed path=%s.%s[%d] — redacting field", path, field, i)
+                        log.error(
+                            "nlp_scrub_failed path=%s.%s[%d] — redacting field",
+                            path,
+                            field,
+                            i,
+                        )
                         current[i] = "[REDACTED]"
 
     _apply(nodes, key)

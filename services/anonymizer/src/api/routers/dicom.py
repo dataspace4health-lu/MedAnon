@@ -1,8 +1,9 @@
 """DICOM de-identification endpoints.
 
-    POST /process/dicom        — de-identify a single DICOM file
-    POST /process/dicom/batch  — de-identify multiple DICOM files (multipart/form-data)
+POST /process/dicom        — de-identify a single DICOM file
+POST /process/dicom/batch  — de-identify multiple DICOM files (multipart/form-data)
 """
+
 import logging
 import os
 import uuid
@@ -89,7 +90,9 @@ async def process_dicom_batch(request: Request, files: list[UploadFile]):
         zip_bytes = await _service.process_batch(file_data)
     except Exception as exc:
         logger.error("dicom_batch error: %s", type(exc).__name__, exc_info=False)
-        raise HTTPException(status_code=500, detail="DICOM batch processing error") from exc
+        raise HTTPException(
+            status_code=500, detail="DICOM batch processing error"
+        ) from exc
 
     job_id = uuid.uuid4().hex[:12]
     return Response(

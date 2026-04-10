@@ -40,10 +40,12 @@ _RATE_UPLOAD = os.environ.get("MEDANON_RATE_UPLOAD", "60/minute")
 # Service factory
 # ---------------------------------------------------------------------------
 
+
 def _get_service():
     """Return a FhirServerService wired to the HTTP FHIR client adapter."""
     from api.services.fhir_server import FhirServerService
     from integrations.fhir.adapter import HttpFhirClientAdapter
+
     return FhirServerService(HttpFhirClientAdapter())
 
 
@@ -51,7 +53,8 @@ def _get_service():
 # Endpoints
 # ---------------------------------------------------------------------------
 
-@router.post('/process/from-server')
+
+@router.post("/process/from-server")
 @limiter.limit(_RATE_FHIR_SERVER)
 async def process_from_server(
     request: Request,
@@ -78,10 +81,15 @@ async def process_from_server(
     try:
         resource_types = await asyncio.to_thread(
             svc.resolve_resource_types,
-            server_url, req.resource_types, token, req.timeout,
+            server_url,
+            req.resource_types,
+            token,
+            req.timeout,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=502, detail=f"Could not reach FHIR server: {exc}") from exc
+        raise HTTPException(
+            status_code=502, detail=f"Could not reach FHIR server: {exc}"
+        ) from exc
     runtime_settings = _runtime_settings(settings)
 
     async def _generate():
@@ -102,7 +110,7 @@ async def process_from_server(
     return StreamingResponse(_generate(), media_type="application/x-ndjson")
 
 
-@router.post('/process/everything')
+@router.post("/process/everything")
 @limiter.limit(_RATE_FHIR_SERVER)
 async def process_everything(
     request: Request,
@@ -136,8 +144,13 @@ async def process_everything(
         count = 0
         disconnected = False
         async for line in svc.stream_everything(
-            server_url, req.resource_type, req.resource_id,
-            req.params, token, req.timeout, runtime_settings,
+            server_url,
+            req.resource_type,
+            req.resource_id,
+            req.params,
+            token,
+            req.timeout,
+            runtime_settings,
         ):
             if await request.is_disconnected():
                 logger.info("everything: client disconnected, stopping stream")
@@ -176,9 +189,9 @@ async def process_and_upload(
     ```
     """
     from pipeline.config.service import get_settings as _get_settings
-    profile = (
-        req.config_profile
-        or os.environ.get("MEDANON_TARGET_CONFIG_PROFILE", "structural")
+
+    profile = req.config_profile or os.environ.get(
+        "MEDANON_TARGET_CONFIG_PROFILE", "structural"
     )
     settings = _get_settings(profile)
 
@@ -200,9 +213,7 @@ async def process_and_upload(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
-        logger.error(
-            "process_and_upload error: %s", type(exc).__name__, exc_info=False
-        )
+        logger.error("process_and_upload error: %s", type(exc).__name__, exc_info=False)
         raise HTTPException(status_code=500, detail="De-identification error") from exc
 
 
@@ -234,9 +245,9 @@ async def process_round_trip(
     Returns streaming NDJSON — one status line per resource.
     """
     from pipeline.config.service import get_settings as _get_settings
-    profile = (
-        req.config_profile
-        or os.environ.get("MEDANON_TARGET_CONFIG_PROFILE", "structural")
+
+    profile = req.config_profile or os.environ.get(
+        "MEDANON_TARGET_CONFIG_PROFILE", "structural"
     )
     settings = _get_settings(profile)
 
@@ -252,18 +263,29 @@ async def process_round_trip(
     try:
         resource_types = await asyncio.to_thread(
             svc.resolve_resource_types,
-            source_url, req.resource_types, source_token, req.timeout,
+            source_url,
+            req.resource_types,
+            source_token,
+            req.timeout,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=502, detail=f"Could not reach FHIR server: {exc}") from exc
+        raise HTTPException(
+            status_code=502, detail=f"Could not reach FHIR server: {exc}"
+        ) from exc
     runtime_settings = _runtime_settings(settings)
 
     async def _generate():
         count = 0
         disconnected = False
         async for line in svc.stream_round_trip(
-            source_url, target_url, resource_types, req.params,
-            source_token, target_token, req.timeout, runtime_settings,
+            source_url,
+            target_url,
+            resource_types,
+            req.params,
+            source_token,
+            target_token,
+            req.timeout,
+            runtime_settings,
         ):
             if await request.is_disconnected():
                 logger.info("round-trip: client disconnected, stopping stream")
@@ -277,7 +299,7 @@ async def process_round_trip(
     return StreamingResponse(_generate(), media_type="application/x-ndjson")
 
 
-@router.post('/process/bulk-export')
+@router.post("/process/bulk-export")
 @limiter.limit(_RATE_BULK_EXPORT)
 async def process_bulk_export(
     request: Request,
@@ -303,7 +325,9 @@ async def process_bulk_export(
     """
     server_url = await _get_url_from_request_or_env(req.server_url, "FHIR_SOURCE_URL")
     if req.level == "type" and not req.resource_type:
-        raise HTTPException(status_code=422, detail="resource_type is required for type-level export")
+        raise HTTPException(
+            status_code=422, detail="resource_type is required for type-level export"
+        )
     token = req.token or os.environ.get("FHIR_SOURCE_TOKEN")
     runtime_settings = _runtime_settings(settings)
     svc = _get_service()
@@ -312,8 +336,14 @@ async def process_bulk_export(
         count = 0
         disconnected = False
         async for line in svc.stream_bulk_export(
-            server_url, req.level, req.resource_type, req.type_filter,
-            req.since, token, req.timeout, runtime_settings,
+            server_url,
+            req.level,
+            req.resource_type,
+            req.type_filter,
+            req.since,
+            token,
+            req.timeout,
+            runtime_settings,
         ):
             if await request.is_disconnected():
                 logger.info("bulk-export: client disconnected, stopping stream")
@@ -327,7 +357,7 @@ async def process_bulk_export(
     return StreamingResponse(_generate(), media_type="application/x-ndjson")
 
 
-@router.post('/process/cohort')
+@router.post("/process/cohort")
 @limiter.limit(_RATE_FHIR_SERVER)
 async def process_cohort(
     request: Request,
@@ -362,8 +392,13 @@ async def process_cohort(
         count = 0
         disconnected = False
         async for line in svc.stream_cohort(
-            server_url, req.search_type, req.search_params,
-            req.everything_params, token, req.timeout, runtime_settings,
+            server_url,
+            req.search_type,
+            req.search_params,
+            req.everything_params,
+            token,
+            req.timeout,
+            runtime_settings,
         ):
             if await request.is_disconnected():
                 logger.info("cohort: client disconnected, stopping stream")
@@ -399,7 +434,10 @@ async def upload_to_target(
     else:
         target_url = os.environ.get("FHIR_TARGET_URL", "").rstrip("/")
     if not target_url:
-        raise HTTPException(status_code=400, detail="No target URL provided and FHIR_TARGET_URL env var is not set")
+        raise HTTPException(
+            status_code=400,
+            detail="No target URL provided and FHIR_TARGET_URL env var is not set",
+        )
 
     target_token = req.target_token or os.environ.get("FHIR_TARGET_TOKEN") or None
 
@@ -409,7 +447,9 @@ async def upload_to_target(
         uploaded = 0
         errors = 0
         results = []
-        for result in upload_resources(target_url, req.resources, token=target_token, timeout=req.timeout):
+        for result in upload_resources(
+            target_url, req.resources, token=target_token, timeout=req.timeout
+        ):
             if result["success"]:
                 uploaded += 1
             else:
@@ -419,6 +459,15 @@ async def upload_to_target(
 
     uploaded, errors, results = await asyncio.to_thread(_run_upload)
 
-    logger.info("upload_to_target: uploaded=%d errors=%d target=%s", uploaded, errors, target_url)
-    return {"uploaded": uploaded, "errors": errors, "total": uploaded + errors, "results": results}
-
+    logger.info(
+        "upload_to_target: uploaded=%d errors=%d target=%s",
+        uploaded,
+        errors,
+        target_url,
+    )
+    return {
+        "uploaded": uploaded,
+        "errors": errors,
+        "total": uploaded + errors,
+        "results": results,
+    }

@@ -57,9 +57,12 @@ class ScoringService:
         """
         try:
             from pipeline.config_service import get_settings
+
             return get_settings(profile)
         except Exception as exc:
-            logger.debug("scoring: could not load settings for profile=%s: %s", profile, exc)
+            logger.debug(
+                "scoring: could not load settings for profile=%s: %s", profile, exc
+            )
             return None
 
     def score_resource(
@@ -119,7 +122,12 @@ class ScoringService:
         storage = get_result_storage()
 
         import datetime
-        scored_at = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+
+        scored_at = (
+            datetime.datetime.now(datetime.timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
         collector = ScoreAuditCollector(
             config_profile=profile,
             job_id=job_id,
@@ -129,7 +137,11 @@ class ScoringService:
         stream = storage.open_stream(job.result_path)
         try:
             for raw_line in stream:
-                line = raw_line.decode("utf-8") if isinstance(raw_line, (bytes, bytearray)) else raw_line
+                line = (
+                    raw_line.decode("utf-8")
+                    if isinstance(raw_line, (bytes, bytearray))
+                    else raw_line
+                )
                 line = line.strip()
                 if not line:
                     continue

@@ -39,22 +39,24 @@ def _resolve_secret_key(params):
 
 
 def _compute_hash(msg, params):
-    hash_type = str(params.get('hash_type', 'sha3_256')).lower()
+    hash_type = str(params.get("hash_type", "sha3_256")).lower()
     secret_key = _resolve_secret_key(params)
 
-    if hash_type == 'sha3_256':
+    if hash_type == "sha3_256":
         digestmod = SHA3_256
-    elif hash_type == 'sha256':
+    elif hash_type == "sha256":
         digestmod = SHA256
     else:
-        raise ValueError(f'Unsupported hash_type: {hash_type}')
+        raise ValueError(f"Unsupported hash_type: {hash_type}")
 
     if secret_key:
         return HMAC.new(str(secret_key).encode(), msg, digestmod=digestmod).hexdigest()
 
     # Plain hashing without HMAC is dangerous — must be explicitly allowed
     allow_plain = os.environ.get("MEDANON_HASH_ALLOW_PLAIN", "").strip().lower() in (
-        "1", "true", "yes",
+        "1",
+        "true",
+        "yes",
     )
     if not allow_plain:
         raise ValueError(
@@ -93,12 +95,13 @@ def _hash_nodes(node, key, value, params):
             node_str = _normalized_node_str(node[key])
             node[key] = _compute_hash(node_str.encode(), params)
 
+
 def cryptohash_by_path(resource, el, params):
     ret = resource
-    path = el['path'] # "Patient.name"
-    path = path.split('.')[1:] # Remove root
+    path = el["path"]  # "Patient.name"
+    path = path.split(".")[1:]  # Remove root
     if len(path) == 0:
         ret.clear()
         return
     ret = find_nodes(ret, path[:-1], [])
-    _hash_nodes(ret, path[-1], el['value'], params)
+    _hash_nodes(ret, path[-1], el["value"], params)

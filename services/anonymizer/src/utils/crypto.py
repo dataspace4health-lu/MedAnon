@@ -17,7 +17,7 @@ def _load_key(resolved_path, import_fn):
         cached = _key_cache.get(resolved_path)
         if cached and cached[0] == mtime:
             return cached[1]
-    with open(resolved_path, 'rb') as fin:
+    with open(resolved_path, "rb") as fin:
         key = import_fn(fin.read())
     with _key_cache_lock:
         _key_cache[resolved_path] = (mtime, key)
@@ -62,8 +62,11 @@ def _validate_key_path(key_path):
         # Default: allow /code/keys, /keys, and the config directory
         allowed_dirs = [
             os.path.realpath(d)
-            for d in ["/code/keys", "/keys",
-                      os.environ.get("MEDANON_CONFIG_DIR", "/code/config")]
+            for d in [
+                "/code/keys",
+                "/keys",
+                os.environ.get("MEDANON_CONFIG_DIR", "/code/config"),
+            ]
             if os.path.isdir(d)
         ]
 
@@ -89,7 +92,7 @@ _OAEP_PADDING = padding.OAEP(
 
 
 def rsa_encrypt(plaintext, enc_params):
-    key_path = _validate_key_path(enc_params['public_key'])
+    key_path = _validate_key_path(enc_params["public_key"])
     public_key = _load_key(key_path, _import_public_key)
     if public_key.key_size < 2048:
         raise ValueError(
@@ -99,7 +102,7 @@ def rsa_encrypt(plaintext, enc_params):
 
 
 def rsa_decrypt(ciphertext, dec_params):
-    key_path = _validate_key_path(dec_params['private_key'])
+    key_path = _validate_key_path(dec_params["private_key"])
     private_key = _load_key(key_path, _import_private_key)
     if private_key.key_size < 2048:
         raise ValueError(

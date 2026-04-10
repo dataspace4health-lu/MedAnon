@@ -32,14 +32,14 @@ _USER_CONFIG_DIR = os.environ.get("MEDANON_USER_CONFIG_DIR", "/output/user-confi
 
 # Canonical profile name → config filename mapping (bundled system profiles only).
 _PROFILE_MAP = {
-    'auto':       None,                              # triggers auto-selection logic below
-    'minimal':    'config.yaml',
-    'gpas':       'config_gpas.yaml',
-    'gdpr':       'config_gdpr_eu.yaml',
-    'hipaa':      'config_hipaa_safe_harbor.yaml',
-    'research':   'config_research_pseudonymous.yaml',
-    'structural':    'config_structure_preserving.yaml',
-    'value-masking': 'config_value_masking.yaml',
+    "auto": None,  # triggers auto-selection logic below
+    "minimal": "config.yaml",
+    "gpas": "config_gpas.yaml",
+    "gdpr": "config_gdpr_eu.yaml",
+    "hipaa": "config_hipaa_safe_harbor.yaml",
+    "research": "config_research_pseudonymous.yaml",
+    "structural": "config_structure_preserving.yaml",
+    "value-masking": "config_value_masking.yaml",
 }
 
 # TTL in seconds (0 = disabled; cache lives for the process lifetime).
@@ -68,7 +68,9 @@ def _resolve_profile(profile: str) -> str:
     if profile in _PROFILE_MAP:
         filename = _PROFILE_MAP[profile]
         if filename is None:  # 'auto'
-            filename = 'config_gpas.yaml' if os.environ.get('GPAS_URL') else 'config.yaml'
+            filename = (
+                "config_gpas.yaml" if os.environ.get("GPAS_URL") else "config.yaml"
+            )
         return os.path.join(_CONFIG_DIR, filename)
 
     # User-defined profile?
@@ -76,7 +78,7 @@ def _resolve_profile(profile: str) -> str:
     if os.path.isfile(user_path):
         return user_path
 
-    valid = ', '.join(_PROFILE_MAP.keys())
+    valid = ", ".join(_PROFILE_MAP.keys())
     raise ValueError(
         f"Unknown profile '{profile}'. Built-in profiles: {valid}. "
         "For user-defined configs, create one via POST /v1/configs first."
@@ -91,12 +93,13 @@ def clear_settings_cache() -> None:
     # Also clear rule matcher caches that depend on config content
     try:
         from pipeline.rule_matcher import clear_rule_caches
+
         clear_rule_caches()
     except ImportError:
         pass
 
 
-def get_settings(profile: str = 'auto') -> Settings:
+def get_settings(profile: str = "auto") -> Settings:
     """Load Settings for the named config profile (results cached per resolved filename).
 
     Args:
