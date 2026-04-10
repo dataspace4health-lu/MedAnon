@@ -62,7 +62,7 @@ def _process_batch(
         rj = row["resource_json"]
         resources.append(rj if isinstance(rj, dict) else _json_loads(rj))
 
-    return process_data_batch(resources, settings, pseudonymizer)
+    return process_data_batch(resources, settings, pseudonymizer, attach_manifest=True)
 
 
 def _process_batch_with_fallback(
@@ -111,7 +111,7 @@ def _process_batch_with_fallback(
             resource = rj if isinstance(rj, dict) else _json_loads(rj)
             rtype = resource.get("resourceType", "Unknown") if isinstance(resource, dict) else "Unknown"
             try:
-                result = process_data_batch([resource], settings, pseudonymizer)[0]
+                result = process_data_batch([resource], settings, pseudonymizer, attach_manifest=True)[0]
                 fh.write(_json_dumps(result) + "\n")
                 staging.mark_done(job_id, [row["id"]])
                 succeeded += 1
@@ -180,6 +180,9 @@ def execute_bulk_export_staged(job, store, staging) -> None:
             all_types = get_capability_statement(server_url, token=token, timeout=timeout)
             resource_types = [t for t in all_types if t not in _INFRA]
         except Exception as exc:
+            from integrations.fhir._transport import FhirCircuitBreakerOpen
+            if isinstance(exc, FhirCircuitBreakerOpen):
+                raise
             _log.warning("capability_statement_failed job=%s: %s", job.id, exc)
             resource_types = ["Patient", "Observation", "Condition", "Encounter", "Procedure"]
 

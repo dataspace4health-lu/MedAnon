@@ -130,7 +130,7 @@ def _process_stream_chunked(gen, settings, pseudonymizer, fh, start_count, store
     def _flush():
         nonlocal count
         try:
-            results = process_data_batch(chunk, settings, pseudonymizer)
+            results = process_data_batch(chunk, settings, pseudonymizer, attach_manifest=True)
             for result in results:
                 line = _json_dumps(result)
                 fh.write(line + "\n")
@@ -141,7 +141,7 @@ def _process_stream_chunked(gen, settings, pseudonymizer, fh, start_count, store
             # Per-resource fallback for the failed chunk
             for resource in chunk:
                 try:
-                    result = process_data_batch([resource], settings, pseudonymizer)[0]
+                    result = process_data_batch([resource], settings, pseudonymizer, attach_manifest=True)[0]
                     line = _json_dumps(result)
                     fh.write(line + "\n")
                     if summary is not None:
@@ -246,6 +246,12 @@ def _execute_bulk_export(job: Job) -> None:
             all_types = get_capability_statement(server_url, token=token, timeout=timeout)
             resource_types = [t for t in all_types if t not in _INFRA]
         except Exception as exc:
+            # If the circuit breaker is OPEN the FHIR server is confirmed
+            # unreachable — fail the job immediately instead of falling back
+            # to hardcoded types (which would also hit the open breaker).
+            from integrations.fhir._transport import FhirCircuitBreakerOpen
+            if isinstance(exc, FhirCircuitBreakerOpen):
+                raise
             _worker_log.warning(
                 "bulk_export capability_statement_failed job=%s: %s", job.id, exc
             )
@@ -926,6 +932,22 @@ async def worker_loop() -> None:
     _poll_count = 0
     # Touch heartbeat file to signal readiness
     Path(_HEARTBEAT_PATH).touch()
+
+    # Background heartbeat task — runs independently of the semaphore so that
+    # the heartbeat file stays fresh even when all job slots are occupied.
+    async def _heartbeat_loop():
+        while not _shutdown_event.is_set():
+            try:
+                Path(_HEARTBEAT_PATH).touch()
+            except OSError:
+                pass
+            try:
+                await asyncio.wait_for(_shutdown_event.wait(), timeout=15)
+            except asyncio.TimeoutError:
+                pass
+
+    _heartbeat_task = asyncio.create_task(_heartbeat_loop())
+
     while not _shutdown_event.is_set():
         await _semaphore.acquire()
         if _shutdown_event.is_set():
@@ -961,6 +983,7 @@ async def worker_loop() -> None:
             await asyncio.sleep(2)
 
     # Graceful drain: wait for in-flight jobs to finish
+    _heartbeat_task.cancel()
     if _active_tasks:
         _worker_log.info(
             "worker_draining active_jobs=%d timeout=%ds",

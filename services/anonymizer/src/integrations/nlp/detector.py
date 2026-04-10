@@ -8,7 +8,7 @@ Designed to complement ``scrub_text`` (regex-based).  Running both actions on
 the same field provides defence-in-depth coverage:
   1. ``scrub_text``  — fast, deterministic regex for structured patterns
                        (SSN, email, phone, ISO dates, ZIP codes …)
-  2. ``nlp_detect``  — NLP/NER for unstructured prose (names, addresses,
+  2. ``nlp_scrub``  — NLP/NER for unstructured prose (names, addresses,
                        medical identifiers mentioned in free text)
 
 Key parameters (``params``):
@@ -312,12 +312,12 @@ def _resolve_entities(param) -> list:
 # Public action entry point
 # ---------------------------------------------------------------------------
 
-def nlp_detect_by_path(resource: dict, el: dict, params: dict) -> None:
-    """Detect and replace PHI/PII using NLP in the field matched by *el*.
+def nlp_scrub_by_path(resource: dict, el: dict, params: dict) -> None:
+    """Scrub PHI/PII from the field matched by *el* using NLP.
 
     Modifies *resource* in-place (same contract as all other actions).
 
-    When NLP_SERVICE_URL is set, delegates detection to the remote NLP
+    When NLP_SERVICE_URL is set, delegates to the remote NLP
     microservice. Otherwise runs Presidio locally (default behaviour).
     """
     import os
@@ -356,7 +356,9 @@ def nlp_detect_by_path(resource: dict, el: dict, params: dict) -> None:
     try:
         nodes = find_nodes(resource, parent_path, [])
     except Exception:
-        log.error("nlp_find_nodes_failed path=%s — field left unprocessed (detector.py)", path)
+        log.error("nlp_find_nodes_failed path=%s — redacting field as safety fallback (detector.py)", path)
+        from actions.redact import redact_by_path
+        redact_by_path(resource, el, {})
         return
 
     def _apply(node, field):
@@ -369,14 +371,30 @@ def nlp_detect_by_path(resource: dict, el: dict, params: dict) -> None:
         current = node[field]
         if use_html:
             if isinstance(current, dict) and isinstance(current.get("div"), str):
-                current["div"] = _scrub_xhtml_text_nodes(current["div"], scrub_fn)
+                try:
+                    current["div"] = _scrub_xhtml_text_nodes(current["div"], scrub_fn)
+                except Exception:
+                    log.error("nlp_scrub_failed path=%s.%s — redacting field", path, field)
+                    current["div"] = "[REDACTED]"
             elif isinstance(current, str):
-                node[field] = _scrub_xhtml_text_nodes(current, scrub_fn)
+                try:
+                    node[field] = _scrub_xhtml_text_nodes(current, scrub_fn)
+                except Exception:
+                    log.error("nlp_scrub_failed path=%s.%s — redacting field", path, field)
+                    node[field] = "[REDACTED]"
         elif isinstance(current, str):
-            node[field] = scrub_fn(current)
+            try:
+                node[field] = scrub_fn(current)
+            except Exception:
+                log.error("nlp_scrub_failed path=%s.%s — redacting field", path, field)
+                node[field] = "[REDACTED]"
         elif isinstance(current, list):
             for i, v in enumerate(current):
                 if isinstance(v, str):
-                    current[i] = scrub_fn(v)
+                    try:
+                        current[i] = scrub_fn(v)
+                    except Exception:
+                        log.error("nlp_scrub_failed path=%s.%s[%d] — redacting field", path, field, i)
+                        current[i] = "[REDACTED]"
 
     _apply(nodes, key)

@@ -58,6 +58,7 @@ ENDPOINT_ROLES: dict[str, str] = {
     "/v1/process/cohort": "analyst",
     "/v1/jobs": "analyst",
     # Config profile management — list/read open to viewer; writes require admin
+    # NOTE: POST /v1/configs requires admin — enforced via prefix match below.
     "/v1/configs": "viewer",
     # FHIR Bulk Data Access IG
     "/fhir/$export": "admin",

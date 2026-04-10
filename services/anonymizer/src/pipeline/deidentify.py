@@ -98,8 +98,11 @@ def _get_nlp_adapter():
     return _nlp_adapter
 
 
-def nlp_detect_by_path(resource: dict, el: dict, params: dict) -> None:
-    """NLP-based PHI detection — delegates to the configured NLP adapter.
+def nlp_scrub_by_path(resource: dict, el: dict, params: dict) -> None:
+    """NLP-based PHI scrubbing — delegates to the configured NLP adapter.
+
+    Replaces detected PHI spans with deterministic tokens (``[[PERSON_1]]``)
+    or redaction placeholders (``[PERSON]``), depending on the ``mode`` param.
 
     Preserves the same (resource, el, params) contract as all other actions.
     The adapter selection (local Presidio vs. remote HTTP) is resolved on first call.
@@ -151,15 +154,31 @@ def nlp_detect_by_path(resource: dict, el: dict, params: dict) -> None:
         current = node[field]
         if use_html:
             if isinstance(current, dict) and isinstance(current.get("div"), str):
-                current["div"] = _nlp_scrub_xhtml(current["div"], scrub_fn)
+                try:
+                    current["div"] = _nlp_scrub_xhtml(current["div"], scrub_fn)
+                except Exception:
+                    _log.error("nlp_scrub_failed path=%s.%s — redacting field", path, field)
+                    current["div"] = "[REDACTED]"
             elif isinstance(current, str):
-                node[field] = _nlp_scrub_xhtml(current, scrub_fn)
+                try:
+                    node[field] = _nlp_scrub_xhtml(current, scrub_fn)
+                except Exception:
+                    _log.error("nlp_scrub_failed path=%s.%s — redacting field", path, field)
+                    node[field] = "[REDACTED]"
         elif isinstance(current, str):
-            node[field] = scrub_fn(current)
+            try:
+                node[field] = scrub_fn(current)
+            except Exception:
+                _log.error("nlp_scrub_failed path=%s.%s — redacting field", path, field)
+                node[field] = "[REDACTED]"
         elif isinstance(current, list):
             for i, v in enumerate(current):
                 if isinstance(v, str):
-                    current[i] = scrub_fn(v)
+                    try:
+                        current[i] = scrub_fn(v)
+                    except Exception:
+                        _log.error("nlp_scrub_failed path=%s.%s[%d] — redacting field", path, field, i)
+                        current[i] = "[REDACTED]"
 
     _apply(nodes, key)
 
@@ -175,7 +194,8 @@ deident_actions = {
     "substitute": substitute_by_path,
     "generalize": generalize_by_path,
     "scrub_text": scrub_text_by_path,
-    "nlp_detect": nlp_detect_by_path,
+    "nlp_scrub": nlp_scrub_by_path,
+    "nlp_detect": nlp_scrub_by_path,  # backward-compat alias
 }
 
 # ---------------------------------------------------------------------------

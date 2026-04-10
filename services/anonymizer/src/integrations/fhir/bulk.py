@@ -107,14 +107,26 @@ def _download_bulk_ndjson(file_url, token=None, timeout=60):
     Yields individual resource dicts (one per NDJSON line).
     Streams the response in 64 KB chunks to avoid buffering the entire file.
     """
+    from ._transport import _fhir_cb, FhirCircuitBreakerOpen
+    if not _fhir_cb.allow_request():
+        raise FhirCircuitBreakerOpen(
+            f"FHIR server unavailable — circuit breaker OPEN (bulk_download)"
+        )
     headers = _make_headers(token)
     headers["Accept"] = "application/fhir+ndjson"
-    resp = _pool.urlopen(
-        "GET", file_url, headers=headers, preload_content=False, timeout=timeout,
-    )
+    try:
+        resp = _pool.urlopen(
+            "GET", file_url, headers=headers, preload_content=False, timeout=timeout,
+        )
+    except (Exception, OSError) as exc:
+        _fhir_cb.record_failure()
+        raise ValueError(f"FHIR server connection error for {file_url}: {exc}") from exc
     if resp.status >= 400:
         resp.release_conn()
+        if resp.status in (500, 502, 503, 504):
+            _fhir_cb.record_failure()
         raise ValueError(f"FHIR server HTTP {resp.status} for {file_url}")
+    _fhir_cb.record_success()
     try:
         buf = b""
         for chunk in resp.stream(65536):

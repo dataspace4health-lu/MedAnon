@@ -11,11 +11,15 @@ import random
 import re
 import time
 import urllib3
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 from utils.circuit_breaker import CircuitBreaker
 from utils.logging import REQUEST_ID
 from utils.metrics import FHIR_CALL_COUNT, FHIR_LATENCY
+
+
+class FhirCircuitBreakerOpen(Exception):
+    """Raised when the FHIR circuit breaker is OPEN and requests are rejected."""
 
 __all__ = [
     # Connection pool & logger
@@ -53,7 +57,15 @@ log = logging.getLogger("medanon.fhir_server")
 # ---------------------------------------------------------------------------
 
 _fhir_cb = CircuitBreaker(
-    name="fhir",
+    name="fhir-source",
+    failure_threshold=int(os.environ.get("FHIR_CB_FAILURE_THRESHOLD", "5")),
+    recovery_timeout_sec=float(os.environ.get("FHIR_CB_RECOVERY_TIMEOUT_SEC", "30")),
+    window_sec=float(os.environ.get("FHIR_CB_WINDOW_SEC", "60")),
+    half_open_probes=int(os.environ.get("FHIR_CB_HALF_OPEN_PROBES", "3")),
+)
+
+_fhir_target_cb = CircuitBreaker(
+    name="fhir-target",
     failure_threshold=int(os.environ.get("FHIR_CB_FAILURE_THRESHOLD", "5")),
     recovery_timeout_sec=float(os.environ.get("FHIR_CB_RECOVERY_TIMEOUT_SEC", "30")),
     window_sec=float(os.environ.get("FHIR_CB_WINDOW_SEC", "60")),
@@ -145,15 +157,17 @@ def _make_post_headers(token=None, target: bool = False):
 # Unified retry loop (DRY: shared by _do_request and _do_raw_request)
 # ---------------------------------------------------------------------------
 
-def _retry_request(method, url, headers, timeout, body, operation, parse_json):
+def _retry_request(method, url, headers, timeout, body, operation, parse_json, target=False):
     """Execute an HTTP request with retry, circuit breaker, and timeout separation.
 
     When *parse_json* is True, parses the response as JSON and raises on HTTP >= 400.
     When False, returns the raw urllib3 response (including 2xx non-200 like 202).
+    When *target* is True, the target-server circuit breaker is used instead of source.
     """
-    if not _fhir_cb.allow_request():
+    cb = _fhir_target_cb if target else _fhir_cb
+    if not cb.allow_request():
         FHIR_CALL_COUNT.labels(operation=operation, status="error").inc()
-        raise ValueError(f"FHIR server unavailable — circuit breaker OPEN ({operation})")
+        raise FhirCircuitBreakerOpen(f"FHIR server unavailable — circuit breaker OPEN ({operation})")
 
     t0 = time.perf_counter()
     for attempt in range(_FHIR_RETRY_COUNT + 1):
@@ -174,13 +188,13 @@ def _retry_request(method, url, headers, timeout, body, operation, parse_json):
                 FHIR_LATENCY.labels(operation=operation).observe(time.perf_counter() - t0)
                 FHIR_CALL_COUNT.labels(operation=operation, status="error").inc()
                 if should_retry:
-                    _fhir_cb.record_failure()
+                    cb.record_failure()
                 body_snippet = resp.data[:400].decode("utf-8", errors="replace") if resp.data else ""
                 raise ValueError(f"FHIR server HTTP {resp.status} for {url}: {body_snippet}")
 
             FHIR_LATENCY.labels(operation=operation).observe(time.perf_counter() - t0)
             FHIR_CALL_COUNT.labels(operation=operation, status="ok").inc()
-            _fhir_cb.record_success()
+            cb.record_success()
 
             if parse_json:
                 return _json_loads(resp.data.decode("utf-8"))
@@ -195,34 +209,35 @@ def _retry_request(method, url, headers, timeout, body, operation, parse_json):
                 continue
             FHIR_LATENCY.labels(operation=operation).observe(time.perf_counter() - t0)
             FHIR_CALL_COUNT.labels(operation=operation, status="error").inc()
-            _fhir_cb.record_failure()
+            cb.record_failure()
             raise ValueError(f"FHIR server connection error for {url}: {exc}") from exc
 
 
-def _do_request(method, url, headers, timeout, body=None, operation="request"):
+def _do_request(method, url, headers, timeout, body=None, operation="request", target=False):
     """Execute an HTTP request and return parsed JSON. Raises ValueError on errors."""
-    return _retry_request(method, url, headers, timeout, body, operation, parse_json=True)
+    return _retry_request(method, url, headers, timeout, body, operation, parse_json=True, target=target)
 
 
-def _do_raw_request(method, url, headers, timeout, body=None, operation="request"):
+def _do_raw_request(method, url, headers, timeout, body=None, operation="request", target=False):
     """Execute HTTP request and return the raw urllib3 response object."""
-    return _retry_request(method, url, headers, timeout, body, operation, parse_json=False)
+    return _retry_request(method, url, headers, timeout, body, operation, parse_json=False, target=target)
 
 
 def _safe_next_url(next_url: str, current_url: str, pinned_origin: list | None = None) -> str:
-    """Validate that a pagination link stays on the same origin.
+    """Return *next_url* with its origin normalised to the working origin.
 
-    On the first page, the FHIR server may return links using a different
-    public address than the caller-provided base_url.  We allow this **once**
-    and then pin all subsequent pages to the server's chosen origin.
+    HAPI FHIR embeds its own configured hostname in ``link[rel=next]`` URLs,
+    which often differs from the address the anonymizer uses (e.g. the server
+    returns ``http://10.168.192.22:8081/fhir?_getpages=...`` while we connect
+    via ``http://fhir-server:8081/fhir``).  Following the server-reported URL
+    fails with "Connection refused" inside Docker.
 
-    Pass a single-element list as *pinned_origin* to share state across pages.
-    On first divergence, the accepted origin is stored in ``pinned_origin[0]``
-    and all subsequent pages must match it.  If *pinned_origin* is ``None``
-    the behaviour is the same but without cross-page pinning.
+    We therefore *rewrite* any divergent origin back to the origin we know is
+    reachable (the origin of *current_url* on the first call, then pinned).
 
-    Prevents SSRF where a malicious FHIR server progressively redirects
-    pagination links to arbitrary internal services.
+    SSRF safety: the path/query from the server are accepted as-is, but the
+    host is always clamped to the known-good pinned origin, so a malicious
+    server cannot redirect us to an arbitrary internal address.
     """
     n = urlparse(next_url)
     b = urlparse(current_url)
@@ -232,29 +247,28 @@ def _safe_next_url(next_url: str, current_url: str, pinned_origin: list | None =
     next_origin = (n.scheme, n.netloc)
     current_origin = (b.scheme, b.netloc)
 
-    # If we already pinned an origin from a prior divergence, enforce it.
-    if pinned_origin and pinned_origin[0] is not None:
-        if next_origin != pinned_origin[0]:
-            raise ValueError(
-                f"Pagination link origin {n.scheme}://{n.netloc} does not match "
-                f"pinned origin {pinned_origin[0][0]}://{pinned_origin[0][1]}"
-            )
-        return next_url
-
-    # Same origin as the current page — always allowed.
-    if next_origin == current_origin:
-        return next_url
-
-    # First divergence: server returned a different public address.  Allow it
-    # once and pin so subsequent pages cannot hop to yet another origin.
-    log.debug(
-        "Pagination link origin (%s://%s) differs from request origin (%s://%s) "
-        "— accepting and pinning server-issued origin",
-        n.scheme, n.netloc, b.scheme, b.netloc,
-    )
+    # Determine the authoritative (reachable) origin for this pagination sequence.
+    # On the first call pinned_origin[0] is None; we pin it to the origin we are
+    # already successfully talking to (current_url's origin).
     if pinned_origin is not None:
-        pinned_origin[0] = next_origin
-    return next_url
+        if pinned_origin[0] is None:
+            pinned_origin[0] = current_origin
+        auth_origin = pinned_origin[0]
+    else:
+        auth_origin = current_origin
+
+    # Same origin as authoritative — return unchanged.
+    if next_origin == auth_origin:
+        return next_url
+
+    # Origin differs: HAPI returned its external hostname.  Rewrite to the
+    # authoritative origin so the request reaches the reachable endpoint.
+    rewritten = urlunparse((auth_origin[0], auth_origin[1], n.path, n.params, n.query, n.fragment))
+    log.debug(
+        "Pagination link origin rewritten: %s://%s → %s://%s",
+        n.scheme, n.netloc, auth_origin[0], auth_origin[1],
+    )
+    return rewritten
 
 
 def _get_json(url, token=None, timeout=30, operation="get"):
@@ -266,4 +280,4 @@ def _write_json(url, payload, method, token=None, timeout=30, operation="write",
     """POST or PUT JSON payload to a FHIR server URL; returns parsed response dict."""
     body = _json_dumps_bytes(payload)
     headers = _make_post_headers(token, target=target)
-    return _do_request(method, url, headers, timeout, body=body, operation=operation)
+    return _do_request(method, url, headers, timeout, body=body, operation=operation, target=target)

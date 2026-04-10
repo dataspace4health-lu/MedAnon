@@ -102,9 +102,10 @@ class CircuitBreaker:
                     )
                     self._failure_count = 0
                     self._state = self.CLOSED
-            else:
-                self._failure_count = 0
-                self._state = self.CLOSED
+            elif self._state == self.CLOSED:
+                # Decrement rather than reset — a single success should not
+                # erase multiple prior failures within the sliding window.
+                self._failure_count = max(0, self._failure_count - 1)
 
     def record_failure(self) -> None:
         with self._lock:

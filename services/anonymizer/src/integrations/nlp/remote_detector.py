@@ -1,7 +1,7 @@
 """Remote NLP detector — calls the NLP microservice over HTTP.
 
 Drop-in replacement for the local ``_analyze_and_replace`` calls when
-``NLP_SERVICE_URL`` is set. The calling interface in ``nlp_detect_by_path``
+``NLP_SERVICE_URL`` is set. The calling interface in ``nlp_scrub_by_path``
 remains unchanged; the choice of local vs. remote is made at call time.
 """
 

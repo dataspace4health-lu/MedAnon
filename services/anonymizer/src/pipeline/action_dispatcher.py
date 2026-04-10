@@ -96,39 +96,42 @@ def dispatch_pass1(
                 except Exception as exc:
                     if processing_mode == "skip":
                         audit_log.warning(
-                            "fhirpath_eval_failed_skip expression=%s resource_type=%s error=%s",
+                            "fhirpath_eval_failed_skip expression=%s resource_type=%s error=%s — "
+                            "redacting matched path as safety fallback",
                             candidate.replace("\n", " ").replace("\r", " "),
                             resource.get("resourceType", "unknown") if isinstance(resource, dict) else "unknown",
                             type(exc).__name__,
                         )
+                        # Fail-safe: construct a synthetic element targeting the
+                        # candidate path so the downstream redact action can strip
+                        # the field.  Without this, a FHIRPath evaluation failure
+                        # silently passes the element through unprocessed.
+                        fallback_el = {"path": candidate, "value": None}
+                        try:
+                            perform_deidentification("redact", resource, fallback_el, {})
+                        except Exception:
+                            audit_log.error(
+                                "fhirpath_fallback_redact_failed expression=%s — PHI may be exposed",
+                                candidate,
+                            )
                         continue
                     raise
 
-        # Determine action category for duplicate-path filtering
-        if action in DEIDENT_ACTIONS:
-            category = "deidentify"
-        elif action in PSEUDO_ACTIONS:
-            category = "pseudonymize"
-        elif action in DEPSEUDO_ACTIONS:
-            category = "depseudonymize"
-        else:
-            category = "unknown"
-
-        # Filter elements already processed by a prior rule in the same category
+        # Filter elements already processed by a prior rule with the same action
         elements_to_process = []
         for el in matched_elements:
             el_path = el.get("path", "?")
-            path_key = (el_path, category)
+            path_key = (el_path, action)
             if path_key in processed_paths:
                 audit_log.debug(
-                    "rule_skipped_duplicate action=%s path=%s category=%s",
-                    action, el_path, category,
+                    "rule_skipped_duplicate action=%s path=%s",
+                    action, el_path,
                 )
                 continue
             elements_to_process.append(el)
 
         for el in elements_to_process:
-            processed_paths.add((el.get("path", "?"), category))
+            processed_paths.add((el.get("path", "?"), action))
 
         for el in elements_to_process:
             el_path = el.get("path", "?")
@@ -141,13 +144,6 @@ def dispatch_pass1(
                 resource.get("resourceType", "unknown") if isinstance(resource, dict) else "unknown",
             )
 
-            if _MANIFEST_ENABLED:
-                manifest_entries.append({
-                    "rule": rule.get("name", rule["match"]),
-                    "action": action,
-                    "path": el_path,
-                })
-
             if action in GPAS_PSEUDO_ACTIONS:
                 val = el["value"]
                 serialized = str(val) if not isinstance(val, dict) else _json_dumps(val)
@@ -155,8 +151,16 @@ def dispatch_pass1(
                     rule=rule, element=el, params=params,
                     serialized_value=serialized,
                 ))
+                # Record manifest at deferral time (gPAS batch succeeds/fails together)
+                if _MANIFEST_ENABLED:
+                    manifest_entries.append({
+                        "rule": rule.get("name", rule["match"]),
+                        "action": action,
+                        "path": el_path,
+                    })
                 continue
 
+            actual_action = action
             try:
                 if action in DEIDENT_ACTIONS:
                     perform_deidentification(action, resource, el, params)
@@ -175,13 +179,29 @@ def dispatch_pass1(
                     )
                     try:
                         perform_deidentification("redact", resource, el, {})
+                        actual_action = "redact"
                     except Exception:
                         audit_log.error(
                             "fallback_redact_failed path=%s — PHI may be exposed; re-raising",
                             el_path,
                         )
                         raise
+                    # Record the fallback action in manifest, then continue
+                    if _MANIFEST_ENABLED:
+                        manifest_entries.append({
+                            "rule": rule.get("name", rule["match"]),
+                            "action": actual_action,
+                            "path": el_path,
+                        })
                     continue
                 raise
+
+            # Record manifest after successful action execution
+            if _MANIFEST_ENABLED:
+                manifest_entries.append({
+                    "rule": rule.get("name", rule["match"]),
+                    "action": actual_action,
+                    "path": el_path,
+                })
 
     return gpas_work

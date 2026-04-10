@@ -173,6 +173,9 @@ def list_gpas_domains(params):
     try:
         resp = _gpas_pool.request('GET', url, headers=headers, timeout=timeout)
         body = resp.data.decode('utf-8', errors='replace')
+        if resp.status >= 500:
+            _gpas_circuit_breaker.record_failure()
+            raise ValueError(f"gPAS admin HTTP {resp.status} for {url}")
         _gpas_circuit_breaker.record_success()
         return _parse_gpas_domains_from_html(body)
     except Exception:
