@@ -13,7 +13,7 @@ import { FhirCodeViewer } from "@/components/shared/FhirCodeViewer";
 import { JsonDiffViewer } from "@/components/shared/JsonDiffViewer";
 import { MultiFormatDownload } from "@/components/shared/MultiFormatDownload";
 import { FhirTableView } from "@/components/shared/FhirTableView";
-import { buildPiiDetectionMap, buildFieldSummary, stripManifestTag } from "@/lib/piiDetection";
+import { buildPiiFromDeidentifiedOnly, buildFieldSummary, stripManifestTag } from "@/lib/piiDetection";
 import { extractFieldsDeep } from "@/lib/fhirFields";
 import { getAuthHeaders } from "@/api/client";
 import { uploadToTarget } from "@/api/medanon";
@@ -306,11 +306,8 @@ export function DeidentifyPanel({
   }, [uploading, cleanResources, targetUrl]);
 
   const piiDetectionMap = useMemo(
-    () =>
-      hasResults
-        ? buildPiiDetectionMap(state.originalResources, state.resources)
-        : {},
-    [hasResults, state.originalResources, state.resources],
+    () => (hasResults ? buildPiiFromDeidentifiedOnly(state.resources) : {}),
+    [hasResults, state.resources],
   );
 
   const fieldSummary = useMemo(() => {
