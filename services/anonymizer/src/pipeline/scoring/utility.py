@@ -180,10 +180,11 @@ class UtilityEvaluator:
     ) -> float:
         if not manifest_entries:
             evidence.append(Evidence(
-                check="information_loss", value=1.0,
-                details={"reason": "no manifest entries"},
+                check="information_loss", value=0.5,
+                details={"reason": "no manifest entries — indeterminate"},
+                severity="warning",
             ))
-            return 1.0
+            return 0.5
 
         total_loss = sum(
             INFO_LOSS_WEIGHTS.get(e.get("action", ""), 0.5)

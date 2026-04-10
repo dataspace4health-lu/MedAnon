@@ -3,6 +3,7 @@
     POST  /score              — score a single de-identified resource (ad-hoc)
     POST  /jobs/{job_id}/score — trigger on-demand scoring for a completed job
     GET   /jobs/{job_id}/score — retrieve cached score for a job
+    GET   /jobs/{job_id}/score/report — retrieve Markdown audit report
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ import asyncio
 import logging
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import PlainTextResponse
 
 from api.schemas.scoring import ScoreResourceRequest
 from api.services.scoring import ScoringService
@@ -78,6 +80,37 @@ async def score_job(job_id: str, config_profile: str | None = None):
         logger.error("score_job_error job=%s: %s", job_id, exc)
         raise HTTPException(status_code=500, detail="Scoring failed")
     return result
+
+
+@router.get("/jobs/{job_id}/score/report", response_class=PlainTextResponse)
+async def get_job_score_report(job_id: str):
+    """Return the Markdown audit report for a scored job.
+
+    The report is generated automatically when you call
+    ``POST /v1/jobs/{job_id}/score`` and written to
+    ``/output/{job_id}_score_audit.md``.  It explains:
+
+    - Why each score (composite / utility / quality) is what it is
+    - Which HIPAA-sensitive paths were not covered by rules
+    - Which text-risk patterns were detected in narrative fields
+    - Which rules fired vs. which were missed
+    - Per-resource-type PASS/FAIL breakdown
+    - Priority-ordered recommendations with config YAML snippets
+    """
+    from medanon_core.domain import JobNotFound
+
+    try:
+        report = await asyncio.to_thread(_service.get_audit_report, job_id)
+    except JobNotFound:
+        raise HTTPException(status_code=404, detail="Job not found")
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=str(exc),
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    return report
 
 
 @router.get("/jobs/{job_id}/score")

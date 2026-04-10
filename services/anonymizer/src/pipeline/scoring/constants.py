@@ -63,7 +63,8 @@ CLINICAL_CODE_SYSTEMS: frozenset[str] = frozenset({
 INFO_LOSS_WEIGHTS: dict[str, float] = {
     "redact": 1.0,
     "scrub_text": 0.6,
-    "nlp_detect": 0.6,
+    "nlp_scrub": 0.6,
+    "nlp_detect": 0.6,  # backward-compat for old manifests
     "generalize": 0.5,
     "substitute": 0.4,
     "perturb": 0.3,

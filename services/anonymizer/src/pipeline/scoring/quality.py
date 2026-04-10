@@ -83,10 +83,11 @@ class QualityEvaluator:
     ) -> float:
         if settings is None or not hasattr(settings, "rules"):
             evidence.append(Evidence(
-                check="rule_coverage", value=1.0,
-                details={"reason": "no settings available"},
+                check="rule_coverage", value=0.5,
+                details={"reason": "no settings available — indeterminate"},
+                severity="warning",
             ))
-            return 1.0
+            return 0.5
 
         rtype = deidentified.get("resourceType", "")
 

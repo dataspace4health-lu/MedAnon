@@ -20,3 +20,4 @@ from pipeline.scoring.models import (  # noqa: F401
     ScoreResult,
 )
 from pipeline.scoring.constants import SCORING_ENABLED, SCORE_ATTACH  # noqa: F401
+from pipeline.scoring.audit import ScoreAuditCollector  # noqa: F401
