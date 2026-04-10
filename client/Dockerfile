@@ -8,6 +8,8 @@ RUN npm run build
 
 # Stage 2: Serve
 FROM nginx:1.27-alpine
+# Upgrade Alpine packages to pick up OS-level security patches (Trivy CRITICAL/HIGH)
+RUN apk upgrade --no-cache
 COPY --from=build /app/dist /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 RUN chown -R nginx:nginx /var/cache/nginx /var/log/nginx /usr/share/nginx/html && \

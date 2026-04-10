@@ -4,6 +4,9 @@
 # ── Base stage ────────────────────────────────────────────────────────────────
 FROM python:3.12-slim AS base
 
+# Upgrade Debian packages to pick up OS-level security patches (Trivy HIGH/CRITICAL)
+RUN apt-get update && apt-get upgrade -y --no-install-recommends && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /code
 
 # Install medanon-core shared library first (layer-cached unless package changes)

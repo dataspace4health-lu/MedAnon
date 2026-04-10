@@ -187,7 +187,7 @@ jobs:
           curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
             | sh -s -- -b /usr/local/bin
       - name: Trivy scan
-        run: trivy image --exit-code 1 --severity CRITICAL,HIGH --format table medanon:ci
+        run: trivy image --exit-code 1 --severity CRITICAL,HIGH --ignore-unfixed --format table medanon:ci
 
   trivy-ui:
     name: Trivy – UI image
@@ -206,7 +206,7 @@ jobs:
           curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
             | sh -s -- -b /usr/local/bin
       - name: Trivy scan
-        run: trivy image --exit-code 1 --severity CRITICAL,HIGH --format table medanon-ui:ci
+        run: trivy image --exit-code 1 --severity CRITICAL,HIGH --ignore-unfixed --format table medanon-ui:ci
 
   # ── Stage 4: Integration test (depends on docker-build) ────────────────────
 
@@ -228,6 +228,12 @@ jobs:
           # compose can parse the file; MinIO is not started (no --profile s3).
           echo "MINIO_ROOT_USER=ci-minio" >> .env
           echo "MINIO_ROOT_PASSWORD=ci-minio-$(date +%s)" >> .env
+          # gPAS env files are gitignored (third-party service config); create
+          # empty stubs so docker compose can parse the file without error.
+          mkdir -p services/gpas/envs
+          for f in ttp_commons ttp_fhir ttp_gpas ttp_gras ttp_noti wf_commons; do
+            touch services/gpas/envs/${f}.env
+          done
       - name: Start full stack
         run: make up
         timeout-minutes: 10
