@@ -194,8 +194,9 @@ CLAUDE.md
 # gPAS third-party service (not source-controlled)
 services/gpas/
 
-# Tests folder — not source-controlled
-services/anonymizer/tests/
+# Test fixtures / generated data (may contain PHI sample data)
+services/anonymizer/tests/data/
+services/anonymizer/tests/__pycache__/
 
 # Virtual environments
 .venv/

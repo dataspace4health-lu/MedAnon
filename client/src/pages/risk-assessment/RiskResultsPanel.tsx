@@ -296,8 +296,8 @@ export function RiskResultsPanel({ report }: RiskResultsPanelProps) {
                     }}
                   />
                   <Tooltip
-                    formatter={(value: number | string) => [value, 'Groups']}
-                    labelFormatter={(label: number | string) => `k = ${label}`}
+                    formatter={(value: unknown) => [value as string | number, 'Groups']}
+                    labelFormatter={(label: unknown) => `k = ${String(label)}`}
                   />
                   <Bar
                     dataKey="count"

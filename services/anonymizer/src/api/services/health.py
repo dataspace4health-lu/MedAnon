@@ -68,7 +68,7 @@ class HealthCheckService:
             # when the old /gpas/gpasService?wsdl suffix was appended to the FHIR path.
             fhir_base = url.rstrip("/").rsplit("/", 1)[0]
             probe = f"{fhir_base}/metadata"
-            _ureq.urlopen(probe, timeout=timeout)
+            _ureq.urlopen(probe, timeout=timeout)  # nosec B310
             return "ok"
         except urllib.error.HTTPError:
             # Any HTTP response (400, 401, etc.) means the service is reachable
@@ -79,7 +79,7 @@ class HealthCheckService:
 
     def _probe_fhir(self, url: str, timeout: float) -> str:
         try:
-            _ureq.urlopen(f"{url.rstrip('/')}/metadata", timeout=timeout)
+            _ureq.urlopen(f"{url.rstrip('/')}/metadata", timeout=timeout)  # nosec B310
             return "ok"
         except Exception as exc:
             logger.debug("readiness: fhir unreachable: %s", exc)

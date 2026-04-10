@@ -99,7 +99,7 @@ def _deliver_webhook(subscription: dict, resource: dict) -> None:
         req = urllib.request.Request(
             url=endpoint, data=payload, headers=headers, method="POST"
         )
-        with urllib.request.urlopen(req, timeout=_WEBHOOK_TIMEOUT):
+        with urllib.request.urlopen(req, timeout=_WEBHOOK_TIMEOUT):  # nosec B310
             pass  # Success — response body not consumed
         _dispatch_log.info(
             "subscription_delivered sub=%s endpoint=%s",

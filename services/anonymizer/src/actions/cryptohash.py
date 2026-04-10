@@ -1,5 +1,6 @@
 from utils.fhirpath import find_nodes
-from Crypto.Hash import SHA3_256, SHA256, HMAC
+import hashlib
+import hmac as _hmac
 import json as _json_stdlib
 import logging
 import os
@@ -43,14 +44,14 @@ def _compute_hash(msg, params):
     secret_key = _resolve_secret_key(params)
 
     if hash_type == "sha3_256":
-        digestmod = SHA3_256
+        digestmod = "sha3_256"
     elif hash_type == "sha256":
-        digestmod = SHA256
+        digestmod = "sha256"
     else:
         raise ValueError(f"Unsupported hash_type: {hash_type}")
 
     if secret_key:
-        return HMAC.new(str(secret_key).encode(), msg, digestmod=digestmod).hexdigest()
+        return _hmac.new(str(secret_key).encode(), msg, digestmod=digestmod).hexdigest()
 
     # Plain hashing without HMAC is dangerous — must be explicitly allowed
     allow_plain = os.environ.get("MEDANON_HASH_ALLOW_PLAIN", "").strip().lower() in (
@@ -78,7 +79,7 @@ def _compute_hash(msg, params):
                 hash_type.upper(),
             )
             _warned_no_key = True
-    return digestmod.new(msg).hexdigest()
+    return hashlib.new(digestmod, msg).hexdigest()
 
 
 def _hash_nodes(node, key, value, params):

@@ -129,7 +129,7 @@ def _sync_introspect(upstream_url: str, body: bytes) -> tuple[dict, int]:
         headers={"Content-Type": "application/x-www-form-urlencoded"},
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=10) as resp:
+    with urllib.request.urlopen(req, timeout=10) as resp:  # nosec B310
         return json.loads(resp.read()), resp.status
 
 

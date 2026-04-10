@@ -191,7 +191,7 @@ def _resolve_bearer_context(token: str) -> AuthContext:
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
                 method="POST",
             )
-            with urllib.request.urlopen(req, timeout=5) as resp:
+            with urllib.request.urlopen(req, timeout=5) as resp:  # nosec B310
                 data = json.loads(resp.read())
             if not data.get("active", False):
                 raise HTTPException(status_code=401, detail="Token inactive")

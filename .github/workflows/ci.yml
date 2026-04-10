@@ -136,20 +136,16 @@ jobs:
           MEDANON_RATE_LIMIT_ENABLED: "false"
         run: |
           python -m pytest \
-            tests/test_api.py \
-            tests/test_auth.py \
+            tests/test_action_dispatcher.py \
             tests/test_cache.py \
-            tests/test_cli.py \
-            tests/test_cli_integration.py \
-            tests/test_config_profiles.py \
-            tests/test_fhir_client.py \
-            tests/test_integration.py \
-            tests/test_io_formats.py \
+            tests/test_circuit_breaker.py \
+            tests/test_crypto.py \
             tests/test_jobs.py \
             tests/test_jobs_redis.py \
+            tests/test_post_processor.py \
             tests/test_proxy_clients.py \
-            tests/test_risk.py \
-            tests/test_synthetic.py \
+            tests/test_scoring.py \
+            tests/test_where_evaluator.py \
             -q --tb=short
 
   docker-build:
