@@ -93,14 +93,10 @@ export function AsyncExportPanel({ configProfile }: { configProfile: string }) {
   );
 
   const handleSubmit = useCallback(async () => {
-    if (!serverUrl.trim()) {
-      toast.error('Server URL is required.');
-      return;
-    }
     setSubmitting(true);
     try {
       const submitted = await submitBulkExportJob({
-        server_url: serverUrl.trim(),
+        server_url: serverUrl.trim() || undefined,
         resource_type: resourceType.trim() || undefined,
         config_profile: configProfile,
       });
@@ -190,10 +186,13 @@ export function AsyncExportPanel({ configProfile }: { configProfile: string }) {
           <div className="flex flex-col gap-3">
             <div>
               <label className="mb-1 block text-sm font-medium">
-                FHIR Server URL
+                FHIR Server URL{' '}
+                <span className="font-normal text-muted-foreground">
+                  (optional — uses server default if blank)
+                </span>
               </label>
               <Input
-                placeholder="http://fhir-server:8080/fhir"
+                placeholder="Leave blank for default (FHIR_SOURCE_URL)"
                 value={serverUrl}
                 onChange={(e) => setServerUrl(e.target.value)}
                 disabled={submitting || job?.status === 'running' || job?.status === 'pending'}

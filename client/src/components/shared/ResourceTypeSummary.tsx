@@ -43,7 +43,8 @@ const ACTION_COLORS: Record<string, string> = {
   perturb: "bg-teal-100 text-teal-800",
   substitute: "bg-orange-100 text-orange-800",
   scrub_text: "bg-pink-100 text-pink-800",
-  nlp_detect: "bg-pink-100 text-pink-800",
+  nlp_scrub: "bg-pink-100 text-pink-800",
+  nlp_detect: "bg-pink-100 text-pink-800",  // backward compat
   modified: "bg-slate-100 text-slate-700",
 };
 

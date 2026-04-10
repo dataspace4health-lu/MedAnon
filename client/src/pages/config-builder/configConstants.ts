@@ -13,7 +13,7 @@ export const VALID_ACTIONS = [
   'substitute',
   'generalize',
   'scrub_text',
-  'nlp_detect',
+  'nlp_scrub',
   'gpas_pseudonymize',
 ] as const;
 
@@ -39,7 +39,7 @@ export const ACTION_DESCRIPTIONS: Record<Action, string> = {
   substitute: 'Replace the value with a synthetic but structurally valid substitute.',
   generalize: 'Reduce precision (e.g. date to year-only, zip to 3-digit prefix).',
   scrub_text: 'Regex-based text scrubbing for phones, emails, dates, and other patterns.',
-  nlp_detect: 'NLP-based named-entity detection (Presidio) for names, locations, etc.',
+  nlp_scrub: 'NLP-based PHI scrubbing (Presidio) — replaces names, locations, etc. with tokens.',
   gpas_pseudonymize: 'Replace the value with a gPAS-generated pseudonym (requires gPAS server).',
 };
 

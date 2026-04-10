@@ -31,7 +31,8 @@ const ACTION_STYLES: Record<
   encrypt:           { row: "bg-indigo-50", badge: "bg-indigo-100 text-indigo-700", label: "Encrypted"     },
   perturb:           { row: "bg-teal-50",   badge: "bg-teal-100 text-teal-700",     label: "Perturbed"     },
   scrub_text:        { row: "bg-pink-50",   badge: "bg-pink-100 text-pink-700",     label: "Scrubbed"      },
-  nlp_detect:        { row: "bg-pink-50",   badge: "bg-pink-100 text-pink-700",     label: "NLP scrub"     },
+  nlp_scrub:         { row: "bg-pink-50",   badge: "bg-pink-100 text-pink-700",     label: "NLP scrub"     },
+  nlp_detect:        { row: "bg-pink-50",   badge: "bg-pink-100 text-pink-700",     label: "NLP scrub"     },  // backward compat
   modified:          { row: "bg-slate-50",  badge: "bg-slate-100 text-slate-600",   label: "Modified"      },
 };
 

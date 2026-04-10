@@ -105,7 +105,7 @@ export function ParamsEditor({
     );
   }
 
-  if (action === 'nlp_detect') {
+  if (action === 'nlp_scrub') {
     return (
       <div className="flex items-center gap-1.5">
         <Select

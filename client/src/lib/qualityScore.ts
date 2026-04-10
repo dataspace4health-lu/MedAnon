@@ -68,7 +68,8 @@ const ACTION_STRENGTH: Record<string, number> = {
   substitute: 0.7,
   perturb: 0.6,
   scrub_text: 0.5,
-  nlp_detect: 0.5,
+  nlp_scrub: 0.5,
+  nlp_detect: 0.5,  // backward compat
   modified: 0.3,
 };
 
