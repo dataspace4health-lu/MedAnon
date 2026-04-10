@@ -27,17 +27,6 @@ COPY services/anonymizer/config/ /code/config/
 #   docker run -v /path/to/keys:/code/keys ...
 #   Kubernetes: secretRef → volumeMount at /code/keys
 
-# 2. Purge packages that have CVEs with no upstream fix and are not needed
-#    by a production Gunicorn/Uvicorn web service at runtime:
-#      libncursesw6/libncurses6: terminal line-editing (readline); only needed
-#        for interactive Python shells, not for gunicorn/uvicorn serving HTTP
-#      libsystemd0: systemd integration; irrelevant inside a container
-#    Done AFTER pip installs so readline is available during package builds.
-RUN apt-get update \
-    && apt-get purge -y libncursesw6 libncurses6 libsystemd0 \
-    && apt-get autoremove -y \
-    && rm -rf /var/lib/apt/lists/*
-
 # Create a non-root user for production security
 RUN addgroup --system appgroup && adduser --system --ingroup appgroup appuser
 
