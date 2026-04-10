@@ -228,6 +228,10 @@ jobs:
           # compose can parse the file; MinIO is not started (no --profile s3).
           echo "MINIO_ROOT_USER=ci-minio" >> .env
           echo "MINIO_ROOT_PASSWORD=ci-minio-$(date +%s)" >> .env
+          # Cap CPU limits to 2 (GitHub Actions runners have 2 CPUs; Docker
+          # rejects limits higher than the available CPU count)
+          echo "ANONYMIZER_CPU_LIMIT=2.0" >> .env
+          echo "WORKER_CPU_LIMIT=2.0" >> .env
           # gPAS env files are gitignored (third-party service config); create
           # empty stubs so docker compose can parse the file without error.
           mkdir -p services/gpas/envs

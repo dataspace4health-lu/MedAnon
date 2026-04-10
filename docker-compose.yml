@@ -121,7 +121,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "4.0"
+          cpus: "${ANONYMIZER_CPU_LIMIT:-4.0}"
           memory: 6G
         reservations:
           cpus: "1.0"
@@ -161,7 +161,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "4.0"
+          cpus: "${WORKER_CPU_LIMIT:-4.0}"
           memory: 4G
         reservations:
           cpus: "0.5"
