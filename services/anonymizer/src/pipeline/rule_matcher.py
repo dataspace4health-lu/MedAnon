@@ -255,9 +255,16 @@ def _evaluate_simple_path(resource: dict, expression: str) -> list:
     if parts[0] != "*":
         if resource_type != parts[0]:
             return []
-    # For wildcard (*.field), any resource type matches
+        return _traverse(resource, parts[1:], parts[0])
 
-    return _traverse(resource, parts[1:], parts[0])
+    # For wildcard (*.field), use the actual resource type as the path prefix so
+    # that elements produced here deduplicate correctly against typed rules.
+    # Without this, "*.code.text" produces path "*.code.text" while the
+    # candidate expansion also generates "Observation.code.text" from the same
+    # rule, yielding two elements with different path strings that bypass the
+    # (el_path, action) dedup check in action_dispatcher — causing actions
+    # like nlp_scrub to run twice on the same field.
+    return _traverse(resource, parts[1:], resource_type or "*")
 
 
 def _traverse(node, path_parts: list[str], prefix: str) -> list:
