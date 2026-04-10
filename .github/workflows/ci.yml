@@ -219,7 +219,10 @@ jobs:
       - name: Create .env from example
         run: |
           cp .env.example .env
-          # Generate required passwords for CI
+          # Generate required passwords for CI (generate once, reuse where needed)
+          REDIS_PW="ci-redis-$(date +%s)"
+          echo "MEDANON_REDIS_PASSWORD=${REDIS_PW}" >> .env
+          echo "MEDANON_REDIS_URL=redis://:${REDIS_PW}@redis:6379/0" >> .env
           echo "GPAS_MYSQL_ROOT_PASSWORD=ci-test-$(date +%s)" >> .env
           echo "HAPI_DB_PASSWORD=ci-test-$(date +%s)" >> .env
           echo "HAPI_TARGET_DB_PASSWORD=ci-test-$(date +%s)" >> .env
