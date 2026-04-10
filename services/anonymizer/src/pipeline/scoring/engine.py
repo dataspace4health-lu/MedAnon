@@ -9,6 +9,8 @@ Implements the constraint-based scoring model:
 from __future__ import annotations
 
 import logging
+import os
+import random
 import time
 from typing import Any
 
@@ -36,6 +38,11 @@ except ImportError:
 _privacy_eval = PrivacyRiskEvaluator()
 _utility_eval = UtilityEvaluator()
 _quality_eval = QualityEvaluator()
+
+# Maximum number of Patient resources retained for batch-level k-anonymity.
+# Exports with more patients use reservoir sampling to keep a representative
+# subsample, bounding memory to ~_MAX_PATIENTS × avg_patient_size.
+_MAX_PATIENTS: int = int(os.environ.get("MEDANON_SCORE_MAX_PATIENTS", "10000"))
 
 
 def compute_composite(
@@ -135,6 +142,7 @@ class ScoreCollector:
         "_quality_sum",
         "_patients",
         "_patient_manifests",
+        "_patient_seen",
         "_error_count",
         "_total_count",
         "_config_profile",
@@ -149,6 +157,7 @@ class ScoreCollector:
         self._quality_sum: float = 0.0
         self._patients: list[dict] = []
         self._patient_manifests: list[list[dict]] = []
+        self._patient_seen: int = 0
         self._error_count: int = 0
         self._total_count: int = 0
         self._config_profile = config_profile
@@ -216,10 +225,19 @@ class ScoreCollector:
         else:
             self._fail_count += 1
 
-        # Accumulate Patients for batch-level k-anonymity
+        # Accumulate Patients for batch-level k-anonymity (reservoir sampling)
         if deidentified.get("resourceType") == "Patient":
-            self._patients.append(deidentified)
-            self._patient_manifests.append(manifest_entries)
+            self._patient_seen += 1
+            if len(self._patients) < _MAX_PATIENTS:
+                self._patients.append(deidentified)
+                self._patient_manifests.append(manifest_entries)
+            else:
+                # Reservoir sampling: replace a random element with probability
+                # _MAX_PATIENTS / _patient_seen to maintain a uniform subsample.
+                j = random.randrange(self._patient_seen)
+                if j < _MAX_PATIENTS:
+                    self._patients[j] = deidentified
+                    self._patient_manifests[j] = manifest_entries
 
         return result
 

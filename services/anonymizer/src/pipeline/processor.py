@@ -55,11 +55,20 @@ audit_log = logging.getLogger("medanon.audit")
 _BATCH_SIZE = int(os.environ.get("MEDANON_BATCH_SIZE", "300"))
 _PARALLEL_WORKERS = int(os.environ.get("MEDANON_PARALLEL_WORKERS", "0"))
 
+# Module-level singleton — GpasPseudonymizerAdapter is stateless (no instance
+# data; all state lives in the module-level gPAS client, circuit breaker, and
+# cache). Re-using the same instance avoids per-request object allocation and
+# keeps the lazy import pattern to prevent circular imports at module load time.
+_default_pseudonymizer = None
+
 
 def _get_default_pseudonymizer():
-    from integrations.gpas.adapter import GpasPseudonymizerAdapter
+    global _default_pseudonymizer
+    if _default_pseudonymizer is None:
+        from integrations.gpas.adapter import GpasPseudonymizerAdapter
 
-    return GpasPseudonymizerAdapter()
+        _default_pseudonymizer = GpasPseudonymizerAdapter()
+    return _default_pseudonymizer
 
 
 def _processing_errors_mode(settings) -> str:
