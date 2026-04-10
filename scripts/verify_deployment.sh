@@ -94,22 +94,50 @@ else
 fi
 echo ""
 
-# ── 3. HAPI FHIR server ────────────────────────────────────────────────────
-echo "3. HAPI FHIR server (port $HAPI_PORT)"
-HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${HAPI_PORT}/fhir/metadata" 2>/dev/null || echo "000")
+# ── 3. HAPI FHIR source server ────────────────────────────────────────────
+# The source FHIR server holds identified patient data and is intentionally
+# NOT published to a host port.  Verify it via the anonymizer container
+# which shares the internal Docker network.
+echo "3. HAPI FHIR source server (internal only — no host port)"
+HTTP_CODE=$(docker compose exec -T anonymizer python3 -c "
+import urllib.request
+try:
+    r = urllib.request.urlopen('http://hapi-fhir:8080/fhir/metadata', timeout=5)
+    print(r.status)
+except Exception:
+    print('000')
+" 2>/dev/null | tr -d '[:space:]')
 if [ "$HTTP_CODE" = "200" ]; then
-    FHIR_VER=$(curl -s "http://localhost:${HAPI_PORT}/fhir/metadata" 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('fhirVersion','?'))" 2>/dev/null || echo "?")
-    pass "/fhir/metadata -> 200 (FHIR $FHIR_VER)"
+    pass "/fhir/metadata -> 200 (via internal network)"
 else
-    fail "/fhir/metadata -> $HTTP_CODE"
+    # Fallback: maybe HAPI_PORT is exposed via override file
+    HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${HAPI_PORT}/fhir/metadata" 2>/dev/null || echo "000")
+    if [ "$HTTP_CODE" = "200" ]; then
+        FHIR_VER=$(curl -s "http://localhost:${HAPI_PORT}/fhir/metadata" 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('fhirVersion','?'))" 2>/dev/null || echo "?")
+        pass "/fhir/metadata -> 200 (FHIR $FHIR_VER) (host port override)"
+    else
+        fail "/fhir/metadata -> unreachable (container may be down)"
+    fi
 fi
 
 # Actuator health (used by Docker health check)
-HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${HAPI_PORT}/actuator/health" 2>/dev/null || echo "000")
+HTTP_CODE=$(docker compose exec -T anonymizer python3 -c "
+import urllib.request
+try:
+    r = urllib.request.urlopen('http://hapi-fhir:8080/actuator/health', timeout=5)
+    print(r.status)
+except Exception:
+    print('000')
+" 2>/dev/null | tr -d '[:space:]')
 if [ "$HTTP_CODE" = "200" ]; then
-    pass "/actuator/health -> 200"
+    pass "/actuator/health -> 200 (via internal network)"
 else
-    fail "/actuator/health -> $HTTP_CODE (health check will fail!)"
+    HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${HAPI_PORT}/actuator/health" 2>/dev/null || echo "000")
+    if [ "$HTTP_CODE" = "200" ]; then
+        pass "/actuator/health -> 200 (host port override)"
+    else
+        fail "/actuator/health -> unreachable"
+    fi
 fi
 echo ""
 
