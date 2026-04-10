@@ -74,7 +74,12 @@ jobs:
       - run: npm ci
       - run: npm install --save-dev eslint-plugin-security
       - name: ESLint with security plugin
-        run: npx eslint --plugin security --rule 'security/detect-object-injection: warn' --rule 'security/detect-non-literal-fs-filename: warn' --rule 'security/detect-eval-with-expression: error' 'src/**/*.{ts,tsx}' || true
+        run: |
+          npx eslint --plugin security \
+            --rule "security/detect-object-injection: warn" \
+            --rule "security/detect-non-literal-fs-filename: warn" \
+            --rule "security/detect-eval-with-expression: error" \
+            "src/**/*.{ts,tsx}" || true
 
   dep-scan-python:
     name: Dependency Scan – pip-audit
