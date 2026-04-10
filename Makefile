@@ -140,7 +140,10 @@ build-healthcheck:
 
 # ── Docker compose helpers ────────────────────────────────────────────────────
 build: build-healthcheck
-	$(COMPOSE) build
+	@# Compose parses command/healthcheck fields (including :? variables) even
+	@# during build. Supply a stub so compose can parse the file without a .env.
+	@# Shell env vars take precedence over .env in Docker Compose v2.
+	MEDANON_REDIS_PASSWORD=$${MEDANON_REDIS_PASSWORD:-build-placeholder} $(COMPOSE) build
 
 build-ui:
 	$(COMPOSE) build ui
