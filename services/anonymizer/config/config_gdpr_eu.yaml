@@ -217,7 +217,7 @@ rules:
       patterns: all
 
   - match: "*.text"
-    action: nlp_detect
+    action: nlp_scrub
     params:
       mode: tokenize
       html: true
@@ -231,7 +231,7 @@ rules:
       patterns: all
 
   - match: "*.note.text"
-    action: nlp_detect
+    action: nlp_scrub
     params:
       mode: tokenize
       threshold: 0.4
@@ -239,25 +239,25 @@ rules:
   # Nested CodeableConcept text fields — NLP only (preserves clinical terms,
   # catches embedded patient names/IDs inserted by EHR systems)
   - match: "*.code.text"
-    action: nlp_detect
+    action: nlp_scrub
     params:
       mode: tokenize
       threshold: 0.4
 
   - match: "*.substance.text"
-    action: nlp_detect
+    action: nlp_scrub
     params:
       mode: tokenize
       threshold: 0.4
 
   - match: "*.valueCodeableConcept.text"
-    action: nlp_detect
+    action: nlp_scrub
     params:
       mode: tokenize
       threshold: 0.4
 
   - match: "*.medicationCodeableConcept.text"
-    action: nlp_detect
+    action: nlp_scrub
     params:
       mode: tokenize
       threshold: 0.4

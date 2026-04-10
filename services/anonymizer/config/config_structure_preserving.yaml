@@ -680,7 +680,7 @@ rules:
 
 # ==========================================================
 # 12. FREE-TEXT NARRATIVE — scrub PII tokens in place
-#     scrub_text/nlp_detect replace PII inline; field stays present
+#     scrub_text/nlp_scrub replace PII inline; field stays present
 # ==========================================================
 
 - name: scrub narrative text
@@ -693,7 +693,7 @@ rules:
 
 - name: nlp scrub narrative text
   match: "*.text"
-  action: nlp_detect
+  action: nlp_scrub
   params:
     mode: tokenize
     html: true
@@ -708,7 +708,7 @@ rules:
 
 - name: nlp scrub note text
   match: "*.note.text"
-  action: nlp_detect
+  action: nlp_scrub
   params:
     mode: tokenize
     threshold: 0.4
@@ -722,28 +722,28 @@ rules:
 
 - name: nlp scrub code text
   match: "*.code.text"
-  action: nlp_detect
+  action: nlp_scrub
   params:
     mode: tokenize
     threshold: 0.4
 
 - name: nlp scrub substance text
   match: "*.substance.text"
-  action: nlp_detect
+  action: nlp_scrub
   params:
     mode: tokenize
     threshold: 0.4
 
 - name: nlp scrub value codeable concept text
   match: "*.valueCodeableConcept.text"
-  action: nlp_detect
+  action: nlp_scrub
   params:
     mode: tokenize
     threshold: 0.4
 
 - name: nlp scrub medication codeable concept text
   match: "*.medicationCodeableConcept.text"
-  action: nlp_detect
+  action: nlp_scrub
   params:
     mode: tokenize
     threshold: 0.4

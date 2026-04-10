@@ -276,7 +276,7 @@ rules:
 
   # NLP-based text scrubbing (second pass — catches names/locations regex misses)
   - match: "*.text"
-    action: nlp_detect
+    action: nlp_scrub
     params:
       mode: tokenize
       html: true
@@ -289,7 +289,7 @@ rules:
       patterns: all
 
   - match: "*.note.text"
-    action: nlp_detect
+    action: nlp_scrub
     params:
       mode: tokenize
       threshold: 0.4
@@ -297,25 +297,25 @@ rules:
   # CodeableConcept.text fields — may contain embedded names/IDs alongside
   # clinical terminology. NLP pass detects PHI; regex pass catches dates/phones.
   - match: "*.code.text"
-    action: nlp_detect
+    action: nlp_scrub
     params:
       mode: tokenize
       threshold: 0.4
 
   - match: "*.substance.text"
-    action: nlp_detect
+    action: nlp_scrub
     params:
       mode: tokenize
       threshold: 0.4
 
   - match: "*.valueCodeableConcept.text"
-    action: nlp_detect
+    action: nlp_scrub
     params:
       mode: tokenize
       threshold: 0.4
 
   - match: "*.medicationCodeableConcept.text"
-    action: nlp_detect
+    action: nlp_scrub
     params:
       mode: tokenize
       threshold: 0.4
