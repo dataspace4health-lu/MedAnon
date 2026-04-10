@@ -182,13 +182,12 @@ jobs:
           path: /tmp
       - name: Load image
         run: docker load -i /tmp/medanon-ci.tar
+      - name: Install Trivy
+        run: |
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+            | sh -s -- -b /usr/local/bin
       - name: Trivy scan
-        uses: aquasecurity/trivy-action@0.28.0
-        with:
-          image-ref: medanon:ci
-          format: table
-          exit-code: "1"
-          severity: CRITICAL,HIGH
+        run: trivy image --exit-code 1 --severity CRITICAL,HIGH --format table medanon:ci
 
   trivy-ui:
     name: Trivy – UI image
@@ -202,13 +201,12 @@ jobs:
           path: /tmp
       - name: Load image
         run: docker load -i /tmp/medanon-ui-ci.tar
+      - name: Install Trivy
+        run: |
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+            | sh -s -- -b /usr/local/bin
       - name: Trivy scan
-        uses: aquasecurity/trivy-action@0.28.0
-        with:
-          image-ref: medanon-ui:ci
-          format: table
-          exit-code: "1"
-          severity: CRITICAL,HIGH
+        run: trivy image --exit-code 1 --severity CRITICAL,HIGH --format table medanon-ui:ci
 
   # ── Stage 4: Integration test (depends on docker-build) ────────────────────
 
@@ -225,6 +223,11 @@ jobs:
           echo "GPAS_MYSQL_ROOT_PASSWORD=ci-test-$(date +%s)" >> .env
           echo "HAPI_DB_PASSWORD=ci-test-$(date +%s)" >> .env
           echo "HAPI_TARGET_DB_PASSWORD=ci-test-$(date +%s)" >> .env
+          # MinIO vars use :? in docker-compose so compose fails to parse the file
+          # even when --profile s3 is not active. Provide placeholder values so
+          # compose can parse the file; MinIO is not started (no --profile s3).
+          echo "MINIO_ROOT_USER=ci-minio" >> .env
+          echo "MINIO_ROOT_PASSWORD=ci-minio-$(date +%s)" >> .env
       - name: Start full stack
         run: make up
         timeout-minutes: 10
