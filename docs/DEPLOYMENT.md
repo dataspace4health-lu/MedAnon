@@ -7,7 +7,7 @@
 | Docker Engine | 24.x | `docker --version` |
 | Docker Compose plugin | v2.x | `docker compose version` (not `docker-compose`) |
 | RAM | 8 GB | 12 GB+ comfortable; 6 GB for anonymizer alone at peak bulk export |
-| Disk | 10 GB | Images ~4 GB + MySQL data volume |
+| Disk | 10 GB | Images ~4 GB + PostgreSQL data volumes |
 | CPU | 2 cores | 4+ recommended for concurrent jobs |
 
 ---
@@ -24,7 +24,7 @@ Edit `.env` and replace every `REPLACE_WITH_...` value. Generate secrets:
 
 ```bash
 openssl rand -hex 32        # → MEDANON_HASH_KEY (HMAC key for cryptohash action)
-openssl rand -base64 24     # → GPAS_BASIC_PASS, GPAS_MYSQL_ROOT_PASSWORD, HAPI_DB_PASSWORD
+openssl rand -base64 24     # → GPAS_BASIC_PASS, GPAS_DB_PASSWORD, HAPI_DB_PASSWORD, MEDANON_REDIS_PASSWORD
 ```
 
 **Key variables to set for production:**
@@ -32,8 +32,9 @@ openssl rand -base64 24     # → GPAS_BASIC_PASS, GPAS_MYSQL_ROOT_PASSWORD, HAP
 | Variable | Why it matters |
 |---|---|
 | `MEDANON_HASH_KEY` | Without this, cryptohash uses plain SHA3-256 — reversible via rainbow tables. Never skip in production. |
-| `GPAS_BASIC_PASS` | Default password in gRAS SQL seed file. Must be changed. |
-| `GPAS_MYSQL_ROOT_PASSWORD` | MySQL root password for gPAS database. |
+| `GPAS_BASIC_PASS` | Default password in gPAS SQL seed file. Must be changed. |
+| `GPAS_DB_PASSWORD` | PostgreSQL password for gPAS database. |
+| `MEDANON_REDIS_PASSWORD` | Redis authentication password. Required in production. |
 | `HAPI_DB_PASSWORD` | PostgreSQL password for source FHIR server. |
 | `HAPI_TARGET_DB_PASSWORD` | PostgreSQL password for target (de-identified) FHIR server. |
 | `EXTERNAL_HOST` | IP or hostname browsers use to reach this server. Used in CORS origins and HAPI server address. |
@@ -59,7 +60,7 @@ The anonymizer Dockerfile uses the **repo root** as build context (required to c
 make up
 ```
 
-Starts all 8 services in dependency order. **gPAS (WildFly) takes ~90 seconds on first boot** — it deploys the TTP-FHIR WAR file and initializes the MySQL schema.
+Starts all 8 services in dependency order. **gPAS (WildFly) takes ~90 seconds on first boot** — it deploys the TTP-FHIR WAR file and initializes the PostgreSQL schema.
 
 ```bash
 docker compose ps    # wait until all show "healthy"
@@ -77,18 +78,18 @@ Or manually via `http://localhost:8080/gpas-web/` (login: `admin@ths`):
 3. Generator: `ReedSolomonLagrange`, Alphabet: `Symbol31`
 4. Save
 
-**Critical:** Never create domains by inserting directly into MySQL. gPAS maintains a `domainLocks HashMap` in JVM memory that is only populated when domains are created through its own REST API. Direct SQL inserts appear to work but cause "domain not found" errors at runtime when pseudonymization is attempted.
+**Critical:** Never create domains by inserting directly into PostgreSQL. gPAS maintains a `domainLocks HashMap` in JVM memory that is only populated when domains are created through its own REST API. Direct SQL inserts appear to work but cause "domain not found" errors at runtime when pseudonymization is attempted.
 
 ### 5. Verify
 
 ```bash
 curl http://localhost:8000/health     # {"status":"ok"}
 curl http://localhost:8000/ready      # {"ready": true, ...}
-curl http://localhost:8081/fhir/metadata | head -3
+curl http://localhost:8082/fhir/metadata | head -3   # target server (de-identified)
 open http://localhost:8501
 ```
 
-`/health` is a fast liveness check. `/ready` probes FHIR and gPAS connectivity — if it returns `false`, check `docker compose logs` for the failing service.
+`/health` is a fast liveness check. `/ready` probes FHIR and gPAS connectivity — if it returns `false`, check `docker compose logs` for the failing service. Note: source FHIR server has no host port published (security isolation) — access it only through the anonymizer proxy endpoints.
 
 ---
 
@@ -110,7 +111,7 @@ Applies `docker-compose.dev.yml` overrides:
 ```bash
 docker compose --profile analytics up   # analytics microservice (risk + synthetic)
 docker compose --profile nlp up         # NLP microservice (Presidio + spaCy, ~800 MB image)
-docker compose --profile ha up          # gPAS MySQL read replica (HA setup)
+docker compose --profile ha up          # gPAS PostgreSQL read replica (HA setup)
 ```
 
 When `NLP_SERVICE_URL` is set, the anonymizer delegates `nlp_detect` actions to the NLP microservice instead of running Presidio in-process. This saves ~800 MB of anonymizer RAM.
@@ -128,7 +129,7 @@ When `ANALYTICS_SERVICE_URL` is set, `/analyse/risk` and `/generate/synthetic` p
 | `MEDANON_HASH_KEY` | Update `.env`, restart anonymizer | All existing cryptohash pseudonyms change — old de-identified data cannot be re-linked to new output |
 | RSA private key | Generate new keypair, update `.env` paths | Old encrypted values become unreadable; keep the old key to decrypt historical data |
 | `GPAS_BASIC_PASS` | Update `.env` + run SQL `CALL changePassword('user@ths','new-pass');` in gRAS, restart anonymizer | Existing gPAS sessions invalidated |
-| `GPAS_MYSQL_ROOT_PASSWORD` | Requires `docker compose down -v` to recreate MySQL volume | **Destroys all pseudonym mappings** — back up first |
+| `GPAS_DB_PASSWORD` | Requires `docker compose down -v` to recreate PostgreSQL volume | **Destroys all pseudonym mappings** — back up first |
 | `MEDANON_API_KEY` | Update `.env`, restart anonymizer | All API clients must update their key |
 
 ### Files never to commit
@@ -162,7 +163,7 @@ These are set in `docker-compose.yml` and tuned based on observed usage during b
 | `anonymizer` | 6 GB | 2.0 | Peak usage ~5.7 GB during large bulk export |
 | `fhir-server` | 3 GB | 2.0 | JVM heap |
 | `gpas` | 6 GB | 2.0 | WildFly JVM, -Xmx4G |
-| `gpas-db` | 4 GB | 1.0 | MySQL InnoDB buffer pool 512 MB |
+| `gpas-db` | 4 GB | 1.0 | PostgreSQL shared_buffers 512 MB |
 | `ui` | 128 MB | 0.5 | nginx is lightweight |
 
 ---
@@ -242,7 +243,7 @@ helm/
 └── charts/
     ├── anonymizer/    Deployment + Service + ConfigMap + Secret
     ├── fhir-server/   Deployment + Service + ConfigMap
-    ├── gpas/          Deployment + StatefulSet (MySQL) + Services + Secrets
+    ├── gpas/          Deployment + StatefulSet (PostgreSQL) + Services + Secrets
     ├── ui/            Deployment + Service + ConfigMap (nginx) + NetworkPolicy
     └── analytics/     Optional (condition: analytics.enabled)
 ```

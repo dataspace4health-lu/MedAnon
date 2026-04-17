@@ -19,7 +19,7 @@ make verify   # smoke-test a running stack
 ```bash
 docker compose --profile analytics up   # analytics microservice
 docker compose --profile nlp up         # Presidio NLP microservice (~800 MB)
-docker compose --profile ha up          # gPAS MySQL read replica
+docker compose --profile ha up          # gPAS PostgreSQL read replica
 ```
 
 ### Check health
@@ -99,23 +99,20 @@ docker compose exec anonymizer tail -f /output/audit.log | python3 -m json.tool
 
 ## Backup
 
-### gPAS MySQL (pseudonym mappings — critical)
+### gPAS PostgreSQL (pseudonym mappings — critical)
 
 Loss of the gPAS database means pseudonym-to-original mappings are unrecoverable. Back up before any destructive operation.
 
 ```bash
 # Backup
-docker run --rm \
-  -v gpas-db-data:/data \
-  -v $(pwd)/backup:/backup \
-  busybox tar czf /backup/gpas-db-$(date +%Y%m%d).tar.gz -C /data .
+docker exec gpas-postgres pg_dump -U gpas_user -d gpas -F c -f /tmp/gpas_backup.dump
+docker cp gpas-postgres:/tmp/gpas_backup.dump ./backup/gpas-db-$(date +%Y%m%d).dump
 
 # Restore (stack must be down)
 docker compose down
-docker run --rm \
-  -v gpas-db-data:/data \
-  -v $(pwd)/backup:/backup \
-  busybox sh -c "rm -rf /data/* && tar xzf /backup/gpas-db-YYYYMMDD.tar.gz -C /data"
+docker compose up -d gpas-db
+docker cp ./backup/gpas-db-YYYYMMDD.dump gpas-postgres:/tmp/restore.dump
+docker exec gpas-postgres pg_restore -U gpas_user -d gpas --clean /tmp/restore.dump
 docker compose up -d
 ```
 
@@ -139,7 +136,7 @@ cp services/anonymizer/keys/id_rsa* backup/keys-$(date +%Y%m%d)/
 | `MEDANON_HASH_KEY` | Update `.env`, restart anonymizer | All existing cryptohash pseudonyms change — old output cannot be re-linked to new |
 | RSA private key | Generate new keypair, update `.env` paths | Old encrypted values become unreadable; keep old key for historical data |
 | `GPAS_BASIC_PASS` | Update `.env` + `CALL changePassword('user@ths','new');` in gRAS | Existing gPAS sessions invalidated |
-| `GPAS_MYSQL_ROOT_PASSWORD` | `docker compose down -v` to recreate MySQL | **Destroys all pseudonym mappings** — back up first |
+| `GPAS_MYSQL_ROOT_PASSWORD` | `docker compose down -v` to recreate PostgreSQL | **Destroys all pseudonym mappings** — back up first |
 | `MEDANON_API_KEY` | Update `.env`, restart anonymizer | All API clients must update their key |
 
 ---
@@ -160,7 +157,7 @@ Verify env: `GPAS_URL`, `GPAS_DOMAIN`, `GPAS_BASIC_USER`, `GPAS_BASIC_PASS` in `
 
 ### gPAS "Unknown Domain"
 
-Domain not created yet. Run `make init-domains` or create it via `http://localhost:8080/gpas-web/`. **Never insert domains directly into MySQL** — gPAS maintains an in-memory `domainLocks HashMap` that is only populated via its own API. Direct SQL inserts bypass this and cause "domain not found" errors at runtime even though the row exists in the DB.
+Domain not created yet. Run `make init-domains` or create it via `http://localhost:8080/gpas-web/`. **Never insert domains directly into PostgreSQL** — gPAS maintains an in-memory `domainLocks HashMap` that is only populated via its own API. Direct SQL inserts bypass this and cause "domain not found" errors at runtime even though the row exists in the DB.
 
 ### gPAS circuit breaker open
 
@@ -176,7 +173,7 @@ Tune thresholds: `GPAS_CB_FAILURE_THRESHOLD`, `GPAS_CB_RECOVERY_TIMEOUT_SEC`, `G
 
 ### gPAS keeps restarting
 
-MySQL is still initializing (schema creation on first boot takes 15–30 s):
+PostgreSQL is still initializing (schema creation on first boot takes 15–30 s):
 
 ```bash
 docker compose ps gpas-db             # wait for "healthy"
@@ -268,7 +265,7 @@ If `depends_on: condition: service_healthy` is configured, the target container 
 ### gPAS
 - [ ] Domain created via web UI or `make init-domains` (not direct SQL)
 - [ ] `GPAS_DOMAIN` matches exactly
-- [ ] gPAS MySQL backed up before first production run
+- [ ] gPAS PostgreSQL backed up before first production run
 - [ ] `curl http://localhost:8080/ttp-fhir/fhir/gpas/metadata` returns 200
 
 ### Validation

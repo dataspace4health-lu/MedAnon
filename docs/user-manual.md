@@ -7,7 +7,7 @@
 | Web UI | `http://localhost:8501` | Browser-based interface |
 | Anonymizer API | `http://localhost:8000` | REST API |
 | Swagger / OpenAPI docs | `http://localhost:8000/docs` | Interactive API explorer |
-| Source FHIR Server | `http://localhost:8081/fhir` | HAPI FHIR R4 — identified patient data |
+| Source FHIR Server | (internal only — `source-net`) | HAPI FHIR R4 — identified patient data; no host port published for security isolation. Access via anonymizer proxy endpoints (`/process/from-server`, `/process/everything`, etc.) |
 | Target FHIR Server | `http://localhost:8082/fhir` | HAPI FHIR R4 — de-identified data |
 | gPAS Web UI | `http://localhost:8080/gpas-web/` | Pseudonym management (admin only) |
 
@@ -33,7 +33,11 @@ open http://localhost:8501
 
 ## Web UI
 
-Open `http://localhost:8501`. The sidebar shows live health status for all services and your current config profile.
+Open `http://localhost:8501`. The sidebar shows live health status for all services and your current config profile. There are 13 pages accessible from the sidebar navigation.
+
+### Home (Dashboard)
+
+Overview page with aggregate statistics: total resources processed, active jobs, service health indicators, and recent activity log.
 
 ### Patient Browser
 
@@ -53,6 +57,15 @@ Find patients by diagnosis, then de-identify their records.
 2. Matching patients shown as cards
 3. Click a card → **De-identify** to run the full pipeline
 
+### De-identify (Per-Patient)
+
+Fetch a single patient's complete record from the source FHIR server and de-identify it in one step.
+
+1. Enter a Patient ID
+2. Select config profile
+3. Click **De-identify** — fetches `$everything` for that patient and runs the pipeline
+4. Download the de-identified NDJSON or upload to the target FHIR server
+
 ### Process Resource
 
 De-identify a single FHIR resource interactively.
@@ -61,6 +74,15 @@ De-identify a single FHIR resource interactively.
 2. Select output format (`json`, `ndjson`, `xml`)
 3. Click **De-identify**
 4. Original input and de-identified output shown side-by-side
+
+### Batch Processing
+
+De-identify multiple resources from a file upload.
+
+1. Upload a JSON, NDJSON, or XML file (or drag-and-drop)
+2. Select config profile and output format
+3. Click **Process** — results stream back as NDJSON
+4. Download the de-identified output
 
 ### Bulk De-identify
 
@@ -79,9 +101,41 @@ k-anonymity and l-diversity analysis on de-identified output.
 1. Upload or paste de-identified NDJSON
 2. Results show `min_k` value and risk level with remediation guidance
 
+### Synthetic Data
+
+Generate synthetic FHIR data from de-identified datasets (requires the analytics microservice).
+
+1. Upload or paste de-identified NDJSON
+2. Configure generation parameters (sample size, privacy budget)
+3. Click **Generate** — synthetic resources returned as downloadable NDJSON
+
 ### Status
 
 Health dashboard for all services: anonymizer, FHIR source, FHIR target, gPAS, Redis.
+
+### Config Profiles
+
+Browse, select, and manage de-identification config profiles.
+
+1. View all available profiles (built-in and user-defined) with descriptions
+2. Click a profile to inspect its full YAML rule set
+3. Set the active profile for subsequent processing requests
+
+### Config Builder
+
+Create custom de-identification profiles through a guided UI.
+
+1. Start from a blank profile or clone an existing one
+2. Add, edit, and reorder rules with match expressions and actions
+3. Save the profile — available immediately via `?config_profile=<name>` on any endpoint
+
+### Target FHIR Browser
+
+Browse de-identified resources that have been uploaded to the target FHIR server.
+
+1. Select a resource type (Patient, Observation, Condition, etc.)
+2. Browse paginated results with expandable JSON detail
+3. Verify de-identification quality by inspecting individual resources
 
 ---
 
@@ -120,7 +174,7 @@ curl -X POST "http://localhost:8000/process?config_profile=hipaa" \
   -d '{...}'
 ```
 
-Profile names: `auto`, `minimal`, `gpas`, `gdpr`, `hipaa`, `research`, `structural`.
+Profile names: `auto`, `minimal`, `gpas`, `gdpr`, `hipaa`, `research`, `structural`, `value-masking`.
 
 ### NDJSON batch
 
@@ -135,11 +189,12 @@ One resource per line in, one de-identified resource per line out. Also accepts 
 
 ### Fetch from FHIR server and de-identify
 
+> **Note:** The source FHIR server has no host port published (security isolation). `server_url` defaults to `FHIR_SOURCE_URL` set in `.env`. Omit it to use the configured default, or pass the Docker-internal URL when calling from another container.
+
 ```bash
 curl -X POST http://localhost:8000/process/from-server \
   -H "Content-Type: application/json" \
   -d '{
-    "server_url": "http://localhost:8081/fhir",
     "resource_types": ["Patient", "Observation", "Condition"]
   }'
 ```
@@ -152,7 +207,6 @@ Streams de-identified NDJSON back. Fetches all pages for each resource type.
 curl -X POST http://localhost:8000/process/everything \
   -H "Content-Type: application/json" \
   -d '{
-    "server_url": "http://localhost:8081/fhir",
     "patient_id": "123"
   }'
 ```
@@ -165,7 +219,6 @@ De-identifies all resources for one patient (the FHIR `$everything` operation).
 curl -X POST http://localhost:8000/process/and-upload \
   -H "Content-Type: application/json" \
   -d '{
-    "source_url": "http://localhost:8081/fhir",
     "target_url": "http://localhost:8082/fhir",
     "resource_types": ["Patient", "Observation"],
     "config_profile": "structural"
@@ -180,7 +233,7 @@ For large datasets that take longer than an HTTP timeout:
 # Submit — returns immediately
 curl -X POST http://localhost:8000/v1/jobs/bulk-export \
   -H "Content-Type: application/json" \
-  -d '{"source_url":"http://localhost:8081/fhir","config_profile":"gdpr"}'
+  -d '{"config_profile":"gdpr"}'
 # → {"job_id":"abc123","status":"pending"}
 
 # Poll status
@@ -227,8 +280,9 @@ python3 -m cli.main process input.ndjson output.ndjson \
   --config config/config_hipaa_safe_harbor.yaml
 
 # Fetch from FHIR server and de-identify
+# (run inside the container — source FHIR has no host port)
 python3 -m cli.main fetch \
-  --server http://localhost:8081/fhir \
+  --server http://hapi-fhir:8080/fhir \
   --resource-type Patient,Observation \
   --output output/all.ndjson \
   --config config/config_gpas.yaml
@@ -280,6 +334,7 @@ rules:
 | `perturb` | Add random noise to numeric values | `range`, `distribution` |
 | `scrub_text` | Regex-based PHI removal in free text | `mode`, `patterns` |
 | `nlp_detect` | Presidio NLP entity detection (PERSON, GPE, DATE, etc.) | `mode`, `threshold` |
+| `nlp_detect_act` | Entity-specific conditional NLP: detect first, then apply a per-entity action (e.g. dates->generalize, names->redact). No-op when nothing detected. | `threshold`, `html`, `entity_actions`, `entities` |
 | `encrypt` | RSA public-key encryption | `public_key_path` |
 | `gpas_pseudonymize` | Reversible gPAS pseudonym | `gpas_url`, `gpas_domain`, `gpas_operation` |
 

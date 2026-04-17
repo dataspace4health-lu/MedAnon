@@ -72,7 +72,7 @@
     │  ┌──────────────────┐  ┌─────────────────▼──────────────────────┐  │
     │  │ Redis (:6379)    │  │ FHIR Servers                           │  │
     │  │ cache + job queue│  │                                         │  │
-    │  └──────────────────┘  │ Source (:8081) ◀── PostgreSQL           │  │
+    │  └──────────────────┘  │ Source (internal) ◀── PostgreSQL       │  │
     │                        │ Target (:8082) ◀── PostgreSQL           │  │
     │  ┌──────────────────┐  └─────────────────────────────────────────┘  │
     │  │ Result Storage   │                                               │
@@ -83,7 +83,7 @@
     ┌─────────────────────────────────────────────────────────────────────┐
     │  PSEUDONYMISATION                                                   │
     │                                                                     │
-    │  gPAS (TTP) (:8080) ◀── MySQL                                      │
+    │  gPAS (TTP) (:8080) ◀── PostgreSQL                                 │
     │  FHIR $pseudonymize · deterministic domain-scoped pseudonyms       │
     └─────────────────────────────────────────────────────────────────────┘
 
@@ -121,6 +121,6 @@ For operations that take minutes or hours — bulk exports, cohort processing, l
 
 Below the internal network boundary sits the **Data layer**. **Redis** serves two purposes: a shared L2 cache for pseudonym lookups (with an in-process L1 above it) and an event-driven job queue using Streams. The **FHIR servers** — a source holding identified data and a target receiving de-identified data — each run HAPI FHIR backed by PostgreSQL. Completed job results land in **local storage or S3**.
 
-The **Pseudonymisation layer** is its own isolated system. **gPAS**, a Trusted Third Party service, generates and stores deterministic, domain-scoped pseudonyms. It ensures the same input always produces the same pseudonym within a domain, which is essential for longitudinal research where records must remain linkable without revealing real identities. gPAS persists everything in its own MySQL database.
+The **Pseudonymisation layer** is its own isolated system. **gPAS**, a Trusted Third Party service, generates and stores deterministic, domain-scoped pseudonyms. It ensures the same input always produces the same pseudonym within a domain, which is essential for longitudinal research where records must remain linkable without revealing real identities. gPAS persists everything in its own PostgreSQL database.
 
 Finally, two capabilities can be **extracted to dedicated microservices** without changing the core: the **Analytics** service (risk scoring and synthetic data generation) and the **NLP** service (Presidio + spaCy for named entity recognition). Setting a single environment variable redirects traffic to the external service. If that service goes down, the system degrades gracefully — the core continues to operate.
