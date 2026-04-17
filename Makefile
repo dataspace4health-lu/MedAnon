@@ -5,10 +5,16 @@
 VENV        := .venv
 PY          := $(VENV)/bin/python3
 PIP         := $(VENV)/bin/pip
-ANONYMIZER  := services/anonymizer
+ANONYMIZER  := services/anonymizer			
 TEST_DIR    := $(ANONYMIZER)/tests
 COMPOSE     := docker compose
 DEV_COMPOSE := $(COMPOSE) -f docker-compose.yml -f docker-compose.dev.yml
+
+# Replica counts — read from .env (default to 1 if not set or .env absent).
+GPAS_REPLICAS  := $(shell grep -s '^GPAS_REPLICAS=' .env | cut -d= -f2 | tr -d '[:space:]')
+NLP_REPLICAS   := $(shell grep -s '^NLP_REPLICAS='  .env | cut -d= -f2 | tr -d '[:space:]')
+GPAS_REPLICAS  := $(if $(GPAS_REPLICAS),$(GPAS_REPLICAS),1)
+NLP_REPLICAS   := $(if $(NLP_REPLICAS),$(NLP_REPLICAS),1)
 
 # HAPI FHIR image — update both together when bumping the HAPI version.
 # v7.x uses Java 17 (eclipse-temurin:17-jre-jammy base).
@@ -34,7 +40,7 @@ help:
 	@echo "  make batch              Run batch processing + analytics"
 	@echo "  make fetch              Pull resources from HAPI FHIR, anonymize, write NDJSON"
 	@echo ""
-	@echo "  make up                 Start full stack (preflight + docker compose + verify)"
+	@echo "  make up                 Start full stack (preflight + docker compose + verify) — scales gPAS and NLP from .env"
 	@echo "  make dev                Start stack with hot-reload (dev overrides)"
 	@echo "  make down               Stop and remove containers"
 	@echo "  make build              (Re)build all images"
@@ -100,8 +106,8 @@ preflight:
 	@test -f .env || { echo "FAIL: .env file not found (copy from .env.example)"; exit 1; }
 	@echo "  [OK] .env file present"
 	@# 4. Required env vars are set
-	@grep -q '^GPAS_MYSQL_ROOT_PASSWORD=.\+' .env || { echo "FAIL: GPAS_MYSQL_ROOT_PASSWORD not set in .env"; exit 1; }
-	@echo "  [OK] GPAS_MYSQL_ROOT_PASSWORD is set"
+	@grep -q '^GPAS_DB_PASSWORD=.\+' .env || { echo "FAIL: GPAS_DB_PASSWORD not set in .env"; exit 1; }
+	@echo "  [OK] GPAS_DB_PASSWORD is set"
 	@grep -q '^HAPI_DB_PASSWORD=.\+' .env || { echo "FAIL: HAPI_DB_PASSWORD not set in .env"; exit 1; }
 	@echo "  [OK] HAPI_DB_PASSWORD is set"
 	@grep -q '^HAPI_TARGET_DB_PASSWORD=.\+' .env || { echo "FAIL: HAPI_TARGET_DB_PASSWORD not set in .env"; exit 1; }
@@ -153,16 +159,22 @@ build-sdv:
 	@echo "✓ medanon-sdv:latest built — activate with: make up-sdv"
 
 up-sdv: _dirs preflight build-sdv
-	ANONYMIZER_IMAGE=medanon-sdv:latest $(COMPOSE) up -d
+	ANONYMIZER_IMAGE=medanon-sdv:latest $(COMPOSE) --profile nlp up -d \
+		--scale gpas=$(GPAS_REPLICAS) \
+		--scale nlp=$(NLP_REPLICAS)
 	@echo ""
 	@echo "SDV stack running — /generate/synthetic will use GaussianCopula engine"
+	@echo "gPAS replicas: $(GPAS_REPLICAS)  |  NLP replicas: $(NLP_REPLICAS)"
 
 _dirs:
 	mkdir -p data output
 
 up: _dirs preflight
-	$(COMPOSE) up -d
+	$(COMPOSE) --profile nlp up -d \
+		--scale gpas=$(GPAS_REPLICAS) \
+		--scale nlp=$(NLP_REPLICAS)
 	@echo ""
+	@echo "gPAS replicas: $(GPAS_REPLICAS)  |  NLP replicas: $(NLP_REPLICAS)"
 	@echo "Waiting for services to become healthy..."
 	@bash scripts/verify_deployment.sh || true
 
@@ -170,7 +182,7 @@ dev: build-healthcheck
 	$(DEV_COMPOSE) up
 
 down:
-	$(COMPOSE) down
+	$(COMPOSE) --profile analytics --profile nlp --profile ha --profile s3 down --remove-orphans
 
 logs:
 	$(COMPOSE) logs -f

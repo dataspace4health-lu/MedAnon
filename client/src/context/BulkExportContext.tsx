@@ -113,7 +113,7 @@ function jobResponseToExportJob(jr: JobResponse): ExportJob {
     startedAt: new Date(jr.created_at).getTime(),
     completedAt: isTerminal ? new Date(jr.updated_at).getTime() : null,
     source: sourceMap[jr.type] ?? "all",
-    configProfile: "auto",
+    configProfile: jr.config_profile ?? jr.summary?.config_profile ?? "auto",
     backendScore: null,
   };
 }

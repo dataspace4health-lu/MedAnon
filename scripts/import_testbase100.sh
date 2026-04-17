@@ -2,17 +2,79 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # MedAnon — import TestBase NDJSON files into HAPI FHIR
 # Usage: bash scripts/import_testbase.sh [data/TestBase]
+#
+# The source FHIR server (hapi-fhir) has no host port in the default stack —
+# identified patient data must not be reachable outside Docker in production.
+#
+# URL resolution order:
+#   1. FHIR_SOURCE_URL env var (explicit override)
+#   2. http://localhost:8081/fhir — works when dev override is active
+#      (docker compose -f docker-compose.yml -f docker-compose.dev.yml up)
+#   3. Auto proxy — spins up a temporary socat container on source-net,
+#      forwards localhost:8081 → hapi-fhir:8080, tears it down on exit.
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
 FHIR_URL="${FHIR_SOURCE_URL:-http://localhost:8081/fhir}"
 DATA_DIR="${1:-$(cd "$(dirname "$0")/.." && pwd)/services/anonymizer/tests/data/TestBase100}"
 BATCH_SIZE=300
+PROXY_CONTAINER="fhir-source-proxy-import"
+PROXY_STARTED=false
+
+# ── Resolve FHIR URL ──────────────────────────────────────────────────────────
+# Spin up a temporary socat proxy when port 8081 is not already reachable.
+if [ -z "${FHIR_SOURCE_URL:-}" ] && ! curl -sf --max-time 3 "${FHIR_URL}/metadata" >/dev/null 2>&1; then
+  # Remove any leftover proxy from a previous interrupted run
+  docker rm -f "${PROXY_CONTAINER}" >/dev/null 2>&1 || true
+
+  echo "Note: localhost:8081 not reachable — starting temporary proxy (localhost:8081 → hapi-fhir:8080)"
+  echo "      The proxy is removed automatically when the import finishes."
+  echo ""
+
+  # Determine project network name (prefix varies with working dir)
+  SOURCE_NET=$(docker network ls --format '{{.Name}}' | grep 'source-net' | head -1)
+  if [ -z "$SOURCE_NET" ]; then
+    echo "ERROR: source-net Docker network not found — is the stack running?"
+    echo "  Start it with: make up"
+    exit 1
+  fi
+
+  docker run -d --rm \
+    --name "${PROXY_CONTAINER}" \
+    --network "${SOURCE_NET}" \
+    -p 8081:8080 \
+    alpine/socat \
+    TCP-LISTEN:8080,fork,reuseaddr TCP:hapi-fhir:8080 >/dev/null
+
+  PROXY_STARTED=true
+
+  # Ensure proxy is stopped when the script exits (success or failure)
+  trap 'docker rm -f "${PROXY_CONTAINER}" >/dev/null 2>&1 || true' EXIT
+fi
 
 echo "FHIR server : ${FHIR_URL}"
 echo "Data dir    : ${DATA_DIR}"
 echo "Batch size  : ${BATCH_SIZE}"
 echo ""
+
+# Wait for FHIR server to accept connections (up to 60s)
+printf "Waiting for FHIR server..."
+for i in $(seq 1 30); do
+  if curl -sf --max-time 3 "${FHIR_URL}/metadata" >/dev/null 2>&1; then
+    echo " ready"
+    break
+  fi
+  if [ "$i" -eq 30 ]; then
+    echo " TIMEOUT — server not reachable at ${FHIR_URL}"
+    echo ""
+    echo "Troubleshooting:"
+    echo "  • Stack running?    docker compose ps"
+    echo "  • Custom URL:       FHIR_SOURCE_URL=http://myhost:8081/fhir bash scripts/import_testbase100.sh"
+    exit 1
+  fi
+  printf "."
+  sleep 2
+done
 
 # Upload all .ndjson files via batch bundles (parallel where load-order allows)
 python3 - <<PYEOF
@@ -135,12 +197,16 @@ def upload_file(path):
         print()
     return uploaded, errors
 
-# Build tier → file mapping
-all_files = {
-    os.path.basename(p).split(".")[0]: p
-    for p in glob.glob(os.path.join(data_dir, "*.ndjson"))
-    if "log" not in os.path.basename(p)
-}
+# Build tier → file mapping (resource type → sorted list of paths)
+# A resource type may span multiple numbered files (e.g. Observation.000, Observation.001).
+# All files for the same type belong to the same tier and are uploaded together.
+all_files: dict[str, list[str]] = {}
+for p in sorted(glob.glob(os.path.join(data_dir, "*.ndjson"))):
+    if "log" in os.path.basename(p):
+        continue
+    rtype = os.path.basename(p).split(".")[0]
+    all_files.setdefault(rtype, []).append(p)
+
 if not all_files:
     print(f"No .ndjson files found in {data_dir}")
     sys.exit(1)
@@ -148,7 +214,8 @@ if not all_files:
 grand_total = grand_errors = 0
 
 for tier in LOAD_TIERS:
-    tier_files = [all_files[t] for t in tier if t in all_files]
+    # Flatten all files for every resource type in this tier
+    tier_files = [p for t in tier if t in all_files for p in all_files[t]]
     if not tier_files:
         continue
     # Upload all files in this tier concurrently
@@ -162,7 +229,7 @@ for tier in LOAD_TIERS:
 # Any resource types not in LOAD_TIERS — upload sequentially at the end
 known = set(_LOAD_ORDER)
 extra_files = sorted(
-    [p for name, p in all_files.items() if name not in known],
+    [p for rtype, paths in all_files.items() if rtype not in known for p in paths],
     key=lambda p: os.path.basename(p),
 )
 for path in extra_files:

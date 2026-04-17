@@ -1,7 +1,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # gPAS Helm Chart — default values
 #
-# Includes the MySQL database backend (db.*) since it has no lifecycle
+# Includes the PostgreSQL database backend (db.*) since it has no lifecycle
 # independent of gPAS itself.
 #
 # Customise with --set / -f my-values.yaml.
@@ -32,8 +32,20 @@ imagePullSecrets: []
 image: medanon-gpas
 # Pin to a specific release tag in production — never use "latest" in production.
 tag: latest
+
+# Static replica count — ignored when autoscaling.enabled=true (HPA controls replicas).
 replicas: 1
 port: 8080
+
+# ─── Horizontal Pod Autoscaler ────────────────────────────────────────────────
+# Multiple gPAS WildFly instances share a single PostgreSQL database.
+# Sequence contention (SELECT … FOR UPDATE on the sequence table) is negligible
+# at batch_size=500 for up to 4 replicas.  For >4, consider adding PgBouncer.
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 4
+  targetCPUUtilizationPercentage: 70
 
 # ─── Environment — non-secret config ─────────────────────────────────────────
 env:
@@ -41,13 +53,13 @@ env:
   # Options: gras | (anything else = no auth)
   TTP_GPAS_WEB_AUTH_MODE: "gras"
 
-  # MySQL hostname — leave empty to use the DB Service name computed from
+  # PostgreSQL hostname — leave empty to use the DB Service name computed from
   # this chart's fullname (recommended). Override only when pointing at an
   # external database.
   TTP_DB_HOST: ""
   TTP_GRAS_DB_HOST: ""
 
-  # Wait for MySQL before starting WildFly (host:port:timeout_seconds).
+  # Wait for PostgreSQL before starting WildFly (host:port:timeout_seconds).
   # Leave empty to use the computed DB service name and db.port.
   MOS_WAIT_FOR_PORTS: ""
 
@@ -73,33 +85,39 @@ resources:
     cpu: "2000m"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# MySQL database backend (exclusively for gPAS)
+# PostgreSQL database backend (exclusively for gPAS)
 # ─────────────────────────────────────────────────────────────────────────────
 db:
-  # MySQL uses the official Docker Hub image; registry is intentionally not
+  # PostgreSQL uses the official Docker Hub image; registry is intentionally not
   # prefixed by default so it always pulls from Docker Hub.
   # Set db.registry to override (e.g. for air-gapped clusters with a mirror).
   registry: ""
-  image: mysql
-  tag: "8"
-  port: 3306
+  image: postgres
+  tag: "16-alpine"
+  port: 5432
 
-  # Persistent volume size for the MySQL data directory.
+  # Persistent volume size for the PostgreSQL data directory.
   storage: "10Gi"
   storageClass: ""   # leave empty to use the cluster default StorageClass
 
-  # MySQL command-line flags
+  # PostgreSQL tuning flags passed as command arguments.
+  # Tune shared_buffers to ~25% of pod memory limit.
   args:
-    - "--max_allowed_packet=20M"
-    - "--default-time-zone=Europe/Berlin"
-    - "--innodb_buffer_pool_size=2G"
+    - "-c"
+    - "shared_buffers=512MB"
+    - "-c"
+    - "max_connections=150"
+    - "-c"
+    - "timezone=Europe/Berlin"
 
   env:
+    POSTGRES_DB: "gpas"
     TZ: "Europe/Berlin"
 
   secrets:
     # REQUIRED: set via --set or a sealed secret. Generate: openssl rand -base64 24
-    rootPassword: ""
+    postgresPassword: ""
+    postgresUser: "gpas_user"
 
   resources:
     requests:
@@ -109,13 +127,11 @@ db:
       memory: "4Gi"
       cpu: "1000m"
 
-  # ─── MySQL read replica (opt-in HA profile) ─────────────────────────────────
-  # When enabled, a read-only MySQL replica is deployed alongside the primary.
-  # Useful for audit queries and backups at high throughput.
-  # gPAS always writes to the primary; the replica endpoint is gpas-db-read.
-  #
-  # After deploying, run the one-time replication init commands documented in
-  # helm/charts/gpas/templates/db-replica-statefulset.yaml.
+  # ─── PostgreSQL streaming replica (opt-in HA profile) ─────────────────────
+  # When enabled, a standby replica StatefulSet is deployed.
+  # Bootstrap is manual: run pg_basebackup in an init container or use the
+  # CloudNativePG / Crunchy Data PGO operator for fully-automated replication.
+  # gPAS always writes to the primary; the replica is read-only (analytics/backups).
   replica:
     enabled: false
     storage: ""      # leave empty to inherit db.storage

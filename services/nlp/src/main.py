@@ -68,6 +68,8 @@ class DetectRequest(BaseModel):
     # Per-call token state allows deterministic surrogate tokens across multiple
     # fields of the same resource when the caller passes state between requests.
     token_state: dict[str, Any] | None = None
+    # When True, return raw detections without replacement.
+    detect_only: bool = False
 
 
 class DetectResponse(BaseModel):
@@ -82,6 +84,7 @@ class BatchDetectItem(BaseModel):
     threshold: float = 0.4
     language: str = "en"
     mode: str = "tokenize"
+    detect_only: bool = False
 
 
 class BatchDetectRequest(BaseModel):
@@ -92,26 +95,56 @@ class BatchDetectRequest(BaseModel):
 class BatchDetectResponse(BaseModel):
     results: list[str]
     token_state: dict[str, Any] = Field(default_factory=dict)
+    detections: list[list] | None = None
 
 
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
 
+@app.on_event("startup")
+def _verify_detector_import():
+    """Eagerly import detector at startup so health checks fail if deps are broken."""
+    try:
+        from detector import _analyze_and_replace, _detect_entities_cached, _resolve_entities  # noqa: F401
+        logger.info("detector module imported successfully")
+    except Exception as exc:
+        logger.error("detector import failed: %s", exc, exc_info=True)
+        app.state.detector_ok = False
+        return
+    app.state.detector_ok = True
+
+
 @app.get("/health")
 def health():
+    if not getattr(app.state, "detector_ok", False):
+        return JSONResponse({"status": "error", "detail": "detector import failed"}, status_code=503)
     return {"status": "ok"}
 
 
-@app.post("/v1/detect", response_model=DetectResponse)
+@app.post("/v1/detect")
 def detect(req: DetectRequest):
-    """Run Presidio NER on *text* and return the scrubbed result."""
-    from detector import _analyze_and_replace, _resolve_entities
+    """Run Presidio NER on *text* and return the scrubbed result.
+
+    When ``detect_only=True``, return raw entity detections without replacement.
+    """
+    from detector import _analyze_and_replace, _detect_entities_cached, _resolve_entities
 
     entities = _resolve_entities(req.entities)
     token_state = req.token_state or {"next": {}, "map": {}, "reverse": {}}
 
     try:
+        if req.detect_only:
+            hits = _detect_entities_cached(
+                req.text, tuple(entities), req.threshold, req.language
+            )
+            _inc_request("/v1/detect", 200)
+            return {
+                "scrubbed_text": req.text,
+                "token_state": token_state,
+                "detections": hits,
+            }
+
         scrubbed = _analyze_and_replace(
             req.text,
             entities=entities,
@@ -132,27 +165,42 @@ def detect(req: DetectRequest):
     return DetectResponse(scrubbed_text=scrubbed, token_state=token_state)
 
 
-@app.post("/v1/detect/batch", response_model=BatchDetectResponse)
+@app.post("/v1/detect/batch")
 def detect_batch(req: BatchDetectRequest):
-    """Run Presidio NER on multiple texts, sharing token state across them."""
-    from detector import _analyze_and_replace, _resolve_entities
+    """Run Presidio NER on multiple texts, sharing token state across them.
+
+    When items have ``detect_only=True``, return raw detections without replacement.
+    """
+    from detector import _analyze_and_replace, _detect_entities_cached, _resolve_entities
 
     token_state = req.token_state or {"next": {}, "map": {}, "reverse": {}}
     results: list[str] = []
+    any_detect_only = any(item.detect_only for item in req.items)
+    all_detections: list[list] | None = [] if any_detect_only else None
 
     for item in req.items:
         entities = _resolve_entities(item.entities)
         try:
-            scrubbed = _analyze_and_replace(
-                item.text,
-                entities=entities,
-                threshold=item.threshold,
-                language=item.language,
-                mode=item.mode,
-                token_state=token_state,
-                token_lock=None,
-            )
-            results.append(scrubbed)
+            if item.detect_only:
+                hits = _detect_entities_cached(
+                    item.text, tuple(entities), item.threshold, item.language
+                )
+                results.append(item.text)
+                if all_detections is not None:
+                    all_detections.append(hits)
+            else:
+                scrubbed = _analyze_and_replace(
+                    item.text,
+                    entities=entities,
+                    threshold=item.threshold,
+                    language=item.language,
+                    mode=item.mode,
+                    token_state=token_state,
+                    token_lock=None,
+                )
+                results.append(scrubbed)
+                if all_detections is not None:
+                    all_detections.append([])
         except RuntimeError as exc:
             logger.error("presidio_not_ready: %s", exc, exc_info=False)
             raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -161,4 +209,7 @@ def detect_batch(req: BatchDetectRequest):
             raise HTTPException(status_code=500, detail="NLP detection error") from exc
 
     _inc_request("/v1/detect/batch", 200)
-    return BatchDetectResponse(results=results, token_state=token_state)
+    response = {"results": results, "token_state": token_state}
+    if all_detections is not None:
+        response["detections"] = all_detections
+    return response
