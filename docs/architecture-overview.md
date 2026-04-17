@@ -95,7 +95,7 @@
 │  └────┬─────┘  └─────┬──────┘  └─────┬──────┘  └────┬───┘  └───────────────┘  │
 │       │              │               │              │                          │
 │  ┌────┴─────┐  ┌─────┴──────┐  ┌─────┴──────┐      │    Optional:            │
-│  │  MySQL   │  │ PostgreSQL │  │ PostgreSQL │      │    NLP, Analytics       │
+│  │PostgreSQL│  │ PostgreSQL │  │ PostgreSQL │      │    NLP, Analytics       │
 │  └──────────┘  └────────────┘  └────────────┘      │    microservices        │
 └─────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -602,7 +602,7 @@ Client                     API Server               Worker                 FHIR 
 | **MinIO / S3** | S3 API | Object storage for large job result files (opt-in) |
 | **NLP Microservice** | Presidio + spaCy | Extracted NER-based PHI detection (opt-in, strangler fig) |
 | **Analytics Microservice** | FastAPI | Extracted risk analysis + synthetic data generation (opt-in) |
-| **MySQL** | MySQL 8.0 | Backend database for gPAS pseudonym storage |
+| **PostgreSQL (gPAS)** | PostgreSQL 16 | Backend database for gPAS pseudonym storage |
 
 ---
 
@@ -645,7 +645,7 @@ All transformation behavior is defined in YAML. Six bundled compliance profiles 
 | **FHIR** | HAPI FHIR v7.6, fhirpathpy, defusedxml |
 | **Pseudonymization** | gPAS (WildFly), HMAC-SHA3-256, RSA-OAEP (PyCryptodome) |
 | **NLP** | Presidio Analyzer, spaCy `en_core_web_lg` |
-| **Databases** | PostgreSQL 16, MySQL 8.0, SQLite (WAL), Redis 7 |
+| **Databases** | PostgreSQL 16 (×4: gPAS, app-db, HAPI source, HAPI target), SQLite (WAL), Redis 7 |
 | **Observability** | Prometheus counters/histograms, structured JSON audit logs |
 | **Infrastructure** | Docker Compose, Helm/K8s, nginx, MinIO (S3) |
 | **Performance** | orjson (3-10x JSON), pyahocorasick (text search), LRU caches |

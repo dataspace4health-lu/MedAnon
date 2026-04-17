@@ -11,37 +11,41 @@
 | Task Queue | Redis Streams / SQLite | Redis 7+ | Event-driven (BLPOP/XREAD) with Redis; polling fallback with SQLite |
 | Cache | In-process LRU + Redis L2 | 50K entries / error-swallowing | `utils/cache.py` — `CacheBackend` Protocol |
 | Pseudonymization | gPAS (TTP WildFly) | 2024.1+ | HTTP SOAP/REST; circuit breaker + retry + cache |
-| NLP | Presidio + spaCy | `en_core_web_lg` | Optional — NLP microservice or in-process; fail-open on error |
+| NLP | Presidio + spaCy | `en_core_web_lg` | Optional — NLP microservice or in-process; fail-closed on error (`[NLP_UNAVAILABLE]`) |
 | Metrics | prometheus_client | 0.20+ | Counters, Histograms, Gauges per subsystem |
 | HTTP | urllib3 | 2.x | Connection pooling; shared transport for FHIR/gPAS/analytics |
 | XML | defusedxml | — | XXE-safe XML parsing for FHIR XML and DICOM |
 | Config | PyYAML | — | `${VAR:-default}` env interpolation; `@lru_cache` service |
 
-## Docker Services (14 containers, 4 profiles)
+## Docker Services (17 containers, 3 opt-in profiles)
 
 | Service | Image | Profile | Port | Purpose |
 |---|---|---|---|---|
 | anonymizer | `python:3.12-slim` | always | 8000 | FastAPI de-identification engine |
-| worker | same image | always | — | Dedicated async job worker (no HTTP) |
-| fhir-server | HAPI FHIR JPA | always | 8081 | Source FHIR R4 server |
+| worker | same as anonymizer | always | 9091 (metrics) | Dedicated async job worker (Prometheus) |
+| fhir-server | HAPI FHIR JPA | always | none (isolated) | Source FHIR R4 server |
 | fhir-target | HAPI FHIR JPA | always | 8082 | Target FHIR R4 server (de-identified) |
-| gpas | WildFly | always | 8080 | gPAS TTP pseudonymization |
-| redis | Redis 7 | always | — | Cache + job queue |
+| gpas | WildFly 38 | always | via gpas-lb | gPAS TTP pseudonymization (scalable) |
+| gpas-lb | nginx:1.27-alpine | always | 8080 | Round-robin LB for gPAS replicas |
+| redis | Redis 7 | always | — | Cache + job queue (password-protected) |
 | ui | nginx + React SPA | always | 8501 | Patient browser, batch export, risk UI |
-| analytics | `python:3.12-slim` | `analytics` | 8100 | Risk analysis + synthetic data |
-| nlp | `python:3.12-slim` | `nlp` | 8200 | Presidio + spaCy NER (800 MB) |
+| app-db | PostgreSQL 16 | always | — | Jobs, configs, subscriptions, staging |
+| analytics | `python:3.12-slim` | always | 8100 | Risk analysis + synthetic data |
 | hapi-db | PostgreSQL 16 | always | — | HAPI source backend |
 | hapi-target-db | PostgreSQL 16 | always | — | HAPI target backend |
-| gpas-db | MySQL 8 | always | — | gPAS backend |
-| gpas-db-replica | MySQL 8 | `ha` | — | Read replica for gPAS |
-| minio | MinIO | `s3` | 9000 | S3-compatible object storage |
+| gpas-db | PostgreSQL 16 | always | — | gPAS backend |
+| nlp | `python:3.12-slim` | `nlp` | via nlp-lb | Presidio + spaCy NER (800 MB, scalable) |
+| nlp-lb | nginx:1.27-alpine | `nlp` | 8200 | Least-conn LB for NLP replicas |
+| gpas-db-replica | PostgreSQL 16 | `ha` | — | Streaming replica for gPAS HA |
+| minio | MinIO | `s3` | 9000, 9001 | S3-compatible object storage |
 
 ## Processing Pipeline
 
 ```
-Input → io_formats.py → config_service.py → processor.py
+Input → io_formats.py → pipeline/config/service.py → processor.py
                                                ├── rule_matcher.py        (FHIRPath eval + per-resource rule index)
-                                               ├── action_dispatcher.py   (Pass 1: per-rule actions + BatchWork)
+                                               ├── action_dispatcher.py   (Pass 1: per-rule actions + BatchWork + NlpWork)
+                                               ├── nlp_orchestrator.py    (Pass 1.5: batch NLP extract→detect→replace)
                                                ├── gpas_orchestrator.py   (Pass 2: batch gPAS pseudonymisation)
                                                ├── post_processor.py      (reference rewriting + text-ID replacement)
                                                ├── manifest.py            (transformation manifest → meta.tag)
@@ -79,8 +83,9 @@ Privacy sub-evaluators:
 
 | Backend | Trigger | Used When |
 |---|---|---|
-| Redis Streams | XREAD (event-driven) | `MEDANON_REDIS_URL` set |
-| SQLite WAL | 2s polling | Redis unavailable |
+| RedisJobStore | BLPOP (event-driven) | `MEDANON_REDIS_URL` set |
+| PostgresJobStore | LISTEN/NOTIFY (event-driven) | `MEDANON_APP_DB_URL` set, Redis absent |
+| SQLite WAL | 2s polling | Neither set |
 
 Job types: `bulk-export`, `cohort`, `patient-export`, `batch-patient-export`, `bulk-import`, `reprocess`
 
@@ -96,6 +101,7 @@ Features: max-concurrent semaphore, checkpoint/resume, crash recovery, poison-jo
 | `config_hipaa_safe_harbor.yaml` | HIPAA Safe Harbor | 18 PHI categories, year-only dates, 3-digit zip |
 | `config_research_pseudonymous.yaml` | IRB-grade research | Year-month dates, cryptohash IDs |
 | `config_structure_preserving.yaml` | Full FHIR structure | gPAS IDs, `[REDACTED]` PII, year-only dates |
+| `config_value_masking.yaml` | Fine-grained field masking | `nlp_detect_act` entity-specific NLP, encrypt+generalize combos |
 
 ## Authentication
 

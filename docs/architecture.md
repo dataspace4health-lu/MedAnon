@@ -34,10 +34,12 @@ MedAnon is a FHIR R4 de-identification engine. It accepts FHIR resources (JSON /
        │                   │  Stores DE-IDENTIFIED data only  │
        │                   └──────────────────────────────────┘
        │
-       ├──► gpas:8080 (WildFly + gPAS)
-       │     └──► gpas-mysql:3306
+       ├──► gpas-lb:8080 (nginx round-robin → gpas replicas)
+       │     └──► gpas-postgres:5432
        │
-       └──► redis:6379
+       ├──► app-db:5432 (jobs, configs, subscriptions, staging)
+       │
+       └──► redis:6379 (password-protected)
              ├── job queue  (BLPOP event-driven)
              └── gPAS cache (L2, cross-replica)
 ```
@@ -51,20 +53,58 @@ MedAnon is a FHIR R4 de-identification engine. It accepts FHIR resources (JSON /
 | Container | Image | Host Port | Role |
 |---|---|---|---|
 | `anonymizer` | `medanon:latest` | 8000 | FastAPI de-identification engine |
+| `worker` | `medanon:latest` | 9091 (metrics) | Dedicated async job worker (Prometheus) |
 | `ui` | `medanon-ui:latest` | 8501 | React SPA served by nginx |
-| `fhir-server` | `hapiproject/hapi:v7.6.0` | 8081 | Source FHIR R4 (identified data) |
-| `fhir-server-target` | `hapiproject/hapi:v7.6.0` | 8082 | Target FHIR R4 (de-identified data) |
-| `gpas` | WildFly + gPAS | 8080 | Reversible pseudonymization (TTP) |
-| `gpas-db` | `mysql:8.0` | internal | gPAS pseudonym store |
-| `redis` | `redis:7` | internal | Shared job queue + gPAS L2 cache |
+| `fhir-server` | `hapiproject/hapi:v7.6.0` | none (isolated) | Source FHIR R4 (identified data) |
+| `fhir-target` | `hapiproject/hapi:v7.6.0` | 8082 | Target FHIR R4 (de-identified data) |
+| `gpas` | WildFly 38 + gPAS | via gpas-lb | Reversible pseudonymization (TTP) |
+| `gpas-lb` | `nginx:1.27-alpine` | 8080 | Round-robin LB for gPAS replicas |
+| `gpas-db` | `postgres:16-alpine` | internal | gPAS pseudonym store |
+| `app-db` | `postgres:16-alpine` | internal | Jobs, configs, subscriptions, staging |
+| `redis` | `redis:7-alpine` | internal | Shared job queue + gPAS L2 cache (password-protected) |
+| `analytics` | `medanon-analytics:latest` | 8100 | Risk analysis + synthetic data |
 
 Opt-in profiles (not started by default):
 
 | Container | Profile | Host Port | Role |
 |---|---|---|---|
-| `analytics` | `analytics` | 8100 | Risk analysis + synthetic data |
-| `nlp` | `nlp` | 8200 | Presidio NLP microservice (~800 MB) |
-| `gpas-db-replica` | `ha` | internal | MySQL read replica for gPAS HA |
+| `nlp` | `nlp` | via nlp-lb | Presidio NLP microservice (~800 MB) |
+| `nlp-lb` | `nlp` | 8200 | Least-conn LB for NLP replicas |
+| `gpas-db-replica` | `ha` | internal | PostgreSQL read replica for gPAS HA |
+| `minio` | `s3` | 9000, 9001 | S3-compatible object storage for job results |
+
+### Nginx Load Balancers
+
+Three nginx reverse proxies handle routing and horizontal scaling:
+
+| Config | Container | Balancing Strategy | Purpose |
+|--------|-----------|-------------------|---------|
+| `client/nginx.conf` | `medanon-ui` | least_conn | UI SPA + API proxy + FHIR routing |
+| `services/gpas/lb/nginx.conf` | `gpas-lb` | round-robin | gPAS replica distribution |
+| `services/nlp/nginx.conf` | `nlp-lb` | least_conn | NLP replica distribution (CPU-intensive) |
+
+**UI proxy routes:**
+- `/` → SPA static files (React app)
+- `/api/*` → `anonymizer:8000` (upstream with keepalive 16)
+- `/fhir/*` → `hapi-fhir:8080` (source FHIR server)
+- `/fhir-target/*` → `hapi-fhir-target:8080` (de-identified data)
+
+**gPAS LB features:**
+- `/ping` health endpoint (responds without touching upstream while WildFly initializes)
+- WildFly-friendly timeouts: connect 10s, read 180s, send 60s
+- Docker DNS re-resolves `gpas` hostname on each connect for `--scale gpas=N`
+
+**NLP LB features:**
+- `/health` health endpoint (nginx answers directly)
+- `least_conn` balancing optimal for CPU-bound inference
+- 120s read timeout for batch detection requests
+- `client_max_body_size 10m` for large batch payloads
+
+**Scaling:**
+```bash
+docker compose up -d --scale gpas=3              # 3 gPAS replicas
+docker compose --profile nlp up -d --scale nlp=4 # 4 NLP replicas
+```
 
 ---
 
@@ -90,8 +130,19 @@ rule_matcher.py        Build per-resource-type rule index using FHIRPath express
     ▼
 action_dispatcher.py   Pass 1: Iterate matched rules. Apply stateless actions immediately
                        (redact, cryptohash, generalize, substitute, perturb, scrub_text,
-                       nlp_detect, encrypt). Collect gPAS-bound values into BatchWork
-                       WITHOUT calling gPAS yet — batching is critical for throughput.
+                       encrypt). Defer NLP actions (nlp_scrub, nlp_detect_act) into
+                       NlpWork items. Collect gPAS-bound values into BatchWork.
+                       Neither NLP nor gPAS is called yet — batching is critical
+                       for throughput.
+    │
+    ▼
+nlp_orchestrator.py    Pass 1.5: Batch NLP detection across all resources.
+                       Phase A — extract text fields from all deferred NlpWork items.
+                       Phase B — deduplicate and batch-detect unique texts (one HTTP
+                       call for remote NLP service, or cache-prewarming for local
+                       Presidio). Phase C — per-resource replacement with isolated
+                       token_state so surrogate tokens are deterministic within a
+                       resource but unique across resources.
     │
     ▼
 gpas_orchestrator.py   Pass 2: Send one HTTP request to gPAS for all collected values.
@@ -112,7 +163,7 @@ manifest.py            Tag meta.tag with a per-rule transformation summary if
 io_formats.py          Serialize. Output format matches input or as requested.
 ```
 
-**Why two passes for gPAS?** gPAS has a non-trivial per-call overhead (TTP-FHIR HTTP round-trip). Processing 300 resources each calling gPAS individually would be ~300 HTTP calls. Batching all values from a resource page into one call reduces this to 1. The action dispatcher collects values in Pass 1; Pass 2 sends the single batch.
+**Why three passes?** Both NLP and gPAS have non-trivial per-call overhead. Processing 300 resources with individual calls would be ~300 HTTP round-trips for each. Pass 1 collects deferred work (NlpWork for NLP, BatchWork for gPAS) without making any external calls. Pass 1.5 deduplicates texts across all resources and sends a single batch to the NLP service (or pre-warms the local Presidio cache), then applies replacements per-resource. Pass 2 does the same for gPAS pseudonymization. This reduces hundreds of HTTP calls to 2-3 regardless of resource count.
 
 ---
 
@@ -139,11 +190,12 @@ GET /v1/jobs/abc123         ◄── poll status (pending/running/done/failed)
 GET /v1/jobs/abc123/result  ◄── download NDJSON when done
 ```
 
-**Backend selection at startup:**
+**Backend selection at startup (priority order):**
 - `MEDANON_REDIS_URL` set → `RedisJobStore`: BLPOP event-driven (no polling), cross-replica safe
-- `MEDANON_REDIS_URL` unset → `SqliteJobStore`: polls every 2 s, single-instance only
+- `MEDANON_APP_DB_URL` set → `PostgresJobStore`: LISTEN/NOTIFY event-driven, single-instance
+- Neither set → `SqliteJobStore`: polls every 2 s, single-instance only
 
-**Why not always Redis?** Local dev has no Redis. SQLite fallback works fine for single-instance dev and CI. Redis is required for multi-replica production deployments where multiple anonymizer instances share a job queue.
+**Why not always Redis?** Local dev has no Redis. SQLite fallback works fine for single-instance dev and CI. PostgreSQL (via `app-db`) provides event-driven execution without requiring Redis. Redis is required for multi-replica production deployments where multiple anonymizer instances share a job queue.
 
 ---
 
@@ -208,7 +260,7 @@ MedAnon                          gPAS
 
 ## Config profiles
 
-Six bundled profiles. Auto-selected based on environment; overridable per-request via `?config_profile=<name>`.
+Six bundled profiles plus one specialist profile. Auto-selected based on environment; overridable per-request via `?config_profile=<name>`.
 
 | Profile | ID handling | Dates | Geographic | Requires gPAS | Use case |
 |---|---|---|---|---|---|
@@ -218,6 +270,7 @@ Six bundled profiles. Auto-selected based on environment; overridable per-reques
 | `config_hipaa_safe_harbor.yaml` | Redacted | Year only | State + 3-digit zip | No | US HIPAA Safe Harbor |
 | `config_research_pseudonymous.yaml` | SHA3-256 hash | Year-month | 3-digit zip | No | IRB research |
 | `config_structure_preserving.yaml` | gPAS pseudonym (reversible) | Year (birthDate only) | Preserved | Yes | Full FHIR structure downstream |
+| `config_value_masking.yaml` | gPAS pseudonym (reversible) | Decade (birth), year (clinical) | Masked to `[REDACTED]` | Yes | Field-complete de-identification with `nlp_detect_act` for entity-specific conditional NLP |
 
 Auto-selection logic: `GPAS_URL` set → `config_gpas.yaml`; otherwise → `config.yaml`.
 
