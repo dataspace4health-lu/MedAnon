@@ -59,5 +59,5 @@ RUN pip install --no-cache-dir -r /code/requirements-sdv.txt
 WORKDIR /code/src
 USER appuser
 CMD gunicorn api.main:app -k uvicorn.workers.UvicornWorker \
-    --workers ${MEDANON_WORKERS:-4} --bind 0.0.0.0:8000 \
+    --workers ${MEDANON_WORKERS:-8} --bind 0.0.0.0:8000 \
     --timeout ${MEDANON_REQUEST_TIMEOUT_SEC:-300} --graceful-timeout 30

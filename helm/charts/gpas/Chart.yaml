@@ -1,6 +1,6 @@
 apiVersion: v2
 name: gpas
-description: "gPAS TTP pseudonymization service (WildFly) with bundled MySQL backend."
+description: "gPAS TTP pseudonymization service (WildFly) with bundled PostgreSQL backend. Supports horizontal scaling via HPA."
 type: application
 version: 0.1.0
 appVersion: "2025.2.0"

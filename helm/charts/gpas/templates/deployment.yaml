@@ -10,7 +10,9 @@ metadata:
     {{- include "gpas.labels" . | nindent 4 }}
     app.kubernetes.io/component: gpas
 spec:
+  {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicas }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "gpas.selectorLabels" (dict "Release" .Release "component" "gpas") | nindent 6 }}
@@ -36,7 +38,7 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      # Wait for MySQL to be accepting TCP connections before WildFly starts.
+      # Wait for PostgreSQL to be accepting TCP connections before WildFly starts.
       # Mirrors docker-compose depends_on: gpas-db: condition: service_healthy
       # and the MOS_WAIT_FOR_PORTS mechanism in the WildFly entrypoint.
       initContainers:
@@ -46,11 +48,11 @@ spec:
             - sh
             - -c
             - |
-              echo "Waiting for MySQL at {{ $dbHost }}:{{ $dbPort }} ..."
+              echo "Waiting for PostgreSQL at {{ $dbHost }}:{{ $dbPort }} ..."
               until nc -z {{ $dbHost }} {{ $dbPort }}; do
                 sleep 2
               done
-              echo "MySQL is reachable."
+              echo "PostgreSQL is reachable."
       containers:
         - name: gpas
           image: {{ include "gpas.image" (dict "registry" $registry "image" .Values.image "tag" .Values.tag) }}

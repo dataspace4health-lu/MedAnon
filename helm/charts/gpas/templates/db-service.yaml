@@ -7,12 +7,12 @@ metadata:
     app.kubernetes.io/component: gpas-db
 spec:
   # Headless service — required for StatefulSet stable DNS names.
-  # gPAS connects to "<fullname>-db:3306" via this service.
+  # gPAS connects to "<fullname>-db:5432" via this service.
   clusterIP: None
   selector:
     {{- include "gpas.selectorLabels" (dict "Release" .Release "component" "gpas-db") | nindent 4 }}
   ports:
-    - name: mysql
+    - name: postgres
       port: {{ .Values.db.port }}
-      targetPort: mysql
+      targetPort: postgres
       protocol: TCP

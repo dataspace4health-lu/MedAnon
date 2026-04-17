@@ -16,7 +16,7 @@ spec:
     - port: {{ .Values.db.port }}
       targetPort: {{ .Values.db.port }}
       protocol: TCP
-      name: mysql
+      name: postgres
   selector:
     {{- include "gpas.selectorLabels" (dict "Release" .Release "component" "gpas-db-replica") | nindent 4 }}
 {{- end }}

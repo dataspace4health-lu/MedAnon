@@ -15,6 +15,7 @@ export interface JobResponse {
   processed: number;
   staged_count: number | null;
   phase: "queued" | "fetching" | "processing" | "done";
+  config_profile: string;
   summary: {
     total_resources: number;
     error_count: number;
@@ -25,6 +26,22 @@ export interface JobResponse {
     compressed: boolean;
     file_size_bytes: number;
   } | null;
+}
+
+export interface BatchPrivacy {
+  risk_score: number;
+  passed: boolean;
+  threshold: number;
+  attacker_risk: number;
+  identifier_risk: number;
+  config_identifier_risk: number;
+  text_risk: number;
+  evidence: Array<{
+    check: string;
+    value: number;
+    details: Record<string, unknown>;
+    severity: string;
+  }>;
 }
 
 export interface JobScoreResponse {
@@ -39,7 +56,7 @@ export interface JobScoreResponse {
   min_composite?: number;
   avg_utility?: number;
   avg_quality?: number;
-  batch_privacy?: Record<string, unknown> | null;
+  batch_privacy?: BatchPrivacy | null;
   config_profile?: string;
 }
 

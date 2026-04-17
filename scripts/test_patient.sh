@@ -24,7 +24,7 @@ if ! curl -sf "${MEDANON_URL}/health" > /dev/null 2>&1; then
   echo "MedAnon not reachable at ${MEDANON_URL} — starting container..."
   docker rm -f medanon-test 2>/dev/null || true
 # Detect the Docker network where gPAS is running
-  GPAS_NET=$(docker inspect gpas-wildfly --format '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{end}}' 2>/dev/null || echo "bridge")
+  GPAS_NET=$(docker inspect gpas-lb --format '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{end}}' 2>/dev/null || echo "bridge")
 
   docker run -d --name medanon-test \
     -p "${MEDANON_PORT}:8000" \

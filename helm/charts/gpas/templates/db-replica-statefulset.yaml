@@ -1,16 +1,18 @@
 {{- if .Values.db.replica.enabled -}}
 {{- $dbRegistry := coalesce .Values.db.registry .Values.global.registry "" -}}
-# MySQL read replica for gPAS — enabled with db.replica.enabled=true.
+# PostgreSQL streaming replica for gPAS — enabled with db.replica.enabled=true.
 #
-# IMPORTANT: Replication must be initialised once after both pods are running:
-#   kubectl exec -n <ns> <primary-pod> -- mysql -uroot -p$MYSQL_ROOT_PASSWORD \
-#     -e "GRANT REPLICATION SLAVE ON *.* TO 'repl'@'%' IDENTIFIED BY '$REPL_PASSWORD';"
-#   kubectl exec -n <ns> <replica-pod> -- mysql -uroot -p$MYSQL_ROOT_PASSWORD \
-#     -e "CHANGE MASTER TO MASTER_HOST='<primary-svc>', MASTER_USER='repl', \
-#         MASTER_PASSWORD='$REPL_PASSWORD', MASTER_AUTO_POSITION=1; START SLAVE;"
+# Bootstrap (run once after both pods are healthy):
+#   1. On the primary, create a replication role:
+#      kubectl exec -n <ns> <primary-pod> -- \
+#        psql -U ${POSTGRES_USER} -c \
+#        "CREATE ROLE replicator REPLICATION LOGIN PASSWORD '${REPL_PASSWORD}';"
 #
-# gPAS (WildFly) always points at the primary. The replica is read-only and
-# is only useful for audit queries and backups.
+#   2. The replica init container automatically runs pg_basebackup using the
+#      REPL_PASSWORD secret — no manual kubectl exec is needed after step 1.
+#
+# gPAS always connects to the primary.  The replica is read-only (analytics/backups).
+# For production-grade HA consider the CloudNativePG or Crunchy Data PGO operator.
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -39,41 +41,66 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      containers:
-        - name: mysql-replica
+      # Clone the primary on first boot using pg_basebackup.
+      # -R creates standby.signal + primary_conninfo automatically (PG 12+).
+      initContainers:
+        - name: pg-basebackup
           image: "{{ if $dbRegistry }}{{ $dbRegistry }}/{{ end }}{{ .Values.db.image }}:{{ .Values.db.tag }}"
-          imagePullPolicy: {{ coalesce .Values.global.imagePullPolicy .Values.imagePullPolicy | default "IfNotPresent" }}
-          args:
-            - --server-id=2
-            - --read-only=ON
-            - --log-bin=mysql-bin
-            - --binlog-format=ROW
-            - --gtid-mode=ON
-            - --enforce-gtid-consistency=ON
-            {{- range .Values.db.args }}
-            - {{ . | quote }}
-            {{- end }}
+          command:
+            - sh
+            - -c
+            - |
+              if [ -f /var/lib/postgresql/data/PG_VERSION ]; then
+                echo "Data directory already initialized — skipping pg_basebackup."
+                exit 0
+              fi
+              echo "Cloning primary at {{ include "gpas.dbHost" . }}:{{ .Values.db.port }} ..."
+              pg_basebackup \
+                -h {{ include "gpas.dbHost" . }} \
+                -p {{ .Values.db.port }} \
+                -U replicator \
+                -D /var/lib/postgresql/data \
+                -Fp -Xs -P -R
+              echo "pg_basebackup complete."
           env:
-            - name: MYSQL_ROOT_PASSWORD
+            - name: PGPASSWORD
               valueFrom:
                 secretKeyRef:
                   name: {{ include "gpas.fullname" . }}-db-secret
-                  key: rootPassword
+                  key: REPL_PASSWORD
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+      containers:
+        - name: postgres-replica
+          image: "{{ if $dbRegistry }}{{ $dbRegistry }}/{{ end }}{{ .Values.db.image }}:{{ .Values.db.tag }}"
+          imagePullPolicy: {{ coalesce .Values.global.imagePullPolicy .Values.imagePullPolicy | default "IfNotPresent" }}
+          env:
             {{- range $k, $v := .Values.db.env }}
             - name: {{ $k }}
               value: {{ $v | quote }}
             {{- end }}
+          envFrom:
+            - secretRef:
+                name: {{ include "gpas.fullname" . }}-db-secret
           ports:
             - containerPort: {{ .Values.db.port }}
+              name: postgres
           livenessProbe:
             exec:
-              command: ["mysqladmin", "ping", "-h", "localhost"]
+              command:
+                - sh
+                - -c
+                - "pg_isready -U ${POSTGRES_USER:-gpas_user} -d ${POSTGRES_DB:-gpas}"
             initialDelaySeconds: 30
             periodSeconds: 10
             timeoutSeconds: 5
           readinessProbe:
             exec:
-              command: ["mysqladmin", "ping", "-h", "localhost"]
+              command:
+                - sh
+                - -c
+                - "pg_isready -U ${POSTGRES_USER:-gpas_user} -d ${POSTGRES_DB:-gpas}"
             initialDelaySeconds: 10
             periodSeconds: 5
             timeoutSeconds: 3
@@ -81,7 +108,7 @@ spec:
             {{- toYaml .Values.db.replica.resources | nindent 12 }}
           volumeMounts:
             - name: data
-              mountPath: /var/lib/mysql
+              mountPath: /var/lib/postgresql/data
   volumeClaimTemplates:
     - metadata:
         name: data

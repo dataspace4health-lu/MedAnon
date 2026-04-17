@@ -20,7 +20,7 @@ Create a default fully qualified app name.
 {{- end }}
 
 {{/*
-Fully qualified name for the MySQL database service.
+Fully qualified name for the PostgreSQL database service.
 Used as the DB hostname for TTP_DB_HOST, TTP_GRAS_DB_HOST, and MOS_WAIT_FOR_PORTS.
 */}}
 {{- define "gpas.dbHost" -}}

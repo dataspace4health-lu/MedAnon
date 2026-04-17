@@ -6,7 +6,7 @@ metadata:
     {{- include "gpas.labels" . | nindent 4 }}
     app.kubernetes.io/component: gpas-db
 data:
-  # MySQL runs these scripts alphabetically on first boot (empty data directory).
+  # PostgreSQL runs these scripts alphabetically on first boot (empty data directory).
   # 01_* scripts create schemas; 02_* seeds gRAS auth users.
   01_create_database_gpas.sql: |-
 {{ .Files.Get "files/gpas-sqls/01_create_database_gpas.sql" | indent 4 }}

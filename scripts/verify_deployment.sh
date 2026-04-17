@@ -39,7 +39,7 @@ echo ""
 # ── 1. Docker container health ──────────────────────────────────────────────
 echo "1. Container health"
 ALL_HEALTHY=true
-for svc in medanon hapi-fhir hapi-fhir-target hapi-postgres hapi-target-postgres gpas-wildfly gpas-mysql medanon-redis medanon-ui; do
+for svc in medanon hapi-fhir hapi-fhir-target hapi-postgres hapi-target-postgres gpas-lb gpas-postgres medanon-redis medanon-ui; do
     STATUS=$(docker inspect --format='{{.State.Health.Status}}' "$svc" 2>/dev/null || echo "not_found")
     case "$STATUS" in
         healthy)   pass "$svc: healthy" ;;

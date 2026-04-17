@@ -21,14 +21,14 @@ spec:
     spec:
       securityContext:
         runAsNonRoot: true
-        runAsUser: 999   # mysql system user UID in the official MySQL image
-        fsGroup: 999
+        runAsUser: 70    # postgres:16-alpine uses UID 70 (not 999 which is MySQL/Debian)
+        fsGroup: 70
       {{- with (coalesce .Values.imagePullSecrets .Values.global.imagePullSecrets) }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       containers:
-        - name: mysql
+        - name: postgres
           image: {{ include "gpas.image" (dict "registry" $dbRegistry "image" .Values.db.image "tag" .Values.db.tag) }}
           imagePullPolicy: {{ coalesce .Values.imagePullPolicy .Values.global.imagePullPolicy "IfNotPresent" }}
           securityContext:
@@ -38,7 +38,7 @@ spec:
           args:
             {{- toYaml .Values.db.args | nindent 12 }}
           ports:
-            - name: mysql
+            - name: postgres
               containerPort: {{ .Values.db.port }}
               protocol: TCP
           env:
@@ -50,23 +50,29 @@ spec:
             - secretRef:
                 name: {{ include "gpas.fullname" . }}-db-secret
           volumeMounts:
-            # Persistent MySQL data directory
+            # Persistent PostgreSQL data directory
             - name: data
-              mountPath: /var/lib/mysql
+              mountPath: /var/lib/postgresql/data
             # Init SQL scripts — run once on first boot when data dir is empty
             - name: init-scripts
               mountPath: /docker-entrypoint-initdb.d
               readOnly: true
           livenessProbe:
             exec:
-              command: ["mysqladmin", "ping", "-h", "localhost"]
+              command:
+                - sh
+                - -c
+                - "pg_isready -U ${POSTGRES_USER:-gpas_user} -d ${POSTGRES_DB:-gpas}"
             initialDelaySeconds: 30
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 10
           readinessProbe:
             exec:
-              command: ["mysqladmin", "ping", "-h", "localhost"]
+              command:
+                - sh
+                - -c
+                - "pg_isready -U ${POSTGRES_USER:-gpas_user} -d ${POSTGRES_DB:-gpas}"
             initialDelaySeconds: 10
             periodSeconds: 10
             timeoutSeconds: 5
@@ -77,7 +83,7 @@ spec:
         - name: init-scripts
           configMap:
             name: {{ include "gpas.fullname" . }}-db-init
-  # Persistent volume for MySQL data — survives pod restarts and rescheduling
+  # Persistent volume for PostgreSQL data — survives pod restarts and rescheduling
   volumeClaimTemplates:
     - metadata:
         name: data

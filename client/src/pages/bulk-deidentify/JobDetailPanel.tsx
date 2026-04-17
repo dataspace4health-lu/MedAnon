@@ -16,7 +16,7 @@ import {
   RefreshCw, User, Users, Stethoscope, Database, Upload, ShieldCheck,
 } from "lucide-react";
 import { getJobResult, getJobStatus, submitBulkImport, getJobScore, triggerJobScore } from "@/api/medanon";
-import type { JobResponse } from "@/api/medanon";
+import type { JobResponse, BatchPrivacy } from "@/api/medanon";
 import { useBulkExport } from "@/context/BulkExportContext";
 import type { ExportJob } from "@/context/BulkExportContext";
 import { buildPiiFromDeidentifiedOnly, buildFieldSummary, stripManifestTag } from "@/lib/piiDetection";
@@ -334,11 +334,26 @@ export function JobDetailPanel({ job }: { job: ExportJob }) {
                   </span>
                 </TooltipTrigger>
                 <TooltipContent>
-                  <div className="text-xs space-y-1">
+                  <div className="text-xs space-y-1 min-w-[180px]">
                     <p className="font-semibold">De-identification Quality</p>
                     <p>Composite: {Math.round(avg)}%</p>
                     {job.backendScore.avg_utility != null && <p>Utility: {Math.round(job.backendScore.avg_utility * 100)}%</p>}
                     {job.backendScore.avg_quality != null && <p>Quality: {Math.round(job.backendScore.avg_quality * 100)}%</p>}
+                    {job.backendScore.batch_privacy && (() => {
+                      const bp = job.backendScore.batch_privacy as BatchPrivacy;
+                      return (
+                        <>
+                          <hr className="border-muted my-1" />
+                          <p className="font-semibold">Privacy Gate ({bp.passed ? "PASS" : "FAIL"})</p>
+                          <p>Risk score: {(bp.risk_score * 100).toFixed(1)}% (threshold {(bp.threshold * 100).toFixed(0)}%)</p>
+                          <p>Attacker: {(bp.attacker_risk * 100).toFixed(1)}%</p>
+                          <p>Identifiers: {(bp.identifier_risk * 100).toFixed(1)}%</p>
+                          <p>Config coverage: {(bp.config_identifier_risk * 100).toFixed(1)}%</p>
+                          <p>Text scan: {(bp.text_risk * 100).toFixed(1)}%</p>
+                        </>
+                      );
+                    })()}
+                    <hr className="border-muted my-1" />
                     <p>{decision}</p>
                   </div>
                 </TooltipContent>
