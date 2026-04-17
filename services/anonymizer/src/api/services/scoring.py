@@ -56,7 +56,7 @@ class ScoringService:
         scoring can still proceed with reduced information.
         """
         try:
-            from pipeline.config_service import get_settings
+            from pipeline.config.service import get_settings
 
             return get_settings(profile)
         except Exception as exc:

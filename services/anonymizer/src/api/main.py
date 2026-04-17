@@ -37,6 +37,7 @@ from api.deps import (
     limiter,
 )
 from api.routers import (
+    admin,
     analytics,
     audit,
     configs,
@@ -112,6 +113,14 @@ async def _supervised_worker_loop(worker_module) -> None:
 
 @app.on_event("startup")
 async def _startup() -> None:
+    # NOTE: Do NOT set the BoundedExecutor as asyncio's default executor.
+    # BoundedExecutor.submit() blocks the calling thread when the semaphore is
+    # exhausted.  asyncio.to_thread() calls loop.run_in_executor(None, fn)
+    # from the event loop thread — if the pool is full, the event loop itself
+    # blocks, freezing all async request handling (deadlock).
+    # The BoundedExecutor is used explicitly via get_executor() for CPU/IO work
+    # that submits from worker threads, not from the event loop thread.
+
     # Opt-in Redis L2 cache for cross-replica gPAS result sharing
     redis_url = os.environ.get("MEDANON_REDIS_URL", "").strip()
     if redis_url:
@@ -130,8 +139,28 @@ async def _startup() -> None:
         except Exception as exc:
             logger.warning("redis_cache_setup_failed falling_back=local: %s", exc)
 
-    # Async job queue — select backend based on MEDANON_REDIS_URL
+    # gPAS cache coherence check — detect stale Redis after DB wipe
+    if redis_url:
+        try:
+            from integrations.gpas.canary import check_gpas_cache_coherence
+
+            result = await asyncio.to_thread(check_gpas_cache_coherence, redis_url)
+            if result.get("flushed"):
+                logger.warning("gpas_canary: %s", result["reason"])
+            elif result.get("checked"):
+                logger.info("gpas_canary: %s", result["reason"])
+            else:
+                logger.debug("gpas_canary: %s", result.get("reason", "skipped"))
+        except Exception as exc:
+            logger.warning("gpas_canary_check_failed: %s", exc)
+
+    # Async job queue — select backend:
+    #   1. MEDANON_REDIS_URL → RedisJobStore (event-driven Streams)
+    #   2. MEDANON_APP_DB_URL → PostgresJobStore (LISTEN/NOTIFY + FOR UPDATE SKIP LOCKED)
+    #   3. Fallback → SqliteJobStore (polling, local dev)
     max_concurrent = int(os.environ.get("MEDANON_JOB_WORKERS", "3"))
+    app_db_url = os.environ.get("MEDANON_APP_DB_URL", "").strip()
+    pg_pool = None  # shared PostgreSQL pool for all app-state stores
     try:
         from pipeline.jobs import init_job_store
         from pipeline.jobs import worker as _worker
@@ -144,13 +173,29 @@ async def _startup() -> None:
                 job_store = RedisJobStore(redis_url)
                 logger.info("job_store=redis")
             except Exception as exc:
-                logger.warning("redis_job_store_failed falling_back=sqlite: %s", exc)
+                logger.warning("redis_job_store_failed falling_back=next: %s", exc)
+
+        if job_store is None and app_db_url:
+            try:
+                from integrations.postgres.pool import get_pool
+                from integrations.postgres.job_store import PostgresJobStore
+
+                pg_pool = get_pool(app_db_url)
+                job_store = PostgresJobStore(pg_pool)
+                app.state.pg_pool = pg_pool
+                logger.info("job_store=postgres")
+            except Exception as exc:
+                logger.warning("postgres_job_store_failed falling_back=sqlite: %s", exc)
 
         store = init_job_store(store=job_store)
         _worker.init_worker(store, max_concurrent=max_concurrent)
 
-        # Staging store — two-phase large-scale export (opt-in via MEDANON_STAGING_DB_URL)
-        staging_url = os.environ.get("MEDANON_STAGING_DB_URL", "").strip()
+        # Staging store — two-phase large-scale export
+        # Uses MEDANON_STAGING_DB_URL when set; otherwise falls back to MEDANON_APP_DB_URL.
+        staging_url = (
+            os.environ.get("MEDANON_STAGING_DB_URL", "").strip()
+            or app_db_url
+        )
         if staging_url:
             staging_store = None
             retries = 3
@@ -162,8 +207,15 @@ async def _startup() -> None:
                     retention_days = int(
                         os.environ.get("MEDANON_STAGING_RETENTION_DAYS", "30")
                     )
+                    # Only share the app-db pool when both URLs are identical.
+                    # If a separate MEDANON_STAGING_DB_URL is configured, pass
+                    # pool=None so StagingStore creates its own pool with the
+                    # correct connection string (pg_pool points to app_db_url).
+                    shared_pool = pg_pool if staging_url == app_db_url else None
                     staging_store = StagingStore(
-                        staging_url, retention_days=retention_days
+                        staging_url,
+                        retention_days=retention_days,
+                        pool=shared_pool,
                     )
                     staging_store.ensure_schema()
                     _worker.init_staging(staging_store)
@@ -199,25 +251,39 @@ async def _startup() -> None:
     except Exception as exc:
         logger.warning("job_worker_start_failed: %s", exc)
 
-    # FHIR Subscription store
+    # FHIR Subscription store — PostgreSQL when app-db available, else SQLite
     try:
         from pipeline.subscriptions import init_subscription_store
 
-        sub_db = os.environ.get("MEDANON_SUBSCRIPTION_DB", "/output/subscriptions.db")
-        init_subscription_store(sub_db)
-        logger.info("subscription_store started path=%s", sub_db)
+        if pg_pool:
+            from integrations.postgres.subscription_store import PostgresSubscriptionStore
+
+            sub_store = PostgresSubscriptionStore(pg_pool)
+            init_subscription_store(store=sub_store)
+            logger.info("subscription_store=postgres")
+        else:
+            sub_db = os.environ.get("MEDANON_SUBSCRIPTION_DB", "/output/subscriptions.db")
+            init_subscription_store(sub_db)
+            logger.info("subscription_store=sqlite path=%s", sub_db)
     except Exception as exc:
         logger.warning("subscription_store_start_failed: %s", exc)
 
-    # Config metadata store (user-defined config profiles)
+    # Config metadata store — PostgreSQL when app-db available, else SQLite
     try:
         from pipeline.config.store import init_config_store
 
-        config_store_db = os.environ.get(
-            "MEDANON_CONFIG_STORE_DB", "/output/config_store.db"
-        )
-        init_config_store(config_store_db)
-        logger.info("config_store started path=%s", config_store_db)
+        if pg_pool:
+            from integrations.postgres.config_store import PostgresConfigStore
+
+            cfg_store = PostgresConfigStore(pg_pool)
+            init_config_store(store=cfg_store)
+            logger.info("config_store=postgres")
+        else:
+            config_store_db = os.environ.get(
+                "MEDANON_CONFIG_STORE_DB", "/output/config_store.db"
+            )
+            init_config_store(config_store_db)
+            logger.info("config_store=sqlite path=%s", config_store_db)
     except Exception as exc:
         logger.warning("config_store_start_failed: %s", exc)
 
@@ -255,6 +321,16 @@ async def _shutdown() -> None:
             logger.info("staging_store closed")
         except Exception as exc:
             logger.warning("staging_store_close_failed: %s", exc)
+
+    # Close the shared PostgreSQL pool (if any)
+    pg_pool = getattr(app.state, "pg_pool", None)
+    if pg_pool is not None:
+        try:
+            from integrations.postgres.pool import close_pool
+
+            close_pool()
+        except Exception as exc:
+            logger.warning("postgres_pool_close_failed: %s", exc)
 
 
 app.state.limiter = limiter
@@ -455,6 +531,7 @@ app.include_router(jobs.router, prefix="/v1")
 app.include_router(configs.router, prefix="/v1")
 app.include_router(scoring.router, prefix="/v1")
 app.include_router(audit.router, prefix="/v1")
+app.include_router(admin.router, prefix="/v1")
 
 app.include_router(dicom.router, prefix="/v1")
 app.include_router(hl7v2.router, prefix="/v1")

@@ -6,10 +6,11 @@ server-side cleanup.
 """
 
 import os
+import urllib.parse as _urlparse
 from utils.json_fast import loads as _json_loads
 import queue as _queue
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future as _Future
 from urllib.parse import urlencode
 
 from integrations.fhir import _transport as _t
@@ -21,7 +22,26 @@ from ._transport import (
     log,
 )
 
-_BULK_DOWNLOAD_PARALLEL = int(os.environ.get("MEDANON_BULK_DOWNLOAD_PARALLEL", "1"))
+
+def _validate_bulk_file_url(url: str) -> None:
+    """Raise ValueError if *url* targets a private or loopback address.
+
+    Prevents SSRF via malicious FHIR bulk export manifests that redirect
+    file downloads to internal infrastructure (e.g. AWS metadata service).
+    """
+    from api.deps import check_hostname_ssrf
+
+    parsed = _urlparse.urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(f"Bulk file URL must use http(s) scheme, got: {parsed.scheme}")
+    hostname = parsed.hostname or ""
+    if not hostname:
+        raise ValueError("Bulk file URL has no hostname")
+    err = check_hostname_ssrf(hostname)
+    if err:
+        raise ValueError(f"Bulk file URL rejected (SSRF): {err}")
+
+_BULK_DOWNLOAD_PARALLEL = int(os.environ.get("MEDANON_BULK_DOWNLOAD_PARALLEL", "4"))
 
 # Timeout for queue.get() in parallel download consumer loops.
 # Prevents permanent thread hangs when a producer thread crashes without
@@ -230,6 +250,14 @@ def _download_manifest_files(manifest, token=None, timeout=60):
     log.info("bulk export complete: %d output file(s)", len(output_files))
     total = 0
 
+    # SSRF guard: validate every file URL before starting any downloads.
+    # A malicious FHIR server could return manifest URLs pointing to internal
+    # infrastructure (e.g. cloud metadata services, Redis, admin panels).
+    for file_entry in output_files:
+        file_url = file_entry.get("url")
+        if file_url:
+            _validate_bulk_file_url(file_url)
+
     if _BULK_DOWNLOAD_PARALLEL <= 1 or len(output_files) <= 1:
         # Sequential download
         for file_entry in output_files:
@@ -264,23 +292,25 @@ def _download_manifest_files(manifest, token=None, timeout=60):
             finally:
                 result_q.put(_SENTINEL)
 
-        with ThreadPoolExecutor(max_workers=_BULK_DOWNLOAD_PARALLEL) as pool:
-            for fe in valid_files:
-                pool.submit(_download_one, fe)
-            finished = 0
-            while finished < n_files:
-                try:
-                    item = result_q.get(timeout=_QUEUE_GET_TIMEOUT_SEC)
-                except _queue.Empty:
-                    raise ValueError(
-                        f"Bulk download stalled: no data received for "
-                        f"{_QUEUE_GET_TIMEOUT_SEC}s — possible thread crash"
-                    )
-                if item is _SENTINEL:
-                    finished += 1
-                    continue
-                total += 1
-                yield item
+        from utils.thread_pool import get_executor
+
+        pool = get_executor()
+        for fe in valid_files:
+            pool.submit(_download_one, fe)
+        finished = 0
+        while finished < n_files:
+            try:
+                item = result_q.get(timeout=_QUEUE_GET_TIMEOUT_SEC)
+            except _queue.Empty:
+                raise ValueError(
+                    f"Bulk download stalled: no data received for "
+                    f"{_QUEUE_GET_TIMEOUT_SEC}s — possible thread crash"
+                )
+            if item is _SENTINEL:
+                finished += 1
+                continue
+            total += 1
+            yield item
 
         if not error_q.empty():
             raise error_q.get_nowait()

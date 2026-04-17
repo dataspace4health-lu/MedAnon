@@ -14,6 +14,7 @@ header pointing to the polling URL, as required by the spec.
 
 from __future__ import annotations
 
+import asyncio
 from utils.json_fast import loads as _json_loads, dumps as _json_dumps
 import logging
 import os
@@ -148,7 +149,8 @@ async def system_export(
     server_url = _require_fhir_source_url()
 
     try:
-        job_dict = _service.submit_bulk_export(
+        job_dict = await asyncio.to_thread(
+            _service.submit_bulk_export,
             server_url,
             {
                 "level": "system",
@@ -190,7 +192,8 @@ async def patient_export(
     server_url = _require_fhir_source_url()
 
     try:
-        job_dict = _service.submit_bulk_export(
+        job_dict = await asyncio.to_thread(
+            _service.submit_bulk_export,
             server_url,
             {
                 "level": "patient",
@@ -233,7 +236,8 @@ async def group_export(
     server_url = _require_fhir_source_url()
 
     try:
-        job_dict = _service.submit_bulk_export(
+        job_dict = await asyncio.to_thread(
+            _service.submit_bulk_export,
             server_url,
             {
                 "level": "group",
@@ -272,7 +276,7 @@ async def export_status(request: Request, job_id: str) -> Response:
     except JobStoreUnavailable:
         raise HTTPException(status_code=503, detail="Job store not initialised")
 
-    job = store.get(job_id)
+    job = await asyncio.to_thread(store.get, job_id)
     if job is None:
         outcome = _operation_outcome("error", "not-found", f"Job '{job_id}' not found")
         return Response(
@@ -289,7 +293,11 @@ async def export_status(request: Request, job_id: str) -> Response:
         download_url = f"{_base_url(request)}/v1/jobs/{job_id}/result"
         result_path = job.result_path or ""
 
-        resource_types = _collect_resource_types(result_path) if result_path else []
+        resource_types = (
+            await asyncio.to_thread(_collect_resource_types, result_path)
+            if result_path
+            else []
+        )
         if resource_types:
             output = [
                 BulkExportOutputFile(type=rt, url=download_url) for rt in resource_types
@@ -305,6 +313,14 @@ async def export_status(request: Request, job_id: str) -> Response:
         return Response(
             status_code=200,
             content=manifest.model_dump_json(),
+            media_type="application/json",
+        )
+
+    if job.status == JobStatus.CANCELLED:
+        outcome = _operation_outcome("information", "informational", "Export was cancelled")
+        return Response(
+            status_code=410,
+            content=_json_dumps(outcome),
             media_type="application/json",
         )
 
@@ -327,35 +343,43 @@ async def cancel_export(request: Request, job_id: str) -> Response:
     * HTTP 409 if the job has already completed (done or error).
     * HTTP 404 if the job is unknown.
     """
-    try:
+
+    def _cancel_sync() -> tuple[str, dict | None]:
+        """Run all store I/O in a single thread to avoid blocking the event loop."""
         store = _service._get_store()
+        job = store.get(job_id)
+        if job is None:
+            return "not_found", None
+        if job.status in (JobStatus.DONE, JobStatus.ERROR, JobStatus.CANCELLED):
+            return "conflict", {
+                "status": job.status.value,
+            }
+        job.status = JobStatus.CANCELLED
+        job.error = "Cancelled by client request"
+        store.update(job)
+        return "cancelled", None
+
+    try:
+        outcome_tag, extra = await asyncio.to_thread(_cancel_sync)
     except JobStoreUnavailable:
         raise HTTPException(status_code=503, detail="Job store not initialised")
 
-    job = store.get(job_id)
-    if job is None:
-        outcome = _operation_outcome("error", "not-found", f"Job '{job_id}' not found")
+    if outcome_tag == "not_found":
+        body = _operation_outcome("error", "not-found", f"Job '{job_id}' not found")
         return Response(
             status_code=404,
-            content=_json_dumps(outcome),
+            content=_json_dumps(body),
             media_type="application/json",
         )
-
-    if job.status in (JobStatus.DONE, JobStatus.ERROR):
-        outcome = _operation_outcome(
+    if outcome_tag == "conflict":
+        body = _operation_outcome(
             "error",
             "conflict",
-            f"Cannot cancel job '{job_id}' with status '{job.status.value}'",
+            f"Cannot cancel job '{job_id}' with status '{extra['status']}'",
         )
         return Response(
             status_code=409,
-            content=_json_dumps(outcome),
+            content=_json_dumps(body),
             media_type="application/json",
         )
-
-    # Mark the job as cancelled
-    job.status = JobStatus.ERROR
-    job.error = "Cancelled by client request"
-    store.update(job)
-
     return Response(status_code=202)

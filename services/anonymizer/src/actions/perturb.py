@@ -1,19 +1,23 @@
-from datetime import timedelta
-from utils.fhirpath import error, find_nodes, get_date
+from __future__ import annotations
+
+from datetime import date, timedelta
+from typing import Any, Union
+
 from utils.crypto import bounded_random
+from utils.fhirpath import error, find_nodes, get_date
 
 expected_params = ["min", "max"]
 date_format = "%Y-%m-%d"
 
 
-def _perturb(real_value, noise_range, is_date=False):
+def _perturb(real_value: Union[int, float, date], noise_range: list, is_date: bool = False) -> Any:
     noise = bounded_random(noise_range[0], noise_range[1])
     if not is_date:
         return real_value + noise
     return (real_value + timedelta(days=noise)).strftime(date_format)
 
 
-def _perturb_nodes(node, key, value, noise_range):
+def _perturb_nodes(node: Any, key: str, value: Any, noise_range: list) -> None:
     if isinstance(node, list):
         for item in node:
             _perturb_nodes(item, key, value, noise_range)
@@ -40,7 +44,7 @@ def _perturb_nodes(node, key, value, noise_range):
                 error(f"{type(node[key])} is not a number")
 
 
-def perturb_by_path(resource, el, params):  # ONLY FOR NUMBERS AND DATES
+def perturb_by_path(resource: dict, el: dict, params: dict) -> None:  # ONLY FOR NUMBERS AND DATES
     if not all(param in params for param in expected_params):
         error(f"Missing params (expected {expected_params})")
     ret = resource

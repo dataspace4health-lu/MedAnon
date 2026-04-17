@@ -136,3 +136,20 @@ class BulkImportJobRequest(BaseModel):
                         f"ndjson_path must be under the output directory ({allowed_dir})"
                     )
         return self
+
+
+class UploadToTargetRequest(BaseModel):
+    """Request body for POST /jobs/{job_id}/upload-to-target.
+
+    Keeping credentials in the request body (not query params) prevents
+    target_token from appearing in server access logs and proxy histories.
+    """
+
+    target_url: str | None = Field(
+        default=None,
+        description="Target FHIR server URL. Falls back to FHIR_TARGET_URL env var when not provided.",
+    )
+    target_token: str | None = Field(
+        default=None,
+        description="Bearer token for the target FHIR server. Falls back to FHIR_TARGET_TOKEN env var when not provided.",
+    )

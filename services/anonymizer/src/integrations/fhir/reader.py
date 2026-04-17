@@ -98,9 +98,11 @@ def fetch_resource_type(
         token: optional Bearer token (overrides FHIR_SOURCE_TOKEN env)
         timeout: HTTP timeout in seconds
         start_url: if given, resume pagination from this URL (cursor-based resume)
-        yield_cursors: if True, yield ``(resource, next_page_url)`` tuples instead
-                       of bare resource dicts.  Allows callers to checkpoint the
-                       current pagination cursor after each resource.
+        yield_cursors: if True, yield ``(resource, current_page_url, page_offset)`` tuples
+                       instead of bare resource dicts.  Allows callers to checkpoint the
+                       exact pagination position: on resume, call with
+                       ``start_url=current_page_url`` and skip the first ``page_offset``
+                       yielded resources.
     """
     if start_url:
         url = start_url
@@ -148,13 +150,18 @@ def fetch_resource_type(
                     next_url = _safe_next_url(raw, current_url, _pinned_origin)
                 break
 
+        page_offset = 0
         for entry in bundle.get("entry", []):
             resource = entry.get("resource")
             if resource:
                 if yield_cursors:
-                    yield resource, next_url
+                    # Yield (resource, current_page_url, offset_in_page) so callers
+                    # can resume from exactly this position: re-fetch current_page_url
+                    # and skip the first `offset_in_page` entries.
+                    yield resource, current_url, page_offset
                 else:
                     yield resource
+                page_offset += 1
 
         url = next_url
 
@@ -236,7 +243,15 @@ def fetch_everything(
 
 
 def fetch_all_resource_types(
-    base_url, resource_types, params=None, token=None, timeout=30
+    base_url,
+    resource_types,
+    params=None,
+    token=None,
+    timeout=30,
+    completed_rts=None,
+    current_rt=None,
+    current_rt_start_url=None,
+    yield_cursors=False,
 ):
     """Generator that yields (resource_type, resource_dict) for all given types.
 
@@ -244,24 +259,45 @@ def fetch_all_resource_types(
     concurrently — each type runs in its own thread — and results are merged
     via a thread-safe queue.  Order across types is non-deterministic but all
     resources for each type are yielded in pagination order.
+
+    B17 cursor-based resume (serial path only):
+      - ``completed_rts``: set of resource types already fully written; skipped.
+      - ``current_rt``: the resource type to resume mid-type.
+      - ``current_rt_start_url``: FHIR page URL to resume from for *current_rt*.
+      - ``yield_cursors``: if True, yields ``(rt, resource, page_url, page_offset)``
+        4-tuples instead of ``(rt, resource)`` pairs.
     """
-    if _FHIR_FETCH_PARALLEL <= 1 or len(resource_types) <= 1:
+    _done = set(completed_rts or [])
+    if _FHIR_FETCH_PARALLEL <= 1 or len(resource_types) <= 1 or yield_cursors:
         for rt in resource_types:
-            for resource in fetch_resource_type(
-                base_url, rt, params=params, token=token, timeout=timeout
+            if rt in _done:
+                continue
+            start_url = current_rt_start_url if rt == current_rt else None
+            for resource, page_url, page_offset in fetch_resource_type(
+                base_url, rt, params=params, token=token, timeout=timeout,
+                start_url=start_url, yield_cursors=True,
             ):
-                yield rt, resource
+                if yield_cursors:
+                    yield rt, resource, page_url, page_offset
+                else:
+                    yield rt, resource
         return
 
     _SENTINEL = object()
     result_q: _queue.Queue = _queue.Queue(maxsize=_FHIR_FETCH_PARALLEL * 200)
     error_q: _queue.Queue = _queue.Queue()
-    total = len(resource_types)
+
+    # Honour checkpoint state: skip completed types, resume current_rt from its
+    # last page URL.  The serial path already handles yield_cursors (gated above).
+    pending_rts = [rt for rt in resource_types if rt not in _done]
+    total = len(pending_rts)
 
     def _fetch_one(rt):
+        start_url = current_rt_start_url if rt == current_rt else None
         try:
             for resource in fetch_resource_type(
-                base_url, rt, params=params, token=token, timeout=timeout
+                base_url, rt, params=params, token=token, timeout=timeout,
+                start_url=start_url,
             ):
                 result_q.put((rt, resource))
         except Exception as exc:
@@ -270,7 +306,7 @@ def fetch_all_resource_types(
             result_q.put(_SENTINEL)
 
     pool = get_executor()
-    for rt in resource_types:
+    for rt in pending_rts:
         pool.submit(_fetch_one, rt)
     finished = 0
     while finished < total:

@@ -20,9 +20,11 @@ from utils.json_fast import loads as _json_loads, dumps as _json_dumps
 import os
 from pathlib import Path
 
+import queue
+import threading
+
 from medanon_core.domain import JobStatus
-from pipeline.jobs.checkpoint import load_checkpoint, save_checkpoint
-from pipeline.jobs.worker import _truncate_to_lines
+from pipeline.jobs.checkpoint import load_checkpoint, save_checkpoint, _truncate_to_lines
 from integrations.storage import store_result
 
 _log = logging.getLogger("medanon.staged_worker")
@@ -59,12 +61,17 @@ def _process_batch(
     settings,
     pseudonymizer,
     processing_mode: str,
+    seen_values=None,
 ) -> list[dict]:
     """Process a batch of staged rows via the unified batch pipeline.
 
     Parses PostgreSQL rows into resource dicts, then delegates to
     :func:`pipeline.processor.process_data_batch` for cross-resource
     gPAS batching.
+
+    When *seen_values* is provided (a :class:`~pipeline.processor._CappedSet`),
+    values already pseudonymized in prior batches are deduped from the gPAS
+    HTTP call — same Patient ID referenced 500 times = 1 gPAS lookup.
     """
     from pipeline.processor import process_data_batch
 
@@ -73,7 +80,14 @@ def _process_batch(
         rj = row["resource_json"]
         resources.append(rj if isinstance(rj, dict) else _json_loads(rj))
 
-    return process_data_batch(resources, settings, pseudonymizer, attach_manifest=True)
+    return process_data_batch(
+        resources,
+        settings,
+        pseudonymizer,
+        attach_manifest=True,
+        _exclude_cached=seen_values,
+        _seen_accumulator=seen_values,
+    )
 
 
 def _process_batch_with_fallback(
@@ -86,6 +100,7 @@ def _process_batch_with_fallback(
     job_id: str,
     label: str,
     summary=None,
+    seen_values=None,
 ) -> tuple[int, int]:
     """Process a staged batch with per-resource fallback on failure.
 
@@ -105,7 +120,7 @@ def _process_batch_with_fallback(
     failed = 0
 
     try:
-        results = _process_batch(batch_rows, settings, pseudonymizer, processing_mode)
+        results = _process_batch(batch_rows, settings, pseudonymizer, processing_mode, seen_values)
         done_ids: list[int] = []
         for row, result in zip(batch_rows, results):
             fh.write(_json_dumps(result) + "\n")
@@ -162,6 +177,100 @@ def _process_batch_with_fallback(
         fh.flush()
 
     return succeeded, failed
+
+
+def _run_staged_phase2(
+    job,
+    store,
+    staging,
+    settings,
+    pseudonymizer,
+    processing_mode: str,
+    output_path: str,
+    open_mode: str,
+    staged_count: int,
+    processed: int,
+    label: str,
+    collector,
+    staging_job_id: str | None = None,
+) -> int:
+    """Run Phase 2 of any staged executor: consume pending rows → NDJSON.
+
+    Provides (a) cross-batch gPAS dedup via a shared ``_CappedSet`` and
+    (b) a one-batch lookahead pipeline so PostgreSQL row fetches for batch N+1
+    overlap with gPAS HTTP calls + NLP inference for batch N.
+
+    ``staging_job_id`` selects which job's rows to read from the staging table.
+    Defaults to ``job.id``; pass ``source_job_id`` for reprocess jobs that read
+    another job's rows but write output under the current job's ID.
+
+    Returns the total number of resources processed (succeeded + failed).
+    """
+    from pipeline.processor import _CappedSet
+
+    _staging_id = staging_job_id or job.id
+    _seen_values = _CappedSet()
+
+    _SENTINEL = object()
+    _prefetch_q: queue.Queue = queue.Queue(maxsize=1)
+    _prefetch_exc: list = []
+
+    def _batch_prefetcher():
+        try:
+            while True:
+                batch = staging.get_pending_batch(_staging_id, _BATCH_SIZE)
+                _prefetch_q.put(batch if batch else _SENTINEL)
+                if not batch:
+                    break
+        except Exception as exc:
+            _prefetch_exc.append(exc)
+            _prefetch_q.put(_SENTINEL)
+
+    prefetch_thread = threading.Thread(target=_batch_prefetcher, daemon=True)
+    prefetch_thread.start()
+
+    try:
+        with open(output_path, open_mode, encoding="utf-8") as fh:
+            while True:
+                fresh = store.get(job.id)
+                if fresh and fresh.status == JobStatus.CANCELLED:
+                    _log.info("%s_cancelled job=%s at=%d", label, job.id, processed)
+                    return processed
+
+                batch_rows = _prefetch_q.get()
+                if batch_rows is _SENTINEL:
+                    break
+
+                ok, bad = _process_batch_with_fallback(
+                    batch_rows,
+                    settings,
+                    pseudonymizer,
+                    processing_mode,
+                    fh,
+                    staging,
+                    _staging_id,
+                    label,
+                    summary=collector,
+                    seen_values=_seen_values,
+                )
+                processed += ok + bad
+                save_checkpoint(
+                    store,
+                    job,
+                    {
+                        "phase": "processing",
+                        "staged_count": staged_count,
+                        "processed": processed,
+                    },
+                )
+    finally:
+        # Always join the prefetch thread so it doesn't continue running
+        # in the background after an exception in batch processing.
+        prefetch_thread.join(timeout=5.0)
+
+    if _prefetch_exc:
+        raise _prefetch_exc[0]
+    return processed
 
 
 # ---------------------------------------------------------------------------
@@ -250,7 +359,7 @@ def execute_bulk_export_staged(job, store, staging) -> None:
                 continue  # already fetched in a previous run
             start = fetch_cursor if ti == type_index else None
 
-            for resource, next_url in fetch_resource_type(
+            for resource, page_url, page_offset in fetch_resource_type(
                 server_url,
                 rt,
                 params=extra_params if extra_params else None,
@@ -259,17 +368,16 @@ def execute_bulk_export_staged(job, store, staging) -> None:
                 start_url=start,
                 yield_cursors=True,
             ):
-                fresh = store.get(job.id)
-                if fresh and fresh.status == JobStatus.CANCELLED:
-                    _log.info("staged_fetch_cancelled job=%s", job.id)
-                    return
-
                 buffer.append(resource)
                 if len(buffer) >= _BATCH_SIZE:
+                    fresh = store.get(job.id)
+                    if fresh and fresh.status == JobStatus.CANCELLED:
+                        _log.info("staged_fetch_cancelled job=%s", job.id)
+                        return
                     inserted = staging.stage_batch(job.id, buffer)
                     staged_count += inserted
                     buffer.clear()
-                    fetch_cursor = next_url
+                    fetch_cursor = page_url
                     save_checkpoint(
                         store,
                         job,
@@ -309,40 +417,11 @@ def execute_bulk_export_staged(job, store, staging) -> None:
             _truncate_to_lines(output_path, processed)
         _log.info("staged_process_start job=%s processed=%d", job.id, processed)
 
-        with open(output_path, open_mode, encoding="utf-8") as fh:
-            while True:
-                fresh = store.get(job.id)
-                if fresh and fresh.status == JobStatus.CANCELLED:
-                    _log.info(
-                        "staged_process_cancelled job=%s at=%d", job.id, processed
-                    )
-                    return
-
-                batch_rows = staging.get_pending_batch(job.id, _BATCH_SIZE)
-                if not batch_rows:
-                    break
-
-                ok, bad = _process_batch_with_fallback(
-                    batch_rows,
-                    settings,
-                    pseudonymizer,
-                    processing_mode,
-                    fh,
-                    staging,
-                    job.id,
-                    "staged_bulk_export",
-                    summary=collector,
-                )
-                processed += ok + bad
-                save_checkpoint(
-                    store,
-                    job,
-                    {
-                        "phase": "processing",
-                        "staged_count": staged_count,
-                        "processed": processed,
-                    },
-                )
+        processed = _run_staged_phase2(
+            job, store, staging, settings, pseudonymizer, processing_mode,
+            output_path, open_mode, staged_count, processed,
+            "staged_bulk_export", collector,
+        )
 
         job.result_path = store_result(job.id, output_path)
         save_checkpoint(
@@ -415,13 +494,12 @@ def execute_cohort_staged(job, store, staging) -> None:
             timeout=timeout,
         )
         for resource in gen:
-            fresh = store.get(job.id)
-            if fresh and fresh.status == JobStatus.CANCELLED:
-                _log.info("staged_cohort_fetch_cancelled job=%s", job.id)
-                return
-
             buffer.append(resource)
             if len(buffer) >= _BATCH_SIZE:
+                fresh = store.get(job.id)
+                if fresh and fresh.status == JobStatus.CANCELLED:
+                    _log.info("staged_cohort_fetch_cancelled job=%s", job.id)
+                    return
                 inserted = staging.stage_batch(job.id, buffer)
                 staged_count += inserted
                 buffer.clear()
@@ -460,42 +538,11 @@ def execute_cohort_staged(job, store, staging) -> None:
             _truncate_to_lines(output_path, processed)
         _log.info("staged_cohort_process_start job=%s processed=%d", job.id, processed)
 
-        with open(output_path, open_mode, encoding="utf-8") as fh:
-            while True:
-                fresh = store.get(job.id)
-                if fresh and fresh.status == JobStatus.CANCELLED:
-                    _log.info(
-                        "staged_cohort_process_cancelled job=%s at=%d",
-                        job.id,
-                        processed,
-                    )
-                    return
-
-                batch_rows = staging.get_pending_batch(job.id, _BATCH_SIZE)
-                if not batch_rows:
-                    break
-
-                ok, bad = _process_batch_with_fallback(
-                    batch_rows,
-                    settings,
-                    pseudonymizer,
-                    processing_mode,
-                    fh,
-                    staging,
-                    job.id,
-                    "staged_cohort",
-                    summary=collector,
-                )
-                processed += ok + bad
-                save_checkpoint(
-                    store,
-                    job,
-                    {
-                        "phase": "processing",
-                        "staged_count": staged_count,
-                        "processed": processed,
-                    },
-                )
+        processed = _run_staged_phase2(
+            job, store, staging, settings, pseudonymizer, processing_mode,
+            output_path, open_mode, staged_count, processed,
+            "staged_cohort", collector,
+        )
 
         job.result_path = store_result(job.id, output_path)
         save_checkpoint(
@@ -553,13 +600,12 @@ def execute_patient_export_staged(job, store, staging) -> None:
             start_url=fetch_cursor,
         )
         for resource in gen:
-            fresh = store.get(job.id)
-            if fresh and fresh.status == JobStatus.CANCELLED:
-                _log.info("staged_patient_fetch_cancelled job=%s", job.id)
-                return
-
             buffer.append(resource)
             if len(buffer) >= _BATCH_SIZE:
+                fresh = store.get(job.id)
+                if fresh and fresh.status == JobStatus.CANCELLED:
+                    _log.info("staged_patient_fetch_cancelled job=%s", job.id)
+                    return
                 inserted = staging.stage_batch(job.id, buffer)
                 staged_count += inserted
                 buffer.clear()
@@ -598,42 +644,11 @@ def execute_patient_export_staged(job, store, staging) -> None:
             _truncate_to_lines(output_path, processed)
         _log.info("staged_patient_process_start job=%s processed=%d", job.id, processed)
 
-        with open(output_path, open_mode, encoding="utf-8") as fh:
-            while True:
-                fresh = store.get(job.id)
-                if fresh and fresh.status == JobStatus.CANCELLED:
-                    _log.info(
-                        "staged_patient_process_cancelled job=%s at=%d",
-                        job.id,
-                        processed,
-                    )
-                    return
-
-                batch_rows = staging.get_pending_batch(job.id, _BATCH_SIZE)
-                if not batch_rows:
-                    break
-
-                ok, bad = _process_batch_with_fallback(
-                    batch_rows,
-                    settings,
-                    pseudonymizer,
-                    processing_mode,
-                    fh,
-                    staging,
-                    job.id,
-                    "staged_patient",
-                    summary=collector,
-                )
-                processed += ok + bad
-                save_checkpoint(
-                    store,
-                    job,
-                    {
-                        "phase": "processing",
-                        "staged_count": staged_count,
-                        "processed": processed,
-                    },
-                )
+        processed = _run_staged_phase2(
+            job, store, staging, settings, pseudonymizer, processing_mode,
+            output_path, open_mode, staged_count, processed,
+            "staged_patient", collector,
+        )
 
         job.result_path = store_result(job.id, output_path)
         save_checkpoint(
@@ -692,13 +707,12 @@ def execute_batch_patient_export_staged(job, store, staging) -> None:
             timeout=timeout,
         )
         for resource in gen:
-            fresh = store.get(job.id)
-            if fresh and fresh.status == JobStatus.CANCELLED:
-                _log.info("staged_batch_patient_fetch_cancelled job=%s", job.id)
-                return
-
             buffer.append(resource)
             if len(buffer) >= _BATCH_SIZE:
+                fresh = store.get(job.id)
+                if fresh and fresh.status == JobStatus.CANCELLED:
+                    _log.info("staged_batch_patient_fetch_cancelled job=%s", job.id)
+                    return
                 inserted = staging.stage_batch(job.id, buffer)
                 staged_count += inserted
                 buffer.clear()
@@ -741,42 +755,11 @@ def execute_batch_patient_export_staged(job, store, staging) -> None:
             "staged_batch_patient_process_start job=%s processed=%d", job.id, processed
         )
 
-        with open(output_path, open_mode, encoding="utf-8") as fh:
-            while True:
-                fresh = store.get(job.id)
-                if fresh and fresh.status == JobStatus.CANCELLED:
-                    _log.info(
-                        "staged_batch_patient_process_cancelled job=%s at=%d",
-                        job.id,
-                        processed,
-                    )
-                    return
-
-                batch_rows = staging.get_pending_batch(job.id, _BATCH_SIZE)
-                if not batch_rows:
-                    break
-
-                ok, bad = _process_batch_with_fallback(
-                    batch_rows,
-                    settings,
-                    pseudonymizer,
-                    processing_mode,
-                    fh,
-                    staging,
-                    job.id,
-                    "staged_batch_patient",
-                    summary=collector,
-                )
-                processed += ok + bad
-                save_checkpoint(
-                    store,
-                    job,
-                    {
-                        "phase": "processing",
-                        "staged_count": staged_count,
-                        "processed": processed,
-                    },
-                )
+        processed = _run_staged_phase2(
+            job, store, staging, settings, pseudonymizer, processing_mode,
+            output_path, open_mode, staged_count, processed,
+            "staged_batch_patient", collector,
+        )
 
         job.result_path = store_result(job.id, output_path)
         save_checkpoint(
@@ -836,30 +819,12 @@ def execute_reprocess_staged(job, store, staging) -> None:
     if processed > 0:
         _truncate_to_lines(output_path, processed)
 
-    with open(output_path, open_mode, encoding="utf-8") as fh:
-        while True:
-            fresh = store.get(job.id)
-            if fresh and fresh.status == JobStatus.CANCELLED:
-                _log.info("staged_reprocess_cancelled job=%s at=%d", job.id, processed)
-                return
-
-            batch_rows = staging.get_pending_batch(source_job_id, _BATCH_SIZE)
-            if not batch_rows:
-                break
-
-            ok, bad = _process_batch_with_fallback(
-                batch_rows,
-                settings,
-                pseudonymizer,
-                processing_mode,
-                fh,
-                staging,
-                source_job_id,
-                "staged_reprocess",
-                summary=collector,
-            )
-            processed += ok + bad
-            save_checkpoint(store, job, {"phase": "processing", "processed": processed})
+    processed = _run_staged_phase2(
+        job, store, staging, settings, pseudonymizer, processing_mode,
+        output_path, open_mode, 0, processed,
+        "staged_reprocess", collector,
+        staging_job_id=source_job_id,
+    )
 
     job.result_path = store_result(job.id, output_path)
     save_checkpoint(

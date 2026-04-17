@@ -67,8 +67,20 @@ class JobSummaryCollector:
         except Exception:
             _log.debug("scoring_init_skipped", exc_info=True)
 
-    def record_resource(self, resource: dict) -> None:
-        """Record a processed resource (success or error marker)."""
+    def record_resource(
+        self,
+        resource: dict,
+        manifest_entries: "list[dict] | None" = None,
+    ) -> None:
+        """Record a processed resource (success or error marker).
+
+        Args:
+            resource:         The processed FHIR resource dict.
+            manifest_entries: Pre-parsed manifest entries from the processor.
+                              When provided, skips the JSON re-parse from
+                              ``meta.tag`` — eliminates one ``json.loads()``
+                              call per resource in the bulk-export hot loop.
+        """
         if not isinstance(resource, dict):
             return
         if "error" in resource:
@@ -78,10 +90,12 @@ class JobSummaryCollector:
             return
         rtype = resource.get("resourceType", "Unknown")
         self._type_counts[rtype] += 1
-        # Score the resource
+        # Score the resource — use pre-parsed entries when the caller supplies
+        # them to avoid re-parsing the JSON-encoded manifest from meta.tag.
         if self._score_collector is not None:
             try:
-                manifest_entries = _extract_manifest_entries(resource)
+                if manifest_entries is None:
+                    manifest_entries = _extract_manifest_entries(resource)
                 self._score_collector.record_resource(
                     original=None,
                     deidentified=resource,

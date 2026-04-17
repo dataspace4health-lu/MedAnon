@@ -48,3 +48,22 @@ def save_checkpoint(store, job, data: dict) -> None:
 def load_checkpoint(job) -> dict | None:
     """Return the persisted checkpoint dict, or None if no checkpoint exists."""
     return job.checkpoint_data
+
+
+def _truncate_to_lines(path: str, line_count: int) -> None:
+    """Truncate *path* to exactly *line_count* newline-terminated lines.
+
+    On resume, the file may contain more lines than the checkpoint recorded
+    (crash after write but before checkpoint update).  Truncating prevents
+    duplicate resources in the output.
+    """
+    import os
+
+    if line_count <= 0 or not os.path.exists(path):
+        return
+    with open(path, "r+b") as f:
+        for _ in range(line_count):
+            line = f.readline()
+            if not line:
+                return  # file has fewer lines than expected — nothing to truncate
+        f.truncate()

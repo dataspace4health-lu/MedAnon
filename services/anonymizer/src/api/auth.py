@@ -80,6 +80,7 @@ ENDPOINT_ROLES: dict[str, str] = {
 # Prefix-based role mapping for parameterized paths (e.g. /v1/jobs/{job_id}).
 # Checked when ENDPOINT_ROLES produces no exact match.
 ENDPOINT_ROLE_PREFIXES: dict[str, str] = {
+    "/v1/admin/": "admin",
     "/v1/jobs/bulk-export": "admin",  # exact — listed first for priority
     "/v1/jobs/bulk-import": "admin",  # uploads to target FHIR server — requires admin
     "/v1/jobs/batch-patient-export": "analyst",

@@ -31,10 +31,16 @@ Supported generalization strategies (set via ``params['strategy']``):
                     otherwise keep.  Useful for gender/ethnicity.
 """
 
+from __future__ import annotations
+
+import logging
 import re
 from datetime import date, datetime
+from typing import Any
 
 from utils.fhirpath import find_nodes
+
+_log = logging.getLogger("medanon.generalize")
 
 
 # -- core generalization functions -------------------------------------------
@@ -63,6 +69,17 @@ def _generalize_date_year_month(value):
     s = str(value).strip()
     m = re.match(r"(\d{4}-\d{2})", s)
     return m.group(1) if m else s
+
+
+def _generalize_date_decade(value):
+    """Truncate a date/dateTime to the decade (e.g. '1991-03-15' → '199x').
+
+    Collapses all years in the same decade into one bucket, substantially
+    improving k-anonymity for birth dates while preserving rough age cohort.
+    """
+    s = str(value).strip()
+    m = re.match(r"(\d{3})", s)
+    return f"{m.group(1)}x" if m else s
 
 
 def _generalize_age_bracket(value, bracket_size=10):
@@ -107,9 +124,23 @@ def _generalize_zip_prefix(value, prefix_len=3):
     return s[:prefix_len] if len(s) > prefix_len else s
 
 
-def _generalize_category(value, mapping):
-    """Map a value to a broader category via a dict."""
-    return mapping.get(str(value), str(value))
+def _generalize_category(value, mapping, unmapped="[REDACTED]"):
+    """Map a value to a broader category via a dict.
+
+    Values absent from *mapping* use *unmapped* as a safe fallback
+    (default: ``"[REDACTED]"``).  Without this, an unmapped value would pass
+    through unchanged and leak PHI silently.  Set ``params['unmapped']`` in
+    the rule config to override the fallback label.
+    """
+    result = mapping.get(str(value))
+    if result is None:
+        _log.warning(
+            "category_unmapped resource_field has a value not in the mapping — "
+            "replacing with fallback %r",
+            unmapped,
+        )
+        return unmapped
+    return result
 
 
 # -- strategy dispatcher -----------------------------------------------------
@@ -118,10 +149,11 @@ _STRATEGIES = {
     "date_year": lambda v, p: _generalize_date_year(v),
     "date_year_month": lambda v, p: _generalize_date_year_month(v),
     "date_year_instant": lambda v, p: _generalize_date_year_instant(v),
+    "date_decade": lambda v, p: _generalize_date_decade(v),
     "age_bracket": lambda v, p: _generalize_age_bracket(v, p.get("bracket_size", 10)),
     "number_round": lambda v, p: _generalize_number_round(v, p.get("precision", 10)),
-    "zip_prefix": lambda v, p: _generalize_zip_prefix(v, p.get("prefix_len", 3)),
-    "category": lambda v, p: _generalize_category(v, p.get("mapping", {})),
+    "zip_prefix": lambda v, p: _generalize_zip_prefix(v, p.get("prefix_length", p.get("prefix_len", 3))),
+    "category": lambda v, p: _generalize_category(v, p.get("mapping", {}), p.get("unmapped", "[REDACTED]")),
 }
 
 
@@ -140,7 +172,7 @@ def _generalize_value(value, params):
 # -- node walker (same pattern as other SPE-FHIR-BlackBox actions) ------------------
 
 
-def _generalize_nodes(node, key, value, params):
+def _generalize_nodes(node: Any, key: str, value: Any, params: dict) -> None:
     if isinstance(node, list):
         for item in node:
             _generalize_nodes(item, key, value, params)
@@ -157,7 +189,7 @@ def _generalize_nodes(node, key, value, params):
 # -- public action handler ---------------------------------------------------
 
 
-def generalize_by_path(resource, el, params):
+def generalize_by_path(resource: dict, el: dict, params: dict) -> None:
     """Generalize a quasi-identifier matched by FHIRPath.
 
     Required params:
@@ -167,8 +199,11 @@ def generalize_by_path(resource, el, params):
     Optional params (strategy-dependent):
         bracket_size: age bracket width (default 10)
         precision: rounding precision for numbers (default 10)
-        prefix_len: number of characters to keep for zip (default 3)
+        prefix_length: number of characters to keep for zip (default 3;
+                       also accepted as prefix_len for backward compatibility)
         mapping: dict for category strategy
+        unmapped: fallback label for category values not in the mapping
+                  (default: "[REDACTED]")
     """
     path = el["path"].split(".")[1:]
     if len(path) == 0:

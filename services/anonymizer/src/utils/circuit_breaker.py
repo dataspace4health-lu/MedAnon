@@ -33,15 +33,18 @@ class CircuitBreaker:
         recovery_timeout_sec: float = 30,
         window_sec: float = 60,
         half_open_probes: int = 3,
+        timeout_threshold: int = 2,
     ) -> None:
         self._name = name
         self._lock = threading.Lock()
         self._state = self.CLOSED
         self._failure_count = 0
+        self._timeout_count = 0
         self._last_failure_time = 0.0
         self._probes_in_flight = 0
         self._successful_probes = 0
         self._threshold = failure_threshold
+        self._timeout_threshold = timeout_threshold
         self._recovery_timeout = recovery_timeout_sec
         self._window = window_sec
         self._window_start = 0.0
@@ -74,7 +77,7 @@ class CircuitBreaker:
         """
         with self._lock:
             if self._state == self.OPEN:
-                if time.time() - self._last_failure_time >= self._recovery_timeout:
+                if time.monotonic() - self._last_failure_time >= self._recovery_timeout:
                     self._state = self.HALF_OPEN
                     self._probes_in_flight = 0
                     self._successful_probes = 0
@@ -106,18 +109,21 @@ class CircuitBreaker:
                         self._half_open_probes,
                     )
                     self._failure_count = 0
+                    self._timeout_count = 0
                     self._state = self.CLOSED
             elif self._state == self.CLOSED:
                 # Decrement rather than reset — a single success should not
                 # erase multiple prior failures within the sliding window.
                 self._failure_count = max(0, self._failure_count - 1)
+                self._timeout_count = max(0, self._timeout_count - 1)
 
     def record_failure(self) -> None:
         with self._lock:
-            now = time.time()
+            now = time.monotonic()
             self._probes_in_flight = max(0, self._probes_in_flight - 1)
             if now - self._window_start > self._window:
                 self._failure_count = 0
+                self._timeout_count = 0
                 self._window_start = now
             self._failure_count += 1
             self._last_failure_time = now
@@ -133,12 +139,47 @@ class CircuitBreaker:
                     self._total_trips,
                 )
 
+    def record_timeout(self) -> None:
+        """Record a timeout failure — trips the CB faster than generic failures.
+
+        Timeouts are a strong signal that the upstream is overloaded or
+        unreachable. The timeout_threshold (default 2) is much lower than
+        the generic failure_threshold (default 5).
+        """
+        with self._lock:
+            now = time.monotonic()
+            self._probes_in_flight = max(0, self._probes_in_flight - 1)
+            if now - self._window_start > self._window:
+                self._failure_count = 0
+                self._timeout_count = 0
+                self._window_start = now
+            self._failure_count += 1
+            self._timeout_count += 1
+            self._last_failure_time = now
+            should_trip = (
+                self._state == self.HALF_OPEN
+                or self._failure_count >= self._threshold
+                or self._timeout_count >= self._timeout_threshold
+            )
+            if should_trip:
+                if self._state != self.OPEN:
+                    self._total_trips += 1
+                self._state = self.OPEN
+                _log.warning(
+                    "circuit_breaker[%s] state=open timeouts=%d timeout_threshold=%d total_trips=%d",
+                    self._name,
+                    self._timeout_count,
+                    self._timeout_threshold,
+                    self._total_trips,
+                )
+
     def reset(self) -> None:
         """Manually reset to CLOSED state (operational recovery)."""
         with self._lock:
             prev = self._state
             self._state = self.CLOSED
             self._failure_count = 0
+            self._timeout_count = 0
             self._probes_in_flight = 0
             self._successful_probes = 0
             if prev != self.CLOSED:

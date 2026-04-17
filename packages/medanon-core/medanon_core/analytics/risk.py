@@ -26,9 +26,49 @@ from __future__ import annotations
 
 import datetime
 import json
+import re
 from datetime import timezone
 from collections import Counter, defaultdict
 from typing import Any
+
+# ---------------------------------------------------------------------------
+# De-identification sentinel detection
+# ---------------------------------------------------------------------------
+
+_QI_SUPPRESSED_VALUES: frozenset[str] = frozenset({
+    "",
+    "[redacted]",
+    "redacted",
+    "unknown",
+    "other",
+    "unk",
+    "[removed]",
+    "removed",
+    "[masked]",
+    "masked",
+})
+
+_DECADE_DATE_RE = re.compile(r"^\d{3}x$")
+
+
+def _is_qi_suppressed(value: str, field: str = "") -> bool:
+    """Return True if *value* looks like a de-identification sentinel.
+
+    Checks the lowercase value against known sentinel strings, plus
+    field-specific patterns:
+      - birth_year: decade-generalized dates like ``"194x"``
+      - zip_prefix: truncated sentinel markers starting with ``[``
+    """
+    if not value:
+        return True
+    lower = value.strip().lower()
+    if lower in _QI_SUPPRESSED_VALUES:
+        return True
+    if field == "birth_year" and _DECADE_DATE_RE.match(value):
+        return True
+    if field == "zip_prefix" and value.startswith("["):
+        return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -41,6 +81,11 @@ def _extract_patient_qi(resource: dict) -> tuple[str, str, str]:
     Missing / redacted fields produce empty-string sentinels so they still
     participate in grouping (a group of patients all missing gender is a
     valid equivalence class).
+
+    Values that are clearly de-identification outputs (e.g. ``"unknown"``
+    gender, decade dates like ``"194x"``, ``"[REDACTED]"`` postal codes)
+    are normalised to empty strings so all properly suppressed patients
+    collapse into a single equivalence class.
     """
     gender = (resource.get("gender") or "").strip().lower()
 
@@ -51,7 +96,16 @@ def _extract_patient_qi(resource: dict) -> tuple[str, str, str]:
     postal = ""
     if addresses and isinstance(addresses, list):
         postal = str(addresses[0].get("postalCode") or "")
+
+    postal_is_suppressed = _is_qi_suppressed(postal)
     zip_prefix = postal[:3]
+
+    if _is_qi_suppressed(gender, "gender"):
+        gender = ""
+    if _is_qi_suppressed(birth_year, "birth_year"):
+        birth_year = ""
+    if postal_is_suppressed or _is_qi_suppressed(zip_prefix, "zip_prefix"):
+        zip_prefix = ""
 
     return (gender, birth_year, zip_prefix)
 

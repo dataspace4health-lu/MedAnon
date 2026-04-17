@@ -11,16 +11,20 @@ The ``dispatch_subscriptions`` function is in ``dispatcher.py``.
 from pipeline.subscriptions.store import SqliteSubscriptionStore  # noqa: F401
 from typing import Optional
 
-_sub_store: Optional[SqliteSubscriptionStore] = None
+_sub_store = None
 
 
-def init_subscription_store(db_path: str | None = None) -> SqliteSubscriptionStore:
-    """Initialise the module-level subscription store singleton and return it."""
+def init_subscription_store(db_path: str | None = None, store=None):
+    """Initialise the module-level subscription store singleton.
+
+    If *store* is provided (e.g. a PostgresSubscriptionStore), it is used
+    directly.  Otherwise a SqliteSubscriptionStore is created at *db_path*.
+    """
     global _sub_store
-    _sub_store = SqliteSubscriptionStore(db_path)
+    _sub_store = store if store is not None else SqliteSubscriptionStore(db_path)
     return _sub_store
 
 
-def get_subscription_store() -> Optional[SqliteSubscriptionStore]:
+def get_subscription_store():
     """Return the current module-level store, or None if not yet initialised."""
     return _sub_store
