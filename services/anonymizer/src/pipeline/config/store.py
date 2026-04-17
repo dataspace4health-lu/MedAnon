@@ -176,8 +176,12 @@ class ConfigStore:
 _config_store: ConfigStore | None = None
 
 
-def init_config_store(db_path: str | None = None) -> ConfigStore:
-    """Initialise and return the module-level ConfigStore singleton."""
+def init_config_store(db_path: str | None = None, store=None):
+    """Initialise and return the module-level config store singleton.
+
+    If *store* is provided (e.g. a PostgresConfigStore), it is used directly.
+    Otherwise a SQLite-backed ConfigStore is created at *db_path*.
+    """
     global _config_store
-    _config_store = ConfigStore(db_path)
+    _config_store = store if store is not None else ConfigStore(db_path)
     return _config_store

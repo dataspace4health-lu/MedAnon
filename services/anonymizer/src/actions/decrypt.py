@@ -1,13 +1,17 @@
-from utils.fhirpath import error, find_nodes
-from utils.crypto import rsa_decrypt
+from __future__ import annotations
+
 import json
+from typing import Any
+
+from utils.crypto import rsa_decrypt
+from utils.fhirpath import error, find_nodes
 
 supported_enc_schemes = {"RSA": rsa_decrypt}
 expected_params = {"RSA": ["private_key"]}
 encoding = "utf-8"
 
 
-def _decrypt(ciphertext, enc_params):
+def _decrypt(ciphertext: bytes, enc_params: dict) -> Any:
     plaintext = supported_enc_schemes[enc_params["algorithm"]](ciphertext, enc_params)
     decoded = plaintext.decode(encoding)
     try:
@@ -16,7 +20,7 @@ def _decrypt(ciphertext, enc_params):
         return decoded
 
 
-def _decrypt_nodes(node, key, value, enc_params):
+def _decrypt_nodes(node: Any, key: str, value: Any, enc_params: dict) -> None:
     if isinstance(node, list):
         for item in node:
             _decrypt_nodes(item, key, value, enc_params)
@@ -37,7 +41,7 @@ def _decrypt_nodes(node, key, value, enc_params):
             node[key] = _decrypt(bytes.fromhex(node_str), enc_params)
 
 
-def decrypt_by_path(resource, el, params):
+def decrypt_by_path(resource: dict, el: dict, params: dict) -> None:
     algorithm = params.get("algorithm", "RSA")
     if algorithm not in supported_enc_schemes:
         error(

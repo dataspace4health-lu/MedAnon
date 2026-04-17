@@ -5,8 +5,6 @@ pure graph-traversal utility with no file system or process-exit side-effects.
 """
 
 import json
-import os
-import sys
 
 from rich import print
 
@@ -20,9 +18,7 @@ def read_resource_from_file(filename: str):
             return json_data
     except IOError as e:
         print(f":sad_but_relieved_face: File {filename} does not exist.")
-        print(e)
-        sys.exit(os.EX_OSFILE)
+        raise
     except ValueError as e:
         print(":sad_but_relieved_face: Cannot parse json data.")
-        print(e)
-        sys.exit(os.EX_OSFILE)
+        raise

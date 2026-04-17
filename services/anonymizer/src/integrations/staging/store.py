@@ -54,10 +54,16 @@ class StagingStore:
     threads (asyncio.to_thread workers).
     """
 
-    def __init__(self, db_url: str, retention_days: int = 30) -> None:
+    def __init__(
+        self,
+        db_url: str,
+        retention_days: int = 30,
+        pool: ThreadedConnectionPool | None = None,
+    ) -> None:
         self._db_url = db_url
         self._retention_days = retention_days
-        self._pool: ThreadedConnectionPool | None = None
+        self._pool: ThreadedConnectionPool | None = pool
+        self._owns_pool = pool is None  # only close pool if we created it
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -67,6 +73,7 @@ class StagingStore:
         """Create schema + table + indexes if they don't already exist."""
         if self._pool is None:
             self._pool = ThreadedConnectionPool(2, 10, self._db_url)
+            self._owns_pool = True
         conn = self._pool.getconn()
         try:
             with conn:
@@ -346,8 +353,8 @@ class StagingStore:
             self._put_conn(conn)
 
     def close(self) -> None:
-        """Close the connection pool."""
-        if self._pool:
+        """Close the connection pool if we own it."""
+        if self._pool and self._owns_pool:
             try:
                 self._pool.closeall()
             except Exception:

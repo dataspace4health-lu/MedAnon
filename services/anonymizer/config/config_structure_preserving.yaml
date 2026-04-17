@@ -32,6 +32,8 @@ general:
   appname: SPE-FHIR-BlackBox
   rewrite_references: true
   rewrite_text_ids: true
+  # domain_map omitted — inherits _DEFAULT_DOMAIN_MAP from loader.py
+  # Add domain_map: here to override specific resource types for this profile.
 
 rules:
 
@@ -124,6 +126,11 @@ rules:
   match: Patient.address.text
   action: substitute
   params: *redacted
+
+# Geolocation (lat/lon) nested inside Patient.address.extension — re-identification PHI
+- name: redact patient address geolocation
+  match: Patient.address.extension
+  action: redact
 
 - name: pseudonymize patient identifier value
   match: Patient.identifier.value
@@ -699,13 +706,6 @@ rules:
     html: true
     threshold: 0.4
 
-- name: scrub note text
-  match: "*.note.text"
-  action: scrub_text
-  params:
-    mode: text
-    patterns: all
-
 - name: nlp scrub note text
   match: "*.note.text"
   action: nlp_scrub
@@ -713,12 +713,11 @@ rules:
     mode: tokenize
     threshold: 0.4
 
-- name: scrub comment fields
+- name: nlp detect act comment fields
   match: "*.comment"
-  action: scrub_text
+  action: nlp_detect_act
   params:
-    mode: text
-    patterns: all
+    threshold: 0.4
 
 - name: nlp scrub code text
   match: "*.code.text"
@@ -748,26 +747,48 @@ rules:
     mode: tokenize
     threshold: 0.4
 
-- name: scrub dosage text
+# Street address pattern — fires on any valueString containing a recognizable
+# address regardless of LOINC code or resource structure (covers PRAPARE 56799-0,
+# custom SDOH panels, and any other free-text fields with address content).
+# Two rules: one for top-level valueString, one for component.valueString
+# (e.g. Observation.component in PRAPARE / SDOH panels).
+- name: scrub street addresses in valueString
+  match: "*.valueString"
+  action: scrub_text
+  params:
+    mode: text
+    patterns: street_address
+
+- name: scrub street addresses in component valueString
+  match: "*.component.valueString"
+  action: scrub_text
+  params:
+    mode: text
+    patterns: street_address
+
+- name: nlp detect act valueString
+  match: "*.valueString"
+  action: nlp_detect_act
+  params:
+    threshold: 0.4
+
+- name: nlp detect act dosage text
   match: "*.dosage.text"
-  action: scrub_text
+  action: nlp_detect_act
   params:
-    mode: text
-    patterns: all
+    threshold: 0.4
 
-- name: scrub dosage patient instruction
+- name: nlp detect act dosage patient instruction
   match: "*.dosage.patientInstruction"
-  action: scrub_text
+  action: nlp_detect_act
   params:
-    mode: text
-    patterns: all
+    threshold: 0.4
 
-- name: scrub reaction description
+- name: nlp detect act reaction description
   match: "*.reaction.description"
-  action: scrub_text
+  action: nlp_detect_act
   params:
-    mode: text
-    patterns: all
+    threshold: 0.4
 
 # ==========================================================
 # 13. COMMUNICATION / MESSAGES
@@ -783,12 +804,11 @@ rules:
   action: substitute
   params: *redacted
 
-- name: scrub communication payload
+- name: nlp detect act communication payload
   match: Communication.payload.contentString
-  action: scrub_text
+  action: nlp_detect_act
   params:
-    mode: text
-    patterns: all
+    threshold: 0.4
 
 # ==========================================================
 # 14. TASK / REQUEST WORKFLOW
@@ -870,6 +890,15 @@ rules:
 #     These fire last, catching any resource type not explicitly
 #     listed above (e.g. Coverage, Claim, ExplanationOfBenefit).
 # ==========================================================
+
+# Identifier type labels disclose PHI categories even when values are pseudonymized
+- name: redact identifier type text labels
+  match: "*.identifier.type.text"
+  action: redact
+
+- name: redact identifier type coding display labels
+  match: "*.identifier.type.coding.display"
+  action: redact
 
 - name: pseudonymize all identifier values
   match: "*.identifier.value"

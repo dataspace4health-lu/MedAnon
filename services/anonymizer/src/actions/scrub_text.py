@@ -1,41 +1,26 @@
-"""Tokenize PHI from free-text and HTML narrative fields.
+"""Name scrubbing and HTML narrative redaction for FHIR text fields.
 
-This action applies configurable regex-based patterns to detect and
-tokenize Protected Health Information (PHI) in unstructured text fields
-such as ``*.note.text``, annotations, and FHIR XHTML narratives
-(``*.text.div``).
+PII detection via regex patterns has been consolidated into Presidio custom
+recognizers (see ``integrations/nlp/detector.py``).  This module now provides:
+
+    1. **Name extraction and scrubbing** — extract patient/practitioner names
+       from ``resource.name`` and redact literal occurrences in text fields.
+
+    2. **HTML narrative modes** — ``html`` (replace entire div with safe
+       placeholder) and ``html_tokenize`` (scrub text nodes, preserve markup).
+
+    3. **Token state management** — deterministic ``[[TYPE_N]]`` surrogate
+       tokens with configurable scope (resource, bundle, global_run).
 
 Supported ``mode`` values (set via ``params['mode']``):
 
-    text  (default) — tokenize plain-text or Markdown fields in-place by
-                                        replacing matched PHI spans with deterministic tokens.
+    text  (default) — scrub names in plain-text fields in-place.
 
-    html_tokenize   — tokenize PHI in XHTML text nodes while preserving
-                                        markup and attributes.
+    html_tokenize   — scrub names in XHTML text nodes while preserving
+                      markup and attributes.
 
     html            — replace the entire XHTML field with a single safe
-                    FHIR-compliant ``<div>`` placeholder.  This is the
-                    recommended mode for ``*.text.div`` fields because FHIR
-                    narratives routinely contain patient names, dates, and
-                    addresses inline.
-
-Supported pattern keys (``params['patterns']``, default ``'all'``):
-
-  date_iso     — ISO dates / dateTimes:  2023-01-15,  1991-01-04T00:00:00
-  date_us      — US short dates:         01/15/2023
-  date_written — Written dates:          January 15, 2023
-  phone        — US phone numbers:       (555) 867-5309,  +1 555 867 5309
-  ssn          — US SSN:                 123-45-6789
-  email        — e-mail addresses
-  ip           — IPv4 addresses
-  mrn          — MRN markers:            MRN: 12345,  MR#67890
-    national_id  — national/passport ID markers
-    account      — account/insurance/member/policy number markers
-    nationality  — sensitive NRP labels (e.g. "nationality: German")
-    religion     — sensitive NRP labels (e.g. "religion: Muslim")
-    political    — sensitive NRP labels (e.g. "political opinion: ...")
-  url          — Bare HTTP/HTTPS URLs
-  zipcode      — US ZIP codes:           12345,  12345-6789
+                    FHIR-compliant ``<div>`` placeholder.
 
 Optional params:
 
@@ -43,179 +28,94 @@ Optional params:
                   literal match, e.g. ``["Smith", "John"]``).
   extract_names — if ``true``, automatically extract names from the
                   resource's own ``name`` field (FHIR Patient / Practitioner).
-  placeholders  — dict overriding default replacement tokens, e.g.
-                  ``{"date_iso": "[DATE]", "phone": "[PHONE_NUM]"}``.
-    mapping_scope — ``resource`` (default), ``bundle`` or ``global_run``
-                                    controls token consistency scope.
+  placeholders  — dict overriding default replacement tokens.
+  mapping_scope — ``resource`` (default), ``bundle`` or ``global_run``
+                  controls token consistency scope.
 """
+
+from __future__ import annotations
 
 import re
 import threading
 from copy import deepcopy
+from typing import Any
 
 from utils.fhirpath import find_nodes
 
 # ---------------------------------------------------------------------------
-# Regex pattern catalogue
+# Regex patterns — most PII detection is consolidated into Presidio custom
+# recognizers in integrations/nlp/detector.py.  Patterns kept here are used
+# by scrub_text_by_path() when the Presidio stack is unavailable or not
+# configured (e.g. plain scrub_text rules without an NLP service).
+#
+# street_address — combined US + EU + PO Box pattern derived from the Presidio
+#   custom recognizers in detector.py.  Kept here so that scrub_text rules
+#   with ``patterns: street_address`` fire on any valueString / free-text
+#   field regardless of LOINC code or FHIR resource structure.
 # ---------------------------------------------------------------------------
 
-_PATTERNS = {
-    # ISO date / dateTime: 2023-01-15, 1991-01-04T00:00:00Z
-    "date_iso": (
-        re.compile(
-            r"\b\d{4}-\d{2}-\d{2}"
-            r"(?:T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)?\b"
-        ),
-        "[DATE]",
-    ),
-    # US short date: 01/15/2023, 1/5/23
-    "date_us": (
-        re.compile(r"\b\d{1,2}/\d{1,2}/\d{2,4}\b"),
-        "[DATE]",
-    ),
-    # Written date: January 15, 2023
-    "date_written": (
-        re.compile(
-            r"\b(?:January|February|March|April|May|June|July|August|September|"
-            r"October|November|December)\s+\d{1,2},?\s+\d{4}\b",
-            re.IGNORECASE,
-        ),
-        "[DATE]",
-    ),
-    # US phone: (555) 867-5309, 555-867-5309, +1 555 867 5309
-    # ReDoS note: use a plain character class [.\- ] instead of \s to avoid
-    # nested quantifier paths that cause catastrophic backtracking.
-    "phone": (
-        re.compile(
-            r"(?<!\d)"
-            r"(?:\+?1[.\- ]?)?"
-            r"(?:\(\d{3}\)|\d{3})"
-            r"[.\- ]?\d{3}[.\- ]?\d{4}"
-            r"(?!\d)"
-        ),
-        "[PHONE]",
-    ),
-    # US Social Security Number: 123-45-6789
-    "ssn": (
-        re.compile(r"\b(?!000|666|9\d{2})\d{3}-(?!00)\d{2}-(?!0000)\d{4}\b"),
-        "[SSN]",
-    ),
-    # E-mail address
-    "email": (
-        re.compile(r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b"),
-        "[EMAIL]",
-    ),
-    # IPv4 address (avoid matching version strings like "1.2.3")
-    "ip": (
-        re.compile(
-            r"\b(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}"
-            r"(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\b"
-        ),
-        "[IP]",
-    ),
-    # IPv6 addresses: full, compressed (::), and IPv4-mapped (::ffff:x.x.x.x)
-    "ipv6": (
-        re.compile(
-            r"(?<![:\w])"
-            r"(?:"
-            # Full 8-group: 2001:0db8:85a3:0000:0000:8a2e:0370:7334
-            r"(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}"
-            r"|"
-            # Compressed with :: anywhere
-            r"(?:[0-9a-fA-F]{1,4}:){1,7}:"
-            r"|"
-            r"(?:[0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}"
-            r"|"
-            r"(?:[0-9a-fA-F]{1,4}:){1,5}(?::[0-9a-fA-F]{1,4}){1,2}"
-            r"|"
-            r"(?:[0-9a-fA-F]{1,4}:){1,4}(?::[0-9a-fA-F]{1,4}){1,3}"
-            r"|"
-            r"(?:[0-9a-fA-F]{1,4}:){1,3}(?::[0-9a-fA-F]{1,4}){1,4}"
-            r"|"
-            r"(?:[0-9a-fA-F]{1,4}:){1,2}(?::[0-9a-fA-F]{1,4}){1,5}"
-            r"|"
-            r"[0-9a-fA-F]{1,4}:(?::[0-9a-fA-F]{1,4}){1,6}"
-            r"|"
-            # :: alone or with trailing groups
-            r":(?::[0-9a-fA-F]{1,4}){1,7}"
-            r"|"
-            r"::(?:[fF]{4}:)?(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)"
-            r")"
-            r"(?![:\w])"
-        ),
-        "[IP]",
-    ),
-    # MRN markers: "MRN: 123456", "MR#67890", "MRN123456"
-    "mrn": (
-        re.compile(r"\b(?:MRN|MR)\s*[:#]?\s*\d+\b", re.IGNORECASE),
-        "[MRN]",
-    ),
-    # National/passport identifiers when explicitly labeled
-    # Upper bound on token length avoids ReDoS on non-matching long strings.
-    "national_id": (
-        re.compile(
-            r"\b(?:national\s*id|nid|passport(?:\s*number)?|id(?:\s*number)?)\s*"
-            r"[:#-]?\s*[A-Z0-9\-]{4,50}\b",
-            re.IGNORECASE,
-        ),
-        "[NATIONAL_ID]",
-    ),
-    # Account / insurance / policy identifiers when explicitly labeled
-    "account": (
-        re.compile(
-            r"\b(?:account|acct|insurance|member|policy)\s*"
-            r"(?:id|number|no\.?|#)?\s*[:#-]?\s*[A-Z0-9\-]{4,50}\b",
-            re.IGNORECASE,
-        ),
-        "[ACCOUNT]",
-    ),
-    # GDPR Art. 9 special categories (NRP) when explicitly labeled
-    "nationality": (
-        re.compile(
-            r"\b(?:nationality|citizenship)\s*[:\-]\s*[A-Za-z][A-Za-z\-\s]{1,40}\b",
-            re.IGNORECASE,
-        ),
-        "[NATIONALITY]",
-    ),
-    "religion": (
-        re.compile(
-            r"\b(?:religion|faith)\s*[:\-]\s*[A-Za-z][A-Za-z\-\s]{1,40}\b",
-            re.IGNORECASE,
-        ),
-        "[RELIGION]",
-    ),
-    "political": (
-        re.compile(
-            r"\b(?:political(?:\s+opinion|\s+affiliation)?|party)\s*[:\-]\s*"
-            r"[A-Za-z][A-Za-z\-\s]{1,80}\b",
-            re.IGNORECASE,
-        ),
-        "[POLITICAL]",
-    ),
-    # Bare HTTP/HTTPS URLs
-    "url": (
-        re.compile(r'\bhttps?://[^\s<>"\')\]]+'),
-        "[URL]",
-    ),
-    # US ZIP code: 12345 or 12345-6789
-    # Negative lookbehind/lookahead prevents matching within longer numbers or decimals
-    "zipcode": (
-        re.compile(r"(?<![.\d])\b\d{5}(?:-\d{4})?\b(?!\d)"),
-        "[ZIP]",
-    ),
-    # Synthea simulation seeds — large integers (positive or negative) labelled
-    # "Person seed:" or "Population seed:" in generated narrative text
-    "synthea_seed": (
-        re.compile(
-            r"\b(?:Person|Population)\s+seed\s*:\s*-?\d{5,}\b",
-            re.IGNORECASE,
-        ),
-        "[SEED]",
-    ),
+_STREET_ADDRESS_RE = re.compile(
+    r"(?:"
+    # US street address: number + street name + type + optional apt/suite/city/state/zip
+    r"\b\d{1,6}\s+"
+    r"(?:[A-Z][a-z''\-]*\.?\s+){1,4}"
+    r"(?:Street|St\.?|Avenue|Ave\.?|Boulevard|Blvd\.?|Drive|Dr\.?|"
+    r"Road|Rd\.?|Lane|Ln\.?|Way|Court|Ct\.?|Place|Pl\.?|Circle|Cir\.?|"
+    r"Trail|Trl\.?|Terrace|Ter\.?|Parkway|Pkwy\.?|Highway|Hwy\.?|"
+    r"Alley|Approach|Bay|Brook|Burg|Bypass|Byway|"
+    r"Causeway|Center|Common|Commons|Corner|Corners|Course|"
+    r"Cove|Creek|Crossing|Dam|Divide|Estate|Estates|"
+    r"Expressway|Extension|Falls|Ferry|Field|Fields|Flat|Flats|"
+    r"Ford|Forge|Fork|Forks|Freeway|Garden|Gardens|Gateway|Glen|"
+    r"Green|Grove|Harbor|Haven|Heights|Hollow|"
+    r"Isle|Junction|Key|Knoll|Lake|Landing|Light|Loaf|Lock|Lodge|Loop|"
+    r"Mall|Manor|Meadow|Meadows|Mill|Mission|Mount|Neck|"
+    r"Orchard|Oval|Overpass|Parade|Park|Pass|Path|Pike|Pine|"
+    r"Plain|Plains|Plaza|Point|Port|Prairie|Promenade|"
+    r"Ramp|Ranch|Rapid|Rapids|Rest|Ridge|River|Route|Row|Run|"
+    r"Shore|Spring|Springs|Spur|Square|Station|Stravenue|Stream|Summit|"
+    r"Trace|Track|Trafficway|Tunnel|Turnpike|Union|Valley|Viaduct|View|Village|"
+    r"Vista|Walk|Well|Wells)"
+    r"(?:\s+(?:Apt|Apartment|Unit|Suite|Ste|Bldg|Building|Floor|Fl|Rm|Room|#)\.?\s*\d{1,5})?"
+    r"(?:[,\s]+(?:[A-Z][a-z''\-]+\s*)+)?"
+    r"(?:[,\s]+[A-Z]{2})?"
+    r"(?:[,\s]+\d{5}(?:-\d{4})?)?"
+    r"|"
+    # German: Hauptstraße 12, Marktplatz 3a
+    r"\b(?:[A-ZÄÖÜ][a-zäöüß]+(?:straße|strasse|str\.?|gasse|weg|platz|allee|ring|damm|ufer))"
+    r"\s+\d{1,5}(?:\s?[a-zA-Z])?"
+    r"|"
+    # French: Rue de la Paix 10
+    r"\b(?:(?:Rue|Avenue|Boulevard|Bd\.?|Chemin|Place|Allée|Impasse|Passage|Quai)"
+    r"(?:\s+(?:de|du|des|la|le|l')?\s*[A-ZÀ-Ü][a-zà-ü]+){1,4})"
+    r"\s+\d{1,5}"
+    r"|"
+    # Italian: Via Garibaldi 5
+    r"\b(?:(?:Via|Viale|Piazza|Corso|Largo|Vicolo)"
+    r"(?:\s+(?:dei?|del|della|delle|degli)?\s*[A-ZÀ-Ü][a-zà-ü]+){1,4})"
+    r"\s*,?\s*\d{1,5}"
+    r"|"
+    # Spanish: Calle Mayor 7
+    r"\b(?:(?:Calle|Avenida|Avda\.?|Paseo|Plaza|Carrera|Camino)"
+    r"(?:\s+(?:de|del|la|las|los)?\s*[A-ZÀ-Ü][a-zà-ü]+){1,4})"
+    r"\s*,?\s*\d{1,5}"
+    r"|"
+    # Dutch: Kalverstraat 12
+    r"\b(?:[A-Z][a-z]+(?:straat|laan|weg|gracht|plein|singel|kade|dijk))"
+    r"\s+\d{1,5}(?:\s?[a-zA-Z])?"
+    r"|"
+    # PO Box (all languages)
+    r"\b(?:P\.?O\.?\s*Box|Postfach|Boîte\s+Postale|BP|Casella\s+Postale|CP|"
+    r"Apartado(?:\s+de\s+Correos)?|Postbus)\s*[:#]?\s*\d{1,10}\b"
+    r")",
+    re.IGNORECASE,
+)
+
+_PATTERNS: dict = {
+    "street_address": (_STREET_ADDRESS_RE, "[ADDRESS]"),
 }
 
-# Patterns applied when params['patterns'] == 'all'
-_ALL_PATTERNS = list(_PATTERNS.keys())
+_ALL_PATTERNS: list = list(_PATTERNS.keys())
 
 # FHIR text.div must be valid XHTML with the FHIR namespace on the root element.
 _REDACTED_DIV = (
@@ -266,31 +166,17 @@ def _resolve_patterns(patterns_param):
     if unknown:
         raise ValueError(
             f"Unknown scrub_text pattern(s): {sorted(unknown)}. "
-            f"Supported: {', '.join(sorted(_PATTERNS))}"
+            f"Supported: {', '.join(sorted(_PATTERNS))}. "
+            f"NOTE: SSN, phone, email, IP, MRN, date, URL, and zip patterns were "
+            f"moved to Presidio custom recognizers in medanon v2. Replace "
+            f"'action: scrub_text' with 'action: nlp_scrub' or 'action: nlp_detect_act' "
+            f"to use the consolidated NLP detection pipeline."
         )
     return keys
 
 
 def _token_prefix_for_pattern(pattern_key):
-    return {
-        "date_iso": "DATE",
-        "date_us": "DATE",
-        "date_written": "DATE",
-        "phone": "PHONE",
-        "ssn": "SSN",
-        "email": "EMAIL",
-        "ip": "IP",
-        "ipv6": "IP",
-        "mrn": "MRN",
-        "national_id": "NID",
-        "account": "ACCOUNT",
-        "nationality": "NATIONALITY",
-        "religion": "RELIGION",
-        "political": "POLITICAL",
-        "url": "URL",
-        "zipcode": "ZIP",
-        "synthea_seed": "SEED",
-    }.get(pattern_key, pattern_key.upper())
+    return pattern_key.upper()
 
 
 def _tokenize_value(value, token_prefix, token_state, lock=None):
@@ -446,21 +332,19 @@ def _scrub_xhtml_text_nodes(div_html, scrub_fn):
 # ---------------------------------------------------------------------------
 
 
-def scrub_text_by_path(resource, el, params):
-    """Scrub PHI from a free-text or HTML field matched by FHIRPath.
+def scrub_text_by_path(resource: dict, el: dict, params: dict) -> None:
+    """Scrub names from a free-text or HTML field matched by FHIRPath.
 
     Required params: none (all have defaults).
 
     Optional params:
         mode          : 'text' (default), 'html_tokenize', or 'html'
-        patterns      : 'all' (default), a comma-separated string, or a list
-                        of pattern keys (see module docstring)
+        patterns      : 'all' (default) — retained for backward compatibility
         names         : list of literal name strings to redact
         extract_names : bool — auto-extract names from resource.name
         placeholders  : dict mapping pattern key → replacement token
         tokenize      : bool (default True). If False, uses static placeholders.
         mapping_scope : resource (default), bundle, or global_run
-                        (bundle currently aliases global_run)
     """
     path = el["path"].split(".")[1:]
     if not path:

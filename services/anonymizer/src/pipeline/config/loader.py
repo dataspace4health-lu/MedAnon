@@ -6,6 +6,84 @@ import yaml
 
 _config_log = logging.getLogger("medanon.config")
 
+# Default resource-type → gPAS domain routing table.
+# Applied automatically when a profile's general.domain_map is absent.
+# Any resource type NOT listed here falls back to the profile's GPAS_DOMAIN env var.
+_DEFAULT_DOMAIN_MAP: dict[str, str] = {
+    # Patient demographics
+    "Patient":                     "spe.direct.patient-admin",
+    "RelatedPerson":               "spe.direct.patient-admin",
+    "Person":                      "spe.direct.patient-admin",
+    # Clinical workforce
+    "Practitioner":                "spe.operational.org-practitioner",
+    "PractitionerRole":            "spe.operational.org-practitioner",
+    "Organization":                "spe.operational.org-practitioner",
+    "OrganizationAffiliation":     "spe.operational.org-practitioner",
+    "HealthcareService":           "spe.operational.org-practitioner",
+    "Location":                    "spe.operational.org-practitioner",
+    "Endpoint":                    "spe.operational.org-practitioner",
+    # Clinical observations
+    "Observation":                 "spe.clinical.observation",
+    "QuestionnaireResponse":       "spe.clinical.observation",
+    "RiskAssessment":              "spe.clinical.observation",
+    # Conditions, procedures, allergies, medications
+    "Condition":                   "spe.clinical.condition-procedure",
+    "Procedure":                   "spe.clinical.condition-procedure",
+    "AllergyIntolerance":          "spe.clinical.condition-procedure",
+    "FamilyMemberHistory":         "spe.clinical.condition-procedure",
+    "ClinicalImpression":          "spe.clinical.condition-procedure",
+    "DetectedIssue":               "spe.clinical.condition-procedure",
+    "MedicationRequest":           "spe.clinical.condition-procedure",
+    "MedicationAdministration":    "spe.clinical.condition-procedure",
+    "MedicationDispense":          "spe.clinical.condition-procedure",
+    "MedicationStatement":         "spe.clinical.condition-procedure",
+    "Medication":                  "spe.clinical.condition-procedure",
+    "Immunization":                "spe.clinical.condition-procedure",
+    "ImmunizationEvaluation":      "spe.clinical.condition-procedure",
+    "ImmunizationRecommendation":  "spe.clinical.condition-procedure",
+    "NutritionOrder":              "spe.clinical.condition-procedure",
+    "VisionPrescription":          "spe.clinical.condition-procedure",
+    # Reports & documents
+    "DiagnosticReport":            "spe.clinical.report-text",
+    "DocumentReference":           "spe.clinical.report-text",
+    "Composition":                 "spe.clinical.report-text",
+    "Media":                       "spe.clinical.report-text",
+    "DocumentManifest":            "spe.clinical.report-text",
+    # Encounters & care
+    "Encounter":                   "spe.direct.resource-id",
+    "EpisodeOfCare":               "spe.direct.resource-id",
+    "CarePlan":                    "spe.direct.resource-id",
+    "CareTeam":                    "spe.direct.resource-id",
+    "Goal":                        "spe.direct.resource-id",
+    # Scheduling & workflow
+    "ServiceRequest":              "spe.operational.scheduling",
+    "Appointment":                 "spe.operational.scheduling",
+    "AppointmentResponse":         "spe.operational.scheduling",
+    "Schedule":                    "spe.operational.scheduling",
+    "Slot":                        "spe.operational.scheduling",
+    "Task":                        "spe.operational.scheduling",
+    "Communication":               "spe.operational.scheduling",
+    "CommunicationRequest":        "spe.operational.scheduling",
+    # Financial / billing
+    "Coverage":                    "spe.financial.coverage",
+    "Claim":                       "spe.financial.claims",
+    "ClaimResponse":               "spe.financial.claims",
+    "ExplanationOfBenefit":        "spe.financial.claims",
+    "CoverageEligibilityRequest":  "spe.financial.claims",
+    "CoverageEligibilityResponse": "spe.financial.claims",
+    "PaymentNotice":               "spe.financial.claims",
+    "PaymentReconciliation":       "spe.financial.claims",
+    # Devices & media
+    "Device":                      "spe.direct.document-media",
+    "DeviceRequest":               "spe.direct.document-media",
+    "DeviceUseStatement":          "spe.direct.document-media",
+    "Binary":                      "spe.direct.document-media",
+    # Audit / provenance
+    "Provenance":                  "spe.technical.references",
+    "AuditEvent":                  "spe.technical.references",
+    "Consent":                     "spe.technical.references",
+}
+
 
 class Settings:
     _ENV_EXPR = re.compile(r"\$\{([A-Z0-9_]+)(?::-(.*?))?\}")
@@ -44,9 +122,19 @@ class Settings:
                 if isinstance(general, dict):
                     self.rewrite_references = general.get("rewrite_references", False)
                     self.rewrite_text_ids = general.get("rewrite_text_ids", False)
+                    _sentinel = object()
+                    raw_domain_map = general.get("domain_map", _sentinel)
+                    if raw_domain_map is _sentinel:
+                        # Key absent from YAML — inherit the built-in default map.
+                        self.domain_map: dict[str, str] = _DEFAULT_DOMAIN_MAP
+                    elif isinstance(raw_domain_map, dict):
+                        self.domain_map = {str(k): str(v) for k, v in raw_domain_map.items()}
+                    else:
+                        self.domain_map = {}
                 else:
                     self.rewrite_references = False
                     self.rewrite_text_ids = False
+                    self.domain_map = {}
 
                 self._validate_rules()
                 _config_log.info(

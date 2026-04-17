@@ -194,26 +194,38 @@ def _rewrite_text_ids(
 # ---------------------------------------------------------------------------
 
 
-def _collect_reference_ids(obj, ids: set, _depth: int = 0) -> None:
-    """Collect all reference IDs from *obj* for batch pseudonymization."""
+def _collect_reference_ids(
+    obj, ids: set, ref_types: "dict[str, str] | None" = None, _depth: int = 0
+) -> None:
+    """Collect all reference IDs from *obj* for batch pseudonymization.
+
+    When *ref_types* is provided, it is populated with ``{bare_id: resource_type}``
+    for typed references (e.g. ``"Patient/UUID"`` → ``{"UUID": "Patient"}``).
+    This allows callers to route each reference ID through the correct gPAS domain
+    via the domain_map rather than always using the default domain.
+    """
     if _depth > _MAX_NESTING_DEPTH:
         return
     if isinstance(obj, dict):
         ref = obj.get("reference")
         if isinstance(ref, str) and ref and "?" not in ref and not ref.startswith("#"):
             if ref.startswith("urn:uuid:"):
-                resource_id = ref[len("urn:uuid:") :]
+                resource_id = ref[len("urn:uuid:"):]
                 if resource_id:
                     ids.add(resource_id)
+                    # urn:uuid: references don't carry a resource type — they fall
+                    # back to the default domain; no entry written to ref_types.
             elif "/" in ref and not ref.startswith("http"):
                 parts = ref.split("/")
                 if len(parts) == 2 and parts[0] and parts[1]:
                     ids.add(parts[1])
+                    if ref_types is not None:
+                        ref_types[parts[1]] = parts[0]
         for value in obj.values():
-            _collect_reference_ids(value, ids, _depth + 1)
+            _collect_reference_ids(value, ids, ref_types, _depth + 1)
     elif isinstance(obj, list):
         for item in obj:
-            _collect_reference_ids(item, ids, _depth + 1)
+            _collect_reference_ids(item, ids, ref_types, _depth + 1)
 
 
 def _pseudonymize_reference_string(ref: str, ref_mapping: dict) -> str:
@@ -253,9 +265,12 @@ def _apply_reference_pseudonyms(obj, ref_mapping: dict, _depth: int = 0) -> None
             if new_ref != ref:
                 audit_log.debug("reference_pseudonymized field=reference")
                 obj["reference"] = new_ref
-            if "display" in obj:
-                audit_log.debug("reference_display_redacted field=display")
-                del obj["display"]
+                # Remove display only when the reference ID changed — the label
+                # is now inconsistent with the pseudonymized ID.  Unchanged
+                # references keep their display value intact.
+                if "display" in obj:
+                    audit_log.debug("reference_display_redacted field=display")
+                    del obj["display"]
         for value in obj.values():
             _apply_reference_pseudonyms(value, ref_mapping, _depth + 1)
     elif isinstance(obj, list):
@@ -322,6 +337,13 @@ def _post_process_resource(
                 if "display" in obj:
                     audit_log.debug("reference_display_redacted field=display")
                     del obj["display"]
+            # Also rewrite "url" fields (Bundle entries may use url for references)
+            url = obj.get("url")
+            if isinstance(url, str):
+                new_url = _pseudonymize_reference_string(url, ref_mapping)
+                if new_url != url:
+                    audit_log.debug("reference_pseudonymized field=url")
+                    obj["url"] = new_url
 
         # --- Text-ID replacement + recurse
         for key in list(obj.keys()):

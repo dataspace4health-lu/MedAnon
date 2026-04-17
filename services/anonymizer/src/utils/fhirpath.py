@@ -1,8 +1,6 @@
 from datetime import datetime
 import re
 
-from utils.io import read_resource_from_file  # noqa: F401 — re-exported for backward compat
-
 # Pre-compiled regex for stripping array-index notation (e.g. 'identifier[0]' → 'identifier').
 # Used in find_nodes() which is called per-action per-matched-element.
 _ARRAY_INDEX_RE = re.compile(r"\[\d+\]$")

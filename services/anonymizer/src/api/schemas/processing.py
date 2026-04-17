@@ -22,6 +22,7 @@ class RuntimeSettings:
     rewrite_text_ids: bool = False
     dynamic_rule_settings: dict = field(default_factory=dict)
     filename: str | None = None
+    domain_map: dict = field(default_factory=dict)
 
 
 class DynamicSettings(BaseModel):

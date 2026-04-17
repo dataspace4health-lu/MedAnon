@@ -32,7 +32,8 @@ gpas_log = logging.getLogger("medanon.gpas")
 # Connection pool (reuses TCP/TLS connections across gPAS requests)
 # ---------------------------------------------------------------------------
 
-_GPAS_POOL_SIZE = int(os.environ.get("GPAS_POOL_SIZE", "10"))
+_JOB_WORKERS = int(os.environ.get("MEDANON_JOB_WORKERS", "3"))
+_GPAS_POOL_SIZE = int(os.environ.get("GPAS_POOL_SIZE", str(_JOB_WORKERS * 8)))
 _gpas_pool = urllib3.PoolManager(
     num_pools=2,
     maxsize=_GPAS_POOL_SIZE,
@@ -152,6 +153,24 @@ def _cache_get(cache_key):
 
 def _cache_set(cache_key, value):
     _gpas_cache_mod._cache_backend.set(cache_key, value)
+
+
+def _cache_get_many(cache_keys: list[tuple]) -> dict[tuple, str]:
+    """Batch cache lookup. Returns {key: value} for hits only."""
+    result = _gpas_cache_mod._cache_backend.get_many(cache_keys)
+    hits = len(result)
+    misses = len(cache_keys) - hits
+    if hits:
+        GPAS_CACHE_HITS.inc(hits)
+    if misses:
+        GPAS_CACHE_MISSES.inc(misses)
+    return result
+
+
+def _cache_set_many(items: dict[tuple, str]) -> None:
+    """Batch cache write."""
+    if items:
+        _gpas_cache_mod._cache_backend.set_many(items)
 
 
 # ---------------------------------------------------------------------------
@@ -282,12 +301,20 @@ def _call_gpas_operation(base_url, operation, fhir_params, params):
             _gpas_circuit_breaker.record_success()
             return _json_loads(body)
         except (urllib3.exceptions.HTTPError, OSError) as exc:
+            is_timeout = isinstance(exc, (
+                urllib3.exceptions.ConnectTimeoutError,
+                urllib3.exceptions.ReadTimeoutError,
+                urllib3.exceptions.TimeoutError,
+            ))
             if attempt < retry_count:
                 time.sleep(retry_backoff * (2**attempt) * (0.5 + random.random()))
                 continue
             GPAS_LATENCY.labels(operation=operation).observe(time.perf_counter() - t0)
             GPAS_CALL_COUNT.labels(operation=operation, status="error").inc()
-            _gpas_circuit_breaker.record_failure()
+            if is_timeout:
+                _gpas_circuit_breaker.record_timeout()
+            else:
+                _gpas_circuit_breaker.record_failure()
             raise GpasUnavailableError(
                 f"gPAS unreachable on ${operation}: {exc}"
             ) from exc

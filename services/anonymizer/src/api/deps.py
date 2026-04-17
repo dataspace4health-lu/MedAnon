@@ -83,7 +83,22 @@ _PRIVATE_NETS = [
     ipaddress.ip_network("0.0.0.0/8"),
     ipaddress.ip_network("::1/128"),
     ipaddress.ip_network("fc00::/7"),
+    ipaddress.ip_network("::ffff:0:0/96"),  # IPv4-mapped IPv6 (belt-and-suspenders)
 ]
+
+
+def _effective_ip(
+    addr: ipaddress.IPv4Address | ipaddress.IPv6Address,
+) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
+    """Return the canonical IP for SSRF checks.
+
+    IPv4-mapped IPv6 addresses (``::ffff:x.x.x.x``) are unmapped to their
+    underlying IPv4 form so that private-range checks against IPv4 networks
+    (e.g. ``127.0.0.0/8``) are not silently bypassed.
+    """
+    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
+        return addr.ipv4_mapped
+    return addr
 
 
 async def _validate_server_url(url: str) -> str:
@@ -109,7 +124,7 @@ async def _validate_server_url(url: str) -> str:
             status_code=422, detail="server_url must contain a hostname"
         )
     try:
-        addr = ipaddress.ip_address(hostname)
+        addr = _effective_ip(ipaddress.ip_address(hostname))
         if any(addr in net for net in _PRIVATE_NETS):
             raise HTTPException(
                 status_code=422,
@@ -143,7 +158,7 @@ def check_hostname_ssrf(hostname: str) -> str | None:
     for family, _, _, _, sockaddr in results:
         ip_str = sockaddr[0]
         try:
-            addr = ipaddress.ip_address(ip_str)
+            addr = _effective_ip(ipaddress.ip_address(ip_str))
             if any(addr in net for net in _PRIVATE_NETS):
                 return f"Hostname {hostname} resolves to private address {ip_str}"
         except ValueError:
@@ -231,6 +246,7 @@ def _runtime_settings(base_settings, dynamic_settings=None):
         rewrite_text_ids=getattr(base_settings, "rewrite_text_ids", False),
         dynamic_rule_settings=dynamic_settings or {},
         filename=filename,
+        domain_map=getattr(base_settings, "domain_map", {}),
     )
 
 

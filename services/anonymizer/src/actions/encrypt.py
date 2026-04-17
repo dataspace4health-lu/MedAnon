@@ -1,18 +1,22 @@
-from utils.fhirpath import error, find_nodes
-from utils.crypto import rsa_encrypt
+from __future__ import annotations
+
 import json
+from typing import Any
+
+from utils.crypto import rsa_encrypt
+from utils.fhirpath import error, find_nodes
 
 supported_enc_schemes = {"RSA": rsa_encrypt}
 expected_params = {"RSA": ["public_key"]}
 encoding = "utf-8"
 
 
-def _encrypt(plaintext, enc_params):
+def _encrypt(plaintext: bytes, enc_params: dict) -> str:
     ciphertext = supported_enc_schemes[enc_params["algorithm"]](plaintext, enc_params)
     return ciphertext.hex()
 
 
-def _encrypt_nodes(node, key, value, enc_params):
+def _encrypt_nodes(node: Any, key: str, value: Any, enc_params: dict) -> None:
     if isinstance(node, list):
         for item in node:
             _encrypt_nodes(item, key, value, enc_params)
@@ -33,7 +37,7 @@ def _encrypt_nodes(node, key, value, enc_params):
             node[key] = _encrypt(node_str.encode(encoding), enc_params)
 
 
-def encrypt_by_path(resource, el, params):
+def encrypt_by_path(resource: dict, el: dict, params: dict) -> None:
     algorithm = params.get("algorithm", "RSA")
     if algorithm not in supported_enc_schemes:
         error(

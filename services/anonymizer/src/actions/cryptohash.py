@@ -1,17 +1,21 @@
-from utils.fhirpath import find_nodes
+from __future__ import annotations
+
 import hashlib
 import hmac as _hmac
 import json as _json_stdlib
 import logging
 import os
 import threading
+from typing import Any
+
+from utils.fhirpath import find_nodes
 
 _hash_log = logging.getLogger("medanon.cryptohash")
 _warned_no_key = False
 _warned_lock = threading.Lock()
 
 
-def _normalized_node_str(value):
+def _normalized_node_str(value: Any) -> str:
     if isinstance(value, dict):
         # Keep historical serialization behavior for backward-compatible hashes.
         # Must use stdlib json.dumps (with spaces) — changing separators changes
@@ -20,7 +24,7 @@ def _normalized_node_str(value):
     return str(value)
 
 
-def _resolve_secret_key(params):
+def _resolve_secret_key(params: dict) -> str | None:
     """Return the HMAC secret key.
 
     Priority order (GDPR Art. 32 — secrets must not live in config files):
@@ -39,7 +43,7 @@ def _resolve_secret_key(params):
     return params.get("secret_key")
 
 
-def _compute_hash(msg, params):
+def _compute_hash(msg: bytes, params: dict) -> str:
     hash_type = str(params.get("hash_type", "sha3_256")).lower()
     secret_key = _resolve_secret_key(params)
 
@@ -82,7 +86,7 @@ def _compute_hash(msg, params):
     return hashlib.new(digestmod, msg).hexdigest()
 
 
-def _hash_nodes(node, key, value, params):
+def _hash_nodes(node: Any, key: str, value: Any, params: dict) -> None:
     if isinstance(node, list):
         for item in node:
             _hash_nodes(item, key, value, params)
@@ -97,7 +101,7 @@ def _hash_nodes(node, key, value, params):
             node[key] = _compute_hash(node_str.encode(), params)
 
 
-def cryptohash_by_path(resource, el, params):
+def cryptohash_by_path(resource: dict, el: dict, params: dict) -> None:
     ret = resource
     path = el["path"]  # "Patient.name"
     path = path.split(".")[1:]  # Remove root

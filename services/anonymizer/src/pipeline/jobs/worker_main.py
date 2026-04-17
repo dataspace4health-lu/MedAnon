@@ -76,6 +76,18 @@ async def _main() -> None:
                         "redis_cache_setup_failed falling_back=local: %s", exc
                     )
 
+        # gPAS cache coherence check — detect stale Redis after DB wipe
+        try:
+            from integrations.gpas.canary import check_gpas_cache_coherence
+
+            result = check_gpas_cache_coherence(redis_url)
+            if result.get("flushed"):
+                logger.warning("gpas_canary: %s", result["reason"])
+            elif result.get("checked"):
+                logger.info("gpas_canary: %s", result["reason"])
+        except Exception as exc:
+            logger.warning("gpas_canary_check_failed: %s", exc)
+
     # Job store — prefer Redis (with retry), fall back to SQLite
     job_store = None
     if redis_url:

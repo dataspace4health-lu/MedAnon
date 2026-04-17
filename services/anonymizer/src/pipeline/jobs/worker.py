@@ -17,15 +17,12 @@ import asyncio
 import logging
 import signal
 from datetime import datetime, timedelta, timezone
-from utils.json_fast import loads as _json_loads, dumps as _json_dumps
 import os
 from pathlib import Path
 
 from medanon_core.domain import Job, JobStatus
-from pipeline.jobs.checkpoint import load_checkpoint, save_checkpoint
+from pipeline.jobs.checkpoint import save_checkpoint
 from utils import audit
-
-from pipeline.processor import process_data_batch, _BATCH_SIZE
 
 _worker_log = logging.getLogger("medanon.worker")
 _store = None
@@ -39,49 +36,50 @@ _semaphore: asyncio.Semaphore | None = None
 _shutdown_event: asyncio.Event | None = None
 _active_tasks: set = set()
 _DRAIN_TIMEOUT_SEC: int = int(os.environ.get("MEDANON_DRAIN_TIMEOUT_SEC", "300"))
-_PROGRESS_INTERVAL: int = int(os.environ.get("MEDANON_PROGRESS_INTERVAL", "100"))
 _STAGING_CLEANUP_INTERVAL_SEC: int = int(
     os.environ.get("MEDANON_STAGING_CLEANUP_INTERVAL_SEC", "3600")
 )
 _MAX_JOB_RETRIES: int = int(os.environ.get("MEDANON_JOB_MAX_RETRIES", "3"))
-_COMPRESS_RESULTS: bool = os.environ.get(
-    "MEDANON_COMPRESS_RESULTS", "false"
-).strip().lower() in ("1", "true", "yes")
-# Default: keep results for 7 days then auto-delete. Set to 0 to disable cleanup.
+# Default: keep results for 7 days then auto-delete.
+# Set to 0 to disable cleanup.
 _RESULT_TTL_SEC: int = int(os.environ.get("MEDANON_RESULT_TTL_SEC", "604800"))
 _RESULT_CLEANUP_INTERVAL_SEC: int = int(
     os.environ.get("MEDANON_RESULT_CLEANUP_INTERVAL_SEC", "3600")
 )
 
 
-def _compress_ndjson(path: str) -> str:
-    """Gzip-compress *path* in place.  Returns the ``.ndjson.gz`` path.
+# ---------------------------------------------------------------------------
+# Public helpers re-exported for callers that import from this module
+# ---------------------------------------------------------------------------
 
-    Used after processing completes (not during) so that
-    ``_truncate_to_lines`` checkpoint/resume still works on the
-    uncompressed file during the processing phase.
-    """
-    import gzip
-    import shutil
-
-    gz_path = path + ".gz"
-    with open(path, "rb") as f_in, gzip.open(gz_path, "wb", compresslevel=6) as f_out:
-        shutil.copyfileobj(f_in, f_out, length=1 << 20)
-    os.remove(path)
-    _worker_log.info("ndjson_compressed src=%s gz=%s", path, gz_path)
-    return gz_path
+from pipeline.jobs.checkpoint import _truncate_to_lines  # noqa: E402  (re-export)
+from pipeline.jobs.executors import (  # noqa: E402
+    _execute_batch_patient_export,
+    _execute_bulk_export,
+    _execute_bulk_import,
+    _execute_cohort,
+    _execute_patient_export,
+    _execute_reprocess,
+)
 
 
 def store_result(job_id: str, local_path: str) -> str:
-    """Upload *local_path* to the configured result storage and return the result key.
-
-    For local storage (default) the key is the path unchanged.
-    For S3 (``MEDANON_RESULT_STORAGE=s3``) the file is uploaded to MinIO and the
-    key is ``s3://<bucket>/<job_id>.ndjson``.
-    """
+    """Upload *local_path* to the configured result storage and return the result key."""
     from integrations.storage import get_result_storage
 
     return get_result_storage().write_from_path(job_id, local_path)
+
+
+# Dispatch table: job type → executor function.
+# Lambdas close over the module-level _store/_staging so they resolve at call time.
+_EXECUTORS = {
+    "bulk-export": lambda job: _execute_bulk_export(job, _store, _staging),
+    "cohort": lambda job: _execute_cohort(job, _store, _staging),
+    "reprocess": lambda job: _execute_reprocess(job, _store, _staging),
+    "patient-export": lambda job: _execute_patient_export(job, _store, _staging),
+    "bulk-import": lambda job: _execute_bulk_import(job, _store, _staging),
+    "batch-patient-export": lambda job: _execute_batch_patient_export(job, _store, _staging),
+}
 
 
 def init_worker(store, max_concurrent: int = 3) -> None:
@@ -96,686 +94,6 @@ def init_staging(staging_store) -> None:
     two-phase staged path instead of the streaming fallback."""
     global _staging
     _staging = staging_store
-
-
-# ---------------------------------------------------------------------------
-# Idempotent resume helper
-# ---------------------------------------------------------------------------
-
-
-def _truncate_to_lines(path: str, line_count: int) -> None:
-    """Truncate *path* to exactly *line_count* newline-terminated lines.
-
-    On resume, the file may contain more lines than the checkpoint recorded
-    (crash after write but before checkpoint update).  Truncating prevents
-    duplicate resources in the output.
-    """
-    if line_count <= 0 or not os.path.exists(path):
-        return
-    with open(path, "r+b") as f:
-        for _ in range(line_count):
-            line = f.readline()
-            if not line:
-                return  # file has fewer lines than expected — nothing to truncate
-        f.truncate()
-
-
-# ---------------------------------------------------------------------------
-# Chunked batch processing helper
-# ---------------------------------------------------------------------------
-
-
-def _process_stream_chunked(
-    gen, settings, pseudonymizer, fh, start_count, store, job, label, summary=None
-):
-    """Buffer resources from *gen* into chunks and process each via
-    :func:`process_data_batch`, writing results to *fh*.
-
-    Returns ``(count, was_cancelled)`` where *count* is the total number of
-    lines written (including *start_count*).
-
-    When *summary* (:class:`~pipeline.jobs.summary.JobSummaryCollector`) is
-    provided, each processed resource is recorded for the completion summary.
-    """
-    count = start_count
-    chunk: list[dict] = []
-
-    def _flush():
-        nonlocal count
-        try:
-            results = process_data_batch(
-                chunk, settings, pseudonymizer, attach_manifest=True
-            )
-            for result in results:
-                line = _json_dumps(result)
-                fh.write(line + "\n")
-                count += 1
-                if summary is not None:
-                    summary.record_resource(result)
-        except Exception:
-            # Per-resource fallback for the failed chunk
-            for resource in chunk:
-                try:
-                    result = process_data_batch(
-                        [resource], settings, pseudonymizer, attach_manifest=True
-                    )[0]
-                    line = _json_dumps(result)
-                    fh.write(line + "\n")
-                    if summary is not None:
-                        summary.record_resource(result)
-                except Exception as exc2:
-                    rtype = (
-                        resource.get("resourceType", "Unknown")
-                        if isinstance(resource, dict)
-                        else "Unknown"
-                    )
-                    _worker_log.error(
-                        "%s job=%s resource_type=%s error=%s",
-                        label,
-                        job.id,
-                        rtype,
-                        exc2,
-                    )
-                    fh.write(
-                        _json_dumps(
-                            {"error": "processing error", "resourceType": rtype}
-                        )
-                        + "\n"
-                    )
-                    if summary is not None:
-                        summary.record_error(rtype)
-                count += 1
-
-        # Flush after every chunk to guarantee NDJSON integrity on crash
-        fh.flush()
-
-        if count % _PROGRESS_INTERVAL < len(chunk):
-            save_checkpoint(store, job, {"phase": "processing", "lines_written": count})
-
-        fresh = store.get(job.id)
-        if fresh and fresh.status == JobStatus.CANCELLED:
-            return True
-        return False
-
-    for resource in gen:
-        chunk.append(resource)
-        if len(chunk) >= _BATCH_SIZE:
-            cancelled = _flush()
-            chunk = []
-            if cancelled:
-                _worker_log.info("%s_cancelled job=%s at_line=%d", label, job.id, count)
-                return count, True
-
-    if chunk:
-        cancelled = _flush()
-        chunk = []
-        if cancelled:
-            return count, True
-
-    return count, False
-
-
-def _skip_to(gen, n: int):
-    """Yield items from *gen*, skipping the first *n* entries (resume helper)."""
-    for i, item in enumerate(gen):
-        if i >= n:
-            yield item
-
-
-# ---------------------------------------------------------------------------
-# Job executors (called via asyncio.to_thread — may block)
-# ---------------------------------------------------------------------------
-
-
-def _execute_bulk_export(job: Job) -> None:
-    """Run a bulk-export job synchronously, resuming from checkpoint when available."""
-    if _staging is not None:
-        from pipeline.jobs.staged_worker import execute_bulk_export_staged
-
-        return execute_bulk_export_staged(job, _store, _staging)
-
-    from integrations.fhir.client import (
-        fetch_all_resource_types,
-        get_capability_statement,
-    )
-    from pipeline.config.service import get_settings
-    from pipeline.processor import _get_default_pseudonymizer
-
-    params = job.params
-    server_url = params["server_url"]
-    resource_type = params.get("resource_type")
-    type_filter = params.get("type_filter")
-    since = params.get("since")
-    token = params.get("token") or os.environ.get("FHIR_SOURCE_TOKEN")
-    timeout = float(params.get("timeout", 30))
-    profile = params.get("config_profile", "auto")
-
-    settings = get_settings(profile)
-    pseudonymizer = _get_default_pseudonymizer()
-
-    output_path = os.path.join(_OUTPUT_DIR, f"{job.id}.ndjson")
-    Path(_OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
-
-    checkpoint = load_checkpoint(job) or {}
-    already_written = checkpoint.get("lines_written", 0)
-    open_mode = "a" if already_written > 0 else "w"
-    if already_written:
-        _truncate_to_lines(output_path, already_written)
-        _worker_log.info(
-            "bulk_export_resume job=%s from_line=%d", job.id, already_written
-        )
-
-    # Determine which resource types to fetch
-    if resource_type:
-        resource_types = [resource_type]
-    elif type_filter:
-        resource_types = [t.strip() for t in type_filter.split(",") if t.strip()]
-    else:
-        # Discover all non-infrastructure types from the server's CapabilityStatement
-        _INFRA = frozenset(
-            {
-                "CapabilityStatement",
-                "OperationDefinition",
-                "SearchParameter",
-                "StructureDefinition",
-                "CompartmentDefinition",
-                "ImplementationGuide",
-                "CodeSystem",
-                "ValueSet",
-                "ConceptMap",
-                "NamingSystem",
-                "OperationOutcome",
-                "Bundle",
-            }
-        )
-        try:
-            all_types = get_capability_statement(
-                server_url, token=token, timeout=timeout
-            )
-            resource_types = [t for t in all_types if t not in _INFRA]
-        except Exception as exc:
-            # If the circuit breaker is OPEN the FHIR server is confirmed
-            # unreachable — fail the job immediately instead of falling back
-            # to hardcoded types (which would also hit the open breaker).
-            from integrations.fhir._transport import FhirCircuitBreakerOpen
-
-            if isinstance(exc, FhirCircuitBreakerOpen):
-                raise
-            _worker_log.warning(
-                "bulk_export capability_statement_failed job=%s: %s", job.id, exc
-            )
-            resource_types = [
-                "Patient",
-                "Observation",
-                "Condition",
-                "Encounter",
-                "Procedure",
-            ]
-
-    if not resource_types:
-        _worker_log.info(
-            "bulk_export_empty job=%s — no resource types to export", job.id
-        )
-        Path(output_path).write_text("")
-        job.result_path = store_result(job.id, output_path)
-        save_checkpoint(_store, job, {"phase": "done", "lines_written": 0})
-        return
-
-    extra_params: dict = {}
-    if since:
-        extra_params["_lastUpdated"] = f"ge{since}"
-
-    save_checkpoint(
-        _store, job, {"phase": "fetching", "lines_written": already_written}
-    )
-    gen = fetch_all_resource_types(
-        server_url,
-        resource_types,
-        params=extra_params if extra_params else None,
-        token=token,
-        timeout=timeout,
-    )
-
-    from pipeline.jobs.summary import JobSummaryCollector
-
-    collector = JobSummaryCollector(config_profile=profile)
-
-    with open(output_path, open_mode, encoding="utf-8") as fh:
-        count, cancelled = _process_stream_chunked(
-            _skip_to(
-                (_rt_res[1] for _rt_res in gen), already_written
-            ),  # strip (rtype, resource) tuples
-            settings,
-            pseudonymizer,
-            fh,
-            already_written,
-            _store,
-            job,
-            "bulk_export",
-            summary=collector,
-        )
-
-    if not cancelled:
-        if _COMPRESS_RESULTS:
-            output_path = _compress_ndjson(output_path)
-        job.result_path = store_result(job.id, output_path)
-        save_checkpoint(
-            _store,
-            job,
-            {
-                "phase": "done",
-                "lines_written": count,
-                "summary": collector.to_dict(
-                    file_size_bytes=os.path.getsize(output_path),
-                    compressed=_COMPRESS_RESULTS,
-                ),
-            },
-        )
-        _worker_log.info("bulk_export_done job=%s count=%d", job.id, count)
-
-
-def _execute_cohort(job: Job) -> None:
-    """Run a cohort export job synchronously, resuming from checkpoint when available."""
-    if _staging is not None:
-        from pipeline.jobs.staged_worker import execute_cohort_staged
-
-        return execute_cohort_staged(job, _store, _staging)
-
-    from integrations.fhir.client import fetch_cohort, preflight_resource_count
-    from pipeline.config.service import get_settings
-    from pipeline.processor import _get_default_pseudonymizer
-
-    params = job.params
-    server_url = params["server_url"]
-    search_type = params["search_type"]
-    search_params = params.get("search_params", {})
-    everything_params = params.get("everything_params", {})
-    token = params.get("token") or os.environ.get("FHIR_SOURCE_TOKEN")
-    timeout = float(params.get("timeout", 30))
-    profile = params.get("config_profile", "auto")
-
-    settings = get_settings(profile)
-    pseudonymizer = _get_default_pseudonymizer()
-
-    output_path = os.path.join(_OUTPUT_DIR, f"{job.id}.ndjson")
-    Path(_OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
-
-    checkpoint = load_checkpoint(job) or {}
-    already_written = checkpoint.get("lines_written", 0)
-    open_mode = "a" if already_written > 0 else "w"
-    if already_written:
-        _truncate_to_lines(output_path, already_written)
-        _worker_log.info("cohort_resume job=%s from_line=%d", job.id, already_written)
-
-    # Preflight: quick count to bail early on empty servers
-    if already_written == 0:
-        count = preflight_resource_count(
-            server_url, resource_type=search_type, token=token
-        )
-        if count == 0:
-            _worker_log.info(
-                "cohort_empty job=%s — no %s resources found, skipping export",
-                job.id,
-                search_type,
-            )
-            Path(output_path).write_text("")
-            job.result_path = store_result(job.id, output_path)
-            save_checkpoint(_store, job, {"phase": "done", "lines_written": 0})
-            return
-
-    save_checkpoint(
-        _store, job, {"phase": "fetching", "lines_written": already_written}
-    )
-    gen = fetch_cohort(
-        server_url,
-        search_type=search_type,
-        search_params=search_params,
-        everything_params=everything_params,
-        token=token,
-        timeout=timeout,
-    )
-
-    from pipeline.jobs.summary import JobSummaryCollector
-
-    collector = JobSummaryCollector(config_profile=profile)
-
-    with open(output_path, open_mode, encoding="utf-8") as fh:
-        count, cancelled = _process_stream_chunked(
-            _skip_to(gen, already_written),
-            settings,
-            pseudonymizer,
-            fh,
-            already_written,
-            _store,
-            job,
-            "cohort",
-            summary=collector,
-        )
-
-    if not cancelled:
-        if _COMPRESS_RESULTS:
-            output_path = _compress_ndjson(output_path)
-        job.result_path = store_result(job.id, output_path)
-        save_checkpoint(
-            _store,
-            job,
-            {
-                "phase": "done",
-                "lines_written": count,
-                "summary": collector.to_dict(
-                    file_size_bytes=os.path.getsize(output_path),
-                    compressed=_COMPRESS_RESULTS,
-                ),
-            },
-        )
-        _worker_log.info("cohort_done job=%s count=%d", job.id, count)
-
-
-def _execute_reprocess(job: Job) -> None:
-    """Re-process staged rows with a (possibly different) config profile."""
-    if _staging is None:
-        job.error = "Staging not configured (MEDANON_STAGING_DB_URL not set)"
-        raise RuntimeError(job.error)
-    from pipeline.jobs.staged_worker import execute_reprocess_staged
-
-    return execute_reprocess_staged(job, _store, _staging)
-
-
-def _execute_patient_export(job: Job) -> None:
-    """Run a patient $everything export + de-identify job."""
-    if _staging is not None:
-        from pipeline.jobs.staged_worker import execute_patient_export_staged
-
-        return execute_patient_export_staged(job, _store, _staging)
-
-    from integrations.fhir.client import fetch_everything
-    from pipeline.config.service import get_settings
-    from pipeline.processor import _get_default_pseudonymizer
-
-    params = job.params
-    server_url = params["server_url"]
-    patient_id = params["patient_id"]
-    token = params.get("token") or os.environ.get("FHIR_SOURCE_TOKEN")
-    timeout = float(params.get("timeout", 30))
-    profile = params.get("config_profile", "auto")
-
-    settings = get_settings(profile)
-    pseudonymizer = _get_default_pseudonymizer()
-
-    output_path = os.path.join(_OUTPUT_DIR, f"{job.id}.ndjson")
-    Path(_OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
-
-    checkpoint = load_checkpoint(job) or {}
-    already_written = checkpoint.get("lines_written", 0)
-    open_mode = "a" if already_written > 0 else "w"
-    if already_written:
-        _truncate_to_lines(output_path, already_written)
-
-    save_checkpoint(
-        _store, job, {"phase": "fetching", "lines_written": already_written}
-    )
-    gen = fetch_everything(
-        server_url, "Patient", patient_id, token=token, timeout=timeout
-    )
-
-    from pipeline.jobs.summary import JobSummaryCollector
-
-    collector = JobSummaryCollector(config_profile=profile)
-
-    with open(output_path, open_mode, encoding="utf-8") as fh:
-        count, cancelled = _process_stream_chunked(
-            _skip_to(gen, already_written),
-            settings,
-            pseudonymizer,
-            fh,
-            already_written,
-            _store,
-            job,
-            "patient_export",
-            summary=collector,
-        )
-
-    if not cancelled:
-        if _COMPRESS_RESULTS:
-            output_path = _compress_ndjson(output_path)
-        job.result_path = store_result(job.id, output_path)
-        save_checkpoint(
-            _store,
-            job,
-            {
-                "phase": "done",
-                "lines_written": count,
-                "summary": collector.to_dict(
-                    file_size_bytes=os.path.getsize(output_path),
-                    compressed=_COMPRESS_RESULTS,
-                ),
-            },
-        )
-        _worker_log.info("patient_export_done job=%s count=%d", job.id, count)
-
-
-def _execute_bulk_import(job: Job) -> None:
-    """Read a completed NDJSON result and upload resources to a target FHIR server.
-
-    Accepts job params:
-        ``job_id``       — source export Job whose result_path is used.
-        ``ndjson_path``  — explicit NDJSON path (local or s3://); used when job_id absent.
-        ``target_url``   — target FHIR server base URL (required).
-        ``target_token`` — bearer token for the target (optional).
-        ``timeout``      — per-request HTTP timeout in seconds (default 30).
-        ``parallel``     — concurrent FHIR batch Bundle POSTs per tier (default 4).
-        ``batch_size``   — resources per FHIR batch Bundle (default 500).
-
-    Writes the source NDJSON path as the job result_path so the result endpoint
-    can still serve the original de-identified file.
-    """
-    from integrations.fhir.writer import upload_resources
-    from integrations.storage import get_result_storage
-
-    params = job.params
-    source_job_id = params.get("job_id")
-    ndjson_path = params.get("ndjson_path")
-    target_url = params["target_url"]
-    target_token = params.get("target_token") or os.environ.get("FHIR_TARGET_TOKEN")
-    timeout = float(params.get("timeout", 30))
-    parallel = int(
-        params.get("parallel", os.environ.get("MEDANON_UPLOAD_PARALLEL", "4"))
-    )
-    batch_size = int(
-        params.get("batch_size", os.environ.get("MEDANON_UPLOAD_BATCH_SIZE", "500"))
-    )
-
-    # Resolve the NDJSON path from the source job if job_id was provided
-    if source_job_id:
-        src = _store.get(source_job_id)
-        if src is None or not src.result_path:
-            raise ValueError(f"Source job {source_job_id!r} not found or has no result")
-        ndjson_path = src.result_path
-
-    if not ndjson_path:
-        raise ValueError("bulk-import job requires 'job_id' or 'ndjson_path' in params")
-
-    save_checkpoint(_store, job, {"phase": "loading"})
-
-    storage = get_result_storage()
-    resources: list[dict] = []
-    stream = storage.open_stream(ndjson_path)
-    try:
-        for raw_line in stream:
-            line = (
-                raw_line.decode("utf-8")
-                if isinstance(raw_line, (bytes, bytearray))
-                else raw_line
-            )
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                obj = _json_loads(line)
-            except (ValueError, TypeError):
-                continue
-            if isinstance(obj, dict) and obj.get("resourceType") and "error" not in obj:
-                resources.append(obj)
-    finally:
-        if hasattr(stream, "close"):
-            stream.close()
-
-    total = len(resources)
-    _worker_log.info(
-        "bulk_import_start job=%s source=%s total=%d parallel=%d batch_size=%d",
-        job.id,
-        source_job_id or ndjson_path,
-        total,
-        parallel,
-        batch_size,
-    )
-    # Include staged_count in every checkpoint so the API response exposes it.
-    # The service maps: processed = checkpoint["lines_written"], staged_count = checkpoint["staged_count"]
-    save_checkpoint(
-        _store, job, {"phase": "uploading", "lines_written": 0, "staged_count": total}
-    )
-
-    uploaded = errors = 0
-    for result in upload_resources(
-        target_url,
-        resources,
-        token=target_token,
-        timeout=timeout,
-        parallel=parallel,
-        batch_size=batch_size,
-    ):
-        if result.get("success"):
-            uploaded += 1
-        else:
-            errors += 1
-        done_count = uploaded + errors
-        if done_count % 500 == 0:
-            save_checkpoint(
-                _store,
-                job,
-                {
-                    "phase": "uploading",
-                    "lines_written": done_count,
-                    "staged_count": total,
-                },
-            )
-
-    save_checkpoint(
-        _store,
-        job,
-        {
-            "phase": "done",
-            "lines_written": uploaded + errors,
-            "staged_count": total,
-            "errors": errors,
-        },
-    )
-    job.result_path = ndjson_path  # re-use source NDJSON; no new file written
-    _store.update(job)
-    _worker_log.info(
-        "bulk_import_done job=%s uploaded=%d errors=%d",
-        job.id,
-        uploaded,
-        errors,
-    )
-
-
-def _execute_batch_patient_export(job: Job) -> None:
-    """Run a batch patient $everything export + de-identify job.
-
-    Fetches $everything for each patient ID in the job params, de-duplicates
-    shared resources, processes in chunks, and writes a single combined NDJSON.
-    """
-    if _staging is not None:
-        from pipeline.jobs.staged_worker import execute_batch_patient_export_staged
-
-        return execute_batch_patient_export_staged(job, _store, _staging)
-
-    from integrations.fhir.client import fetch_patients_everything
-    from pipeline.config.service import get_settings
-    from pipeline.processor import _get_default_pseudonymizer
-
-    params = job.params
-    server_url = params["server_url"]
-    patient_ids = params["patient_ids"]
-    token = params.get("token") or os.environ.get("FHIR_SOURCE_TOKEN")
-    timeout = float(params.get("timeout", 30))
-    profile = params.get("config_profile", "auto")
-
-    settings = get_settings(profile)
-    pseudonymizer = _get_default_pseudonymizer()
-
-    output_path = os.path.join(_OUTPUT_DIR, f"{job.id}.ndjson")
-    Path(_OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
-
-    checkpoint = load_checkpoint(job) or {}
-    already_written = checkpoint.get("lines_written", 0)
-    open_mode = "a" if already_written > 0 else "w"
-    if already_written:
-        _truncate_to_lines(output_path, already_written)
-        _worker_log.info(
-            "batch_patient_resume job=%s from_line=%d", job.id, already_written
-        )
-
-    save_checkpoint(
-        _store, job, {"phase": "fetching", "lines_written": already_written}
-    )
-    gen = fetch_patients_everything(
-        server_url,
-        patient_ids,
-        token=token,
-        timeout=timeout,
-    )
-
-    from pipeline.jobs.summary import JobSummaryCollector
-
-    collector = JobSummaryCollector(config_profile=profile)
-
-    with open(output_path, open_mode, encoding="utf-8") as fh:
-        count, cancelled = _process_stream_chunked(
-            _skip_to(gen, already_written),
-            settings,
-            pseudonymizer,
-            fh,
-            already_written,
-            _store,
-            job,
-            "batch_patient_export",
-            summary=collector,
-        )
-
-    if not cancelled:
-        if _COMPRESS_RESULTS:
-            output_path = _compress_ndjson(output_path)
-        job.result_path = store_result(job.id, output_path)
-        save_checkpoint(
-            _store,
-            job,
-            {
-                "phase": "done",
-                "lines_written": count,
-                "summary": collector.to_dict(
-                    file_size_bytes=os.path.getsize(output_path),
-                    compressed=_COMPRESS_RESULTS,
-                ),
-            },
-        )
-        _worker_log.info(
-            "batch_patient_export_done job=%s patients=%d count=%d",
-            job.id,
-            len(patient_ids),
-            count,
-        )
-
-
-_EXECUTORS = {
-    "bulk-export": _execute_bulk_export,
-    "cohort": _execute_cohort,
-    "reprocess": _execute_reprocess,
-    "patient-export": _execute_patient_export,
-    "bulk-import": _execute_bulk_import,
-    "batch-patient-export": _execute_batch_patient_export,
-}
 
 
 # ---------------------------------------------------------------------------
@@ -1005,6 +323,7 @@ def _recover_running_jobs() -> int:
                     job.status = JobStatus.PENDING
                     job.error = None
                     _store.update(job)
+                    _store.notify_new_job(job.id)
                     recovered += 1
         except Exception as exc:
             _worker_log.warning("recovery_claim_failed: %s", type(exc).__name__)
@@ -1018,9 +337,29 @@ def _recover_running_jobs() -> int:
             job.status = JobStatus.PENDING
             job.error = None
             _store.update(job)
+            _store.notify_new_job(job.id)
             recovered += 1
     except Exception as exc:
         _worker_log.warning("recovery_scan_failed: %s", type(exc).__name__)
+    # Re-notify any PENDING jobs whose stream message was lost.  This happens
+    # when the Redis stream consumer group was created with id="$" (skips
+    # pre-existing messages) or the stream key was evicted between the API's
+    # XADD and the worker's XREADGROUP.  Calling notify_new_job again is
+    # idempotent: the worker validates job.status == PENDING before executing,
+    # so duplicate messages are ACK-ed and discarded.
+    try:
+        orphaned = _store.list_jobs(status="pending", limit=200)
+        for job in orphaned:
+            try:
+                _store.notify_new_job(job.id)
+                recovered += 1
+                _worker_log.info("recover_pending job=%s — re-queued", job.id)
+            except Exception as exc:
+                _worker_log.warning(
+                    "recover_pending_notify_failed job=%s: %s", job.id, exc
+                )
+    except Exception as exc:
+        _worker_log.warning("recover_pending_scan_failed: %s", type(exc).__name__)
     return recovered
 
 

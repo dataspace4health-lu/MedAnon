@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import threading
 
 from utils.fhirpath import not_implemented, find_nodes
@@ -207,6 +208,235 @@ def nlp_scrub_by_path(resource: dict, el: dict, params: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# NLP conditional action — detect first, act per entity type
+# ---------------------------------------------------------------------------
+
+_DEFAULT_ENTITY_ACTIONS: dict[str, str] = {
+    # --- Presidio built-in entities ---
+    "PERSON": "redact",
+    "DATE_TIME": "generalize",
+    "AGE": "generalize",
+    "LOCATION": "redact",
+    "PHONE_NUMBER": "redact",
+    "EMAIL_ADDRESS": "redact",
+    "US_SSN": "redact",
+    "US_PASSPORT": "redact",
+    "US_DRIVER_LICENSE": "redact",
+    "MEDICAL_LICENSE": "redact",
+    "NRP": "redact",
+    "CREDIT_CARD": "redact",
+    "IBAN_CODE": "redact",
+    "US_BANK_NUMBER": "redact",
+    "US_ITIN": "redact",
+    "IP_ADDRESS": "redact",
+    "URL": "keep",
+    # --- Custom recognizer entities ---
+    "STREET_ADDRESS": "redact",
+    "INTL_PHONE": "redact",
+    "FAX_NUMBER": "redact",
+    # EU national IDs
+    "UK_NINO": "redact",
+    "FR_NIR": "redact",
+    "DE_SVNR": "redact",
+    "NL_BSN": "redact",
+    "IT_CF": "redact",
+    "ES_DNI": "redact",
+    "CH_AHV": "redact",
+    "BE_NN": "redact",
+    # Healthcare IDs
+    "MRN": "redact",
+    "UK_NHS": "redact",
+    "DE_KVNR": "redact",
+    "EU_EHIC": "redact",
+    # Postcodes
+    "UK_POSTCODE": "redact",
+    "EU_POSTCODE": "redact",
+    # Labeled markers
+    "DOB_MARKER": "generalize",
+    "AGE_MARKER": "generalize",
+    "NATIONAL_ID_LABEL": "redact",
+    "ACCOUNT_LABEL": "redact",
+    "LICENSE_PLATE": "redact",
+    # GDPR Art.9
+    "NATIONALITY_LABEL": "redact",
+    "RELIGION_LABEL": "redact",
+    "POLITICAL_LABEL": "redact",
+    "ETHNICITY_LABEL": "redact",
+    # EU dates
+    "EU_DATE": "generalize",
+    "EU_DATE_WRITTEN": "generalize",
+    # Synthetic artifacts
+    "SYNTHEA_SEED": "redact",
+}
+
+_YEAR_RE = re.compile(r"\b((?:19|20)\d{2})\b")
+_AGE_RE = re.compile(r"\b(\d+)\b")
+
+
+def _replace_span(
+    text: str, start: int, end: int, entity_type: str,
+    entity_action: str, token_state: dict,
+) -> str:
+    """Replace a single detected span using the entity-specific strategy."""
+    span_text = text[start:end]
+    if entity_action == "keep":
+        return text
+    if entity_action == "redact":
+        replacement = f"[{entity_type}]"
+    elif entity_action == "generalize":
+        if entity_type in ("DATE_TIME", "DOB_MARKER", "EU_DATE", "EU_DATE_WRITTEN"):
+            m = _YEAR_RE.search(span_text)
+            replacement = m.group(1) if m else "[DATE]"
+        elif entity_type in ("AGE", "AGE_MARKER"):
+            m = _AGE_RE.search(span_text)
+            if m:
+                age = int(m.group(1))
+                decade_lo = (age // 10) * 10
+                replacement = f"{decade_lo}-{decade_lo + 9}"
+            else:
+                replacement = "[AGE]"
+        else:
+            replacement = f"[{entity_type}]"
+    else:
+        # tokenize (default)
+        from integrations.nlp.detector import _tokenize
+        replacement = _tokenize(span_text, entity_type, token_state)
+    return text[:start] + replacement + text[end:]
+
+
+def nlp_detect_act_by_path(resource: dict, el: dict, params: dict) -> None:
+    """NLP-conditional action: detect PII first, apply entity-specific actions.
+
+    Unlike ``nlp_scrub`` which always tokenizes all detected spans uniformly,
+    this action maps each detected entity type to a configurable replacement
+    strategy (redact, generalize, tokenize, keep).  When no entities are
+    detected, the text is left unchanged and ``params["_no_change"]`` is set
+    to signal the dispatcher to skip the manifest entry.
+    """
+    _ensure_nlp_detector_imports()
+
+    entities = _nlp_resolve_entities(params.get("entities", "healthcare"))
+    threshold = float(params.get("threshold", 0.4))
+    language = str(params.get("language", "en"))
+    use_html = bool(params.get("html", False))
+    entity_actions = {**_DEFAULT_ENTITY_ACTIONS, **(params.get("entity_actions") or {})}
+    default_action = entity_actions.get("default", "tokenize")
+    token_state = params.get("_token_state") or {"next": {}, "map": {}, "reverse": {}}
+
+    adapter = _get_nlp_adapter()
+    if adapter is None:
+        if _NLP_FAIL_MODE == "raise":
+            raise RuntimeError(f"NLP adapter unavailable — cannot detect {el['path']}")
+        _log.error("nlp_unavailable path=%s — redacting as safety fallback", el["path"])
+        redact_by_path(resource, el, {})
+        params["_actual_action"] = "nlp_detect_act/redact"
+        return
+
+    def detect_and_replace(text: str) -> str:
+        """Run detection on text, apply per-entity replacements.
+
+        Spans are replaced right-to-left (descending by start position) so that
+        each replacement only shifts characters to the right of all remaining
+        spans, keeping their original (start, end) positions valid.
+        """
+        if not text or not text.strip():
+            return text
+        hits = adapter.detect(text, entities, threshold, language)
+        if not hits:
+            return text
+        # Guarantee descending order regardless of adapter implementation.
+        sorted_hits = sorted(hits, key=lambda h: h[0], reverse=True)
+        for start, end, entity_type in sorted_hits:
+            if not text[start:end].strip():
+                continue
+            ea = entity_actions.get(entity_type, default_action)
+            text = _replace_span(text, start, end, entity_type, ea, token_state)
+        return text
+
+    # Navigate to the field
+    path = el["path"]
+    parts = path.split(".")
+    if len(parts) < 2:
+        params["_no_change"] = True
+        return
+
+    key = parts[-1]
+    parent_path = parts[1:-1]
+
+    try:
+        nodes = find_nodes(resource, parent_path, [])
+    except Exception:
+        _log.error(
+            "nlp_detect_act_find_nodes_failed path=%s — redacting as safety fallback", path
+        )
+        redact_by_path(resource, el, {})
+        params["_actual_action"] = "nlp_detect_act/redact"
+        return
+
+    changed = False
+
+    def _apply(node, field):
+        nonlocal changed
+        if isinstance(node, list):
+            for item in node:
+                _apply(item, field)
+            return
+        if not isinstance(node, dict) or field not in node:
+            return
+        current = node[field]
+        if use_html:
+            if isinstance(current, dict) and isinstance(current.get("div"), str):
+                try:
+                    result = _nlp_scrub_xhtml(current["div"], detect_and_replace)
+                    if result != current["div"]:
+                        current["div"] = result
+                        changed = True
+                except Exception:
+                    _log.error("nlp_detect_act_failed path=%s — redacting", path)
+                    current["div"] = "[REDACTED]"
+                    changed = True
+            elif isinstance(current, str):
+                try:
+                    result = _nlp_scrub_xhtml(current, detect_and_replace)
+                    if result != current:
+                        node[field] = result
+                        changed = True
+                except Exception:
+                    _log.error("nlp_detect_act_failed path=%s — redacting", path)
+                    node[field] = "[REDACTED]"
+                    changed = True
+        elif isinstance(current, str):
+            try:
+                result = detect_and_replace(current)
+                if result != current:
+                    node[field] = result
+                    changed = True
+            except Exception:
+                _log.error("nlp_detect_act_failed path=%s — redacting", path)
+                node[field] = "[REDACTED]"
+                changed = True
+        elif isinstance(current, list):
+            for i, v in enumerate(current):
+                if isinstance(v, str):
+                    try:
+                        result = detect_and_replace(v)
+                        if result != v:
+                            current[i] = result
+                            changed = True
+                    except Exception:
+                        _log.error("nlp_detect_act_failed path=%s[%d] — redacting", path, i)
+                        current[i] = "[REDACTED]"
+                        changed = True
+
+    _apply(nodes, key)
+
+    if not changed:
+        params["_no_change"] = True
+    else:
+        params["_actual_action"] = "nlp_detect_act"
+
+
+# ---------------------------------------------------------------------------
 # De-identification actions (pure transformations + NLP)
 # ---------------------------------------------------------------------------
 
@@ -219,6 +449,7 @@ deident_actions = {
     "scrub_text": scrub_text_by_path,
     "nlp_scrub": nlp_scrub_by_path,
     "nlp_detect": nlp_scrub_by_path,  # backward-compat alias
+    "nlp_detect_act": nlp_detect_act_by_path,
 }
 
 # ---------------------------------------------------------------------------

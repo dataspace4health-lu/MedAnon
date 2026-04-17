@@ -86,6 +86,11 @@ rules:
       strategy: zip_prefix
       prefix_length: 3
 
+  # Geolocation (lat/lon) nested inside Patient.address.extension — re-identification PHI
+  - name: redact patient address geolocation
+    match: Patient.address.extension
+    action: redact
+
   # Identifier 3: Dates — generalize to year only
   # Ages 90+ are at higher re-identification risk; this profile truncates to year
   # for all ages. Organisations with patients ≥ 90 should additionally redact
@@ -269,7 +274,22 @@ rules:
     params:
       strategy: date_year
 
-  - match: "*.onset[x]"
+  - match: "*.onsetDateTime"
+    action: generalize
+    params:
+      strategy: date_year
+
+  - match: "*.onsetPeriod.start"
+    action: generalize
+    params:
+      strategy: date_year
+
+  - match: "*.onsetPeriod.end"
+    action: generalize
+    params:
+      strategy: date_year
+
+  - match: "*.onsetString"
     action: generalize
     params:
       strategy: date_year
@@ -304,25 +324,50 @@ rules:
       threshold: 0.4
 
   - match: "*.note.text"
-    action: scrub_text
-    params:
-      mode: text
-      patterns: all
-
-  - match: "*.note.text"
     action: nlp_scrub
     params:
       mode: tokenize
       threshold: 0.4
 
-  - match: "*.comment"
+  # Street address pattern — fires on any valueString containing a recognizable
+  # address regardless of LOINC code or resource structure (covers PRAPARE 56799-0,
+  # custom SDOH panels, and any other free-text fields with address content).
+  # Two rules: one for top-level valueString, one for component.valueString
+  # (e.g. Observation.component in PRAPARE / SDOH panels).
+  - name: scrub street addresses in valueString
+    match: "*.valueString"
     action: scrub_text
     params:
       mode: text
-      patterns: all
+      patterns: street_address
+
+  - name: scrub street addresses in component valueString
+    match: "*.component.valueString"
+    action: scrub_text
+    params:
+      mode: text
+      patterns: street_address
+
+  - match: "*.valueString"
+    action: nlp_detect_act
+    params:
+      threshold: 0.4
+
+  - match: "*.comment"
+    action: nlp_detect_act
+    params:
+      threshold: 0.4
 
   - match: "*.description"
-    action: scrub_text
+    action: nlp_detect_act
     params:
-      mode: text
-      patterns: all
+      threshold: 0.4
+
+  # Identifier type labels disclose PHI categories even when values are pseudonymized
+  - name: redact identifier type text labels
+    match: "*.identifier.type.text"
+    action: redact
+
+  - name: redact identifier type coding display labels
+    match: "*.identifier.type.coding.display"
+    action: redact

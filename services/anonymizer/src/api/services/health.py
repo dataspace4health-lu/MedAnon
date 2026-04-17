@@ -4,7 +4,7 @@ import logging
 import os
 import urllib.error
 import urllib.request as _ureq
-from concurrent.futures import as_completed
+from concurrent.futures import TimeoutError as _FuturesTimeoutError, as_completed
 
 from utils.thread_pool import get_executor
 
@@ -56,8 +56,20 @@ class HealthCheckService:
         futures = {
             executor.submit(fn, *args): name for name, (fn, args) in probes.items()
         }
-        for fut in as_completed(futures, timeout=timeout + 2):
-            checks[futures[fut]] = fut.result()
+        try:
+            for fut in as_completed(futures, timeout=timeout + 2):
+                try:
+                    checks[futures[fut]] = fut.result()
+                except Exception as exc:
+                    logger.debug("readiness: probe raised: %s", exc)
+                    checks[futures[fut]] = "error"
+        except _FuturesTimeoutError:
+            # One or more probes didn't finish in time — mark them so /ready
+            # returns 503 instead of letting the TimeoutError propagate as 500.
+            for fut, name in futures.items():
+                if name not in checks:
+                    logger.debug("readiness: probe timed out: %s", name)
+                    checks[name] = "timeout"
         return checks
 
     def _probe_gpas(self, url: str, timeout: float) -> str:

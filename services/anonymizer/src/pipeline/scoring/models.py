@@ -31,8 +31,9 @@ class PrivacyDecision:
     passed: bool
     threshold: float
     attacker_risk: float
-    identifier_risk: float
+    identifier_risk: float        # HIPAA Safe Harbor 18-identifier coverage
     text_risk: float
+    config_identifier_risk: float = 0.0  # Active config rule coverage
     evidence: list[Evidence] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -42,6 +43,7 @@ class PrivacyDecision:
             "threshold": self.threshold,
             "attacker_risk": round(self.attacker_risk, 4),
             "identifier_risk": round(self.identifier_risk, 4),
+            "config_identifier_risk": round(self.config_identifier_risk, 4),
             "text_risk": round(self.text_risk, 4),
             "evidence": [
                 {

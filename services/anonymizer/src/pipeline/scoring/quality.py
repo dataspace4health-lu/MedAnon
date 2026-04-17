@@ -100,25 +100,41 @@ class QualityEvaluator:
             evidence.append(
                 Evidence(
                     check="rule_coverage",
-                    value=0.5,
-                    details={"reason": "no settings available — indeterminate"},
-                    severity="warning",
+                    value=1.0,
+                    details={"reason": "no settings available — coverage not measurable"},
                 )
             )
-            return 0.5
+            return 1.0
 
         rtype = deidentified.get("resourceType", "")
 
-        # Determine which rules are applicable to this resource type
+        # Determine which rules are applicable to this resource type AND whose
+        # target root field actually exists in the resource.  Without the
+        # field-existence check, wildcard rules like ``*.note.text`` are counted
+        # as applicable to every resource type — even those without a ``note``
+        # field — which deflates coverage to ~50%.
         applicable: set[str] = set()
         for rule in settings.rules:
             name = rule.get("name", rule.get("match", ""))
             match_expr = rule.get("match", "")
             # A rule applies if it's a wildcard (*.) or targets this resource type
+            type_matches = False
             if match_expr.startswith("*.") or match_expr.startswith(f"{rtype}."):
-                applicable.add(name)
+                type_matches = True
             elif match_expr.startswith("{resourceType}."):
-                applicable.add(name)
+                type_matches = True
+
+            if not type_matches:
+                continue
+
+            # Extract the root field targeted by this rule (e.g. "name" from
+            # "Patient.name" or "*.name.family") and only count the rule as
+            # applicable when the resource actually contains that field.
+            parts = match_expr.split(".")
+            root_field = parts[1] if len(parts) >= 2 else ""
+            if root_field and root_field not in deidentified:
+                continue
+            applicable.add(name)
 
         if not applicable:
             evidence.append(

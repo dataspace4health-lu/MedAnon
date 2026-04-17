@@ -31,6 +31,7 @@ from api.schemas.jobs import (
     BulkImportJobRequest,
     CohortJobRequest,
     PatientExportJobRequest,
+    UploadToTargetRequest,
 )
 from utils import audit
 from api.services.jobs import (
@@ -397,7 +398,7 @@ async def reprocess_job(job_id: str, config_profile: str = Query("auto")):
 
 @router.post("/jobs/{job_id}/upload-to-target")
 async def upload_job_to_target(
-    job_id: str, target_url: str | None = None, target_token: str | None = None
+    job_id: str, req: UploadToTargetRequest | None = None
 ):
     """Upload a completed job's de-identified resources to the target FHIR server.
 
@@ -410,13 +411,15 @@ async def upload_job_to_target(
     - 410 if the result file has been cleaned up.
     - 400 if no target URL is available.
     """
-    resolved_url = await _resolve_import_target_url(target_url)
+    if req is None:
+        req = UploadToTargetRequest()
+    resolved_url = await _resolve_import_target_url(req.target_url)
     if not resolved_url:
         raise HTTPException(
             status_code=400,
             detail="No target URL provided and FHIR_TARGET_URL env var is not set",
         )
-    resolved_token = target_token or os.environ.get("FHIR_TARGET_TOKEN") or None
+    resolved_token = req.target_token or os.environ.get("FHIR_TARGET_TOKEN") or None
     try:
         result = await asyncio.to_thread(
             _service.upload_job_to_target,

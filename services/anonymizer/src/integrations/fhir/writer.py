@@ -497,7 +497,9 @@ def upload_resources(
     done = 0
 
     if parallel > 1:
-        from concurrent.futures import ThreadPoolExecutor, as_completed
+        from concurrent.futures import as_completed
+
+        from utils.thread_pool import get_executor
 
         # Group resources into per-tier buckets (already sorted; order is preserved)
         tier_levels = sorted(
@@ -513,26 +515,25 @@ def upload_resources(
                 tier_buckets[tiers.get(r.get("resourceType", ""), 0)].append(r)
         all_resources = None  # allow GC of sorted list; tier_buckets owns refs now
 
+        pool = get_executor()
         for tier_level in tier_levels:
             tier_resources = tier_buckets.pop(tier_level)
             batches = [
                 tier_resources[i : i + chunk_size]
                 for i in range(0, len(tier_resources), chunk_size)
             ]
-            effective = min(parallel, len(batches))
-            with ThreadPoolExecutor(max_workers=effective) as pool:
-                futs = [
-                    pool.submit(_post_bundle_batch, base, b, token, timeout)
-                    for b in batches
-                ]
-                # as_completed yields futures as they finish; pool.__exit__ (shutdown wait=True)
-                # guarantees all tier-N futures complete before the next tier begins.
-                for fut in as_completed(futs):
-                    for result in fut.result():
-                        yield result
-                        done += 1
-                        if done % 1000 == 0 or done == total:
-                            log.info("upload_resources: %d/%d processed", done, total)
+            futs = [
+                pool.submit(_post_bundle_batch, base, b, token, timeout)
+                for b in batches
+            ]
+            # as_completed yields futures as they finish and blocks until all
+            # tier-N futures complete — this ensures tier ordering is preserved.
+            for fut in as_completed(futs):
+                for result in fut.result():
+                    yield result
+                    done += 1
+                    if done % 1000 == 0 or done == total:
+                        log.info("upload_resources: %d/%d processed", done, total)
     else:
         for i in range(0, total, chunk_size):
             chunk = all_resources[i : i + chunk_size]

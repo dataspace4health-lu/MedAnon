@@ -58,7 +58,12 @@ def compute_composite(
     else:
         privacy_score = 1.0 - (privacy.risk_score / privacy.threshold)
     raw = privacy_score * utility.score * quality.score
-    return round(raw * 100, 1), "PASS"
+    composite = round(raw * 100, 1)
+    # A composite of exactly 0.0 means at least one dimension is zero (e.g.
+    # utility or quality is completely absent) — return FAIL even when privacy
+    # passes, since a score of zero is not a meaningful pass.
+    decision = "PASS" if composite > 0.0 else "FAIL"
+    return composite, decision
 
 
 def score_resource(
@@ -140,7 +145,7 @@ class ScoreCollector:
         "_min_composite",
         "_utility_sum",
         "_quality_sum",
-        "_patients",
+        "_patient_qis",
         "_patient_manifests",
         "_patient_seen",
         "_error_count",
@@ -155,7 +160,7 @@ class ScoreCollector:
         self._min_composite: float = float("inf")
         self._utility_sum: float = 0.0
         self._quality_sum: float = 0.0
-        self._patients: list[dict] = []
+        self._patient_qis: list[tuple[str, str, str]] = []
         self._patient_manifests: list[list[dict]] = []
         self._patient_seen: int = 0
         self._error_count: int = 0
@@ -225,18 +230,25 @@ class ScoreCollector:
         else:
             self._fail_count += 1
 
-        # Accumulate Patients for batch-level k-anonymity (reservoir sampling)
+        # Accumulate Patient QI tuples for batch-level k-anonymity (reservoir sampling).
+        # Only the 3 quasi-identifier fields are retained — not the full dict —
+        # to bound memory usage (~100 bytes/patient instead of ~5 KB).
         if deidentified.get("resourceType") == "Patient":
             self._patient_seen += 1
-            if len(self._patients) < _MAX_PATIENTS:
-                self._patients.append(deidentified)
+            try:
+                from medanon_core.analytics.risk import _extract_patient_qi
+                qi = _extract_patient_qi(deidentified)
+            except ImportError:
+                qi = ("", "", "")
+            if len(self._patient_qis) < _MAX_PATIENTS:
+                self._patient_qis.append(qi)
                 self._patient_manifests.append(manifest_entries)
             else:
                 # Reservoir sampling: replace a random element with probability
                 # _MAX_PATIENTS / _patient_seen to maintain a uniform subsample.
                 j = random.randrange(self._patient_seen)
                 if j < _MAX_PATIENTS:
-                    self._patients[j] = deidentified
+                    self._patient_qis[j] = qi
                     self._patient_manifests[j] = manifest_entries
 
         return result
@@ -251,11 +263,11 @@ class ScoreCollector:
         if total == 0:
             return {"computed": False, "reason": "no resources scored"}
 
-        # Batch-level privacy with full k-anonymity
+        # Batch-level privacy with full k-anonymity (from pre-extracted QI tuples)
         batch_privacy: PrivacyDecision | None = None
-        if self._patients:
-            batch_privacy = _privacy_eval.evaluate_batch(
-                self._patients,
+        if self._patient_qis:
+            batch_privacy = _privacy_eval.evaluate_batch_from_qis(
+                self._patient_qis,
                 self._patient_manifests,
             )
 

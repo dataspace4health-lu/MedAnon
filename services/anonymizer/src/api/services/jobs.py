@@ -27,6 +27,7 @@ class JobService:
         checkpoint = job.checkpoint_data or {}
         # Support both old-style (lines_written) and staged (processed) checkpoint keys
         processed = checkpoint.get("processed", checkpoint.get("lines_written", 0))
+        params = getattr(job, "params", None) or {}
         return {
             "job_id": job.id,
             "type": job.type,
@@ -39,6 +40,7 @@ class JobService:
             "staged_count": checkpoint.get("staged_count"),
             "phase": checkpoint.get("phase", "queued"),
             "summary": checkpoint.get("summary"),
+            "config_profile": params.get("config_profile", "auto"),
         }
 
     def submit_bulk_export(self, server_url: str, params: dict) -> dict:

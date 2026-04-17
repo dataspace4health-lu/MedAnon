@@ -40,10 +40,12 @@ DEIDENT_ACTIONS = frozenset(_deident_actions)
 PSEUDO_ACTIONS = frozenset(_pseudo_actions)
 DEPSEUDO_ACTIONS = frozenset(_depseudo_actions)
 GPAS_PSEUDO_ACTIONS = frozenset({"gpas_pseudonymize"})
+GPAS_DEPSEUDO_ACTIONS = frozenset({"gpas_depseudonymize"})
+NLP_BATCH_ACTIONS = frozenset({"nlp_scrub", "nlp_detect", "nlp_detect_act"})
 
 
 # ---------------------------------------------------------------------------
-# Work item for deferred gPAS batch call
+# Work items for deferred batch calls
 # ---------------------------------------------------------------------------
 
 
@@ -57,6 +59,16 @@ class BatchWork:
     serialized_value: str = field(default="", repr=False)
 
 
+@dataclass
+class NlpWork:
+    """A single element deferred to the NLP batch pass."""
+
+    rule: dict
+    element: dict  # FHIRPath node with ``path`` and ``value`` keys
+    params: dict
+    action_type: str  # 'nlp_scrub', 'nlp_detect', or 'nlp_detect_act'
+
+
 # ---------------------------------------------------------------------------
 # Pass 1: evaluate rules, dispatch non-gPAS actions, collect gPAS work
 # ---------------------------------------------------------------------------
@@ -68,21 +80,35 @@ def dispatch_pass1(
     settings,
     manifest_entries: list,
     processing_mode: str,
-) -> list[BatchWork]:
-    """Evaluate all rules against *resource*, applying non-gPAS actions immediately.
+) -> tuple[list[BatchWork], list[NlpWork]]:
+    """Evaluate all rules against *resource*, applying non-gPAS/NLP actions immediately.
 
     Modifies *resource* in place.  Appends fired-rule metadata to
     *manifest_entries* when the manifest is enabled.
 
     Returns:
-        List of :class:`BatchWork` items for the gPAS batch pass (Pass 2).
+        Tuple of (gPAS :class:`BatchWork` items, NLP :class:`NlpWork` items)
+        for the respective batch passes.
     """
     gpas_work: list[BatchWork] = []
+    nlp_work: list[NlpWork] = []
     processed_paths: set[tuple[str, str]] = set()
 
     for rule in applicable_rules:
         action = rule["action"]
         params = _resolve_rule_params(rule, settings)
+
+        # Apply domain_map override: route this resource type to its leaf gPAS domain.
+        # Only runs for gpas_pseudonymize/gpas_depseudonymize when the config has a domain_map.
+        if action in GPAS_PSEUDO_ACTIONS or action in GPAS_DEPSEUDO_ACTIONS:
+            _domain_map = getattr(settings, "domain_map", None)
+            if _domain_map:
+                resource_type = (
+                    resource.get("resourceType") if isinstance(resource, dict) else None
+                )
+                if resource_type and resource_type in _domain_map:
+                    params = dict(params)  # shallow copy — gpas_domain is a scalar
+                    params["gpas_domain"] = _domain_map[resource_type]
 
         # Evaluate FHIRPath match candidates, collecting node elements
         matched_elements: list[dict] = []
@@ -124,11 +150,19 @@ def dispatch_pass1(
                         continue
                     raise
 
-        # Filter elements already processed by a prior rule with the same action
+        # Filter elements already processed by a prior rule with the same action.
+        # The key includes value identity so that different array elements at the
+        # same structural path (e.g. race vs ethnicity sub-extensions both at
+        # Patient.extension.extension.valueString) are NOT treated as duplicates.
         elements_to_process = []
         for el in matched_elements:
             el_path = el.get("path", "?")
-            path_key = (el_path, action)
+            el_val = el.get("value")
+            # id() is safe here: el_val is a live reference held in matched_elements,
+            # so the object cannot be GC'd and its id() cannot be reused within this
+            # tight loop.  Scalar values (str/int/bool) use the value itself as key.
+            val_id = id(el_val) if isinstance(el_val, (dict, list)) else el_val
+            path_key = (el_path, action, val_id)
             if path_key in processed_paths:
                 audit_log.debug(
                     "rule_skipped_duplicate action=%s path=%s",
@@ -139,7 +173,9 @@ def dispatch_pass1(
             elements_to_process.append(el)
 
         for el in elements_to_process:
-            processed_paths.add((el.get("path", "?"), action))
+            el_val = el.get("value")
+            val_id = id(el_val) if isinstance(el_val, (dict, list)) else el_val
+            processed_paths.add((el.get("path", "?"), action, val_id))
 
         for el in elements_to_process:
             el_path = el.get("path", "?")
@@ -154,7 +190,7 @@ def dispatch_pass1(
                 else "unknown",
             )
 
-            if action in GPAS_PSEUDO_ACTIONS:
+            if action in GPAS_PSEUDO_ACTIONS or action in GPAS_DEPSEUDO_ACTIONS:
                 val = el["value"]
                 serialized = str(val) if not isinstance(val, dict) else _json_dumps(val)
                 gpas_work.append(
@@ -174,6 +210,18 @@ def dispatch_pass1(
                             "path": el_path,
                         }
                     )
+                continue
+
+            # Defer NLP actions for batch processing (Pass 1.5)
+            if action in NLP_BATCH_ACTIONS:
+                nlp_work.append(
+                    NlpWork(
+                        rule=rule,
+                        element=el,
+                        params=params,
+                        action_type=action,
+                    )
+                )
                 continue
 
             actual_action = action
@@ -219,12 +267,20 @@ def dispatch_pass1(
 
             # Record manifest after successful action execution
             if _MANIFEST_ENABLED:
+                # Conditional-manifest: nlp_detect_act skips manifest when
+                # NLP found nothing (text unchanged, no info loss to record).
+                if params.get("_no_change"):
+                    params.pop("_no_change", None)
+                    continue
+                # Use the actual sub-action when the action reports one
+                # (e.g. "nlp_detect_act/redact" for targeted replacements).
+                reported_action = params.pop("_actual_action", actual_action)
                 manifest_entries.append(
                     {
                         "rule": rule.get("name", rule["match"]),
-                        "action": actual_action,
+                        "action": reported_action,
                         "path": el_path,
                     }
                 )
 
-    return gpas_work
+    return gpas_work, nlp_work

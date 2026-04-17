@@ -25,17 +25,61 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 
 # Total thread budget across all integrations (gPAS sub-batches, FHIR fetch,
-# upload, bulk download, etc.).  Default 32 comfortably supports 3 concurrent
-# jobs with up to 8 sub-threads each plus headroom for health probes.
+# upload, bulk download, Pass 1 parallelism, etc.).  Default 64 supports
+# concurrent jobs with parallel Pass 1 (8-16 threads each) plus headroom.
 # Override via MEDANON_GLOBAL_MAX_THREADS.
-_MAX_THREADS: int = int(os.environ.get("MEDANON_GLOBAL_MAX_THREADS", "32"))
+_MAX_THREADS: int = int(os.environ.get("MEDANON_GLOBAL_MAX_THREADS", "64"))
 
-_executor: ThreadPoolExecutor | None = None
+# Maximum pending tasks beyond the active workers before submit() blocks.
+# Default: 2× max_workers.  Under gPAS degradation, this caps how many chunk
+# payloads can accumulate in memory (each holds ~100–500 KB of FHIR data).
+_QUEUE_DEPTH: int = int(os.environ.get("MEDANON_POOL_QUEUE_DEPTH", str(_MAX_THREADS * 2)))
+
+# How long submit() waits for a semaphore slot before raising TimeoutError.
+# 60 s covers normal gPAS latency spikes; if the pool is still saturated after
+# that long an upstream service is effectively down and failing fast is safer
+# than holding the caller thread indefinitely.
+_SUBMIT_TIMEOUT_SEC: float = float(os.environ.get("MEDANON_POOL_SUBMIT_TIMEOUT", "60"))
+
+_executor: "_BoundedExecutor | None" = None
 _executor_lock = threading.Lock()
 
 
-def get_executor() -> ThreadPoolExecutor:
-    """Return (lazily creating) the process-wide thread pool.
+class _BoundedExecutor(ThreadPoolExecutor):
+    """ThreadPoolExecutor with backpressure via a BoundedSemaphore.
+
+    ``submit()`` blocks when ``max_workers + queue_depth`` tasks are already
+    in-flight or queued, preventing unbounded memory growth under sustained
+    overload (e.g. gPAS degradation with slow draining).
+
+    If a semaphore slot is not available within ``_SUBMIT_TIMEOUT_SEC``,
+    ``submit()`` raises ``TimeoutError`` so callers fail fast instead of
+    blocking indefinitely.
+    """
+
+    def __init__(self, max_workers: int, queue_depth: int, **kwargs):
+        super().__init__(max_workers, **kwargs)
+        # Semaphore capacity = workers + extra queue slots
+        self._semaphore = threading.BoundedSemaphore(max_workers + queue_depth)
+
+    def submit(self, fn, *args, **kwargs):  # type: ignore[override]
+        acquired = self._semaphore.acquire(timeout=_SUBMIT_TIMEOUT_SEC)
+        if not acquired:
+            raise TimeoutError(
+                f"Thread pool saturated: could not acquire a slot within "
+                f"{_SUBMIT_TIMEOUT_SEC}s — upstream service may be degraded"
+            )
+        try:
+            future = super().submit(fn, *args, **kwargs)
+        except Exception:
+            self._semaphore.release()
+            raise
+        future.add_done_callback(lambda _: self._semaphore.release())
+        return future
+
+
+def get_executor() -> _BoundedExecutor:
+    """Return (lazily creating) the process-wide bounded thread pool.
 
     Thread-safe via double-check locking — prevents orphaned pools.
     """
@@ -43,8 +87,9 @@ def get_executor() -> ThreadPoolExecutor:
     if _executor is None:
         with _executor_lock:
             if _executor is None:
-                _executor = ThreadPoolExecutor(
+                _executor = _BoundedExecutor(
                     max_workers=_MAX_THREADS,
+                    queue_depth=_QUEUE_DEPTH,
                     thread_name_prefix="medanon",
                 )
     return _executor

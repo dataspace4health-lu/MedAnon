@@ -1,9 +1,13 @@
+from __future__ import annotations
+
+from typing import Any
+
 from utils.fhirpath import error, find_nodes
 
 expected_params = ["substitute_with"]
 
 
-def _substitute_nodes(node, key, value, new_value):
+def _substitute_nodes(node: Any, key: str, value: Any, new_value: Any) -> None:
     if isinstance(node, list):
         for item in node:
             _substitute_nodes(item, key, value, new_value)
@@ -17,7 +21,7 @@ def _substitute_nodes(node, key, value, new_value):
                 node[key] = new_value
 
 
-def substitute_by_path(resource, el, params):
+def substitute_by_path(resource: dict, el: dict, params: dict) -> None:
     if not all(param in params for param in expected_params):
         error(f"Missing params (expected {expected_params})")
     ret = resource
