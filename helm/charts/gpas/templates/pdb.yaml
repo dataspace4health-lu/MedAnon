@@ -1,0 +1,16 @@
+{{- if or .Values.autoscaling.enabled (gt (int .Values.replicas) 1) -}}
+# PodDisruptionBudget guarantees at least one gPAS pod survives node drains,
+# cluster upgrades, and voluntary disruptions when running multiple replicas.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "gpas.fullname" . }}
+  labels:
+    {{- include "gpas.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gpas
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      {{- include "gpas.selectorLabels" (dict "Release" .Release "component" "gpas") | nindent 6 }}
+{{- end }}
