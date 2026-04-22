@@ -187,9 +187,8 @@ services/fhir-server/healthcheck/*.class
 *.war
 *.deployed
 
-# Claude downloaded models (large, not source-controlled)
+# Claude local settings / downloaded models (large, not source-controlled)
 .claude/
-CLAUDE.md
 
 # gPAS third-party service (not source-controlled)
 services/gpas/
