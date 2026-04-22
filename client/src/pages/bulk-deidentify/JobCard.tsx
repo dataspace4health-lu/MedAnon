@@ -42,7 +42,7 @@ export function JobCard({
   }, [isActive, job.startedAt, frozenElapsed]);
 
   // Compute real progress percentage when staged_count is available
-  const hasProgress = job.stagedCount != null && job.stagedCount > 0 && job.phase === "processing";
+  const hasProgress = job.stagedCount != null && job.stagedCount > 0 && (job.phase === "processing" || job.phase === "uploading");
   const progressPct = hasProgress ? Math.round((job.processed / job.stagedCount!) * 100) : null;
 
   return (

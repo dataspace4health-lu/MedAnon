@@ -7,8 +7,8 @@ Public surface:
     ``init_job_store(db_path)`` — initialise the module-level singleton.
     ``SqliteJobStore``          — SQLite backend (default).
     ``JobStore``                — backward-compat alias for ``SqliteJobStore``.
-    ``Job``                     — dataclass representing a single job (from medanon_core).
-    ``JobStatus``               — Enum: pending | running | done | error (from medanon_core).
+    ``Job``                     — dataclass representing a single job (from domain.jobs).
+    ``JobStatus``               — Enum: pending | running | done | error (from domain.jobs).
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from medanon_core.domain import Job, JobStatus  # noqa: F401 — re-exported for callers
+from domain.jobs import Job, JobStatus  # noqa: F401 — re-exported for callers
 
 _jobs_log = logging.getLogger("medanon.jobs")
 _DEFAULT_DB = "/output/jobs.db"
@@ -59,8 +59,9 @@ class SqliteJobStore:
             # Migrate existing tables that predate the checkpoint_data column.
             try:
                 conn.execute("ALTER TABLE jobs ADD COLUMN checkpoint_data TEXT")
-            except Exception:
-                pass  # Column already exists — nothing to do.
+            except sqlite3.OperationalError as e:
+                if "duplicate column" not in str(e):
+                    raise
             # Indexes for next_pending() and list_jobs() to avoid full table scans
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_jobs_status_created ON jobs(status, created_at)"
@@ -126,11 +127,26 @@ class SqliteJobStore:
             )
 
     def next_pending(self) -> Job | None:
-        """Return the oldest PENDING job, or None if the queue is empty."""
+        """Atomically claim the oldest PENDING job, or return None.
+
+        Uses UPDATE-in-CTE to avoid TOCTOU race between SELECT and UPDATE
+        when multiple workers or threads poll concurrently.
+        """
+        now = datetime.now(timezone.utc).isoformat()
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT * FROM jobs WHERE status=? ORDER BY created_at LIMIT 1",
-                (JobStatus.PENDING.value,),
+                """
+                UPDATE jobs
+                   SET status = ?, updated_at = ?
+                 WHERE id = (
+                    SELECT id FROM jobs
+                     WHERE status = ?
+                     ORDER BY created_at
+                     LIMIT 1
+                 )
+                RETURNING *
+                """,
+                (JobStatus.RUNNING.value, now, JobStatus.PENDING.value),
             ).fetchone()
         return _row_to_job(row) if row else None
 
@@ -140,8 +156,15 @@ class SqliteJobStore:
         job_type: str | None = None,
         limit: int = 50,
         offset: int = 0,
+        before_created_at: str | None = None,
     ) -> list[Job]:
-        """List jobs with optional filtering, ordered by created_at descending."""
+        """List jobs with optional filtering, ordered by created_at descending.
+
+        *before_created_at* enables keyset pagination: pass the ``created_at``
+        of the last job from the previous page to avoid an O(n) offset scan.
+        *offset* is still accepted for backward compatibility but should be 0
+        when keyset pagination is active.
+        """
         query = "SELECT * FROM jobs WHERE 1=1"
         params: list = []
         if status:
@@ -150,6 +173,9 @@ class SqliteJobStore:
         if job_type:
             query += " AND type=?"
             params.append(job_type)
+        if before_created_at:
+            query += " AND created_at < ?"
+            params.append(before_created_at)
         query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
         params.extend([limit, offset])
         with self._connect() as conn:

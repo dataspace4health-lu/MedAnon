@@ -283,9 +283,14 @@ def fetch_all_resource_types(
                     yield rt, resource
         return
 
+    import logging as _logging
+    _log = _logging.getLogger("medanon.fhir.reader")
+
     _SENTINEL = object()
-    result_q: _queue.Queue = _queue.Queue(maxsize=_FHIR_FETCH_PARALLEL * 200)
-    error_q: _queue.Queue = _queue.Queue()
+    # Use an unbounded queue: bounded queues deadlock when the consumer raises
+    # and stops draining while producer threads are blocked on put().
+    result_q: _queue.Queue = _queue.Queue()
+    failed_rts: list[str] = []
 
     # Honour checkpoint state: skip completed types, resume current_rt from its
     # last page URL.  The serial path already handles yield_cursors (gated above).
@@ -301,7 +306,15 @@ def fetch_all_resource_types(
             ):
                 result_q.put((rt, resource))
         except Exception as exc:
-            error_q.put(exc)
+            # Log the failure but do NOT abort — other resource types continue.
+            # The failed type is recorded in failed_rts and logged at the end
+            # so operators can see exactly which types are missing.
+            _log.warning(
+                "fhir_fetch_partial_failure rt=%s — resources from this type "
+                "will be missing from the export: %s",
+                rt, exc,
+            )
+            result_q.put((_SENTINEL, rt, exc))
         finally:
             result_q.put(_SENTINEL)
 
@@ -320,10 +333,25 @@ def fetch_all_resource_types(
         if item is _SENTINEL:
             finished += 1
             continue
+        # Error sentinel: (SENTINEL, rt, exc) tuple — log and skip this type.
+        if isinstance(item, tuple) and len(item) == 3 and item[0] is _SENTINEL:
+            _, failed_rt, exc = item
+            failed_rts.append(failed_rt)
+            _log.error(
+                "fhir_fetch_type_failed rt=%s error=%s — %d resource(s) from "
+                "this type may be missing from the output",
+                failed_rt, exc, 0,
+            )
+            continue
         yield item
 
-    if not error_q.empty():
-        raise error_q.get_nowait()
+    if failed_rts:
+        _log.error(
+            "fhir_fetch_incomplete failed_types=%s — export is missing resources "
+            "from %d type(s). Re-run with MEDANON_FHIR_FETCH_PARALLEL=1 to use "
+            "serial fetch which is crash-safe.",
+            failed_rts, len(failed_rts),
+        )
 
 
 def fetch_cohort(

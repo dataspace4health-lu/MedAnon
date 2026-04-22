@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from pathlib import Path
 
-from medanon_core.domain import Job
+from domain.jobs import Job
 from pipeline.jobs.checkpoint import _truncate_to_lines, load_checkpoint, save_checkpoint
 from pipeline.jobs.executor_stream import (
     INFRA_RESOURCE_TYPES,
@@ -39,6 +40,8 @@ def _execute_bulk_export(job: Job, store, staging) -> None:
     params = job.params
     server_url = params["server_url"]
     resource_type = params.get("resource_type")
+    group_id = params.get("group_id")
+    level = params.get("level", "system")
     type_filter = params.get("type_filter")
     since = params.get("since")
     token = params.get("token") or os.environ.get("FHIR_SOURCE_TOKEN")
@@ -64,6 +67,54 @@ def _execute_bulk_export(job: Job, store, staging) -> None:
             if fhir_cursor else "none",
         )
 
+    # ── Group-level export: use FHIR Bulk Data API (Group/{id}/$export) ────────
+    if level == "group" or group_id:
+        if not group_id:
+            raise ValueError("group_id is required for group-level bulk export")
+        from integrations.fhir.bulk import bulk_export as fhir_bulk_export
+
+        _t0 = time.monotonic()
+        save_checkpoint(store, job, {"phase": "fetching", "lines_written": already_written})
+        _worker_log.info("bulk_export_group_start job=%s group_id=%s", job.id, group_id)
+
+        from pipeline.jobs.summary import JobSummaryCollector
+        collector = JobSummaryCollector(config_profile=profile, settings=settings, job_id=job.id)
+
+        raw_gen = fhir_bulk_export(
+            server_url,
+            level="group",
+            group_id=group_id,
+            type_filter=type_filter,
+            since=since,
+            token=token,
+            timeout=timeout,
+        )
+
+        with open(output_path, open_mode, encoding="utf-8") as fh:
+            count, cancelled = process_stream_chunked(
+                skip_to(raw_gen, already_written),
+                settings, pseudonymizer, fh, already_written,
+                store, job, "bulk_export", summary=collector, cursor_state={},
+            )
+
+        if not cancelled:
+            if _COMPRESS_RESULTS:
+                output_path = compress_ndjson(output_path)
+            from integrations.storage import store_result
+            job.result_path = store_result(job.id, output_path)
+            summary_dict = collector.to_dict(
+                file_size_bytes=os.path.getsize(output_path),
+                compressed=_COMPRESS_RESULTS,
+            )
+            save_checkpoint(store, job, {
+                "phase": "done",
+                "lines_written": count,
+                "summary": summary_dict,
+            })
+            _worker_log.info("bulk_export_group_done job=%s count=%d", job.id, count)
+        return
+
+    # ── System/type-level export: FHIR resource-search path ─────────────────
     if resource_type:
         resource_types = [resource_type]
     elif type_filter:
@@ -93,6 +144,7 @@ def _execute_bulk_export(job: Job, store, staging) -> None:
     if since:
         extra_params["_lastUpdated"] = f"ge{since}"
 
+    _t0 = time.monotonic()
     save_checkpoint(store, job, {"phase": "fetching", "lines_written": already_written})
 
     # Pass cursor params so completed resource types and the current page are
@@ -116,7 +168,7 @@ def _execute_bulk_export(job: Job, store, staging) -> None:
     resume_skip = (fhir_cursor or {}).get("page_offset", already_written)
 
     from pipeline.jobs.summary import JobSummaryCollector
-    collector = JobSummaryCollector(config_profile=profile)
+    collector = JobSummaryCollector(config_profile=profile, settings=settings, job_id=job.id)
 
     with open(output_path, open_mode, encoding="utf-8") as fh:
         count, cancelled = process_stream_chunked(
@@ -130,14 +182,41 @@ def _execute_bulk_export(job: Job, store, staging) -> None:
             output_path = compress_ndjson(output_path)
         from integrations.storage import store_result
         job.result_path = store_result(job.id, output_path)
-        save_checkpoint(store, job, {
+        summary_dict = collector.to_dict(
+            file_size_bytes=os.path.getsize(output_path),
+            compressed=_COMPRESS_RESULTS,
+        )
+        checkpoint_data: dict = {
             "phase": "done",
             "lines_written": count,
-            "summary": collector.to_dict(
-                file_size_bytes=os.path.getsize(output_path),
-                compressed=_COMPRESS_RESULTS,
-            ),
-        })
+            "summary": summary_dict,
+        }
+        audit_report = collector.generate_audit_report(
+            export_meta={"fhir_source": params.get("server_url", "")}
+        )
+        if audit_report:
+            try:
+                audit_path = os.path.join(_OUTPUT_DIR, f"{job.id}_score_audit.md")
+                with open(audit_path, "w", encoding="utf-8") as fh:
+                    fh.write(audit_report)
+                checkpoint_data["score_audit_path"] = audit_path
+            except Exception:
+                _worker_log.debug("bulk_export_audit_write_failed job=%s", job.id, exc_info=True)
+        save_checkpoint(store, job, checkpoint_data)
+        try:
+            from api.services.scoring_helpers import persist_run_sync
+            persist_run_sync(
+                endpoint="bulk_export",
+                config_profile=profile,
+                resource_count=summary_dict.get("total_resources", count),
+                error_count=summary_dict.get("error_count", 0),
+                duration_ms=int((time.monotonic() - _t0) * 1000),
+                input_type="ndjson",
+                summary=summary_dict,
+                score=summary_dict.get("score"),
+            )
+        except Exception:
+            _worker_log.debug("bulk_export_persist_run_failed", exc_info=True)
         _worker_log.info("bulk_export_done job=%s count=%d", job.id, count)
 
 
@@ -186,6 +265,7 @@ def _execute_cohort(job: Job, store, staging) -> None:
             save_checkpoint(store, job, {"phase": "done", "lines_written": 0})
             return
 
+    _t0 = time.monotonic()
     save_checkpoint(store, job, {"phase": "fetching", "lines_written": already_written})
     gen = fetch_cohort(
         server_url,
@@ -197,7 +277,7 @@ def _execute_cohort(job: Job, store, staging) -> None:
     )
 
     from pipeline.jobs.summary import JobSummaryCollector
-    collector = JobSummaryCollector(config_profile=profile)
+    collector = JobSummaryCollector(config_profile=profile, settings=settings, job_id=job.id)
 
     with open(output_path, open_mode, encoding="utf-8") as fh:
         count, cancelled = process_stream_chunked(
@@ -211,14 +291,41 @@ def _execute_cohort(job: Job, store, staging) -> None:
             output_path = compress_ndjson(output_path)
         from integrations.storage import store_result
         job.result_path = store_result(job.id, output_path)
-        save_checkpoint(store, job, {
+        summary_dict = collector.to_dict(
+            file_size_bytes=os.path.getsize(output_path),
+            compressed=_COMPRESS_RESULTS,
+        )
+        checkpoint_data = {
             "phase": "done",
             "lines_written": count,
-            "summary": collector.to_dict(
-                file_size_bytes=os.path.getsize(output_path),
-                compressed=_COMPRESS_RESULTS,
-            ),
-        })
+            "summary": summary_dict,
+        }
+        audit_report = collector.generate_audit_report(
+            export_meta={"fhir_source": server_url}
+        )
+        if audit_report:
+            try:
+                audit_path = os.path.join(_OUTPUT_DIR, f"{job.id}_score_audit.md")
+                with open(audit_path, "w", encoding="utf-8") as fh:
+                    fh.write(audit_report)
+                checkpoint_data["score_audit_path"] = audit_path
+            except Exception:
+                _worker_log.debug("cohort_audit_write_failed job=%s", job.id, exc_info=True)
+        save_checkpoint(store, job, checkpoint_data)
+        try:
+            from api.services.scoring_helpers import persist_run_sync
+            persist_run_sync(
+                endpoint="cohort",
+                config_profile=profile,
+                resource_count=summary_dict.get("total_resources", count),
+                error_count=summary_dict.get("error_count", 0),
+                duration_ms=int((time.monotonic() - _t0) * 1000),
+                input_type="ndjson",
+                summary=summary_dict,
+                score=summary_dict.get("score"),
+            )
+        except Exception:
+            _worker_log.debug("cohort_persist_run_failed", exc_info=True)
         _worker_log.info("cohort_done job=%s count=%d", job.id, count)
 
 
@@ -260,11 +367,12 @@ def _execute_patient_export(job: Job, store, staging) -> None:
     if already_written:
         _truncate_to_lines(output_path, already_written)
 
+    _t0 = time.monotonic()
     save_checkpoint(store, job, {"phase": "fetching", "lines_written": already_written})
     gen = fetch_everything(server_url, "Patient", patient_id, token=token, timeout=timeout)
 
     from pipeline.jobs.summary import JobSummaryCollector
-    collector = JobSummaryCollector(config_profile=profile)
+    collector = JobSummaryCollector(config_profile=profile, settings=settings, job_id=job.id)
 
     with open(output_path, open_mode, encoding="utf-8") as fh:
         count, cancelled = process_stream_chunked(
@@ -278,14 +386,41 @@ def _execute_patient_export(job: Job, store, staging) -> None:
             output_path = compress_ndjson(output_path)
         from integrations.storage import store_result
         job.result_path = store_result(job.id, output_path)
-        save_checkpoint(store, job, {
+        summary_dict = collector.to_dict(
+            file_size_bytes=os.path.getsize(output_path),
+            compressed=_COMPRESS_RESULTS,
+        )
+        checkpoint_data = {
             "phase": "done",
             "lines_written": count,
-            "summary": collector.to_dict(
-                file_size_bytes=os.path.getsize(output_path),
-                compressed=_COMPRESS_RESULTS,
-            ),
-        })
+            "summary": summary_dict,
+        }
+        audit_report = collector.generate_audit_report(
+            export_meta={"fhir_source": server_url, "patient_id": patient_id}
+        )
+        if audit_report:
+            try:
+                audit_path = os.path.join(_OUTPUT_DIR, f"{job.id}_score_audit.md")
+                with open(audit_path, "w", encoding="utf-8") as fh:
+                    fh.write(audit_report)
+                checkpoint_data["score_audit_path"] = audit_path
+            except Exception:
+                _worker_log.debug("patient_export_audit_write_failed job=%s", job.id, exc_info=True)
+        save_checkpoint(store, job, checkpoint_data)
+        try:
+            from api.services.scoring_helpers import persist_run_sync
+            persist_run_sync(
+                endpoint="patient_export",
+                config_profile=profile,
+                resource_count=summary_dict.get("total_resources", count),
+                error_count=summary_dict.get("error_count", 0),
+                duration_ms=int((time.monotonic() - _t0) * 1000),
+                input_type="ndjson",
+                summary=summary_dict,
+                score=summary_dict.get("score"),
+            )
+        except Exception:
+            _worker_log.debug("patient_export_persist_run_failed", exc_info=True)
         _worker_log.info("patient_export_done job=%s count=%d", job.id, count)
 
 
@@ -323,11 +458,12 @@ def _execute_batch_patient_export(job: Job, store, staging) -> None:
         _truncate_to_lines(output_path, already_written)
         _worker_log.info("batch_patient_resume job=%s from_line=%d", job.id, already_written)
 
+    _t0 = time.monotonic()
     save_checkpoint(store, job, {"phase": "fetching", "lines_written": already_written})
     gen = fetch_patients_everything(server_url, patient_ids, token=token, timeout=timeout)
 
     from pipeline.jobs.summary import JobSummaryCollector
-    collector = JobSummaryCollector(config_profile=profile)
+    collector = JobSummaryCollector(config_profile=profile, settings=settings, job_id=job.id)
 
     with open(output_path, open_mode, encoding="utf-8") as fh:
         count, cancelled = process_stream_chunked(
@@ -341,14 +477,41 @@ def _execute_batch_patient_export(job: Job, store, staging) -> None:
             output_path = compress_ndjson(output_path)
         from integrations.storage import store_result
         job.result_path = store_result(job.id, output_path)
-        save_checkpoint(store, job, {
+        summary_dict = collector.to_dict(
+            file_size_bytes=os.path.getsize(output_path),
+            compressed=_COMPRESS_RESULTS,
+        )
+        checkpoint_data = {
             "phase": "done",
             "lines_written": count,
-            "summary": collector.to_dict(
-                file_size_bytes=os.path.getsize(output_path),
-                compressed=_COMPRESS_RESULTS,
-            ),
-        })
+            "summary": summary_dict,
+        }
+        audit_report = collector.generate_audit_report(
+            export_meta={"fhir_source": server_url}
+        )
+        if audit_report:
+            try:
+                audit_path = os.path.join(_OUTPUT_DIR, f"{job.id}_score_audit.md")
+                with open(audit_path, "w", encoding="utf-8") as fh:
+                    fh.write(audit_report)
+                checkpoint_data["score_audit_path"] = audit_path
+            except Exception:
+                _worker_log.debug("batch_patient_export_audit_write_failed job=%s", job.id, exc_info=True)
+        save_checkpoint(store, job, checkpoint_data)
+        try:
+            from api.services.scoring_helpers import persist_run_sync
+            persist_run_sync(
+                endpoint="batch_patient_export",
+                config_profile=profile,
+                resource_count=summary_dict.get("total_resources", count),
+                error_count=summary_dict.get("error_count", 0),
+                duration_ms=int((time.monotonic() - _t0) * 1000),
+                input_type="ndjson",
+                summary=summary_dict,
+                score=summary_dict.get("score"),
+            )
+        except Exception:
+            _worker_log.debug("batch_patient_export_persist_run_failed", exc_info=True)
         _worker_log.info(
             "batch_patient_export_done job=%s patients=%d count=%d",
             job.id, len(patient_ids), count,

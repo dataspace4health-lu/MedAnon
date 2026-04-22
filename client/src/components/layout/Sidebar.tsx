@@ -12,6 +12,7 @@ import {
   SlidersHorizontal,
   PackageOpen,
   ShieldCheck,
+  History,
 } from 'lucide-react';
 import { HealthBadge } from '@/components/shared/HealthBadge';
 import { useHealth } from '@/hooks/useHealth';
@@ -78,6 +79,7 @@ const NAV_SECTIONS: NavSection[] = [
     label: 'Monitor',
     items: [
       { to: '/status', label: 'Status Dashboard', icon: BarChart3, minRole: 'viewer' },
+      { to: '/history', label: 'Processing History', icon: History, minRole: 'analyst' },
     ],
   },
 ];

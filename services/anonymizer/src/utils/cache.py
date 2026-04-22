@@ -11,14 +11,20 @@ FastAPI startup event when ``MEDANON_REDIS_URL`` is set.
 
 from __future__ import annotations
 
-from utils.json_fast import dumps as _json_dumps
+from collections import OrderedDict
 import logging
+import os
 import threading
 from typing import Protocol, runtime_checkable
 
 _cache_log = logging.getLogger("medanon.cache")
 
-_DEFAULT_MAX = 50_000
+# Sizing: a 130K-resource bulk export touches ~300K–400K unique values (IDs +
+# cross-resource references). The LRU must hold the entire working set to avoid
+# evictions that force re-fetches from gPAS (~150 ms each).
+# Default raised from 50K → 300K; tune via MEDANON_CACHE_MAX_ENTRIES.
+# Memory: ~150 bytes/entry × 300K ≈ 45 MB — well within the 3 GB anonymizer budget.
+_DEFAULT_MAX = int(os.environ.get("MEDANON_CACHE_MAX_ENTRIES", "300000"))
 
 
 # ---------------------------------------------------------------------------
@@ -48,7 +54,7 @@ class _LruShard:
     __slots__ = ("_cache", "_lock", "_maxsize")
 
     def __init__(self, maxsize: int) -> None:
-        self._cache: dict = {}
+        self._cache: OrderedDict = OrderedDict()
         self._lock = threading.Lock()
         self._maxsize = maxsize
 
@@ -56,18 +62,18 @@ class _LruShard:
         with self._lock:
             value = self._cache.get(key)
             if value is not None:
-                del self._cache[key]
-                self._cache[key] = value
+                self._cache.move_to_end(key)
             return value
 
     def set(self, key: tuple, value: str) -> None:
         with self._lock:
             if key in self._cache:
-                del self._cache[key]
-            elif len(self._cache) >= self._maxsize:
-                oldest_key = next(iter(self._cache))
-                del self._cache[oldest_key]
-            self._cache[key] = value
+                self._cache.move_to_end(key)
+                self._cache[key] = value
+            else:
+                if len(self._cache) >= self._maxsize:
+                    self._cache.popitem(last=False)
+                self._cache[key] = value
 
     def flush(self) -> int:
         with self._lock:
@@ -113,8 +119,7 @@ class LocalLruCache:
                 for key in ks:
                     value = shard._cache.get(key)
                     if value is not None:
-                        del shard._cache[key]
-                        shard._cache[key] = value
+                        shard._cache.move_to_end(key)
                         result[key] = value
         return result
 
@@ -130,11 +135,12 @@ class LocalLruCache:
                 for key in ks:
                     value = items[key]
                     if key in shard._cache:
-                        del shard._cache[key]
-                    elif len(shard._cache) >= shard._maxsize:
-                        oldest_key = next(iter(shard._cache))
-                        del shard._cache[oldest_key]
-                    shard._cache[key] = value
+                        shard._cache.move_to_end(key)
+                        shard._cache[key] = value
+                    else:
+                        if len(shard._cache) >= shard._maxsize:
+                            shard._cache.popitem(last=False)
+                        shard._cache[key] = value
 
 
 # ---------------------------------------------------------------------------
@@ -171,7 +177,9 @@ class RedisCache:
         self._prefix = key_prefix
 
     def _make_key(self, key: tuple) -> str:
-        return self._prefix + _json_dumps(key)
+        # Use ASCII Unit Separator (\\x1f) as delimiter — faster than JSON serialization
+        # and safe because FHIR values, URIs, and domain names never contain this byte.
+        return self._prefix + "\x1f".join(str(x) for x in key)
 
     def get(self, key: tuple) -> str | None:
         try:

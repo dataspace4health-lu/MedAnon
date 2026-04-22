@@ -15,8 +15,8 @@ import {
   Loader2, AlertCircle, Download, CheckCircle2, Inbox, Square,
   RefreshCw, User, Users, Stethoscope, Database, Upload, ShieldCheck,
 } from "lucide-react";
-import { getJobResult, getJobStatus, submitBulkImport, getJobScore, triggerJobScore } from "@/api/medanon";
-import type { JobResponse, BatchPrivacy } from "@/api/medanon";
+import { getJobResult, getJobStatus, submitBulkImport, getJobScore, triggerJobScore, getJobDetail, saveJobDetail } from "@/api/medanon";
+import type { JobResponse, BatchPrivacy, UploadErrorDetail } from "@/api/medanon";
 import { useBulkExport } from "@/context/BulkExportContext";
 import type { ExportJob } from "@/context/BulkExportContext";
 import { buildPiiFromDeidentifiedOnly, buildFieldSummary, stripManifestTag } from "@/lib/piiDetection";
@@ -63,16 +63,50 @@ export function JobDetailPanel({ job }: { job: ExportJob }) {
     if (importPollRef.current !== null) clearInterval(importPollRef.current);
   }, []);
 
-  // Fetch and parse result when job is done
+  // Fetch and parse result when job is done — tries backend cache first.
+  // Resource counts are shown immediately from job.summary (already fetched).
   useEffect(() => {
+    // Import jobs have no NDJSON result to parse
+    if (isImport) return;
     // Skip if already parsed for this exact job
     if (!job.jobId || job.status !== "done" || parsing) return;
     if (parsedJobIdRef.current === job.jobId) return;
+
+    // Show resource counts immediately from the API summary — no download needed
+    if (job.summary?.resource_type_counts) {
+      const counts = job.summary.resource_type_counts;
+      const total = job.summary.total_resources ?? Object.values(counts).reduce((a, b) => a + b, 0);
+      setResourceCounts(counts);
+      setTotalResources(total);
+    }
+
     let cancelled = false;
     setParsing(true);
     setFetchError(null);
     (async () => {
       try {
+        // Try backend cache first — avoids downloading the NDJSON entirely
+        try {
+          const cached = await getJobDetail(job.jobId!);
+          if (cancelled) return;
+          setResourceCounts(cached.resource_counts);
+          setPiiData(cached.pii_data as PiiDetectionMap);
+          setFieldSummary(cached.field_summary as FieldSummaryMap);
+          setTotalResources(cached.total_resources);
+          setParsed(true);
+          parsedJobIdRef.current = job.jobId!;
+          // Fetch score even on cache hit
+          try {
+            let scoreResult = await getJobScore(job.jobId!);
+            if (!scoreResult.computed) scoreResult = await triggerJobScore(job.jobId!);
+            setJobBackendScore(job.id, scoreResult);
+          } catch { /* non-fatal */ }
+          return; // skip NDJSON download
+        } catch {
+          // cache miss (404) or store unavailable (503) — fall through to NDJSON parse
+        }
+
+        // Cache miss: download and parse NDJSON
         const blob = await getJobResult(job.jobId!);
         if (cancelled) return;
         // Yield a frame so the loading spinner renders before heavy parsing
@@ -88,12 +122,20 @@ export function JobDetailPanel({ job }: { job: ExportJob }) {
         setFieldSummary(builtFieldSummary);
         setTotalResources(total);
         setParsed(true);
-        parsedJobIdRef.current = job.jobId;
+        parsedJobIdRef.current = job.jobId!;
+
+        // Save parsed result to backend cache (fire-and-forget)
+        saveJobDetail(job.jobId!, {
+          resource_counts: counts,
+          total_resources: total,
+          pii_data: pii as Record<string, unknown>,
+          field_summary: builtFieldSummary as Record<string, unknown>,
+        }).catch(() => {}); // cache write failures are non-fatal
+
         // Fetch backend score
         try {
           let scoreResult = await getJobScore(job.jobId!);
           if (!scoreResult.computed) {
-            // Trigger on-demand scoring if not yet computed
             scoreResult = await triggerJobScore(job.jobId!);
           }
           setJobBackendScore(job.id, scoreResult);
@@ -172,6 +214,7 @@ export function JobDetailPanel({ job }: { job: ExportJob }) {
     }
   }, [selectedFormat, job.jobId, job.filename, downloading]);
 
+  const isImport = job.type === 'bulk-import';
   const isDone = job.status === "done";
   const isRunning =
     job.status === "submitting" ||
@@ -409,7 +452,7 @@ export function JobDetailPanel({ job }: { job: ExportJob }) {
               <p className="font-medium">{new Date(job.startedAt).toLocaleTimeString()}</p>
             </div>
           </div>
-          {job.stagedCount != null && job.stagedCount > 0 && job.phase === "processing" ? (
+          {job.stagedCount != null && job.stagedCount > 0 && (job.phase === "processing" || job.phase === "uploading") ? (
             <div className="mt-3">
               <Progress
                 value={Math.round((job.processed / job.stagedCount) * 100)}
@@ -456,7 +499,7 @@ export function JobDetailPanel({ job }: { job: ExportJob }) {
       )}
 
       {/* Download + Send to Target */}
-      {isDone && job.processed > 0 && (
+      {isDone && job.processed > 0 && !isImport && (
         <div className="flex flex-col gap-3">
           <div className="flex items-center gap-2">
             <Select
@@ -526,32 +569,131 @@ export function JobDetailPanel({ job }: { job: ExportJob }) {
               ) : (
                 <>
                   <Progress value={100} className="h-1.5 [&>div]:animate-pulse" />
-                  <p className="text-[10px] text-muted-foreground">Loading resources…</p>
+                  <p className="text-[10px] text-muted-foreground">
+                    {importJob.phase === "loading" ? "Reading export file…" : "Uploading…"}
+                  </p>
                 </>
               )}
             </div>
           )}
-          {/* Upload success */}
-          {importJob?.status === "done" && (
-            <div className="flex items-center gap-2 text-sm">
-              <CheckCircle2 className="size-4 text-green-600" />
-              <span>
-                Uploaded {importJob.processed.toLocaleString()} of {(importJob.staged_count ?? importJob.processed).toLocaleString()} resource{importJob.processed !== 1 ? "s" : ""} to target
-              </span>
-            </div>
-          )}
-          {/* Upload error */}
-          {(importJob?.status === "error" || uploadError) && (
+          {/* Upload done */}
+          {importJob?.status === "done" && (() => {
+            const total = importJob.staged_count ?? importJob.processed;
+            const failCount = importJob.upload_errors ?? 0;
+            const successCount = importJob.processed;
+            const details = importJob.upload_error_details ?? [];
+            // Group errors by type for a compact summary
+            const byType: Record<string, { count: number; sample: string }> = {};
+            for (const d of details) {
+              if (!byType[d.resourceType]) byType[d.resourceType] = { count: 0, sample: d.error };
+              byType[d.resourceType].count++;
+            }
+            return (
+              <div className="flex flex-col gap-1.5 text-sm">
+                <div className="flex items-center gap-2">
+                  {failCount === 0 ? (
+                    <CheckCircle2 className="size-4 text-green-600 shrink-0" />
+                  ) : (
+                    <AlertCircle className="size-4 text-amber-500 shrink-0" />
+                  )}
+                  <span>
+                    Uploaded <span className="font-medium tabular-nums">{successCount.toLocaleString()}</span>
+                    {" "}of <span className="tabular-nums">{total.toLocaleString()}</span> resources
+                    {failCount > 0 && (
+                      <span className="text-amber-600 ml-1">
+                        — {failCount.toLocaleString()} rejected by target server
+                      </span>
+                    )}
+                  </span>
+                </div>
+                {/* Per-type error breakdown */}
+                {Object.keys(byType).length > 0 && (
+                  <div className="ml-6 flex flex-col gap-0.5">
+                    {Object.entries(byType).map(([rt, info]) => (
+                      <p key={rt} className="text-xs text-muted-foreground">
+                        <span className="font-medium text-destructive/80">{rt}</span>
+                        {" "}({info.count} rejected):{" "}
+                        <span className="italic">{info.sample}</span>
+                      </p>
+                    ))}
+                    {failCount > details.length && (
+                      <p className="text-xs text-muted-foreground">
+                        …and {(failCount - details.length).toLocaleString()} more. Check server logs for details.
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+          {/* Upload submit error (before job started) */}
+          {!importJob && uploadError && (
             <div className="flex items-center gap-2 text-sm text-destructive">
               <AlertCircle className="size-4 shrink-0" />
-              {importJob?.error ?? uploadError ?? "Upload failed"}
+              {uploadError}
+            </div>
+          )}
+          {/* Upload job failed (worker-level error, not FHIR rejections) */}
+          {importJob?.status === "error" && (
+            <div className="flex items-center gap-2 text-sm text-destructive">
+              <AlertCircle className="size-4 shrink-0" />
+              {importJob.error ?? "Upload failed — check server logs for details"}
             </div>
           )}
         </div>
       )}
 
+      {/* Import result summary — shown for recovered/completed bulk-import jobs */}
+      {isDone && isImport && (() => {
+        const total = job.stagedCount ?? job.processed;
+        const failCount = job.uploadErrors ?? 0;
+        const successCount = job.processed;
+        const details: UploadErrorDetail[] = job.uploadErrorDetails ?? [];
+        const byType: Record<string, { count: number; sample: string }> = {};
+        for (const d of details) {
+          if (!byType[d.resourceType]) byType[d.resourceType] = { count: 0, sample: d.error };
+          byType[d.resourceType].count++;
+        }
+        return (
+          <div className="flex flex-col gap-1.5 text-sm">
+            <div className="flex items-center gap-2">
+              {failCount === 0 ? (
+                <CheckCircle2 className="size-4 text-green-600 shrink-0" />
+              ) : (
+                <AlertCircle className="size-4 text-amber-500 shrink-0" />
+              )}
+              <span>
+                Uploaded <span className="font-medium tabular-nums">{successCount.toLocaleString()}</span>
+                {' '}of <span className="tabular-nums">{total.toLocaleString()}</span> resources
+                {failCount > 0 && (
+                  <span className="text-amber-600 ml-1">
+                    — {failCount.toLocaleString()} rejected by target server
+                  </span>
+                )}
+              </span>
+            </div>
+            {Object.keys(byType).length > 0 && (
+              <div className="ml-6 flex flex-col gap-0.5">
+                {Object.entries(byType).map(([rt, info]) => (
+                  <p key={rt} className="text-xs text-muted-foreground">
+                    <span className="font-medium text-destructive/80">{rt}</span>
+                    {' '}({info.count} rejected):{' '}
+                    <span className="italic">{info.sample}</span>
+                  </p>
+                ))}
+                {failCount > details.length && (
+                  <p className="text-xs text-muted-foreground">
+                    …and {(failCount - details.length).toLocaleString()} more. Check server logs for details.
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
       {/* Reprocess — only available when staging is configured (stagedCount present) */}
-      {isTerminal && job.stagedCount != null && job.jobId && (
+      {isTerminal && job.stagedCount != null && job.jobId && !isImport && (
         <div className="mt-4 flex items-center gap-2 border-t pt-4">
           <Button
             variant="outline"

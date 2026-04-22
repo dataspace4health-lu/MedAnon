@@ -43,3 +43,19 @@ class PseudonymizerPort(Protocol):
             callers must handle missing keys gracefully.
         """
         ...
+
+    def lookup_cache_batch(
+        self,
+        values: list[str],
+        params: dict,
+    ) -> dict[str, str]:
+        """Return cached pseudonyms for *values* without calling the backend.
+
+        Only returns entries present in L1 (and L2 when Redis is configured).
+        Values absent from cache are not included — the caller is responsible
+        for falling back to :meth:`pseudonymize_batch` for any missing values.
+
+        Default implementation returns an empty dict (safe fallback for adapters
+        that do not implement the cache layer).
+        """
+        return {}

@@ -54,7 +54,9 @@ def decrypt_by_path(resource: dict, el: dict, params: dict) -> None:
     path = el["path"]
     path = path.split(".")[1:]  # Remove root
     if len(path) == 0:
-        ret.clear()
-        return
+        raise ValueError(
+            f"Empty path after removing resource type root in decrypt — "
+            f"refusing to clear entire resource (original path: {el['path']!r})"
+        )
     ret = find_nodes(ret, path[:-1], [])
     _decrypt_nodes(ret, path[-1], el["value"], params)

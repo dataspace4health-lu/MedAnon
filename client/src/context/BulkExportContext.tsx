@@ -8,10 +8,10 @@ import {
 } from "react";
 import type { ReactNode } from "react";
 import { getJobStatus, getJobResult, cancelJob as cancelJobApi, reprocessJob as reprocessJobApi, listJobs } from "@/api/medanon";
-import type { JobResponse, JobScoreResponse } from "@/api/medanon";
+import type { JobResponse, JobScoreResponse, UploadErrorDetail } from "@/api/medanon";
 
 export type ExportJobStatus = "submitting" | "pending" | "running" | "done" | "error" | "cancelled";
-export type ExportJobPhase = "queued" | "fetching" | "processing" | "done";
+export type ExportJobPhase = "queued" | "fetching" | "processing" | "loading" | "uploading" | "done" | string;
 
 export interface ExportJobMeta {
   source: "all" | "condition" | "patient" | "patients";
@@ -19,6 +19,7 @@ export interface ExportJobMeta {
   patientName?: string;
   patientCount?: number;
   configProfile: string;
+  type?: string;
 }
 
 export interface ExportJob {
@@ -26,6 +27,7 @@ export interface ExportJob {
   jobId: string | null;
   label: string;
   filename: string;
+  type: string;
   status: ExportJobStatus;
   phase: ExportJobPhase;
   error: string | null;
@@ -39,6 +41,9 @@ export interface ExportJob {
   patientCount?: number;
   configProfile: string;
   backendScore: JobScoreResponse | null;
+  uploadErrors?: number;
+  uploadErrorDetails?: UploadErrorDetail[];
+  summary?: JobResponse["summary"];
 }
 
 interface BulkExportContextValue {
@@ -105,6 +110,7 @@ function jobResponseToExportJob(jr: JobResponse): ExportJob {
     jobId: jr.job_id,
     label,
     filename: `job_${jr.job_id}.ndjson`,
+    type: jr.type,
     status: jr.status as ExportJobStatus,
     phase: jr.phase as ExportJobPhase,
     error: jr.error,
@@ -115,6 +121,9 @@ function jobResponseToExportJob(jr: JobResponse): ExportJob {
     source: sourceMap[jr.type] ?? "all",
     configProfile: jr.config_profile ?? jr.summary?.config_profile ?? "auto",
     backendScore: null,
+    uploadErrors: jr.upload_errors,
+    uploadErrorDetails: jr.upload_error_details,
+    summary: jr.summary,
   };
 }
 
@@ -183,7 +192,7 @@ export function BulkExportProvider({ children }: { children: ReactNode }) {
             pollFailures.current.set(id, 0);
             if (job.status === "done") {
               stopPolling(id);
-              updateJob(id, { status: "done", phase: "done", processed: job.processed, stagedCount: job.staged_count, completedAt: new Date(job.updated_at).getTime() });
+              updateJob(id, { status: "done", phase: "done", processed: job.processed, stagedCount: job.staged_count, completedAt: new Date(job.updated_at).getTime(), uploadErrors: job.upload_errors, uploadErrorDetails: job.upload_error_details });
             } else if (job.status === "error") {
               stopPolling(id);
               updateJob(id, {
@@ -247,12 +256,15 @@ export function BulkExportProvider({ children }: { children: ReactNode }) {
         const sortedAsc = [...backendJobs].reverse();
 
         // Build candidates outside the updater to avoid StrictMode double-run.
+        const EXPORT_JOB_TYPES = new Set([
+          "bulk-export", "cohort", "patient-export", "batch-patient-export", "reprocess", "bulk-import",
+        ]);
         const dismissed = dismissedIds.current;
         const candidates: ExportJob[] = sortedAsc
-          .filter((jr) => !dismissed.has(jr.job_id))
+          .filter((jr) => !dismissed.has(jr.job_id) && EXPORT_JOB_TYPES.has(jr.type))
           .map(jobResponseToExportJob);
         const activeIds: { localId: string; serverId: string }[] = sortedAsc
-          .filter((jr) => !dismissed.has(jr.job_id) && (jr.status === "pending" || jr.status === "running"))
+          .filter((jr) => !dismissed.has(jr.job_id) && EXPORT_JOB_TYPES.has(jr.type) && (jr.status === "pending" || jr.status === "running"))
           .map((jr) => ({ localId: `recovered-${jr.job_id}`, serverId: jr.job_id }));
 
         // Merge into state, skipping jobs already tracked (dedup by jobId).
@@ -289,6 +301,7 @@ export function BulkExportProvider({ children }: { children: ReactNode }) {
         jobId: null,
         label,
         filename,
+        type: meta.type ?? "bulk-export",
         status: "submitting",
         phase: "queued",
         error: null,
@@ -379,6 +392,7 @@ export function BulkExportProvider({ children }: { children: ReactNode }) {
         jobId: null,
         label: `Re-process: ${job.label}`,
         filename: job.filename.replace(/\.ndjson$/, `.reprocess.ndjson`),
+        type: "reprocess",
         status: "submitting",
         phase: "queued",
         error: null,

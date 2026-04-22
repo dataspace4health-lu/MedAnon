@@ -75,8 +75,15 @@ def _resolve_profile(profile: str) -> str:
 
     # User-defined profile?
     user_path = os.path.join(_USER_CONFIG_DIR, f"{profile}.yaml")
-    if os.path.isfile(user_path):
-        return user_path
+    # Guard against path traversal: resolved path must stay inside the user config dir.
+    resolved = os.path.realpath(user_path)
+    allowed_dir = os.path.realpath(_USER_CONFIG_DIR)
+    if not resolved.startswith(allowed_dir + os.sep) and resolved != allowed_dir:
+        raise ValueError(
+            f"Invalid profile name '{profile}': resolves outside the user config directory."
+        )
+    if os.path.isfile(resolved):
+        return resolved
 
     valid = ", ".join(_PROFILE_MAP.keys())
     raise ValueError(

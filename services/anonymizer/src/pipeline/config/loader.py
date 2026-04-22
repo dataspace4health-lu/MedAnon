@@ -103,9 +103,24 @@ class Settings:
 
                 cfg = self._expand_env(cfg)
 
+                # Attributes managed explicitly below — never let raw YAML keys
+                # silently overwrite them via setattr (e.g. a YAML key "filename"
+                # would corrupt the LRU cache key; "processing_errors" is
+                # validated and sanitized separately).
+                _MANAGED_ATTRS = frozenset({
+                    "filename",
+                    "processing_errors",
+                    "processingError",
+                    "rewrite_references",
+                    "rewrite_text_ids",
+                    "domain_map",
+                    "general",
+                })
+
                 # Set values of the dictionary as class attributes
                 for key in cfg:
-                    setattr(self, key, cfg[key])
+                    if key not in _MANAGED_ATTRS:
+                        setattr(self, key, cfg[key])
 
                 # Backward-compatible processing error setting inspired by
                 # Microsoft anonymizer's processingErrors policy.

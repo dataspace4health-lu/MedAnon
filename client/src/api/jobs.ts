@@ -4,6 +4,11 @@
 
 import { getAuthHeaders } from "./client";
 
+export interface UploadErrorDetail {
+  resourceType: string;
+  error: string;
+}
+
 export interface JobResponse {
   job_id: string;
   type: string;
@@ -14,8 +19,12 @@ export interface JobResponse {
   error: string | null;
   processed: number;
   staged_count: number | null;
-  phase: "queued" | "fetching" | "processing" | "done";
+  phase: "queued" | "fetching" | "processing" | "loading" | "uploading" | "done" | string;
   config_profile: string;
+  /** Number of resources that failed to upload (bulk-import jobs only). */
+  upload_errors?: number;
+  /** Per-resource error details, capped at 50 (bulk-import jobs only). */
+  upload_error_details?: UploadErrorDetail[];
   summary: {
     total_resources: number;
     error_count: number;
@@ -268,4 +277,40 @@ export async function triggerJobScore(jobId: string): Promise<JobScoreResponse> 
     );
   }
   return response.json() as Promise<JobScoreResponse>;
+}
+
+// ---------------------------------------------------------------------------
+// Job detail cache (parsed result: resource counts + field/PII analysis)
+// ---------------------------------------------------------------------------
+
+export interface JobDetail {
+  resource_counts: Record<string, number>;
+  total_resources: number;
+  pii_data: Record<string, unknown>;
+  field_summary: Record<string, unknown>;
+}
+
+/**
+ * GET /api/v1/jobs/:jobId/detail — load cached parsed result.
+ * Throws on 404 (cache miss) — callers should fall back to NDJSON parse.
+ */
+export async function getJobDetail(jobId: string): Promise<JobDetail> {
+  const response = await fetch(
+    `/api/v1/jobs/${encodeURIComponent(jobId)}/detail`,
+    { headers: getAuthHeaders() },
+  );
+  if (!response.ok) throw new Error(`getJobDetail failed (${response.status})`);
+  return response.json() as Promise<JobDetail>;
+}
+
+/**
+ * POST /api/v1/jobs/:jobId/detail — save parsed result to backend cache.
+ * Fire-and-forget safe — callers should silently swallow failures.
+ */
+export async function saveJobDetail(jobId: string, detail: JobDetail): Promise<void> {
+  await fetch(`/api/v1/jobs/${encodeURIComponent(jobId)}/detail`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    body: JSON.stringify(detail),
+  });
 }

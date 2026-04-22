@@ -77,3 +77,36 @@ CREATE INDEX IF NOT EXISTS idx_staged_job_status
 CREATE INDEX IF NOT EXISTS idx_staged_expires
     ON medanon.staged_resources (expires_at)
     WHERE expires_at IS NOT NULL;
+
+-- -------------------------------------------------------------------
+-- Processing runs (scoring persistence for all processing paths)
+-- -------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS medanon.processing_runs (
+    id              TEXT PRIMARY KEY,
+    created_at      TEXT NOT NULL,
+    endpoint        TEXT NOT NULL,
+    config_profile  TEXT NOT NULL DEFAULT 'auto',
+    resource_count  INTEGER NOT NULL DEFAULT 0,
+    error_count     INTEGER NOT NULL DEFAULT 0,
+    duration_ms     INTEGER NOT NULL DEFAULT 0,
+    input_type      TEXT NOT NULL DEFAULT '',
+    summary         JSONB,
+    score           JSONB
+);
+
+CREATE INDEX IF NOT EXISTS idx_processing_runs_created
+    ON medanon.processing_runs (created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_processing_runs_endpoint
+    ON medanon.processing_runs (endpoint, created_at DESC);
+
+-- -------------------------------------------------------------------
+-- Job details (frontend parse cache — resource counts, field analysis)
+-- -------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS medanon.job_details (
+    job_id     TEXT PRIMARY KEY,
+    detail     JSONB NOT NULL,
+    created_at TEXT NOT NULL
+);

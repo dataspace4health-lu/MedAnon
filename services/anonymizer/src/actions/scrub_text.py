@@ -38,8 +38,7 @@ from __future__ import annotations
 import re
 import threading
 from copy import deepcopy
-from typing import Any
-
+from integrations.nlp.utils import _scrub_xhtml_text_nodes, _tokenize
 from utils.fhirpath import find_nodes
 
 # ---------------------------------------------------------------------------
@@ -126,7 +125,6 @@ _REDACTED_DIV = (
 
 _GLOBAL_TOKEN_STATE = {"next": {}, "map": {}, "reverse": {}}
 _GLOBAL_TOKEN_LOCK = threading.Lock()
-_TOKEN_STATE_MAX_ENTRIES = 100_000
 
 
 def reset_global_token_state():
@@ -135,18 +133,6 @@ def reset_global_token_state():
         _GLOBAL_TOKEN_STATE["next"].clear()
         _GLOBAL_TOKEN_STATE["map"].clear()
         _GLOBAL_TOKEN_STATE["reverse"].clear()
-
-
-def _evict_if_needed(token_state, limit=_TOKEN_STATE_MAX_ENTRIES):
-    """Drop the oldest 25% of entries when the map exceeds *limit*."""
-    if len(token_state["map"]) <= limit:
-        return
-    evict_count = len(token_state["map"]) // 4
-    keys_to_drop = list(token_state["map"].keys())[:evict_count]
-    for key in keys_to_drop:
-        token = token_state["map"].pop(key, None)
-        if token:
-            token_state["reverse"].pop(token, None)
 
 
 # ---------------------------------------------------------------------------
@@ -179,29 +165,6 @@ def _token_prefix_for_pattern(pattern_key):
     return pattern_key.upper()
 
 
-def _tokenize_value(value, token_prefix, token_state, lock=None):
-    """Return deterministic token for *value* and maintain reverse map."""
-    if lock:
-        with lock:
-            return _tokenize_value_unlocked(value, token_prefix, token_state)
-    return _tokenize_value_unlocked(value, token_prefix, token_state)
-
-
-def _tokenize_value_unlocked(value, token_prefix, token_state):
-    """Internal helper for _tokenize_value — assumes lock is already held if needed."""
-    key = (token_prefix, value)
-    if key in token_state["map"]:
-        return token_state["map"][key]
-
-    _evict_if_needed(token_state)
-    current = token_state["next"].get(token_prefix, 0) + 1
-    token_state["next"][token_prefix] = current
-    token = f"[[{token_prefix}_{current}]]"
-    token_state["map"][key] = token
-    token_state["reverse"][token] = value
-    return token
-
-
 def _scrub(
     text,
     pattern_keys,
@@ -218,7 +181,7 @@ def _scrub(
             token_prefix = _token_prefix_for_pattern(key)
 
             def repl(match, lock=token_lock):
-                return _tokenize_value(match.group(0), token_prefix, token_state, lock)
+                return _tokenize(match.group(0), token_prefix, token_state, lock)
 
             text = compiled.sub(repl, text)
         else:
@@ -234,7 +197,7 @@ def _scrub(
             regex = re.compile(re.escape(name), re.IGNORECASE)
 
             def repl_name(match, lock=token_lock):
-                return _tokenize_value(match.group(0), "NAME", token_state, lock)
+                return _tokenize(match.group(0), "NAME", token_state, lock)
 
             text = regex.sub(repl_name, text)
         else:
@@ -312,19 +275,6 @@ def _get_token_state(params, mapping_scope):
     # called once per matched field across the whole bundle in a single
     # process_data invocation.
     return {"next": {}, "map": {}, "reverse": {}}
-
-
-def _scrub_xhtml_text_nodes(div_html, scrub_fn):
-    """Tokenize text between tags while preserving XHTML structure.
-
-    This avoids touching attributes like xmlns URLs and only scrubs visible
-    narrative text content.
-    """
-    return re.sub(
-        r">([^<>]+)<",
-        lambda m: ">" + scrub_fn(m.group(1)) + "<",
-        div_html,
-    )
 
 
 # ---------------------------------------------------------------------------

@@ -15,6 +15,8 @@ when NLP_SERVICE_URL is set. Otherwise it runs detector.py locally (default).
 from __future__ import annotations
 
 import logging
+import os
+import time
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
@@ -26,17 +28,28 @@ logger = logging.getLogger("nlp")
 
 app = FastAPI(title="MedAnon NLP", version="1.0.0")
 
+# Maximum number of items accepted by the batch endpoint. Prevents CPU/memory
+# exhaustion — each Presidio+spaCy detection call is CPU-intensive. Configurable
+# via NLP_MAX_BATCH_ITEMS; must stay in sync with MEDANON_STAGING_BATCH_SIZE.
+_MAX_BATCH_ITEMS: int = int(os.environ.get("NLP_MAX_BATCH_ITEMS", "1000"))
+
 # ---------------------------------------------------------------------------
 # Prometheus metrics (optional — degrades gracefully if package absent)
 # ---------------------------------------------------------------------------
 
 try:
-    from prometheus_client import CONTENT_TYPE_LATEST, Counter, generate_latest
+    from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
 
     _REQUESTS = Counter(
         "medanon_requests_total",
         "Total HTTP requests received by the NLP service",
         ["endpoint", "status_code", "medanon_service"],
+    )
+    _LATENCY = Histogram(
+        "medanon_request_duration_seconds",
+        "NLP service request latency in seconds",
+        ["endpoint", "medanon_service"],
+        buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0),
     )
     _PROM_AVAILABLE = True
 except ImportError:  # pragma: no cover
@@ -46,6 +59,11 @@ except ImportError:  # pragma: no cover
 def _inc_request(endpoint: str, status: int) -> None:
     if _PROM_AVAILABLE:
         _REQUESTS.labels(endpoint=endpoint, status_code=str(status), medanon_service="nlp").inc()
+
+
+def _observe_latency(endpoint: str, duration: float) -> None:
+    if _PROM_AVAILABLE:
+        _LATENCY.labels(endpoint=endpoint, medanon_service="nlp").observe(duration)
 
 
 @app.get("/metrics")
@@ -104,12 +122,20 @@ class BatchDetectResponse(BaseModel):
 
 @app.on_event("startup")
 def _verify_detector_import():
-    """Eagerly import detector at startup so health checks fail if deps are broken."""
+    """Warm up Presidio/spaCy at startup and verify end-to-end detection works.
+
+    A successful import alone does not confirm the spaCy model is loaded and
+    functional.  Running a real detection call here surfaces broken model files
+    before the service starts accepting traffic, so health checks are reliable.
+    """
     try:
-        from detector import _analyze_and_replace, _detect_entities_cached, _resolve_entities  # noqa: F401
-        logger.info("detector module imported successfully")
+        from detector import _detect_entities_cached, _resolve_entities
+        entities = tuple(_resolve_entities("healthcare"))
+        # Minimal real detection — exercises the full Presidio + spaCy stack.
+        _detect_entities_cached("John Smith DOB 1980-01-01", entities, 0.4, "en")
+        logger.info("detector warm-up complete — Presidio/spaCy ready")
     except Exception as exc:
-        logger.error("detector import failed: %s", exc, exc_info=True)
+        logger.error("detector warm-up failed: %s", exc, exc_info=True)
         app.state.detector_ok = False
         return
     app.state.detector_ok = True
@@ -128,17 +154,19 @@ def detect(req: DetectRequest):
 
     When ``detect_only=True``, return raw entity detections without replacement.
     """
-    from detector import _analyze_and_replace, _detect_entities_cached, _resolve_entities
+    from detector import _analyze_and_replace, _detect_entities, _resolve_entities
 
     entities = _resolve_entities(req.entities)
     token_state = req.token_state or {"next": {}, "map": {}, "reverse": {}}
+    _t0 = time.monotonic()
 
     try:
         if req.detect_only:
-            hits = _detect_entities_cached(
+            hits = _detect_entities(
                 req.text, tuple(entities), req.threshold, req.language
             )
             _inc_request("/v1/detect", 200)
+            _observe_latency("/v1/detect", time.monotonic() - _t0)
             return {
                 "scrubbed_text": req.text,
                 "token_state": token_state,
@@ -156,12 +184,14 @@ def detect(req: DetectRequest):
         )
     except RuntimeError as exc:
         logger.error("presidio_not_ready: %s", exc, exc_info=False)
+        app.state.detector_ok = False  # reflect degraded state in /health
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
         logger.error("detect_error: %s", type(exc).__name__, exc_info=False)
         raise HTTPException(status_code=500, detail="NLP detection error") from exc
 
     _inc_request("/v1/detect", 200)
+    _observe_latency("/v1/detect", time.monotonic() - _t0)
     return DetectResponse(scrubbed_text=scrubbed, token_state=token_state)
 
 
@@ -171,18 +201,25 @@ def detect_batch(req: BatchDetectRequest):
 
     When items have ``detect_only=True``, return raw detections without replacement.
     """
-    from detector import _analyze_and_replace, _detect_entities_cached, _resolve_entities
+    if len(req.items) > _MAX_BATCH_ITEMS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Batch too large: {len(req.items)} items exceeds limit of {_MAX_BATCH_ITEMS}",
+        )
+
+    from detector import _analyze_and_replace, _detect_entities, _resolve_entities
 
     token_state = req.token_state or {"next": {}, "map": {}, "reverse": {}}
     results: list[str] = []
     any_detect_only = any(item.detect_only for item in req.items)
     all_detections: list[list] | None = [] if any_detect_only else None
+    _t0 = time.monotonic()
 
     for item in req.items:
         entities = _resolve_entities(item.entities)
         try:
             if item.detect_only:
-                hits = _detect_entities_cached(
+                hits = _detect_entities(
                     item.text, tuple(entities), item.threshold, item.language
                 )
                 results.append(item.text)
@@ -203,12 +240,14 @@ def detect_batch(req: BatchDetectRequest):
                     all_detections.append([])
         except RuntimeError as exc:
             logger.error("presidio_not_ready: %s", exc, exc_info=False)
+            app.state.detector_ok = False  # reflect degraded state in /health
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         except Exception as exc:
             logger.error("detect_batch_error: %s", type(exc).__name__, exc_info=False)
             raise HTTPException(status_code=500, detail="NLP detection error") from exc
 
     _inc_request("/v1/detect/batch", 200)
+    _observe_latency("/v1/detect/batch", time.monotonic() - _t0)
     response = {"results": results, "token_state": token_state}
     if all_detections is not None:
         response["detections"] = all_detections

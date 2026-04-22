@@ -16,6 +16,11 @@ logger = logging.getLogger("medanon")
 
 _PREFETCH_BATCHES = int(os.environ.get("MEDANON_PREFETCH_BATCHES", "2"))
 
+try:
+    from pipeline.scoring.constants import SCORING_ENABLED as _SCORING_ON
+except ImportError:
+    _SCORING_ON = False
+
 
 class FhirServerService:
     """Orchestrates FHIR server fetch-process-upload workflows.
@@ -52,7 +57,10 @@ class FhirServerService:
     ) -> AsyncIterator[str]:
         """Process a single chunk via process_data_batch, yielding results."""
         try:
-            results = await asyncio.to_thread(process_data_batch, chunk, settings)
+            results = await asyncio.to_thread(
+                process_data_batch, chunk, settings,
+                None, _SCORING_ON,
+            )
             for result in results:
                 yield _json_dumps(result)
         except GpasUnavailableError as exc:
@@ -64,7 +72,8 @@ class FhirServerService:
             for res in chunk:
                 try:
                     result = await asyncio.to_thread(
-                        process_data_batch, [res], settings
+                        process_data_batch, [res], settings,
+                        None, _SCORING_ON,
                     )
                     yield _json_dumps(result[0])
                 except GpasUnavailableError as gexc:
@@ -229,7 +238,9 @@ class FhirServerService:
         Returns ``{"uploaded": int, "errors": int, "results": list}``.
         Raises ValueError on de-identification failure.
         """
-        deidentified = await asyncio.to_thread(process_data, resource, settings)
+        deidentified = await asyncio.to_thread(
+            process_data, resource, settings, None, _SCORING_ON
+        )
 
         # Flatten Bundle entries or wrap single resource into a list
         if (

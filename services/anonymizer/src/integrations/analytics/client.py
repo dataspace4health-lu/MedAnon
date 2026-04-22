@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 from urllib.parse import urlencode
 
-from integrations.http_client import proxy_post_json, proxy_post_raw
+from integrations.http_client import proxy_post_json, proxy_post_raw, ProxyTimeoutError
 from utils.circuit_breaker import CircuitBreaker
 
 _analytics_cb = CircuitBreaker(
@@ -38,8 +38,13 @@ def proxy_analyse_risk(body: bytes, content_type: str) -> dict:
     url = _analytics_url("/v1/analyse/risk")
     try:
         result = proxy_post_json(url, body, content_type=content_type, timeout=60)
+        if not isinstance(result, dict):
+            raise ValueError(f"Analytics returned {type(result).__name__}, expected dict")
         _analytics_cb.record_success()
         return result
+    except ProxyTimeoutError:
+        _analytics_cb.record_timeout()
+        raise
     except Exception:
         _analytics_cb.record_failure()
         raise
@@ -59,6 +64,9 @@ def proxy_generate_synthetic(body: bytes, content_type: str, params: dict) -> by
         result = proxy_post_raw(url, body, content_type=content_type, timeout=120)
         _analytics_cb.record_success()
         return result
+    except ProxyTimeoutError:
+        _analytics_cb.record_timeout()
+        raise
     except Exception:
         _analytics_cb.record_failure()
         raise

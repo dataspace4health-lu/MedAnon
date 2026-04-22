@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import os
+import time
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -27,6 +28,14 @@ from api.schemas.fhir_ops import (
     UploadToTargetRequest,
 )
 from api.services import stream_trailer
+from api.services.scoring_helpers import (
+    _is_scoring_enabled,
+    _get_config_profile,
+    make_collector,
+    score_and_persist,
+    score_json_line,
+    persist_run,
+)
 
 router = APIRouter()
 logger = logging.getLogger("medanon")
@@ -91,9 +100,12 @@ async def process_from_server(
             status_code=502, detail=f"Could not reach FHIR server: {exc}"
         ) from exc
     runtime_settings = _runtime_settings(settings)
+    profile = _get_config_profile(runtime_settings)
 
     async def _generate():
+        collector = make_collector(profile)
         count = 0
+        t0 = time.monotonic()
         disconnected = False
         async for line in svc.stream_from_server(
             server_url, resource_types, req.params, token, req.timeout, runtime_settings
@@ -102,10 +114,23 @@ async def process_from_server(
                 logger.info("from-server: client disconnected, stopping stream")
                 disconnected = True
                 break
+            score_json_line(collector, line, runtime_settings)
             yield line + "\n"
             count += 1
+        score = collector.aggregate() if collector else None
         if not disconnected:
-            yield stream_trailer(count) + "\n"
+            yield stream_trailer(count, score) + "\n"
+        if score is not None:
+            asyncio.create_task(persist_run(
+                endpoint="/v1/process/from-server",
+                config_profile=profile,
+                resource_count=count,
+                error_count=score.get("error_count", 0),
+                duration_ms=int((time.monotonic() - t0) * 1000),
+                input_type="from-server",
+                summary={"total_resources": count},
+                score=score,
+            ))
 
     return StreamingResponse(_generate(), media_type="application/x-ndjson")
 
@@ -138,10 +163,13 @@ async def process_everything(
     server_url = await _get_url_from_request_or_env(req.server_url, "FHIR_SOURCE_URL")
     token = req.token or os.environ.get("FHIR_SOURCE_TOKEN")
     runtime_settings = _runtime_settings(settings)
+    profile = _get_config_profile(runtime_settings)
     svc = _get_service()
 
     async def _generate():
+        collector = make_collector(profile)
         count = 0
+        t0 = time.monotonic()
         disconnected = False
         async for line in svc.stream_everything(
             server_url,
@@ -156,10 +184,23 @@ async def process_everything(
                 logger.info("everything: client disconnected, stopping stream")
                 disconnected = True
                 break
+            score_json_line(collector, line, runtime_settings)
             yield line + "\n"
             count += 1
+        score = collector.aggregate() if collector else None
         if not disconnected:
-            yield stream_trailer(count) + "\n"
+            yield stream_trailer(count, score) + "\n"
+        if score is not None:
+            asyncio.create_task(persist_run(
+                endpoint="/v1/process/everything",
+                config_profile=profile,
+                resource_count=count,
+                error_count=score.get("error_count", 0),
+                duration_ms=int((time.monotonic() - t0) * 1000),
+                input_type="everything",
+                summary={"total_resources": count, "resource_type": req.resource_type, "resource_id": req.resource_id},
+                score=score,
+            ))
 
     return StreamingResponse(_generate(), media_type="application/x-ndjson")
 
@@ -206,8 +247,9 @@ async def process_and_upload(
     runtime_settings = _runtime_settings(settings, dynamic_settings)
 
     svc = _get_service()
+    t0 = time.monotonic()
     try:
-        return await svc.process_and_upload(
+        result = await svc.process_and_upload(
             resource, target_url, target_token, req.timeout, runtime_settings
         )
     except ValueError as exc:
@@ -215,6 +257,17 @@ async def process_and_upload(
     except Exception as exc:
         logger.error("process_and_upload error: %s", type(exc).__name__, exc_info=False)
         raise HTTPException(status_code=500, detail="De-identification error") from exc
+    if _is_scoring_enabled():
+        asyncio.create_task(persist_run(
+            endpoint="/v1/process/and-upload",
+            config_profile=profile,
+            resource_count=result.get("uploaded", 0) + result.get("errors", 0),
+            error_count=result.get("errors", 0),
+            duration_ms=int((time.monotonic() - t0) * 1000),
+            input_type="and-upload",
+            summary=result,
+        ))
+    return result
 
 
 @router.post("/process/round-trip")
@@ -275,7 +328,9 @@ async def process_round_trip(
     runtime_settings = _runtime_settings(settings)
 
     async def _generate():
+        collector = make_collector(profile)
         count = 0
+        t0 = time.monotonic()
         disconnected = False
         async for line in svc.stream_round_trip(
             source_url,
@@ -291,10 +346,23 @@ async def process_round_trip(
                 logger.info("round-trip: client disconnected, stopping stream")
                 disconnected = True
                 break
+            score_json_line(collector, line, runtime_settings)
             yield line + "\n"
             count += 1
+        score = collector.aggregate() if collector else None
         if not disconnected:
-            yield stream_trailer(count) + "\n"
+            yield stream_trailer(count, score) + "\n"
+        if score is not None:
+            asyncio.create_task(persist_run(
+                endpoint="/v1/process/round-trip",
+                config_profile=profile,
+                resource_count=count,
+                error_count=score.get("error_count", 0),
+                duration_ms=int((time.monotonic() - t0) * 1000),
+                input_type="round-trip",
+                summary={"total_resources": count},
+                score=score,
+            ))
 
     return StreamingResponse(_generate(), media_type="application/x-ndjson")
 
@@ -330,10 +398,13 @@ async def process_bulk_export(
         )
     token = req.token or os.environ.get("FHIR_SOURCE_TOKEN")
     runtime_settings = _runtime_settings(settings)
+    profile = _get_config_profile(runtime_settings)
     svc = _get_service()
 
     async def _generate():
+        collector = make_collector(profile)
         count = 0
+        t0 = time.monotonic()
         disconnected = False
         async for line in svc.stream_bulk_export(
             server_url,
@@ -349,10 +420,23 @@ async def process_bulk_export(
                 logger.info("bulk-export: client disconnected, stopping stream")
                 disconnected = True
                 break
+            score_json_line(collector, line, runtime_settings)
             yield line + "\n"
             count += 1
+        score = collector.aggregate() if collector else None
         if not disconnected:
-            yield stream_trailer(count) + "\n"
+            yield stream_trailer(count, score) + "\n"
+        if score is not None:
+            asyncio.create_task(persist_run(
+                endpoint="/v1/process/bulk-export",
+                config_profile=profile,
+                resource_count=count,
+                error_count=score.get("error_count", 0),
+                duration_ms=int((time.monotonic() - t0) * 1000),
+                input_type="bulk-export",
+                summary={"total_resources": count, "level": req.level},
+                score=score,
+            ))
 
     return StreamingResponse(_generate(), media_type="application/x-ndjson")
 
@@ -386,10 +470,13 @@ async def process_cohort(
     server_url = await _get_url_from_request_or_env(req.server_url, "FHIR_SOURCE_URL")
     token = req.token or os.environ.get("FHIR_SOURCE_TOKEN")
     runtime_settings = _runtime_settings(settings)
+    profile = _get_config_profile(runtime_settings)
     svc = _get_service()
 
     async def _generate():
+        collector = make_collector(profile)
         count = 0
+        t0 = time.monotonic()
         disconnected = False
         async for line in svc.stream_cohort(
             server_url,
@@ -404,10 +491,23 @@ async def process_cohort(
                 logger.info("cohort: client disconnected, stopping stream")
                 disconnected = True
                 break
+            score_json_line(collector, line, runtime_settings)
             yield line + "\n"
             count += 1
+        score = collector.aggregate() if collector else None
         if not disconnected:
-            yield stream_trailer(count) + "\n"
+            yield stream_trailer(count, score) + "\n"
+        if score is not None:
+            asyncio.create_task(persist_run(
+                endpoint="/v1/process/cohort",
+                config_profile=profile,
+                resource_count=count,
+                error_count=score.get("error_count", 0),
+                duration_ms=int((time.monotonic() - t0) * 1000),
+                input_type="cohort",
+                summary={"total_resources": count, "search_type": req.search_type},
+                score=score,
+            ))
 
     return StreamingResponse(_generate(), media_type="application/x-ndjson")
 

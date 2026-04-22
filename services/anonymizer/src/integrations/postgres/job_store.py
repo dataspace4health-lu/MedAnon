@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import select
 import uuid
 from datetime import datetime, timezone
 
@@ -22,7 +23,7 @@ import psycopg2
 import psycopg2.extras
 from psycopg2.pool import ThreadedConnectionPool
 
-from medanon_core.domain import Job, JobStatus
+from domain.jobs import Job, JobStatus
 
 logger = logging.getLogger("medanon.jobs.postgres")
 
@@ -40,10 +41,12 @@ class PostgresJobStore:
     # ------------------------------------------------------------------
 
     def _get_conn(self):
-        return self._pool.getconn()
+        from integrations.postgres.pool import get_conn
+        return get_conn(self._pool)
 
     def _put_conn(self, conn) -> None:
-        self._pool.putconn(conn)
+        from integrations.postgres.pool import safe_putconn
+        safe_putconn(self._pool, conn)
 
     # ------------------------------------------------------------------
     # Public API (same interface as SqliteJobStore / RedisJobStore)
@@ -181,8 +184,13 @@ class PostgresJobStore:
         job_type: str | None = None,
         limit: int = 50,
         offset: int = 0,
+        before_created_at: str | None = None,
     ) -> list[Job]:
-        """List jobs with optional filtering, ordered by created_at descending."""
+        """List jobs with optional filtering, ordered by created_at descending.
+
+        *before_created_at* enables keyset pagination: pass the ``created_at``
+        of the last job from the previous page to avoid an O(n) offset scan.
+        """
         query = "SELECT * FROM medanon.jobs WHERE TRUE"
         params: list = []
         if status:
@@ -191,6 +199,9 @@ class PostgresJobStore:
         if job_type:
             query += " AND type = %s"
             params.append(job_type)
+        if before_created_at:
+            query += " AND created_at < %s"
+            params.append(before_created_at)
         query += " ORDER BY created_at DESC LIMIT %s OFFSET %s"
         params.extend([limit, offset])
 
@@ -239,6 +250,38 @@ class PostgresJobStore:
                         (updated_at, job_id),
                     )
                     return cur.rowcount > 0
+        finally:
+            self._put_conn(conn)
+
+    def wait_for_job(self, timeout: float = 2.0) -> str | None:
+        """Block until a NOTIFY arrives on the jobs channel, or *timeout* expires.
+
+        Uses a dedicated connection (not from the pool) with LISTEN so the
+        pooled connections remain available for queries.
+
+        Returns the job_id payload, or None on timeout.
+        """
+        conn = self._get_conn()
+        try:
+            conn.autocommit = True
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(f"LISTEN {_NOTIFY_CHANNEL}")
+                # select.select blocks until the socket is readable or timeout
+                if select.select([conn], [], [], timeout) == ([], [], []):
+                    return None
+                conn.poll()
+                while conn.notifies:
+                    notify = conn.notifies.pop(0)
+                    return notify.payload or None
+                return None
+            finally:
+                try:
+                    with conn.cursor() as cur:
+                        cur.execute(f"UNLISTEN {_NOTIFY_CHANNEL}")
+                except Exception:
+                    pass
+                conn.autocommit = False
         finally:
             self._put_conn(conn)
 

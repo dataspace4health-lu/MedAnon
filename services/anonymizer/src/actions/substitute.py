@@ -28,7 +28,9 @@ def substitute_by_path(resource: dict, el: dict, params: dict) -> None:
     path = el["path"]  # "Patient.name"
     path = path.split(".")[1:]  # Remove root
     if len(path) == 0:
-        ret.clear()
-        return
+        raise ValueError(
+            f"Empty path after removing resource type root in substitute — "
+            f"refusing to clear entire resource (original path: {el['path']!r})"
+        )
     ret = find_nodes(ret, path[:-1], [])
     _substitute_nodes(ret, path[-1], el["value"], params[expected_params[0]])

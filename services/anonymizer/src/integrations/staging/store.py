@@ -72,7 +72,9 @@ class StagingStore:
     def ensure_schema(self) -> None:
         """Create schema + table + indexes if they don't already exist."""
         if self._pool is None:
-            self._pool = ThreadedConnectionPool(2, 10, self._db_url)
+            from utils.pool_budget import pg_staging_budget
+
+            self._pool = ThreadedConnectionPool(2, pg_staging_budget(), self._db_url)
             self._owns_pool = True
         conn = self._pool.getconn()
         try:
@@ -92,7 +94,13 @@ class StagingStore:
 
     def _put_conn(self, conn) -> None:
         if self._pool:
-            self._pool.putconn(conn)
+            try:
+                if conn.closed:
+                    self._pool.putconn(conn, close=True)
+                else:
+                    self._pool.putconn(conn)
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------
     # Write operations
@@ -132,10 +140,7 @@ class StagingStore:
                         VALUES %s
                         ON CONFLICT (job_id, resource_id) DO NOTHING
                         """,
-                        [
-                            (job_id, rid, rtype, rjson, None)
-                            for job_id, rid, rtype, rjson in rows
-                        ],
+                        rows,
                         template=f"(%s, %s, %s, %s::jsonb, {expires_sql})",
                     )
                     return cur.rowcount
@@ -216,27 +221,43 @@ class StagingStore:
         finally:
             self._put_conn(conn)
 
-    def get_all_resources(self, job_id: str) -> Iterable[dict]:
-        """Iterate over every resource for a job (for re-processing)."""
-        conn = self._get_conn()
-        try:
-            with conn.cursor(
-                name=f"cursor_all_{job_id}",
-                cursor_factory=psycopg2.extras.RealDictCursor,
-            ) as cur:
-                cur.execute(
-                    """
-                    SELECT id, resource_id, resource_type, resource_json
-                      FROM medanon.staged_resources
-                     WHERE job_id = %s
-                     ORDER BY id
-                    """,
-                    (job_id,),
-                )
-                for row in cur:
-                    yield dict(row)
-        finally:
-            self._put_conn(conn)
+    def get_all_resources(
+        self, job_id: str, page_size: int = 500
+    ) -> Iterable[dict]:
+        """Iterate over every resource for a job (e.g. for re-processing).
+
+        Uses keyset pagination on the integer ``id`` PK — releases and
+        re-acquires the connection between pages so the pool is never starved
+        during long-running jobs.  Pages of *page_size* rows at a time.
+        """
+        after_id = 0
+        while True:
+            conn = self._get_conn()
+            try:
+                with conn.cursor(
+                    cursor_factory=psycopg2.extras.RealDictCursor
+                ) as cur:
+                    cur.execute(
+                        """
+                        SELECT id, resource_id, resource_type, resource_json
+                          FROM medanon.staged_resources
+                         WHERE job_id = %s AND id > %s
+                         ORDER BY id
+                         LIMIT %s
+                        """,
+                        (job_id, after_id, page_size),
+                    )
+                    rows = cur.fetchall()
+            finally:
+                self._put_conn(conn)
+
+            if not rows:
+                break
+            for row in rows:
+                yield dict(row)
+            after_id = rows[-1]["id"]
+            if len(rows) < page_size:
+                break
 
     def count_by_status(self, job_id: str) -> dict[str, int]:
         """Return ``{pending, done, error, total}`` counts for a job."""

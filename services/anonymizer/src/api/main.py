@@ -38,6 +38,7 @@ from api.deps import (
 )
 from api.routers import (
     admin,
+    agents,
     analytics,
     audit,
     configs,
@@ -47,6 +48,7 @@ from api.routers import (
     hl7v2,
     jobs,
     process,
+    processing_runs,
     scoring,
     synthetic,
 )
@@ -113,132 +115,51 @@ async def _supervised_worker_loop(worker_module) -> None:
 
 @app.on_event("startup")
 async def _startup() -> None:
-    # NOTE: Do NOT set the BoundedExecutor as asyncio's default executor.
-    # BoundedExecutor.submit() blocks the calling thread when the semaphore is
-    # exhausted.  asyncio.to_thread() calls loop.run_in_executor(None, fn)
-    # from the event loop thread — if the pool is full, the event loop itself
-    # blocks, freezing all async request handling (deadlock).
-    # The BoundedExecutor is used explicitly via get_executor() for CPU/IO work
-    # that submits from worker threads, not from the event loop thread.
+    # Log the centralized connection pool budget so operators can verify sizing.
+    try:
+        from utils.pool_budget import log_pool_budget
 
-    # Opt-in Redis L2 cache for cross-replica gPAS result sharing
+        log_pool_budget()
+    except Exception:
+        pass
+
+    # Opt-in Redis L2 cache + gPAS canary (via shared factory)
     redis_url = os.environ.get("MEDANON_REDIS_URL", "").strip()
-    if redis_url:
-        try:
-            from utils.cache import (
-                LocalLruCache,
-                RedisCache,
-                TieredCache,
-                configure_cache,
-            )
+    app_db_url = os.environ.get("MEDANON_APP_DB_URL", "").strip()
 
-            l1 = LocalLruCache()
-            l2 = RedisCache(redis_url)
-            configure_cache(TieredCache(l1, l2))
-            logger.info("gpas_cache=tiered(local+redis)")
-        except Exception as exc:
-            logger.warning("redis_cache_setup_failed falling_back=local: %s", exc)
+    from pipeline.jobs.store_factory import (
+        check_gpas_canary,
+        select_job_store,
+        setup_redis_cache,
+        setup_staging,
+    )
 
-    # gPAS cache coherence check — detect stale Redis after DB wipe
-    if redis_url:
-        try:
-            from integrations.gpas.canary import check_gpas_cache_coherence
-
-            result = await asyncio.to_thread(check_gpas_cache_coherence, redis_url)
-            if result.get("flushed"):
-                logger.warning("gpas_canary: %s", result["reason"])
-            elif result.get("checked"):
-                logger.info("gpas_canary: %s", result["reason"])
-            else:
-                logger.debug("gpas_canary: %s", result.get("reason", "skipped"))
-        except Exception as exc:
-            logger.warning("gpas_canary_check_failed: %s", exc)
+    await setup_redis_cache(redis_url)
+    await check_gpas_canary(redis_url)
 
     # Async job queue — select backend:
     #   1. MEDANON_REDIS_URL → RedisJobStore (event-driven Streams)
     #   2. MEDANON_APP_DB_URL → PostgresJobStore (LISTEN/NOTIFY + FOR UPDATE SKIP LOCKED)
     #   3. Fallback → SqliteJobStore (polling, local dev)
     max_concurrent = int(os.environ.get("MEDANON_JOB_WORKERS", "3"))
-    app_db_url = os.environ.get("MEDANON_APP_DB_URL", "").strip()
     pg_pool = None  # shared PostgreSQL pool for all app-state stores
     try:
         from pipeline.jobs import init_job_store
         from pipeline.jobs import worker as _worker
 
-        job_store = None
-        if redis_url:
-            try:
-                from integrations.redis.job_store import RedisJobStore
-
-                job_store = RedisJobStore(redis_url)
-                logger.info("job_store=redis")
-            except Exception as exc:
-                logger.warning("redis_job_store_failed falling_back=next: %s", exc)
-
-        if job_store is None and app_db_url:
-            try:
-                from integrations.postgres.pool import get_pool
-                from integrations.postgres.job_store import PostgresJobStore
-
-                pg_pool = get_pool(app_db_url)
-                job_store = PostgresJobStore(pg_pool)
-                app.state.pg_pool = pg_pool
-                logger.info("job_store=postgres")
-            except Exception as exc:
-                logger.warning("postgres_job_store_failed falling_back=sqlite: %s", exc)
+        job_store, pg_pool = await select_job_store(redis_url, app_db_url)
+        if pg_pool is not None:
+            app.state.pg_pool = pg_pool
 
         store = init_job_store(store=job_store)
         _worker.init_worker(store, max_concurrent=max_concurrent)
 
         # Staging store — two-phase large-scale export
-        # Uses MEDANON_STAGING_DB_URL when set; otherwise falls back to MEDANON_APP_DB_URL.
-        staging_url = (
-            os.environ.get("MEDANON_STAGING_DB_URL", "").strip()
-            or app_db_url
-        )
-        if staging_url:
-            staging_store = None
-            retries = 3
-            backoff = 2.0
-            for attempt in range(1, retries + 1):
-                try:
-                    from integrations.staging.store import StagingStore
-
-                    retention_days = int(
-                        os.environ.get("MEDANON_STAGING_RETENTION_DAYS", "30")
-                    )
-                    # Only share the app-db pool when both URLs are identical.
-                    # If a separate MEDANON_STAGING_DB_URL is configured, pass
-                    # pool=None so StagingStore creates its own pool with the
-                    # correct connection string (pg_pool points to app_db_url).
-                    shared_pool = pg_pool if staging_url == app_db_url else None
-                    staging_store = StagingStore(
-                        staging_url,
-                        retention_days=retention_days,
-                        pool=shared_pool,
-                    )
-                    staging_store.ensure_schema()
-                    _worker.init_staging(staging_store)
-                    app.state.staging_store = staging_store
-                    logger.info(
-                        "staging_store=postgres retention_days=%d", retention_days
-                    )
-                    break
-                except Exception as exc:
-                    if attempt < retries:
-                        logger.warning(
-                            "staging_store_setup_failed attempt=%d/%d: %s — retrying in %.0fs",
-                            attempt,
-                            retries,
-                            exc,
-                            backoff,
-                        )
-                        await asyncio.sleep(backoff)
-                        backoff *= 2
-                    else:
-                        logger.warning(
-                            "staging_store_setup_failed falling_back=streaming: %s", exc
-                        )
+        staging_url = os.environ.get("MEDANON_STAGING_DB_URL", "").strip()
+        staging_store = await setup_staging(staging_url, app_db_url, pg_pool)
+        if staging_store is not None:
+            _worker.init_staging(staging_store)
+            app.state.staging_store = staging_store
 
         worker_enabled = os.environ.get(
             "MEDANON_WORKER_ENABLED", "false"
@@ -286,6 +207,40 @@ async def _startup() -> None:
             logger.info("config_store=sqlite path=%s", config_store_db)
     except Exception as exc:
         logger.warning("config_store_start_failed: %s", exc)
+
+    # Processing run store — PostgreSQL when app-db available, else SQLite
+    try:
+        from pipeline.processing_run import init_processing_run_store
+
+        if pg_pool:
+            from integrations.postgres.processing_run_store import PostgresProcessingRunStore
+
+            pr_store = PostgresProcessingRunStore(pg_pool)
+            init_processing_run_store(store=pr_store)
+            logger.info("processing_run_store=postgres")
+        else:
+            pr_db = os.environ.get("MEDANON_PROCESSING_RUN_DB", "/output/processing_runs.db")
+            init_processing_run_store(pr_db)
+            logger.info("processing_run_store=sqlite path=%s", pr_db)
+    except Exception as exc:
+        logger.warning("processing_run_store_start_failed: %s", exc)
+
+    # Job detail cache — PostgreSQL when app-db available, else SQLite
+    try:
+        from pipeline.job_detail import init_job_detail_store
+
+        if pg_pool:
+            from integrations.postgres.job_detail_store import PostgresJobDetailStore
+
+            jd_store = PostgresJobDetailStore(pg_pool)
+            init_job_detail_store(store=jd_store)
+            logger.info("job_detail_store=postgres")
+        else:
+            jd_db = os.environ.get("MEDANON_JOB_DETAIL_DB", "/output/job_details.db")
+            init_job_detail_store(jd_db)
+            logger.info("job_detail_store=sqlite path=%s", jd_db)
+    except Exception as exc:
+        logger.warning("job_detail_store_start_failed: %s", exc)
 
     # Pre-warm the NLP adapter (Presidio + spaCy) in the background so the
     # first user request is not blocked by the 3-second model load.
@@ -530,8 +485,10 @@ app.include_router(synthetic.router, prefix="/v1")
 app.include_router(jobs.router, prefix="/v1")
 app.include_router(configs.router, prefix="/v1")
 app.include_router(scoring.router, prefix="/v1")
+app.include_router(processing_runs.router, prefix="/v1")
 app.include_router(audit.router, prefix="/v1")
 app.include_router(admin.router, prefix="/v1")
+app.include_router(agents.router, prefix="/v1")
 
 app.include_router(dicom.router, prefix="/v1")
 app.include_router(hl7v2.router, prefix="/v1")

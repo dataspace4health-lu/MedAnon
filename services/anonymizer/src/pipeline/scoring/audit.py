@@ -33,6 +33,7 @@ class _TypeStats:
         "pass_count",
         "fail_count",
         "composite_sum",
+        "privacy_score_sum",
         "utility_sum",
         "quality_sum",
         "privacy_fail_reasons",
@@ -45,6 +46,7 @@ class _TypeStats:
         self.pass_count: int = 0
         self.fail_count: int = 0
         self.composite_sum: float = 0.0
+        self.privacy_score_sum: float = 0.0
         self.utility_sum: float = 0.0
         self.quality_sum: float = 0.0
         self.privacy_fail_reasons: collections.Counter = collections.Counter()
@@ -110,6 +112,12 @@ class ScoreAuditCollector:
         else:
             ts.fail_count += 1
         ts.composite_sum += result.composite
+
+        # Normalized privacy score: 1 - risk/threshold (higher = better, same direction as composite)
+        if result.privacy.threshold > 0:
+            ts.privacy_score_sum += max(
+                0.0, 1.0 - result.privacy.risk_score / result.privacy.threshold
+            )
 
         if result.utility:
             ts.utility_sum += result.utility.score
@@ -214,6 +222,19 @@ def _pct(v: float | None) -> str:
     return f"{v * 100:.1f}%" if v is not None else "n/a"
 
 
+def _letter_grade(composite: float) -> str:
+    """Return A/B/C/D/F letter grade matching the bulk-export UI badge thresholds."""
+    if composite >= 90:
+        return "A"
+    if composite >= 75:
+        return "B"
+    if composite >= 60:
+        return "C"
+    if composite >= 40:
+        return "D"
+    return "F"
+
+
 def _render_report(
     summary: dict,
     by_type: dict[str, _TypeStats],
@@ -289,31 +310,41 @@ def _render_report(
     # -----------------------------------------------------------------------
     # Executive Summary (always show)
     # -----------------------------------------------------------------------
+    grade = _letter_grade(avg_composite)
     W("# Scoring Report")
     W("")
-    W(f"**Job:** `{job_id or '(ad-hoc)'}`  |  **Profile:** `{config_profile}`  |  **Resources:** {total:,}")
+    W(f"**Job:** `{job_id or '(ad-hoc)'}`  |  **Profile:** `{config_profile}`  |  **Resources:** {total:,}  |  **Grade:** {grade}")
     W("")
 
     # Overall verdict
     if fail_count == 0 and not issues:
-        W("## ✓ PASS — No Issues")
+        W(f"## ✓ PASS — Grade {grade} — No Issues")
         W("")
         W(f"All {total:,} resources passed privacy checks. Composite score: **{avg_composite:.1f}%**")
     elif fail_count == 0:
-        W(f"## ⚠ PASS with Warnings — {len(issues)} Issue(s)")
+        W(f"## ⚠ PASS — Grade {grade} — {len(issues)} Issue(s)")
         W("")
         W(f"All resources passed privacy gate, but there are optimization opportunities.")
     else:
-        W(f"## ✗ FAIL — {fail_count:,} Resources Failed")
+        W(f"## ✗ FAIL — Grade {grade} — {fail_count:,} Resources Failed")
         W("")
         pct_fail = fail_count / max(total, 1) * 100
         W(f"**{pct_fail:.0f}%** of resources failed the privacy gate (composite = 0).")
     W("")
 
+    # Compute overall avg privacy score from per-type accumulators
+    _privacy_count = sum(ts.total for ts in by_type.values())
+    avg_privacy = (
+        sum(ts.privacy_score_sum for ts in by_type.values()) / _privacy_count
+        if _privacy_count > 0
+        else 0.0
+    )
+
     # Quick stats
     W("| Metric | Value |")
     W("|--------|-------|")
     W(f"| Composite | **{avg_composite:.1f}%** |")
+    W(f"| Privacy Score | {avg_privacy * 100:.1f}% |")
     W(f"| Utility | {_pct(avg_utility)} |")
     W(f"| Quality | {_pct(avg_quality)} |")
     W(f"| Pass / Fail | {pass_count:,} / {fail_count:,} |")
@@ -353,39 +384,61 @@ def _render_report(
     # Problems Only — skip sections with no issues
     # -----------------------------------------------------------------------
 
-    # Uncovered HIPAA paths
+    # Uncovered HIPAA paths — grouped by resource type with qualified paths
     if uncovered_hipaa:
         W("---")
         W("")
+
+        # Build (rtype, qualified_path, bare_path, count) rows from per-type accumulators
+        type_path_rows: list[tuple[str, str, str, int]] = []
+        for rtype, ts in by_type.items():
+            for path, count in ts.uncovered_hipaa.items():
+                qualified = f"{rtype}.{path}" if not path.startswith(rtype + ".") else path
+                type_path_rows.append((rtype, qualified, path, count))
+        type_path_rows.sort(key=lambda x: -x[3])
+
+        failing_type_count = sum(1 for ts in by_type.values() if ts.uncovered_hipaa)
+
         if fail_count > 0:
             W("## 🔴 Uncovered HIPAA Paths")
             W("")
-            W(f"**{len(uncovered_hipaa)} sensitive paths** have no transformation rule "
-              f"and caused {fail_count:,} resource(s) to fail the privacy gate.")
+            W(f"**{len(uncovered_hipaa)} fields** across **{failing_type_count} resource type(s)** "
+              f"have no transformation rule and caused **{fail_count:,} resource(s) to fail** the privacy gate.")
         else:
             W("## 🔵 Partially Uncovered HIPAA Paths (below risk threshold)")
             W("")
-            W(f"**{len(uncovered_hipaa)} sensitive path(s)** had no manifest entry on some resources, "
-              f"but the per-resource risk score stayed below the threshold on all {total:,} resources — "
-              f"**no failures**. This often means the field is covered by a conditional rule "
-              f"(`nlp_detect_act`) that did not fire because no PII was detected.")
+            W(f"**{len(uncovered_hipaa)} fields** across **{failing_type_count} resource type(s)** "
+              f"had no rule but risk stayed below threshold — **no failures**. Often means a conditional "
+              f"rule (`nlp_detect_act`) passed because no PII was detected.")
         W("")
-        W("| Path | Occurrences |")
-        W("|------|-------------|")
-        for path, count in uncovered_hipaa.most_common(10):
-            W(f"| `{path}` | {count:,} |")
+        W("| Resource Type | Field | Resources Affected | Suggested Fix |")
+        W("|---|---|---|---|")
+        for rtype, qualified, bare, count in type_path_rows:
+            action, _ = _suggest_action(bare)
+            W(f"| `{rtype}` | `{qualified}` | {count:,} | `{action}` |")
         W("")
-        W("**Fix — add explicit rules if the conditional coverage is insufficient:**")
-        W("```yaml")
-        for path, _ in uncovered_hipaa.most_common(5):
-            action, note = _suggest_action(path)
-            parts = path.split(".")
-            name = f"{action} {parts[0].lower()} {parts[-1]}"
-            W(f"- name: {name}")
-            W(f'  match: "{path}"')
-            W(f"  action: {action}  # {note}")
+
+        # Per-type YAML fix blocks for types that are actually failing
+        failing_types_ordered = sorted(
+            {rtype for rtype, _, _, _ in type_path_rows if by_type[rtype].fail_count > 0},
+            key=lambda rt: -by_type[rt].fail_count,
+        )
+        if failing_types_ordered:
+            W("**Rules to add — by resource type:**")
             W("")
-        W("```")
+            for rtype in failing_types_ordered[:5]:
+                ts = by_type[rtype]
+                rows_for_type = [(qp, bp) for rt, qp, bp, _ in type_path_rows if rt == rtype]
+                W(f"**`{rtype}`** — {ts.fail_count:,}/{ts.total:,} failed:")
+                W("```yaml")
+                for qualified, bare in rows_for_type[:6]:
+                    action, note = _suggest_action(bare)
+                    name = f"{action} {qualified.replace('.', '-').lower()}"
+                    W(f"- name: {name}")
+                    W(f'  match: "{qualified}"')
+                    W(f"  action: {action}  # {note}")
+                W("```")
+                W("")
 
     # CRITICAL: Text PII
     if text_pattern_counts:
@@ -486,11 +539,9 @@ def _render_report(
 
     # Missed rules (only if actually an issue)
     if missed_rules_by_type:
-        # Only show if there are rules that NEVER fired (not just missed on some types)
         never_fired = set()
         for rules in missed_rules_by_type.values():
             never_fired.update(rules)
-        # Filter to rules that also never appear in fired_rules
         truly_missed = [r for r in never_fired if fired_rules.get(r, 0) == 0]
 
         if truly_missed:
@@ -498,12 +549,21 @@ def _render_report(
             W("")
             W("## 🔵 Inactive Rules")
             W("")
-            W(f"**{len(truly_missed)} rules** defined in config but never fired:")
+            W(f"**{len(truly_missed)} rule(s)** are defined in config but never fired on any resource:")
             W("")
+            W("| Rule | Expected on | Total Fired |")
+            W("|------|-------------|-------------|")
             for rule in truly_missed[:10]:
-                W(f"- `{rule}`")
+                types_that_missed = sorted(
+                    rt for rt, rules in missed_rules_by_type.items() if rule in rules
+                )
+                types_str = ", ".join(f"`{t}`" for t in types_that_missed[:3])
+                if len(types_that_missed) > 3:
+                    types_str += f" +{len(types_that_missed) - 3} more"
+                W(f"| `{rule}` | {types_str} | 0 |")
             W("")
-            W("Check if the FHIRPath expressions match your data or remove unused rules.")
+            W("Check FHIRPath expressions: if the resource types listed are in your data but the rule never fires, "
+              "the path may not match your FHIR profile. Remove the rule if it is no longer needed.")
 
     # -----------------------------------------------------------------------
     # Action Summary (always useful)
@@ -530,21 +590,29 @@ def _render_report(
         W("")
         W("## Resource Type Breakdown")
         W("")
-        W("| Type | Total | Pass | Failed | Avg Composite | Avg Utility | Avg Quality | Notes |")
-        W("|------|-------|------|--------|---------------|-------------|-------------|-------|")
-        for rtype, ts in sorted(by_type.items(), key=lambda x: -x[1].total):
+        W("| Type | Grade | Total | Pass | Failed | Composite | Privacy | Utility | Quality | Notes |")
+        W("|------|-------|-------|------|--------|-----------|---------|---------|---------|-------|")
+        for rtype, ts in sorted(by_type.items()):  # alphabetic A-Z
             avg_comp = ts.composite_sum / ts.total if ts.total else 0.0
+            avg_priv = ts.privacy_score_sum / ts.total if ts.total else 0.0
             avg_u = ts.utility_sum / ts.pass_count if ts.pass_count else 0.0
             avg_q = ts.quality_sum / ts.pass_count if ts.pass_count else 0.0
+            grade = _letter_grade(avg_comp)
             note = ""
             if ts.fail_count > 0 and ts.privacy_fail_reasons:
                 reason = ts.privacy_fail_reasons.most_common(1)[0][0]
-                note = _brief_reason(reason, ts)
+                note = _brief_reason(reason, ts, rtype)
+            elif ts.pass_count > 0 and avg_priv < 0.6:
+                note = f"privacy score low ({avg_priv * 100:.0f}%) — residual risk near threshold"
+            elif ts.pass_count > 0 and avg_u < 0.70:
+                note = f"low utility ({avg_u * 100:.0f}%)"
+            elif ts.pass_count > 0 and avg_q < 0.70:
+                note = f"low quality ({avg_q * 100:.0f}%)"
             elif ts.total > 0 and avg_comp < 80:
-                note = "low composite"
+                note = f"composite {avg_comp:.0f}%"
             W(
-                f"| `{rtype}` | {ts.total:,} | {ts.pass_count:,} | {ts.fail_count:,} |"
-                f" {avg_comp:.0f}% | {_pct(avg_u)} | {_pct(avg_q)} | {note} |"
+                f"| `{rtype}` | {grade} | {ts.total:,} | {ts.pass_count:,} | {ts.fail_count:,} |"
+                f" {avg_comp:.0f}% | {avg_priv * 100:.0f}% | {_pct(avg_u)} | {_pct(avg_q)} | {note} |"
             )
         W("")
 
@@ -561,20 +629,32 @@ def _suggest_action(path: str) -> tuple[str, str]:
         return "cryptohash", "preserves linkage"
     if "name" in p:
         return "redact", "names must be removed"
-    if "birth" in p or "date" in p:
+    if "birth" in p or "date" in p or "period" in p or "time" in p:
         return "generalize", "year-only reduces loss"
-    if "address" in p or "zip" in p:
+    if "address" in p or "zip" in p or "postal" in p:
         return "generalize", "partial suppression"
     if "telecom" in p or "phone" in p or "email" in p:
         return "redact", "contact info removed"
+    if "performer" in p or "author" in p or "requester" in p or "participant" in p:
+        return "redact", "practitioner reference"
+    if "custodian" in p or "organization" in p:
+        return "redact", "organization reference"
     return "redact", "sensitive field"
 
 
-def _brief_reason(reason: str, ts: _TypeStats) -> str:
+def _brief_reason(reason: str, ts: _TypeStats, rtype: str = "") -> str:
     """One-line explanation of failure reason."""
     if reason == "identifier_not_covered":
         paths = list(ts.uncovered_hipaa.keys())[:2]
-        return f"uncovered: {', '.join(paths)}"
+        if rtype:
+            qualified = [
+                f"{rtype}.{p}" if not p.startswith(rtype + ".") else p for p in paths
+            ]
+        else:
+            qualified = paths
+        return f"missing rules: {', '.join(f'`{p}`' for p in qualified)}"
     if reason == "text_risk":
-        return "PII in text"
+        return "PII detected in text fields"
+    if reason == "attacker_model":
+        return "k-anonymity failure — patient re-identifiable"
     return reason.replace("_", " ")

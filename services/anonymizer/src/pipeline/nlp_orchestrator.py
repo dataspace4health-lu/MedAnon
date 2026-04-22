@@ -35,6 +35,7 @@ class _TextField:
     is_xhtml: bool
     work_item: NlpWork  # back-reference for params/action_type
     resource_idx: int  # index into the parsed resources list
+    nlp_params: tuple = ()  # (entities, threshold, language) — populated post-extraction
 
 
 # ---------------------------------------------------------------------------
@@ -104,7 +105,7 @@ def _extract_fields(resource: dict, work_item: NlpWork, resource_idx: int) -> li
 
 def _resolve_nlp_params(work_item: NlpWork):
     """Extract NLP parameters from a work item."""
-    from integrations.nlp.detector import _resolve_entities
+    from integrations.nlp.utils import _resolve_entities
 
     params = work_item.params
     entities = _resolve_entities(params.get("entities", "healthcare"))
@@ -154,7 +155,7 @@ def _apply_nlp_detect_act(text: str, adapter, entities, threshold, language, par
 
 def _apply_replacement(field: _TextField, adapter, token_state):
     """Apply NLP replacement to a single text field. Returns (result_text, changed)."""
-    entities, threshold, language = _resolve_nlp_params(field.work_item)
+    entities, threshold, language = field.nlp_params
     text = field.text
     action_type = field.work_item.action_type
 
@@ -172,9 +173,9 @@ def _apply_replacement(field: _TextField, adapter, token_state):
 
 def _apply_replacement_xhtml(field: _TextField, adapter, token_state):
     """Apply NLP replacement to an XHTML text field. Returns (result_text, changed)."""
-    from integrations.nlp.detector import _scrub_xhtml_text_nodes
+    from integrations.nlp.utils import _scrub_xhtml_text_nodes
 
-    entities, threshold, language = _resolve_nlp_params(field.work_item)
+    entities, threshold, language = field.nlp_params
     action_type = field.work_item.action_type
 
     if action_type == "nlp_detect_act":
@@ -227,11 +228,19 @@ def _batch_detect_prewarm(adapter, unique_texts: list[str], entities, threshold,
             _log.warning("detect_batch_failed — falling back to sequential pre-warm")
 
     # Fallback: sequential detection (still pre-warms the per-process cache)
+    failed = 0
     for text in unique_texts:
         try:
             adapter.detect(text, entities, threshold, language)
         except Exception:
-            pass  # individual failures are handled during replacement
+            failed += 1
+    if failed:
+        _log.warning(
+            "nlp_sequential_prewarm: %d/%d texts failed detection — "
+            "affected fields will be redacted during replacement",
+            failed,
+            len(unique_texts),
+        )
 
 
 def run_nlp_batch_for_batch(
@@ -290,6 +299,16 @@ def run_nlp_batch_for_batch(
     if not all_fields:
         return
 
+    # Pre-compute NLP params once per unique NlpWork instance.
+    # _resolve_entities() creates a fresh list copy each call; doing it once
+    # per work_item (vs once per field) avoids O(fields) list allocations.
+    wi_params: dict[int, tuple] = {}
+    for f in all_fields:
+        wi_id = id(f.work_item)
+        if wi_id not in wi_params:
+            wi_params[wi_id] = _resolve_nlp_params(f.work_item)
+        f.nlp_params = wi_params[wi_id]
+
     # Phase B: Batch detection — pre-warm cache for all unique texts
     # Group by (entities, threshold, language) so mixed-param configs get
     # correct detection results instead of using first-field params for all.
@@ -297,7 +316,7 @@ def run_nlp_batch_for_batch(
     for f in all_fields:
         if not f.text or not f.text.strip():
             continue
-        entities, threshold, language = _resolve_nlp_params(f.work_item)
+        entities, threshold, language = f.nlp_params
         key = (tuple(entities), threshold, language)
         if key not in param_groups:
             param_groups[key] = set()

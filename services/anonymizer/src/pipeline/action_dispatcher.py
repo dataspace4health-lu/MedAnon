@@ -179,6 +179,9 @@ def dispatch_pass1(
 
         for el in elements_to_process:
             el_path = el.get("path", "?")
+            # Copy params per-element to prevent mutations (_no_change,
+            # _actual_action) from leaking between elements sharing the same rule.
+            el_params = dict(params)
 
             audit_log.debug(
                 "rule_applied action=%s match=%s path=%s resource_type=%s",
@@ -193,23 +196,23 @@ def dispatch_pass1(
             if action in GPAS_PSEUDO_ACTIONS or action in GPAS_DEPSEUDO_ACTIONS:
                 val = el["value"]
                 serialized = str(val) if not isinstance(val, dict) else _json_dumps(val)
+                # Normalize urn:uuid: so the same bare UUID always maps to the same
+                # pseudonym regardless of reference format. Without this, a resource id
+                # "abc-123" (bare) and a reference "urn:uuid:abc-123" produce two
+                # separate gPAS entries with different pseudonyms, breaking linkage.
+                if isinstance(val, str) and val.startswith("urn:uuid:"):
+                    serialized = val[len("urn:uuid:"):]
                 gpas_work.append(
                     BatchWork(
                         rule=rule,
                         element=el,
-                        params=params,
+                        params=el_params,
                         serialized_value=serialized,
                     )
                 )
-                # Record manifest at deferral time (gPAS batch succeeds/fails together)
-                if _MANIFEST_ENABLED:
-                    manifest_entries.append(
-                        {
-                            "rule": rule.get("name", rule["match"]),
-                            "action": action,
-                            "path": el_path,
-                        }
-                    )
+                # Manifest is recorded at write-back time (run_gpas_batch /
+                # write_back_gpas_batch) so the logged action reflects the actual
+                # outcome — pseudonymization or fallback-redact if gPAS failed.
                 continue
 
             # Defer NLP actions for batch processing (Pass 1.5)
@@ -218,7 +221,7 @@ def dispatch_pass1(
                     NlpWork(
                         rule=rule,
                         element=el,
-                        params=params,
+                        params=el_params,
                         action_type=action,
                     )
                 )
@@ -227,11 +230,11 @@ def dispatch_pass1(
             actual_action = action
             try:
                 if action in DEIDENT_ACTIONS:
-                    perform_deidentification(action, resource, el, params)
+                    perform_deidentification(action, resource, el, el_params)
                 elif action in PSEUDO_ACTIONS:
-                    perform_pseudonymization(action, resource, el, params)
+                    perform_pseudonymization(action, resource, el, el_params)
                 elif action in DEPSEUDO_ACTIONS:
-                    perform_depseudonymization(action, resource, el, params)
+                    perform_depseudonymization(action, resource, el, el_params)
                 else:
                     not_implemented(f"Method {action} is not implemented")
             except Exception as exc:
@@ -269,12 +272,11 @@ def dispatch_pass1(
             if _MANIFEST_ENABLED:
                 # Conditional-manifest: nlp_detect_act skips manifest when
                 # NLP found nothing (text unchanged, no info loss to record).
-                if params.get("_no_change"):
-                    params.pop("_no_change", None)
+                if el_params.get("_no_change"):
                     continue
                 # Use the actual sub-action when the action reports one
                 # (e.g. "nlp_detect_act/redact" for targeted replacements).
-                reported_action = params.pop("_actual_action", actual_action)
+                reported_action = el_params.get("_actual_action", actual_action)
                 manifest_entries.append(
                     {
                         "rule": rule.get("name", rule["match"]),

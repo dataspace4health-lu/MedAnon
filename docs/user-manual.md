@@ -33,7 +33,7 @@ open http://localhost:8501
 
 ## Web UI
 
-Open `http://localhost:8501`. The sidebar shows live health status for all services and your current config profile. There are 13 pages accessible from the sidebar navigation.
+Open `http://localhost:8501`. The sidebar shows live health status for all services and your current config profile. There are 14 pages accessible from the sidebar navigation.
 
 ### Home (Dashboard)
 
@@ -111,7 +111,7 @@ Generate synthetic FHIR data from de-identified datasets (requires the analytics
 
 ### Status
 
-Health dashboard for all services: anonymizer, FHIR source, FHIR target, gPAS, Redis.
+Health dashboard for all services: anonymizer, FHIR source, FHIR target, gPAS, Redis, NLP microservice, analytics.
 
 ### Config Profiles
 
@@ -128,6 +128,25 @@ Create custom de-identification profiles through a guided UI.
 1. Start from a blank profile or clone an existing one
 2. Add, edit, and reorder rules with match expressions and actions
 3. Save the profile — available immediately via `?config_profile=<name>` on any endpoint
+
+**AI-assisted config generation (requires `MEDANON_AI_ENABLED=true`, role: `admin`):**
+
+1. Click the **AI** button in the Config Builder toolbar
+2. Describe your use case in plain language (e.g. "GDPR-compliant profile for cardiovascular research, retain LOINC codes and measurement values, generalize dates to year-month")
+3. The AI agent generates a complete YAML config using the 7 bundled profiles as context
+4. Review the generated rules, adjust if needed, then save
+
+The AI panel also shows the rationale for each generated rule and which bundled profile it was derived from.
+
+### Processing History
+
+View a running log of all de-identification processing runs (requires `MEDANON_SCORING_ENABLED=true`).
+
+1. Shows all past runs: endpoint, config profile, resource count, composite score, timestamp
+2. Click a row to see the full score breakdown (privacy / utility / quality)
+3. Runs are grouped by endpoint — filter by `/v1/process`, `/v1/jobs/bulk-export`, etc.
+4. Aggregate statistics at the top: total runs, average composite score, runs by profile
+5. Use **Purge** to delete all run history (analyst role — admin enforcement pending)
 
 ### Target FHIR Browser
 
@@ -253,17 +272,66 @@ curl -X DELETE http://localhost:8000/v1/jobs/abc123
 ### Risk assessment
 
 ```bash
-curl -X POST http://localhost:8000/analyse/risk \
-  -H "Content-Type: application/x-ndjson" \
-  --data-binary @output.ndjson | python3 -m json.tool
+curl -X POST http://localhost:8000/v1/analyse/risk \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: $MEDANON_API_KEY" \
+  -d '{"resources": [...], "quasi_identifiers": ["gender","birthDate","address.postalCode"]}' \
+  | python3 -m json.tool
 ```
 
-| `min_k` | Risk level | Action |
+| `k_anonymity` | Risk level | Action |
 |---|---|---|
 | ≥ 5 | low | No action required — meets basic k-anonymity |
 | 3–4 | medium | Consider broader date generalization or additional field suppression |
 | 2 | high | Suppress records that form pairs |
 | 1 | critical | Unique records exist — do not share without remediation |
+
+### Score a de-identified resource
+
+```bash
+curl -X POST http://localhost:8000/v1/score \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: $MEDANON_API_KEY" \
+  -d '{
+    "original": {"resourceType":"Patient","id":"p1","name":[{"family":"Smith"}],"birthDate":"1985-03-12"},
+    "deidentified": {"resourceType":"Patient","id":"5e2f1a9c...","name":[],"birthDate":"1985"},
+    "config_profile": "gdpr"
+  }'
+```
+
+Returns a composite score (0–100) split across privacy, utility, and quality dimensions.
+Add `?include_audit=true` to include a Markdown audit report in the response.
+
+### AI agent endpoints (requires `MEDANON_AI_ENABLED=true`)
+
+```bash
+# Check AI availability
+curl http://localhost:8000/v1/ai/status -H "X-API-Key: $MEDANON_API_KEY"
+
+# Detect PII in a text snippet (local model only — never sent to external API)
+curl -X POST http://localhost:8000/v1/ai/detect-pii \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: $MEDANON_API_KEY" \
+  -d '{"text": "Patient Hans Müller, DOB 1951-08-14, admitted to Charité Berlin."}'
+
+# Explain a config rule in plain language
+curl -X POST http://localhost:8000/v1/ai/explain \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: $MEDANON_API_KEY" \
+  -d '{"config_profile": "gdpr", "rule_name": "pseudonymize patient ID"}'
+
+# Generate a config profile from a description (admin only)
+curl -X POST http://localhost:8000/v1/ai/generate-config \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: $ADMIN_KEY" \
+  -d '{"description": "GDPR profile for cardiovascular research. Retain LOINC codes. Dates to year-month."}'
+
+# Compliance gap analysis
+curl -X POST http://localhost:8000/v1/ai/compliance \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: $MEDANON_API_KEY" \
+  -d '{"config_profile": "gdpr", "frameworks": ["GDPR", "HIPAA"]}'
+```
 
 ---
 
@@ -271,7 +339,7 @@ curl -X POST http://localhost:8000/analyse/risk \
 
 ```bash
 # From repo root
-make setup    # create venv, install deps, download spaCy model
+make setup    # create venv, install anonymizer Python deps
 
 cd services/anonymizer
 
@@ -287,6 +355,8 @@ python3 -m cli.main fetch \
   --output output/all.ndjson \
   --config config/config_gpas.yaml
 ```
+
+**Note on NLP in the CLI:** Presidio + spaCy no longer run in the anonymizer process. NLP de-identification delegates to the NLP microservice (`nlp-lb:8200`). When using the CLI outside Docker, set `NLP_SERVICE_URL=http://localhost:8200` (or omit NLP rules if the microservice is not running — text fields will not be scrubbed).
 
 ---
 
@@ -333,7 +403,7 @@ rules:
 | `substitute` | Replace with a fixed value | `substitute_with` |
 | `perturb` | Add random noise to numeric values | `range`, `distribution` |
 | `scrub_text` | Regex-based PHI removal in free text | `mode`, `patterns` |
-| `nlp_detect` | Presidio NLP entity detection (PERSON, GPE, DATE, etc.) | `mode`, `threshold` |
+| `nlp_detect` | NLP entity detection via NLP microservice (Presidio + spaCy) — PERSON, GPE, DATE, etc. | `mode`, `threshold` |
 | `nlp_detect_act` | Entity-specific conditional NLP: detect first, then apply a per-entity action (e.g. dates->generalize, names->redact). No-op when nothing detected. | `threshold`, `html`, `entity_actions`, `entities` |
 | `encrypt` | RSA public-key encryption | `public_key_path` |
 | `gpas_pseudonymize` | Reversible gPAS pseudonym | `gpas_url`, `gpas_domain`, `gpas_operation` |

@@ -22,7 +22,7 @@ HAPI_IMAGE     := hapiproject/hapi:v7.6.0
 HAPI_JAVA_VER  := 17
 HC_DIR      := services/fhir-server/healthcheck
 
-.PHONY: help setup test test-cov lint format batch fetch \
+.PHONY: help setup test test-cov lint format batch fetch sync-check \
         up down dev logs build build-ui build-sdv up-sdv build-healthcheck clean \
         init-domains preflight verify _dirs \
         helm-install helm-uninstall helm-lint helm-template helm-build-gpas
@@ -65,9 +65,7 @@ help:
 setup:
 	python3 -m venv $(VENV)
 	$(PIP) install --upgrade pip
-	$(PIP) install -e packages/medanon-core/
 	$(PIP) install -r services/anonymizer/requirements.txt
-	$(PY) -m spacy download en_core_web_lg
 	@echo "✓ virtualenv ready — activate with: source $(VENV)/bin/activate"
 
 # ── Testing ───────────────────────────────────────────────────────────────────
@@ -83,6 +81,9 @@ lint:
 
 format:
 	$(VENV)/bin/ruff format services/anonymizer/src
+
+sync-check:
+	bash scripts/sync_shared_code.sh
 
 # ── Batch processing ──────────────────────────────────────────────────────────
 batch:
@@ -182,7 +183,7 @@ dev: build-healthcheck
 	$(DEV_COMPOSE) up
 
 down:
-	$(COMPOSE) --profile analytics --profile nlp --profile ha --profile s3 down --remove-orphans
+	$(COMPOSE) --profile analytics --profile nlp --profile ha --profile s3 down --remove-orphans -v
 
 logs:
 	$(COMPOSE) logs -f

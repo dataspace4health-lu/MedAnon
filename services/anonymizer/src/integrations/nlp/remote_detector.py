@@ -10,6 +10,7 @@ from __future__ import annotations
 from utils.json_fast import dumps_bytes as _json_dumps_bytes
 import logging
 import os
+import secrets
 
 from integrations.http_client import proxy_post_json
 from utils.circuit_breaker import CircuitBreaker
@@ -17,8 +18,27 @@ import urllib3
 
 _log = logging.getLogger("medanon.nlp.remote")
 
-# NLP failure mode: always fail-closed (redact) to prevent PHI leakage.
-_NLP_FALLBACK_TEXT = "[NLP_UNAVAILABLE]"
+
+def _nlp_fallback_token() -> str:
+    """Return a unique per-field redaction placeholder.
+
+    Using a random suffix prevents cross-record linkability: two records that
+    both hit the NLP failure path will receive different placeholder values and
+    cannot be correlated on that basis.
+    """
+    return f"[NLP_UNAVAILABLE_{secrets.token_hex(4).upper()}]"
+
+
+def _validate_detect_response(raw: dict) -> dict:
+    """Validate the NLP /v1/detect response against the contract schema."""
+    from api.schemas.nlp import NlpDetectResponse
+    return NlpDetectResponse.model_validate(raw).model_dump()
+
+
+def _validate_batch_response(raw: dict) -> dict:
+    """Validate the NLP /v1/detect/batch response against the contract schema."""
+    from api.schemas.nlp import NlpBatchResponse
+    return NlpBatchResponse.model_validate(raw).model_dump()
 
 
 class NlpUnavailableError(RuntimeError):
@@ -36,8 +56,8 @@ class NlpUnavailableError(RuntimeError):
 _nlp_cb = CircuitBreaker(
     name="nlp",
     failure_threshold=int(os.environ.get("NLP_CB_FAILURE_THRESHOLD", "5")),
-    recovery_timeout_sec=float(os.environ.get("NLP_CB_RECOVERY_TIMEOUT_SEC", "60")),
-    window_sec=float(os.environ.get("NLP_CB_WINDOW_SEC", "120")),
+    recovery_timeout_sec=float(os.environ.get("NLP_CB_RECOVERY_TIMEOUT_SEC", "30")),
+    window_sec=float(os.environ.get("NLP_CB_WINDOW_SEC", "60")),
     half_open_probes=int(os.environ.get("NLP_CB_HALF_OPEN_PROBES", "2")),
     timeout_threshold=int(os.environ.get("NLP_CB_TIMEOUT_THRESHOLD", "2")),
 )
@@ -89,10 +109,13 @@ def detect_remote(
 
     url = _nlp_service_url("/v1/detect")
     try:
-        result = proxy_post_json(url, payload, timeout=30)
+        raw = proxy_post_json(url, payload, timeout=30)
+        result = _validate_detect_response(raw)
         _nlp_cb.record_success()
-        detections = result.get("detections", [])
+        detections = result.get("detections") or []
         return [(d[0], d[1], d[2]) for d in detections]
+    except NlpUnavailableError:
+        raise
     except Exception as exc:
         _nlp_cb.record_failure()
         _log.warning(
@@ -137,8 +160,9 @@ def detect_batch_remote(
 
     url = _nlp_service_url("/v1/detect/batch")
     try:
-        result = proxy_post_json(url, payload, timeout=120)
-        all_detections = result.get("detections", [])
+        raw = proxy_post_json(url, payload, timeout=120)
+        result = _validate_batch_response(raw)
+        all_detections = result.get("detections") or []
         if len(all_detections) == len(texts):
             _nlp_cb.record_success()
             return [
@@ -159,8 +183,15 @@ def detect_batch_remote(
             type(exc).__name__,
         )
 
-    # Fallback: sequential per-text detection
-    return [detect_remote(t, entities, threshold, language) for t in texts]
+    # Fallback: sequential per-text detection.
+    # Re-check the circuit breaker before each call — a run of failures during
+    # the batch may have tripped it while iterating.
+    results: list[list[tuple[int, int, str]]] = []
+    for t in texts:
+        if not _nlp_cb.allow_request():
+            raise NlpUnavailableError("NLP circuit breaker OPEN during sequential fallback")
+        results.append(detect_remote(t, entities, threshold, language))
+    return results
 
 
 def analyze_and_replace_remote(
@@ -182,7 +213,7 @@ def analyze_and_replace_remote(
     """
     if not _nlp_cb.allow_request():
         _log.warning("nlp_circuit_breaker OPEN — returning redacted placeholder")
-        return _NLP_FALLBACK_TEXT
+        return _nlp_fallback_token()
 
     payload = _json_dumps_bytes(
         {
@@ -197,7 +228,8 @@ def analyze_and_replace_remote(
 
     url = _nlp_service_url("/v1/detect")
     try:
-        result = proxy_post_json(url, payload, timeout=30)
+        raw = proxy_post_json(url, payload, timeout=30)
+        result = _validate_detect_response(raw)
         returned_state = result.get("token_state", {})
         token_state.update(returned_state)
         _nlp_cb.record_success()
@@ -208,7 +240,7 @@ def analyze_and_replace_remote(
             "nlp_service_error type=%s — returning redacted placeholder",
             type(exc).__name__,
         )
-        return _NLP_FALLBACK_TEXT
+        return _nlp_fallback_token()
 
 
 def analyze_and_replace_batch_remote(
@@ -232,7 +264,7 @@ def analyze_and_replace_batch_remote(
             "nlp_circuit_breaker OPEN — returning %d redacted placeholders",
             len(texts),
         )
-        return [_NLP_FALLBACK_TEXT] * len(texts)
+        return [_nlp_fallback_token() for _ in texts]
 
     payload = _json_dumps_bytes(
         {
@@ -252,7 +284,8 @@ def analyze_and_replace_batch_remote(
 
     url = _nlp_service_url("/v1/detect/batch")
     try:
-        result = proxy_post_json(url, payload, timeout=60)
+        raw = proxy_post_json(url, payload, timeout=60)
+        result = _validate_batch_response(raw)
         returned_state = result.get("token_state", {})
         token_state.update(returned_state)
         scrubbed = result.get("results", [])
@@ -286,7 +319,7 @@ def analyze_and_replace_batch_remote(
         # If batch failure tripped the circuit breaker, bail immediately rather than
         # spawning hundreds of sub-batch HTTP calls under degradation.
         if not _nlp_cb.allow_request():
-            return [_NLP_FALLBACK_TEXT] * len(texts)
+            return [_nlp_fallback_token() for _ in texts]
 
     # Fallback: sub-batch retry (batches of 10) then sequential per-text calls
     sub_batch_size = 10
@@ -310,7 +343,8 @@ def analyze_and_replace_batch_remote(
                 }
             )
             try:
-                sub_result = proxy_post_json(url, sub_payload, timeout=60)
+                sub_raw = proxy_post_json(url, sub_payload, timeout=60)
+                sub_result = _validate_batch_response(sub_raw)
                 returned_state = sub_result.get("token_state", {})
                 token_state.update(returned_state)
                 scrubbed = sub_result.get("results", [])

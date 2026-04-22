@@ -3,7 +3,7 @@
 import json
 import logging
 
-from medanon_core.domain import (  # noqa: F401 — re-exported for routers
+from domain.jobs import (  # noqa: F401 — re-exported for routers
     JobNotComplete,
     JobNotFound,
     JobResultMissing,
@@ -25,8 +25,12 @@ class JobService:
 
     def _job_to_dict(self, job) -> dict:
         checkpoint = job.checkpoint_data or {}
-        # Support both old-style (lines_written) and staged (processed) checkpoint keys
-        processed = checkpoint.get("processed", checkpoint.get("lines_written", 0))
+        # "uploaded" is set by bulk-import to count only successful uploads.
+        # Export jobs use "lines_written" (resources written to NDJSON).
+        # Fall back through all keys for backward compatibility.
+        processed = checkpoint.get(
+            "uploaded", checkpoint.get("processed", checkpoint.get("lines_written", 0))
+        )
         params = getattr(job, "params", None) or {}
         return {
             "job_id": job.id,
@@ -41,6 +45,8 @@ class JobService:
             "phase": checkpoint.get("phase", "queued"),
             "summary": checkpoint.get("summary"),
             "config_profile": params.get("config_profile", "auto"),
+            "upload_errors": checkpoint.get("errors", 0),
+            "upload_error_details": checkpoint.get("error_details", []),
         }
 
     def submit_bulk_export(self, server_url: str, params: dict) -> dict:

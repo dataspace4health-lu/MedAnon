@@ -18,7 +18,7 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
-from medanon_core.domain import Job, JobStatus
+from domain.jobs import Job, JobStatus
 
 _log = logging.getLogger("medanon.jobs.redis")
 
@@ -159,25 +159,63 @@ class RedisJobStore:
             _STATUS_PREFIX,
         )
 
+    # Lua script: atomically claim the oldest PENDING job.
+    # Reads all pending IDs, finds the one with the lowest score in the time
+    # index, then transitions it from pending→running in the secondary set —
+    # all in a single server-side operation so no two workers can claim the
+    # same job via the polling fallback path.
+    _CLAIM_OLDEST_PENDING_LUA = """
+    local pending_key   = KEYS[1]
+    local index_key     = KEYS[2]
+    local status_prefix = ARGV[1]
+    local updated_at    = ARGV[2]
+
+    local ids = redis.call('SMEMBERS', pending_key)
+    if #ids == 0 then return nil end
+
+    local oldest_id    = nil
+    local oldest_score = nil
+    for _, jid in ipairs(ids) do
+        local score = redis.call('ZSCORE', index_key, jid)
+        if score then
+            score = tonumber(score)
+            if oldest_score == nil or score < oldest_score then
+                oldest_score = score
+                oldest_id    = jid
+            end
+        end
+    end
+
+    if oldest_id == nil then return nil end
+
+    redis.call('SREM', pending_key, oldest_id)
+    redis.call('SADD', status_prefix .. 'running', oldest_id)
+    local job_key = 'medanon:job:' .. oldest_id
+    redis.call('HSET', job_key, 'status', 'running', 'updated_at', updated_at)
+    return oldest_id
+    """
+
     def next_pending(self) -> Job | None:
-        """Return the oldest PENDING job (polling fallback for non-Streams callers)."""
-        pending_ids = self._client.smembers(f"{_STATUS_PREFIX}pending")
-        if not pending_ids:
+        """Atomically claim and return the oldest PENDING job.
+
+        Polling fallback for non-Streams callers.  Uses a Lua script so the
+        select-oldest + pending→running transition is a single server-side
+        operation; two concurrent workers cannot claim the same job.
+        """
+        from datetime import datetime, timezone
+
+        updated_at = datetime.now(timezone.utc).isoformat()
+        job_id = self._client.eval(
+            self._CLAIM_OLDEST_PENDING_LUA,
+            2,
+            f"{_STATUS_PREFIX}pending",
+            _INDEX_KEY,
+            _STATUS_PREFIX,
+            updated_at,
+        )
+        if not job_id:
             return None
-        # Batch ZSCORE via pipeline to avoid N round-trips
-        pipe = self._client.pipeline(transaction=False)
-        id_list = list(pending_ids)
-        for jid in id_list:
-            pipe.zscore(_INDEX_KEY, jid)
-        scores_raw = pipe.execute()
-        scores = {}
-        for jid, score in zip(id_list, scores_raw):
-            if score is not None:
-                scores[jid] = score
-        if not scores:
-            return None
-        oldest_id = min(scores, key=scores.get)
-        return self.get(oldest_id)
+        return self.get(job_id)
 
     def list_jobs(
         self,
@@ -185,8 +223,23 @@ class RedisJobStore:
         job_type: str | None = None,
         limit: int = 50,
         offset: int = 0,
+        before_created_at: str | None = None,
     ) -> list[Job]:
-        """List jobs with optional filtering, ordered by created_at descending."""
+        """List jobs with optional filtering, ordered by created_at descending.
+
+        *before_created_at* enables keyset pagination: pass the ``created_at``
+        ISO string of the last job from the previous page as the cursor.
+        """
+        # Convert ISO cursor to a Unix timestamp score for sorted-set range queries.
+        max_score = "+inf"
+        if before_created_at:
+            try:
+                max_score = str(
+                    datetime.fromisoformat(before_created_at).timestamp() - 0.001
+                )
+            except ValueError:
+                pass
+
         if status and job_type:
             candidates = self._client.sinter(
                 f"{_STATUS_PREFIX}{status}",
@@ -197,7 +250,12 @@ class RedisJobStore:
         elif job_type:
             candidates = self._client.smembers(f"{_TYPE_PREFIX}{job_type}")
         else:
-            all_ids = self._client.zrevrange(_INDEX_KEY, offset, offset + limit - 1)
+            if before_created_at and max_score != "+inf":
+                all_ids = self._client.zrevrangebyscore(
+                    _INDEX_KEY, max_score, "-inf", start=0, num=limit
+                )
+            else:
+                all_ids = self._client.zrevrange(_INDEX_KEY, offset, offset + limit - 1)
             return self._batch_get_jobs(all_ids)
 
         if not candidates:
@@ -209,9 +267,10 @@ class RedisJobStore:
             pipe.zscore(_INDEX_KEY, jid)
         scores_raw = pipe.execute()
         scored = []
+        max_score_float = float(max_score) if max_score != "+inf" else float("inf")
         for jid, score in zip(id_list, scores_raw):
-            if score is not None:
-                scored.append((jid, score))
+            if score is not None and float(score) < max_score_float:
+                scored.append((jid, float(score)))
         scored.sort(key=lambda x: x[1], reverse=True)
         page = scored[offset : offset + limit]
         return self._batch_get_jobs([jid for jid, _ in page])

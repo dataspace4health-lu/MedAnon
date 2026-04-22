@@ -57,11 +57,17 @@ def compute_composite(
         privacy_score = 1.0
     else:
         privacy_score = 1.0 - (privacy.risk_score / privacy.threshold)
+        # When risk_score exactly equals threshold, privacy.passed=True (gate uses <=)
+        # but privacy_score collapses to 0.0 → composite = 0 → spurious FAIL.
+        # Preserve a minimal positive contribution so the composite decision
+        # matches the gate: a resource that barely passed privacy should not
+        # be reported as FAIL at the aggregate level.
+        if privacy.passed and privacy_score <= 0.0:
+            privacy_score = 0.001
     raw = privacy_score * utility.score * quality.score
     composite = round(raw * 100, 1)
-    # A composite of exactly 0.0 means at least one dimension is zero (e.g.
-    # utility or quality is completely absent) — return FAIL even when privacy
-    # passes, since a score of zero is not a meaningful pass.
+    # A composite of exactly 0.0 means utility or quality is completely absent —
+    # return FAIL since a zero score is not a meaningful pass.
     decision = "PASS" if composite > 0.0 else "FAIL"
     return composite, decision
 
@@ -236,7 +242,7 @@ class ScoreCollector:
         if deidentified.get("resourceType") == "Patient":
             self._patient_seen += 1
             try:
-                from medanon_core.analytics.risk import _extract_patient_qi
+                from analytics.risk import _extract_patient_qi
                 qi = _extract_patient_qi(deidentified)
             except ImportError:
                 qi = ("", "", "")

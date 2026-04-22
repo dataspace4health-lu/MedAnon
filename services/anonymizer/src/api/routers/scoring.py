@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import PlainTextResponse
 
 from api.schemas.scoring import ScoreResourceRequest
@@ -24,7 +24,10 @@ _service = ScoringService()
 
 
 @router.post("/score")
-async def score_resource(req: ScoreResourceRequest):
+async def score_resource(
+    req: ScoreResourceRequest,
+    include_audit: bool = Query(default=False, description="Include Markdown audit report in response"),
+):
     """Score a de-identified FHIR resource.
 
     Evaluates privacy risk (hard constraint), utility preservation, and
@@ -49,6 +52,7 @@ async def score_resource(req: ScoreResourceRequest):
             manifest_entries=req.manifest_entries,
             config_profile=req.config_profile,
             settings=settings,
+            include_audit=include_audit,
         )
     except Exception as exc:
         logger.error("score_error: %s", exc)
@@ -64,7 +68,7 @@ async def score_job(job_id: str, config_profile: str | None = None):
     from meta.tag, scores each resource, and returns a batch-level aggregate.
     The result is cached in the job's checkpoint for subsequent GET requests.
     """
-    from medanon_core.domain import JobNotFound, JobNotComplete
+    from domain.jobs import JobNotFound, JobNotComplete
 
     try:
         result = await asyncio.to_thread(
@@ -104,7 +108,7 @@ async def get_job_score_report(job_id: str):
     - Per-resource-type PASS/FAIL breakdown
     - Priority-ordered recommendations with config YAML snippets
     """
-    from medanon_core.domain import JobNotFound
+    from domain.jobs import JobNotFound
 
     try:
         report = await asyncio.to_thread(_service.get_audit_report, job_id)
@@ -127,7 +131,7 @@ async def get_job_score(job_id: str):
     Returns the batch-level scoring results if scoring has been previously
     triggered via POST. If not yet scored, returns a 200 with computed=False.
     """
-    from medanon_core.domain import JobNotFound
+    from domain.jobs import JobNotFound
 
     try:
         result = await asyncio.to_thread(_service.get_job_score, job_id)

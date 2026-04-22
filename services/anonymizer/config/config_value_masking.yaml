@@ -87,11 +87,6 @@ rules:
   action: substitute
   params: *redacted
 
-- name: mask all name text
-  match: "*.name.text"
-  action: substitute
-  params: *redacted
-
 - name: mask all name prefix
   match: "*.name.prefix"
   action: substitute
@@ -136,10 +131,6 @@ rules:
   action: substitute
   params: *redacted
 
-- name: mask all address text
-  match: "*.address.text"
-  action: substitute
-  params: *redacted
 
 # ==============================================================
 # 6. REFERENCE DISPLAY NAMES — cryptohash across all types
@@ -147,10 +138,6 @@ rules:
 
 - name: mask subject display
   match: "*.subject.display"
-  action: cryptohash
-
-- name: mask patient display
-  match: "*.patient.display"
   action: cryptohash
 
 - name: mask performer display
@@ -416,12 +403,6 @@ rules:
   params:
     threshold: 0.4
 
-- name: nlp scrub dosage instruction patient instruction
-  match: "*.dosageInstruction.patientInstruction"
-  action: nlp_detect_act
-  params:
-    threshold: 0.4
-
 - name: nlp scrub communication payload
   match: Communication.payload.contentString
   action: nlp_detect_act
@@ -653,12 +634,6 @@ rules:
   params:
     substitute_with: 0.0
 
-- name: mask location position altitude
-  match: Location.position.altitude
-  action: substitute
-  params:
-    substitute_with: 0.0
-
 - name: mask location managing org display
   match: Location.managingOrganization.display
   action: cryptohash
@@ -666,11 +641,6 @@ rules:
 # ==============================================================
 # 15. ENCOUNTER HOSPITALIZATION
 # ==============================================================
-
-- name: mask encounter hospitalization admit source text
-  match: Encounter.hospitalization.admitSource.text
-  action: substitute
-  params: *redacted
 
 - name: mask encounter hospitalization discharge disposition text
   match: Encounter.hospitalization.dischargeDisposition.text
@@ -743,12 +713,6 @@ rules:
   match: Device.udiCarrier.carrierHRF
   action: substitute
   params: *redacted
-
-- name: mask device udi carrier aidc
-  match: Device.udiCarrier.carrierAIDC
-  action: substitute
-  params:
-    substitute_with: ""
 
 - name: mask device serial number
   match: Device.serialNumber

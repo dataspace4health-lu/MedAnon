@@ -135,5 +135,13 @@ services/gpas/
 CLAUDE.md
 .claude/
 
+# ── Internal documentation ────────────────────────────────────────────────────
+# Architecture reviews, security audits, competitive analysis, planning docs.
+# Tracked locally but not published to the repository.
+docs/internal/
+
 # ── Tests ─────────────────────────────────────────────────────────────────────
 services/anonymizer/tests/
+
+# scripts/ — generally not tracked, but some scripts are important for local development and are tracked. If you add a new script that should be tracked, add an exception here and document it in the README.
+scripts/

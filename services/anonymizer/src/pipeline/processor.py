@@ -58,7 +58,39 @@ _BATCH_SIZE = int(os.environ.get("MEDANON_BATCH_SIZE", "1000"))
 # Set to 0 to disable parallelism (sequential processing).
 _PARALLEL_WORKERS = int(os.environ.get("MEDANON_PARALLEL_WORKERS", "8"))
 
-_SEEN_VALUES_CAP = int(os.environ.get("MEDANON_SEEN_VALUES_CAP", "200000"))
+_SEEN_VALUES_CAP = int(os.environ.get("MEDANON_SEEN_VALUES_CAP", "1000000"))
+_PII_GATE = os.environ.get("MEDANON_PII_GATE", "false").strip().lower() in (
+    "true", "1", "yes",
+)
+
+
+class PiiLeakError(Exception):
+    """Raised when the PII blocking gate detects critical PII in output."""
+
+    def __init__(self, detections: list[dict]):
+        self.detections = detections
+        critical = [d for d in detections if d.get("severity") == "critical"]
+        super().__init__(
+            f"PII gate blocked: {len(critical)} critical PII leak(s) detected"
+        )
+
+
+def _run_pii_gate(results: list[dict]) -> None:
+    """Run fast PII scan on de-identified results and raise on critical PII."""
+    if not _PII_GATE:
+        return
+    from integrations.ai.agents.pii_detector import detect_pii_fast
+
+    valid_resources = [r for r in results if isinstance(r, dict) and "error" not in r]
+    if not valid_resources:
+        return
+    detections = detect_pii_fast(valid_resources)
+    critical = [d for d in detections if d.get("severity") == "critical"]
+    if critical:
+        audit_log.warning(
+            "pii_gate_blocked count=%d critical=%d", len(detections), len(critical),
+        )
+        raise PiiLeakError(critical)
 
 
 class _CappedSet:
@@ -151,11 +183,13 @@ def _finalize_resource(
 
     if precomputed_mapping is not None:
         batch_mapping = write_back_gpas_batch(
-            resource, pseudo_work, precomputed_mapping, processing_mode
+            resource, pseudo_work, precomputed_mapping, processing_mode,
+            manifest_entries=manifest_entries,
         )
     else:
         batch_mapping = run_gpas_batch(
-            resource, pseudo_work, processing_mode, pseudonymizer
+            resource, pseudo_work, processing_mode, pseudonymizer,
+            manifest_entries=manifest_entries,
         )
 
     # Batch de-pseudonymization (separate from pseudonymization)
@@ -250,16 +284,31 @@ def _pass1_single(resource, settings, processing_mode, collect_refs=False):
             _ref_ids: set[str] = set()
             ref_type_map = {}
             _collect_reference_ids(resource, _ref_ids, ref_types=ref_type_map)
+            # Include urn:uuid: IDs (not captured in ref_type_map) under type ""
+            # so the N>1 batch path routes them to the default gPAS domain.
+            for _rid in _ref_ids:
+                if _rid not in ref_type_map:
+                    ref_type_map[_rid] = ""
         gpas_work, nlp_work = dispatch_pass1(
             resource, rules, settings, manifest_entries, processing_mode
         )
         return resource, gpas_work, nlp_work, manifest_entries, ref_type_map
-    except Exception:
+    except Exception as original_exc:
         if snapshot is not None:
-            # Restore original resource to prevent emitting partial de-identification
-            resource.clear()
-            resource.update(_json_loads(snapshot))
-        raise
+            # Restore original resource to prevent emitting partial de-identification.
+            # If restoration itself fails the resource is cleared (empty output) rather
+            # than left in a partially de-identified state — never leak PHI.
+            try:
+                resource.clear()
+                resource.update(_json_loads(snapshot))
+            except Exception as restore_exc:
+                audit_log.error(
+                    "snapshot_restore_failed resource_type=%s — resource cleared to prevent PHI leak: %s",
+                    resource.get("resourceType", "unknown"),
+                    restore_exc,
+                )
+                resource.clear()
+        raise original_exc
 
 
 def process_data_batch(
@@ -471,7 +520,7 @@ def process_data_batch(
                 if ref_type_map_:
                     _all_ref_type_map.update(ref_type_map_)
             except Exception as exc:
-                audit_log.error("batch_pass1_error: %s", exc)
+                audit_log.error("batch_pass1_error error_type=%s", type(exc).__name__)
                 if processing_mode != "skip":
                     raise
                 parsed.append(None)
@@ -487,7 +536,7 @@ def process_data_batch(
                         collect_refs=_need_refs,
                     )
                 except Exception as exc:
-                    audit_log.error("batch_pass1_error (sequential fallback): %s", exc)
+                    audit_log.error("batch_pass1_error (sequential fallback) error_type=%s", type(exc).__name__)
                     if processing_mode != "skip":
                         raise
                     parsed.append(None)
@@ -514,7 +563,7 @@ def process_data_batch(
                     if isinstance(resource, dict)
                     else "Unknown"
                 )
-                audit_log.error("batch_pass1_error resource_type=%s: %s", rtype, exc)
+                audit_log.error("batch_pass1_error resource_type=%s error_type=%s", rtype, type(exc).__name__)
                 if processing_mode != "skip":
                     raise
                 parsed.append(None)
@@ -629,59 +678,61 @@ def process_data_batch(
 
         from concurrent.futures import as_completed
 
-        for fut in as_completed(futures):
-            i = futures[fut]
-            try:
-                results[i] = fut.result()
-            except Exception as exc:
-                resource = parsed[i]
-                rtype = (
-                    resource.get("resourceType", "Unknown")
-                    if isinstance(resource, dict)
-                    else "Unknown"
-                )
-                audit_log.error("batch_process_error resource_type=%s: %s", rtype, exc)
-                if processing_mode != "skip":
-                    raise
-                results[i] = {"error": "processing error", "resourceType": rtype}
-
-        # Finalize remaining resources sequentially if pool submit timed out
-        if _finalize_sequential_start is not None:
-            for i, (resource, gpas_work, manifest_entries_) in enumerate(
-                zip(
-                    parsed[_finalize_sequential_start:],
-                    all_gpas_works[_finalize_sequential_start:],
-                    all_manifest_entries[_finalize_sequential_start:],
-                ),
-                start=_finalize_sequential_start,
-            ):
-                if resource is None:
-                    results[i] = {"error": "pass1 error", "resourceType": "Unknown"}
-                    continue
+        try:
+            for fut in as_completed(futures):
+                i = futures[fut]
                 try:
-                    results[i] = _finalize_resource(
-                        resource, settings, pseudonymizer, gpas_work, manifest_entries_,
-                        processing_mode,
-                        precomputed_mapping=shared_mapping,
-                        precompiled_text_id_regex=_batch_text_id_regex,
-                        precomputed_ref_mapping=_batch_ref_mapping,
-                        prebuilt_text_id_automaton=_batch_text_id_automaton,
-                        attach_manifest=attach_manifest,
-                    )
+                    results[i] = fut.result()
                 except Exception as exc:
-                    rtype = resource.get("resourceType", "Unknown") if isinstance(resource, dict) else "Unknown"
+                    resource = parsed[i]
+                    rtype = (
+                        resource.get("resourceType", "Unknown")
+                        if isinstance(resource, dict)
+                        else "Unknown"
+                    )
                     audit_log.error("batch_process_error resource_type=%s: %s", rtype, exc)
                     if processing_mode != "skip":
                         raise
                     results[i] = {"error": "processing error", "resourceType": rtype}
 
-        # Free intermediate data after all futures complete
-        for i in range(n_resources):
-            parsed[i] = None
-            all_gpas_works[i] = []
-            all_nlp_works[i] = []
-            if not _return_manifest:
-                all_manifest_entries[i] = []
+            # Finalize remaining resources sequentially if pool submit timed out
+            if _finalize_sequential_start is not None:
+                for i, (resource, gpas_work, manifest_entries_) in enumerate(
+                    zip(
+                        parsed[_finalize_sequential_start:],
+                        all_gpas_works[_finalize_sequential_start:],
+                        all_manifest_entries[_finalize_sequential_start:],
+                    ),
+                    start=_finalize_sequential_start,
+                ):
+                    if resource is None:
+                        results[i] = {"error": "pass1 error", "resourceType": "Unknown"}
+                        continue
+                    try:
+                        results[i] = _finalize_resource(
+                            resource, settings, pseudonymizer, gpas_work, manifest_entries_,
+                            processing_mode,
+                            precomputed_mapping=shared_mapping,
+                            precompiled_text_id_regex=_batch_text_id_regex,
+                            precomputed_ref_mapping=_batch_ref_mapping,
+                            prebuilt_text_id_automaton=_batch_text_id_automaton,
+                            attach_manifest=attach_manifest,
+                        )
+                    except Exception as exc:
+                        rtype = resource.get("resourceType", "Unknown") if isinstance(resource, dict) else "Unknown"
+                        audit_log.error("batch_process_error resource_type=%s: %s", rtype, exc)
+                        if processing_mode != "skip":
+                            raise
+                        results[i] = {"error": "processing error", "resourceType": rtype}
+        finally:
+            # Always free intermediate per-resource data to cap peak memory,
+            # even when an exception propagates (e.g. processing_mode=raise).
+            for i in range(n_resources):
+                parsed[i] = None
+                all_gpas_works[i] = []
+                all_nlp_works[i] = []
+                if not _return_manifest:
+                    all_manifest_entries[i] = []
     else:
         # Small batch — sequential (no thread pool overhead)
         for i, (resource, gpas_work, manifest_entries_) in enumerate(
@@ -832,16 +883,22 @@ def process_data(resource, settings, pseudonymizer=None, attach_manifest: bool =
     if pseudonymizer is None:
         pseudonymizer = _get_default_pseudonymizer()
     if isinstance(resource, list):
-        return process_data_batch(
+        result = process_data_batch(
             resource, settings, pseudonymizer, attach_manifest=attach_manifest
         )
+        _run_pii_gate(result)
+        return result
     if isinstance(resource, dict) and resource.get("resourceType") == "Bundle":
-        return _process_bundle(
+        result = _process_bundle(
             resource, settings, pseudonymizer, attach_manifest=attach_manifest
         )
-    return process_data_batch(
+        _run_pii_gate([result])
+        return result
+    result = process_data_batch(
         [resource], settings, pseudonymizer, attach_manifest=attach_manifest
     )[0]
+    _run_pii_gate([result])
+    return result
 
 
 def process_data_stream(

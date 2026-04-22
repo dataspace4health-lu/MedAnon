@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import os
 
-from medanon_core.domain import Job
+from domain.jobs import Job
 from pipeline.jobs.checkpoint import save_checkpoint
 from utils.json_fast import loads as _json_loads
 
@@ -66,12 +66,14 @@ def _execute_bulk_import(job: Job, store, staging) -> None:
     save_checkpoint(store, job, {"phase": "loading"})
     base = target_url.rstrip("/")
 
-    # Single-pass scan: keep raw line strings bucketed by resource type.
-    # Only (resourceType, id) metadata is kept as dicts for tier and id_map
-    # computation; all other data stays as compact strings so peak dict-object
-    # pressure is one tier's worth rather than the full file.
+    # Single-pass scan: keep raw line strings + full parsed objects for tier/id_map
+    # computation.  Full objects are needed so _infer_upload_tiers can see reference
+    # fields and produce the correct topological upload order (Patients before
+    # Observations, Encounters before Observations, etc.).  After tier+id_map are
+    # computed we drop the parsed objects; only raw strings are kept for upload.
     storage = get_result_storage()
     lines_with_meta: list[tuple[str, str, str]] = []  # (raw_line, resourceType, id)
+    full_objs: list[dict] = []  # kept only until tiers/id_map are computed
     stream = storage.open_stream(ndjson_path)
     try:
         for raw_line in stream:
@@ -89,14 +91,14 @@ def _execute_bulk_import(job: Job, store, staging) -> None:
                 continue
             if isinstance(obj, dict) and obj.get("resourceType") and "error" not in obj:
                 lines_with_meta.append((line, obj["resourceType"], str(obj.get("id", ""))))
+                full_objs.append(obj)
     finally:
         if hasattr(stream, "close"):
             stream.close()
 
-    meta_dicts = [{"resourceType": rt, "id": rid} for _, rt, rid in lines_with_meta]
-    tiers = _infer_upload_tiers(meta_dicts)
-    id_map = _compute_id_map(meta_dicts)
-    del meta_dicts
+    tiers = _infer_upload_tiers(full_objs)
+    id_map = _compute_id_map(full_objs)
+    del full_objs  # release memory before upload phase
 
     tier_raw: defaultdict[int, list[str]] = defaultdict(list)
     for raw_line, rt, _rid in lines_with_meta:
@@ -121,8 +123,31 @@ def _execute_bulk_import(job: Job, store, staging) -> None:
             base, [_parse_and_rewrite(r) for r in chunk_lines], target_token, timeout
         )
 
+    _MAX_ERROR_DETAILS = 50  # cap stored error details to avoid bloating the checkpoint
     uploaded = errors = 0
+    error_details: list[dict] = []  # [{resourceType, error}] — first N failures
     pool = get_executor() if parallel > 1 else None
+
+    def _tally(results: list[dict]) -> None:
+        """Count results and collect up to _MAX_ERROR_DETAILS error samples."""
+        nonlocal uploaded, errors
+        for result in results:
+            if result.get("success"):
+                uploaded += 1
+            else:
+                errors += 1
+                if len(error_details) < _MAX_ERROR_DETAILS:
+                    error_details.append({
+                        "resourceType": result.get("resourceType", "Unknown"),
+                        "error": (result.get("error") or "unknown error")[:200],
+                    })
+
+    def _checkpoint_progress() -> None:
+        save_checkpoint(store, job, {
+            "phase": "uploading",
+            "lines_written": uploaded + errors,
+            "staged_count": total,
+        })
 
     for tier_level in sorted(tier_raw.keys()):
         tier_lines = tier_raw.pop(tier_level)
@@ -130,48 +155,36 @@ def _execute_bulk_import(job: Job, store, staging) -> None:
         del tier_lines
 
         if pool is not None and len(chunks) > 1:
-            # Sliding window of futures limits concurrent dict-object memory to
-            # at most `parallel` in-flight tiers rather than the whole tier at once.
+            # Sliding window: keep `parallel` futures in-flight, drain on each fill.
+            # Checkpoint after each drain so the frontend sees progress every
+            # ~(parallel × batch_size) resources rather than once per tier.
             active: set = set()
             for chunk in chunks:
                 fut = pool.submit(_upload_chunk, chunk)
                 active.add(fut)
                 if len(active) >= parallel:
-                    done, active = cf_wait(active, return_when=FIRST_COMPLETED)
-                    for f in done:
-                        for result in f.result():
-                            if result.get("success"):
-                                uploaded += 1
-                            else:
-                                errors += 1
-            done, _ = cf_wait(active)
-            for f in done:
-                for result in f.result():
-                    if result.get("success"):
-                        uploaded += 1
-                    else:
-                        errors += 1
+                    done_futs, active = cf_wait(active, return_when=FIRST_COMPLETED)
+                    for f in done_futs:
+                        _tally(f.result())
+                    _checkpoint_progress()
+            # Drain remaining futures
+            done_futs, _ = cf_wait(active)
+            for f in done_futs:
+                _tally(f.result())
+            _checkpoint_progress()
         else:
+            # Sequential: checkpoint after every chunk (= batch_size resources).
             for chunk in chunks:
-                for result in _upload_chunk(chunk):
-                    if result.get("success"):
-                        uploaded += 1
-                    else:
-                        errors += 1
-
-        done_count = uploaded + errors
-        if done_count % 500 == 0 or done_count == total:
-            save_checkpoint(store, job, {
-                "phase": "uploading",
-                "lines_written": done_count,
-                "staged_count": total,
-            })
+                _tally(_upload_chunk(chunk))
+                _checkpoint_progress()
 
     save_checkpoint(store, job, {
         "phase": "done",
         "lines_written": uploaded + errors,
+        "uploaded": uploaded,
         "staged_count": total,
         "errors": errors,
+        "error_details": error_details,
     })
     job.result_path = ndjson_path
     store.update(job)

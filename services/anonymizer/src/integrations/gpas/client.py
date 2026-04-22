@@ -94,43 +94,63 @@ def gpas_pseudonymize_batch(values, params):
             # Single batch — common fast path
             mapping = _call_chunk(unique_uncached)
         else:
-            # Split into sub-batches and run in parallel.
-            # Use submit + as_completed instead of pool.map so that:
-            #  1. Successful chunk results are preserved even if other chunks fail
-            #  2. Successful results are cached immediately per-chunk
-            #  3. Only truly-failed chunks are retried
+            # Split into sub-batches.  When the current thread was dispatched from
+            # the shared executor (name prefix "medanon"), fall back to sequential
+            # processing — submitting to the same pool from within a pool thread
+            # risks livelock when all workers are occupied waiting for their own
+            # nested futures.  Sequential processing is correct in all cases;
+            # parallelism here is an optimisation only safe at the call stack root.
+            import threading
+            _use_parallel = not threading.current_thread().name.startswith("medanon")
+
             chunks = [
                 unique_uncached[i : i + _GPAS_MAX_BATCH]
                 for i in range(0, len(unique_uncached), _GPAS_MAX_BATCH)
             ]
             mapping = {}
             failed_chunks = []
-            # Use the process-wide shared executor instead of a nested
-            # ThreadPoolExecutor — avoids spawning N*8 threads when multiple
-            # jobs run concurrently.  The global pool caps concurrency.
-            futures = {get_executor().submit(_call_chunk, c): c for c in chunks}
-            for future in as_completed(futures):
-                try:
-                    partial = future.result()
-                    mapping.update(partial)
-                    # Cache successful results immediately (not deferred to
-                    # after the loop) so they survive even if later chunks fail.
-                    if use_cache:
-                        _cache_set_many({
-                            ("pseudonymize", base_url, domain, operation, orig): psn
-                            for orig, psn in partial.items()
-                        })
-                except GpasUnavailableError:
-                    # Circuit breaker open — re-raise immediately, no retry
-                    raise
-                except Exception as exc:
-                    failed_chunk = futures[future]
-                    _log.warning(
-                        "gpas sub-batch failed (%d values): %s — will retry",
-                        len(failed_chunk),
-                        type(exc).__name__,
-                    )
-                    failed_chunks.append(failed_chunk)
+
+            if _use_parallel:
+                futures = {get_executor().submit(_call_chunk, c): c for c in chunks}
+                for future in as_completed(futures):
+                    try:
+                        partial = future.result()
+                        mapping.update(partial)
+                        if use_cache:
+                            _cache_set_many({
+                                ("pseudonymize", base_url, domain, operation, orig): psn
+                                for orig, psn in partial.items()
+                            })
+                    except GpasUnavailableError:
+                        raise
+                    except Exception as exc:
+                        failed_chunk = futures[future]
+                        _log.warning(
+                            "gpas sub-batch failed (%d values): %s — will retry",
+                            len(failed_chunk),
+                            type(exc).__name__,
+                        )
+                        failed_chunks.append(failed_chunk)
+            else:
+                # Sequential — called from within a pool thread
+                for chunk in chunks:
+                    try:
+                        partial = _call_chunk(chunk)
+                        mapping.update(partial)
+                        if use_cache:
+                            _cache_set_many({
+                                ("pseudonymize", base_url, domain, operation, orig): psn
+                                for orig, psn in partial.items()
+                            })
+                    except GpasUnavailableError:
+                        raise
+                    except Exception as exc:
+                        _log.warning(
+                            "gpas sub-batch failed (%d values): %s — will retry",
+                            len(chunk),
+                            type(exc).__name__,
+                        )
+                        failed_chunks.append(chunk)
 
             # Retry failed chunks once (sequentially to avoid thundering herd)
             for retry_chunk in failed_chunks:

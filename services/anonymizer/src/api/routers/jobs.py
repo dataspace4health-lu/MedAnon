@@ -23,6 +23,7 @@ import os
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
+from pydantic import BaseModel
 
 from api.deps import _get_url_from_request_or_env, _validate_server_url
 from api.schemas.jobs import (
@@ -451,3 +452,49 @@ async def get_staged_stats(job_id: str):
         raise HTTPException(status_code=503, detail="Job store not initialised")
     except JobNotFound:
         raise HTTPException(status_code=404, detail="Job not found")
+
+
+# ---------------------------------------------------------------------------
+# Job detail cache (parsed result: resource counts + field/PII analysis)
+# ---------------------------------------------------------------------------
+
+
+class _JobDetailBody(BaseModel):
+    resource_counts: dict = {}
+    total_resources: int = 0
+    pii_data: dict = {}
+    field_summary: dict = {}
+
+
+def _get_detail_store():
+    from pipeline.job_detail import get_job_detail_store
+    store = get_job_detail_store()
+    if store is None:
+        raise HTTPException(status_code=503, detail="Job detail store not initialised")
+    return store
+
+
+@router.get("/jobs/{job_id}/detail")
+async def get_job_detail(job_id: str):
+    """Return cached parsed-result detail for a completed job.
+
+    Returns 404 when no detail has been saved yet — the client should then
+    download and parse the NDJSON result, then POST the parsed data back.
+    """
+    store = _get_detail_store()
+    detail = await asyncio.to_thread(store.get, job_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="No cached detail for this job")
+    return detail
+
+
+@router.post("/jobs/{job_id}/detail", status_code=204, response_class=Response)
+async def save_job_detail(job_id: str, body: _JobDetailBody):
+    """Save parsed-result detail for a completed job.
+
+    Called by the frontend after parsing the NDJSON output so subsequent
+    selections of this job load instantly without re-downloading the file.
+    Upserts — safe to call multiple times.
+    """
+    store = _get_detail_store()
+    await asyncio.to_thread(store.set, job_id, body.model_dump())

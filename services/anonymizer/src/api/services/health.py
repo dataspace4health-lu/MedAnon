@@ -44,9 +44,13 @@ class HealthCheckService:
         if redis_url:
             probes["redis"] = (self._probe_redis, (redis_url, timeout))
 
-        nlp_model = os.environ.get("MEDANON_NLP_MODEL", "")
-        if nlp_model:
-            probes["nlp"] = (self._probe_nlp, ())
+        nlp_url = os.environ.get("NLP_SERVICE_URL", "").strip()
+        if nlp_url:
+            probes["nlp"] = (self._probe_nlp, (nlp_url, timeout))
+
+        app_db_url = os.environ.get("MEDANON_APP_DB_URL", "").strip()
+        if app_db_url:
+            probes["postgres"] = (self._probe_postgres, (timeout,))
 
         if not probes:
             return {}
@@ -110,12 +114,26 @@ class HealthCheckService:
             logger.debug("readiness: redis unreachable: %s", exc)
             return "error"
 
-    def _probe_nlp(self) -> str:
+    def _probe_nlp(self, url: str, timeout: float) -> str:
         try:
-            from integrations.nlp.detector import _get_analyzer
-
-            _get_analyzer()
+            probe = url.rstrip("/") + "/health"
+            _ureq.urlopen(probe, timeout=timeout)  # nosec B310
             return "ok"
         except Exception as exc:
-            logger.debug("readiness: nlp engine not ready: %s", exc)
+            logger.debug("readiness: nlp service unreachable: %s", exc)
+            return "error"
+
+    def _probe_postgres(self, timeout: float) -> str:
+        try:
+            from integrations.postgres.pool import pool_health
+
+            info = pool_health()
+            if info.get("ping") == "ok":
+                return "ok"
+            cb_state = info.get("circuit_breaker", {}).get("state", "unknown")
+            if cb_state == "open":
+                return "error"
+            return "error"
+        except Exception as exc:
+            logger.debug("readiness: postgres unreachable: %s", exc)
             return "error"

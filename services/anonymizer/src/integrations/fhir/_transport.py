@@ -54,7 +54,8 @@ __all__ = [
 # Connection pool (reuses TCP/TLS connections across requests)
 # ---------------------------------------------------------------------------
 
-_FHIR_POOL_SIZE = int(os.environ.get("FHIR_POOL_SIZE", "10"))
+from utils.pool_budget import fhir_pool_budget
+_FHIR_POOL_SIZE = fhir_pool_budget()
 _pool = urllib3.PoolManager(
     num_pools=4,
     maxsize=_FHIR_POOL_SIZE,
@@ -218,13 +219,17 @@ def _retry_request(
                 FHIR_CALL_COUNT.labels(operation=operation, status="error").inc()
                 if should_retry:
                     cb.record_failure()
-                body_snippet = (
-                    resp.data[:400].decode("utf-8", errors="replace")
-                    if resp.data
-                    else ""
-                )
+                if resp.data and log.isEnabledFor(logging.DEBUG):
+                    # Log raw body only at DEBUG so it never surfaces in production
+                    # logs or exception messages (response may contain PHI).
+                    log.debug(
+                        "fhir_error_body status=%s url=%s body=%s",
+                        resp.status,
+                        url,
+                        resp.data[:400].decode("utf-8", errors="replace"),
+                    )
                 raise ValueError(
-                    f"FHIR server HTTP {resp.status} for {url}: {body_snippet}"
+                    f"FHIR server HTTP {resp.status} for {url} (see DEBUG log for details)"
                 )
 
             FHIR_LATENCY.labels(operation=operation).observe(time.perf_counter() - t0)

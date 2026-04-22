@@ -75,6 +75,15 @@ ENDPOINT_ROLES: dict[str, str] = {
     "/fhir/Subscription": "admin",
     # SMART token introspection
     "/oauth2/introspect": "analyst",
+    # AI agent endpoints
+    "/v1/ai/status": "viewer",
+    "/v1/ai/generate-config": "admin",
+    "/v1/ai/detect-pii": "analyst",
+    "/v1/ai/explain": "analyst",
+    "/v1/ai/compliance": "analyst",
+    # Processing run history
+    "/v1/processing-runs": "analyst",
+    "/v1/processing-runs/stats": "analyst",
 }
 
 # Prefix-based role mapping for parameterized paths (e.g. /v1/jobs/{job_id}).
@@ -90,6 +99,8 @@ ENDPOINT_ROLE_PREFIXES: dict[str, str] = {
     "/fhir/Group/": "admin",  # /fhir/Group/{id}/$export
     "/fhir/export-status/": "analyst",  # /fhir/export-status/{job_id}
     "/fhir/Subscription/": "analyst",  # /fhir/Subscription/{id} CRUD
+    "/v1/ai/": "analyst",  # AI agent endpoints (generate-config enforced as admin in ENDPOINT_ROLES)
+    "/v1/processing-runs/": "analyst",  # covers /v1/processing-runs/{id}
 }
 
 

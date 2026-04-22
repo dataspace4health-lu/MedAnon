@@ -17,21 +17,25 @@ make verify   # smoke-test a running stack
 ### Opt-in profiles
 
 ```bash
-docker compose --profile analytics up   # analytics microservice
-docker compose --profile nlp up         # Presidio NLP microservice (~800 MB)
-docker compose --profile ha up          # gPAS PostgreSQL read replica
+docker compose --profile ha up    # gPAS PostgreSQL read replica (HA)
+docker compose --profile s3 up    # MinIO S3 object storage for job results
+docker compose --profile ai up    # Ollama local LLM for AI agent endpoints
 ```
+
+The NLP microservice (`nlp`, `nlp-lb`) and analytics service (`analytics`) are **always-on** — they start with `make up`. They are no longer opt-in profiles.
 
 ### Check health
 
 ```bash
 docker compose ps                          # all containers, health status
 curl -s http://localhost:8000/health       # {"status":"ok"} — liveness (fast, no external calls)
-curl -s http://localhost:8000/ready        # {"ready":true} — readiness (probes FHIR + gPAS)
+curl -s http://localhost:8000/ready        # {"ready":true} — readiness (probes FHIR, gPAS, NLP)
+curl -s http://localhost:8200/health       # NLP microservice liveness
+curl -s http://localhost:9091/ready        # worker readiness probe
 docker compose exec anonymizer tail -f /output/audit.log  # structured JSON audit log
 ```
 
-`/health` vs `/ready`: Health is a lightweight liveness check used by Docker's healthcheck. Ready probes FHIR and gPAS with a 5 s timeout each — use it to confirm the stack is actually operational, not just started.
+`/health` vs `/ready`: Health is a lightweight liveness check used by Docker's healthcheck. Ready probes FHIR, gPAS, and NLP with a 5 s timeout each — use it to confirm the stack is actually operational, not just started.
 
 ---
 
@@ -75,7 +79,8 @@ See [policies.md](policies.md) for full compliance details per profile.
 ### Prometheus metrics
 
 ```bash
-curl -s http://localhost:8000/metrics
+curl -s http://localhost:8000/metrics      # anonymizer metrics
+curl -s http://localhost:9091/metrics      # worker metrics
 ```
 
 Key metrics exposed:
@@ -84,15 +89,27 @@ Key metrics exposed:
 - `medanon_gpas_calls_total{operation,cached}` — gPAS call rate + cache hit rate
 - `medanon_gpas_latency_seconds` — gPAS round-trip latency
 - `medanon_fhir_calls_total{operation,server}` — FHIR client call counts
+- `medanon_nlp_calls_total{cached}` — NLP microservice call count and cache hits
+- `medanon_jobs_total{status}` — job completion counts (worker metrics port 9091)
 
 All pods have Prometheus scrape annotations (`prometheus.io/scrape: "true"`) in the Helm charts.
 
 ### Audit log
 
-The anonymizer writes a structured JSON audit log to `/output/audit.log` (mapped to `./output/audit.log` on the host). Each line records: timestamp, HTTP method, path, status code, request ID, auth subject, auth method. **PHI is never logged.**
+The anonymizer emits structured JSON audit events to three destinations simultaneously:
+
+1. **stdout** (always) — captured by Docker/K8s log driver; forward to ELK, Loki, Splunk
+2. **Redis Stream** `medanon:audit` (when `MEDANON_REDIS_URL` set) — queryable via `GET /v1/audit`
+3. **Rotating file** (when `MEDANON_AUDIT_LOG_FILE` set) — 10 MB/file, 5 backups
+
+Each entry records: timestamp, HTTP method, path, status code, request ID, auth subject, auth method. **PHI is never logged.**
 
 ```bash
+# Follow the audit log in the container
 docker compose exec anonymizer tail -f /output/audit.log | python3 -m json.tool
+
+# Query via API (requires MEDANON_REDIS_URL)
+curl -s http://localhost:8000/v1/audit?count=50 -H "X-API-Key: $ADMIN_KEY"
 ```
 
 ---
@@ -136,7 +153,7 @@ cp services/anonymizer/keys/id_rsa* backup/keys-$(date +%Y%m%d)/
 | `MEDANON_HASH_KEY` | Update `.env`, restart anonymizer | All existing cryptohash pseudonyms change — old output cannot be re-linked to new |
 | RSA private key | Generate new keypair, update `.env` paths | Old encrypted values become unreadable; keep old key for historical data |
 | `GPAS_BASIC_PASS` | Update `.env` + `CALL changePassword('user@ths','new');` in gRAS | Existing gPAS sessions invalidated |
-| `GPAS_MYSQL_ROOT_PASSWORD` | `docker compose down -v` to recreate PostgreSQL | **Destroys all pseudonym mappings** — back up first |
+| `GPAS_DB_PASSWORD` | `docker compose down -v` to recreate PostgreSQL volume | **Destroys all pseudonym mappings** — back up first |
 | `MEDANON_API_KEY` | Update `.env`, restart anonymizer | All API clients must update their key |
 
 ---
@@ -181,13 +198,68 @@ docker compose logs gpas-db --tail 20 # check init progress
 docker compose restart gpas           # restart once gpas-db is healthy
 ```
 
+### NLP microservice unavailable
+
+**Symptom:** Text fields contain `[NLP_UNAVAILABLE]` placeholders; `/ready` reports NLP check failed.
+
+```bash
+docker compose ps nlp nlp-lb                    # check both are running
+curl -s http://localhost:8200/health            # NLP LB liveness
+docker compose logs nlp --tail 50               # check for startup errors
+docker compose logs nlp-lb --tail 20            # check nginx config errors
+```
+
+NLP fails closed — PHI is replaced with `[NLP_UNAVAILABLE]` rather than leaking. Scale NLP replicas if latency is high:
+
+```bash
+docker compose up -d --scale nlp=3
+```
+
+### AI agent errors
+
+**Symptom:** `GET /v1/ai/status` returns `enabled: false` or `provider_status: unavailable`.
+
+```bash
+# Check if AI is enabled
+grep MEDANON_AI_ENABLED .env
+
+# Check Ollama (if using --profile ai)
+docker compose --profile ai ps ollama
+docker compose --profile ai logs ollama --tail 30
+
+# Verify model is pulled
+docker exec medanon-ollama ollama list
+docker exec medanon-ollama ollama pull llama3.2
+```
+
+If using an external LLM: verify `MEDANON_AI_API_BASE` and `MEDANON_AI_MODEL` in `.env`.
+
+**IMPORTANT — PHI safety:** `MEDANON_AI_PII_PROVIDER` must always point to the local Ollama model, never to an external API. PII detection sends text that may contain PHI to this model.
+
 ### 503 on job endpoints (`/v1/jobs/*`)
 
-Job store not initialized. Check:
-- `MEDANON_REDIS_URL` is correct and Redis is reachable: `docker compose ps redis`
-- SQLite fallback: `MEDANON_JOB_DB` path is writable inside the container
+Job store not initialized. Check in priority order:
+1. `MEDANON_REDIS_URL` set and Redis reachable: `docker compose ps redis`
+2. `MEDANON_APP_DB_URL` set and `app-db` reachable: `docker compose ps app-db`
+3. SQLite fallback: `MEDANON_JOB_DB` path is writable inside the container (default `/output/jobs.db`)
 
-Root cause of past bug: `from pipeline.jobs.store import _job_store` captured `None` at import time. `init_job_store()` wrote to `pipeline.jobs.store._job_store` but the re-exported name stayed `None`. Fixed by reading directly from the authoritative module. If you see this error, ensure you're on a version after this fix.
+Backend selection order at startup: Redis → PostgreSQL (`app-db`) → SQLite.
+
+Root cause of past bug: `from pipeline.jobs.store import _job_store` captured `None` at import time. Fixed by reading directly from the authoritative module (`pipeline.jobs.store._job_store`). Ensure you're on a version after this fix.
+
+### Worker not picking up jobs
+
+```bash
+docker compose ps worker                        # check health status
+curl -s http://localhost:9091/ready             # worker readiness probe
+docker compose logs worker --tail 50
+
+# Check job queue depth (Redis backend)
+docker exec medanon-redis redis-cli -a $REDIS_PASSWORD LLEN medanon:jobs
+
+# Check job status directly
+curl -s http://localhost:8000/v1/jobs?status=pending -H "X-API-Key: $MEDANON_API_KEY"
+```
 
 ### Bulk export is slow
 
@@ -225,7 +297,7 @@ MEDANON_MAX_BODY_BYTES=20971520    # 20 MB
 docker inspect --format='{{.State.OOMKilled}}' <container>
 ```
 
-Increase the memory limit in `docker-compose.yml` (anonymizer: 6 GB, HAPI: 3 GB, gPAS: 6 GB).
+Current memory limits (tuned for 16 GB host): anonymizer 3 GB, worker 2 GB, gPAS 2.5 GB, gpas-postgres 2 GB. Increase in `docker-compose.yml` only if you observe OOM kills during bulk export.
 
 ### Port conflicts
 
@@ -247,29 +319,39 @@ If `depends_on: condition: service_healthy` is configured, the target container 
 - [ ] `MEDANON_HASH_KEY` set (`openssl rand -hex 32`)
 - [ ] `MEDANON_API_KEY` set for authenticated access
 - [ ] `GPAS_BASIC_PASS` rotated from default
-- [ ] `GPAS_MYSQL_ROOT_PASSWORD` rotated from default
+- [ ] `GPAS_DB_PASSWORD` rotated from default (PostgreSQL — not MySQL)
+- [ ] `MEDANON_REDIS_PASSWORD` set
 - [ ] `HAPI_DB_PASSWORD` and `HAPI_TARGET_DB_PASSWORD` set
-- [ ] No secrets in git (check `.env` is gitignored)
+- [ ] No secrets in git (`git status` — verify `.env` is gitignored)
 
 ### Network and TLS
-- [ ] TLS termination at reverse proxy
+- [ ] TLS termination at reverse proxy (nginx/Caddy/Traefik) or Ingress controller
 - [ ] `MEDANON_CORS_ORIGINS` restricted to known origins
-- [ ] gPAS web UI (8080) not publicly accessible
+- [ ] gPAS web UI (port 8080) not publicly accessible
+- [ ] Source FHIR server has no external port — verify `docker compose ps fhir-server` shows no host port
 
-### Logging and monitoring
-- [ ] `LOG_LEVEL=INFO` (DEBUG may expose PHI)
+### Logging, monitoring, and compliance
+- [ ] `LOG_LEVEL=INFO` (DEBUG may log resource content containing PHI)
 - [ ] `MEDANON_MANIFEST_ENABLED=true` (GDPR Art. 30 accountability)
-- [ ] Audit log volume mounted
-- [ ] Prometheus scraping configured
+- [ ] `MEDANON_SCORING_ENABLED=true` (enable processing run history and scoring)
+- [ ] `MEDANON_RESULT_TTL_SEC=86400` (clean up job results after 24 h)
+- [ ] Audit log volume mounted and forwarded to log aggregator
+- [ ] Prometheus scraping configured; worker metrics port 9091 scraped
+
+### NLP and AI
+- [ ] NLP microservice healthy: `curl http://localhost:8200/health`
+- [ ] If AI enabled: `MEDANON_AI_PII_PROVIDER` points to local Ollama (not external API)
+- [ ] If AI enabled: Ollama model pulled (`ollama list` shows the configured model)
 
 ### gPAS
-- [ ] Domain created via web UI or `make init-domains` (not direct SQL)
+- [ ] Domain created via web UI or `make init-domains` (never direct SQL)
 - [ ] `GPAS_DOMAIN` matches exactly
 - [ ] gPAS PostgreSQL backed up before first production run
 - [ ] `curl http://localhost:8080/ttp-fhir/fhir/gpas/metadata` returns 200
 
 ### Validation
-- [ ] `/ready` returns `{"ready": true}`
-- [ ] End-to-end: POST a sample Patient to `/process`, verify output
-- [ ] `/analyse/risk` run on de-identified output before data sharing
+- [ ] `curl http://localhost:8000/ready` returns `{"ready": true}` for all components
+- [ ] End-to-end: POST a sample Patient to `/process`, verify output is de-identified
+- [ ] Score the output: `POST /v1/score` returns `privacy.gate: PASS`
+- [ ] `/v1/analyse/risk` run on de-identified output before data sharing
 - [ ] Appropriate config profile selected — see [policies.md](policies.md)

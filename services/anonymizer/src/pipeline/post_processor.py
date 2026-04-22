@@ -44,6 +44,10 @@ def _aho_replace(text: str, automaton, id_map: dict) -> str:
 
     Only replaces on word boundaries to match the behavior of the regex
     ``\\b(id1|id2|...)\\b`` pattern.
+
+    Overlapping matches are resolved by selecting non-overlapping spans
+    greedily from left to right, preferring the longer match when two
+    patterns start at the same position.
     """
     # Collect matches (end_index, (original, replacement))
     matches = []
@@ -60,10 +64,23 @@ def _aho_replace(text: str, automaton, id_map: dict) -> str:
     if not matches:
         return text
 
+    # Resolve overlaps: sort by start ascending, then length descending
+    # (prefer longer match at the same start), then select greedily.
+    matches.sort(key=lambda m: (m[0], -(m[1] - m[0])))
+    selected = []
+    last_end = 0
+    for start, end, replacement in matches:
+        if start >= last_end:
+            selected.append((start, end, replacement))
+            last_end = end
+
+    if not selected:
+        return text
+
     # Build result from string slices (avoids per-character list allocation)
     parts = []
     prev = 0
-    for start, end, replacement in matches:
+    for start, end, replacement in selected:
         parts.append(text[prev:start])
         parts.append(replacement)
         prev = end
@@ -334,9 +351,9 @@ def _post_process_resource(
                 if new_ref != ref:
                     audit_log.debug("reference_pseudonymized field=reference")
                     obj["reference"] = new_ref
-                if "display" in obj:
-                    audit_log.debug("reference_display_redacted field=display")
-                    del obj["display"]
+                    if "display" in obj:
+                        audit_log.debug("reference_display_redacted field=display")
+                        del obj["display"]
             # Also rewrite "url" fields (Bundle entries may use url for references)
             url = obj.get("url")
             if isinstance(url, str):

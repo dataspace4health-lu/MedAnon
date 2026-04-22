@@ -7,15 +7,17 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── Networks ──────────────────────────────────────────────────────────────────
-# processing-net: anonymizer, worker, gPAS, Redis, target HAPI, UI, opt-in services
-# source-net:     source HAPI + its PostgreSQL (isolated; anonymizer bridges in read-only)
-# Anonymizer and worker sit on BOTH networks so they can fetch from source and
-# write de-identified results to the processing side. No other processing-net
-# service can initiate connections to the source network.
+# processing-net: anonymizer, worker, gPAS, Redis, NLP, analytics, app-db, UI
+# source-net:     source HAPI + its PostgreSQL (isolated; only anonymizer/worker bridge in)
+# target-net:     target HAPI + its PostgreSQL (isolated; only anonymizer/worker/UI bridge in)
+# Three-network segmentation: gPAS, Redis, NLP, analytics cannot reach the target FHIR
+# directly. Only anonymizer/worker (write path) and UI (read proxy) bridge target-net.
 networks:
   processing-net:
     driver: bridge
   source-net:
+    driver: bridge
+  target-net:
     driver: bridge
 
 # ── Named volumes ─────────────────────────────────────────────────────────────
@@ -27,6 +29,7 @@ volumes:
   app-pg-data:
   redis-data:
   minio-data:
+  ollama-data:
 
 # ── Shared environment (anonymizer + worker) ──────────────────────────────────
 # Both services run the same image; this anchor eliminates the ~40-line duplication.
@@ -45,6 +48,9 @@ x-worker-env: &worker-env
   GPAS_POOL_SIZE: ${GPAS_POOL_SIZE:-24}
   MEDANON_HASH_KEY: ${MEDANON_HASH_KEY:-}
   MEDANON_MANIFEST_ENABLED: ${MEDANON_MANIFEST_ENABLED:-true}
+  MEDANON_SCORING_ENABLED: ${MEDANON_SCORING_ENABLED:-false}
+  #
+  MEDANON_SCORE_NER_ENABLED: ${MEDANON_SCORE_NER_ENABLED:-false}
   # MEDANON_REDIS_URL must be set explicitly in .env — no default password shipped here.
   MEDANON_REDIS_URL: ${MEDANON_REDIS_URL:?MEDANON_REDIS_URL must be set in .env}
   MEDANON_JOB_WORKERS: ${MEDANON_JOB_WORKERS:-3}
@@ -56,12 +62,13 @@ x-worker-env: &worker-env
   MEDANON_COHORT_PARALLEL: ${MEDANON_COHORT_PARALLEL:-4}
   MEDANON_BATCH_SIZE: ${MEDANON_BATCH_SIZE:-1000}
   MEDANON_PARALLEL_WORKERS: ${MEDANON_PARALLEL_WORKERS:-8}
-  MEDANON_GLOBAL_MAX_THREADS: ${MEDANON_GLOBAL_MAX_THREADS:-64}
+  MEDANON_GLOBAL_MAX_THREADS: ${MEDANON_GLOBAL_MAX_THREADS:-96}
+  MEDANON_SEEN_VALUES_CAP: ${MEDANON_SEEN_VALUES_CAP:-1000000}
   MEDANON_PROGRESS_INTERVAL: ${MEDANON_PROGRESS_INTERVAL:-500}
   MEDANON_PIPELINE_ENABLED: ${MEDANON_PIPELINE_ENABLED:-true}
   MEDANON_PIPELINE_QUEUE_SIZE: ${MEDANON_PIPELINE_QUEUE_SIZE:-4}
   MEDANON_WORKERS: ${MEDANON_WORKERS:-4}
-  MEDANON_REQUEST_TIMEOUT_SEC: ${MEDANON_REQUEST_TIMEOUT_SEC:-300}
+  MEDANON_REQUEST_TIMEOUT_SEC: ${MEDANON_REQUEST_TIMEOUT_SEC:-120}
   MEDANON_UPLOAD_BATCH_SIZE: ${MEDANON_UPLOAD_BATCH_SIZE:-500}
   MEDANON_UPLOAD_PARALLEL: ${MEDANON_UPLOAD_PARALLEL:-4}
   MEDANON_RESULT_STORAGE: ${MEDANON_RESULT_STORAGE:-local}
@@ -82,19 +89,27 @@ x-worker-env: &worker-env
   # Analytics microservice — always running on processing-net, no profile needed.
   # Proxied by /analyse/risk and /generate/synthetic endpoints.
   ANALYTICS_SERVICE_URL: http://analytics:8100
-  # NLP microservice — only active with --profile nlp.
-  # Leave empty to use in-process Presidio; set to http://nlp-lb:8200 when the
-  # nlp profile is running (see NLP_SERVICE_URL in .env.example).
-  NLP_SERVICE_URL: ${NLP_SERVICE_URL:-}
+  # NLP microservice — always running, no profile needed.
+  # Proxied by nlp_scrub / nlp_detect actions via RemoteNlpAdapter.
+  NLP_SERVICE_URL: http://nlp-lb:8200
+  # AI agent integration — disabled by default.
+  # Set MEDANON_AI_ENABLED=true and configure the provider to enable AI features.
+  MEDANON_AI_ENABLED: ${MEDANON_AI_ENABLED:-false}
+  MEDANON_AI_PROVIDER: ${MEDANON_AI_PROVIDER:-ollama/llama3.1}
+  MEDANON_AI_API_BASE: ${MEDANON_AI_API_BASE:-http://ollama:11434}
+  MEDANON_AI_API_KEY: ${MEDANON_AI_API_KEY:-}
+  MEDANON_AI_PII_PROVIDER: ${MEDANON_AI_PII_PROVIDER:-}
+  MEDANON_PII_GATE: ${MEDANON_PII_GATE:-false}
+  AI_SERVICE_URL: ${AI_SERVICE_URL:-}
 
 # ── Services ──────────────────────────────────────────────────────────────────
 services:
 
-  # ── 1. FHIR de-identification / anonymiser ──────────────────────────────────
+  # FHIR de-identification / anonymiser ──────────────────────────────────
   anonymizer:
     build:
-      context: .
-      dockerfile: services/anonymizer/Dockerfile
+      context: services/anonymizer
+      dockerfile: Dockerfile
       target: prod
     image: ${ANONYMIZER_IMAGE:-medanon:latest}
     container_name: medanon
@@ -115,9 +130,14 @@ services:
       - ./data:/data:ro
       - ./output:/output
     networks:
-      - processing-net  # gPAS, Redis, target HAPI, UI
+      - processing-net  # gPAS, Redis, NLP, analytics, app-db
       - source-net      # source HAPI (read-only fetch)
+      - target-net      # target HAPI (write de-identified results)
     depends_on:
+      nlp-lb:
+        condition: service_healthy
+      analytics:
+        condition: service_healthy
       gpas-lb:
         condition: service_healthy
       fhir-server:
@@ -150,7 +170,7 @@ services:
     tmpfs:
       - /tmp:size=100M
 
-  # ── 1b. Dedicated job worker (same image, no HTTP server) ────────────────
+  # Dedicated job worker (same image, no HTTP server) ────────────────
   # Handles async jobs (bulk-export, cohort, patient-export, bulk-import, reprocess)
   # independently from the web server. The anonymizer defaults to
   # MEDANON_WORKER_ENABLED=false so jobs are only executed here.
@@ -169,9 +189,16 @@ services:
     volumes:
       - ./output:/output
     networks:
-      - processing-net  # gPAS, Redis, target HAPI
+      - processing-net  # gPAS, Redis, NLP, analytics, app-db
       - source-net      # source HAPI (read-only fetch)
+      - target-net      # target HAPI (write de-identified results)
     depends_on:
+      nlp-lb:
+        condition: service_healthy
+      fhir-target:
+        condition: service_healthy
+      analytics:
+        condition: service_healthy
       redis:
         condition: service_healthy
       app-db:
@@ -181,8 +208,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "${WORKER_CPU_LIMIT:-4.0}"
-          memory: 2G
+          cpus: "${WORKER_CPU_LIMIT:-8.0}"
+          memory: 3G
         reservations:
           cpus: "0.5"
           memory: 256M
@@ -194,7 +221,7 @@ services:
     tmpfs:
       - /tmp:size=100M
     healthcheck:
-      test: ["CMD-SHELL", "test $$(( $$(date +%s) - $$(stat -c %Y /output/worker_healthy 2>/dev/null || echo 0) )) -lt 120"]
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:9091/ready', timeout=3)\""]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -277,9 +304,9 @@ services:
     security_opt:
       - no-new-privileges:true
 
-  # ── 2b. HAPI FHIR target server (processing-net) ──────────────────────────
-  # Holds de-identified data. Lives on processing-net alongside anonymizer and gPAS.
-  # The source network cannot reach this server.
+  # HAPI FHIR target server (target-net) ──────────────────────────────
+  # Holds de-identified data. Isolated on target-net — only anonymizer, worker,
+  # and UI can reach it. gPAS, Redis, NLP, and analytics have no path to it.
   fhir-target:
     image: hapiproject/hapi:v7.6.0
     container_name: hapi-fhir-target
@@ -297,7 +324,7 @@ services:
       - ./services/fhir-target/config/application.yaml:/app/config/application.yaml:ro
       - ./services/fhir-server/healthcheck:/healthcheck:ro
     networks:
-      - processing-net
+      - target-net
     depends_on:
       hapi-target-db:
         condition: service_healthy
@@ -320,7 +347,7 @@ services:
     cap_drop:
       - ALL
 
-  # ── 3b. HAPI FHIR target PostgreSQL (processing-net) ──────────────────────
+  # HAPI FHIR target PostgreSQL (target-net) ──────────────────────────
   hapi-target-db:
     image: postgres:16-alpine
     container_name: hapi-target-postgres
@@ -332,7 +359,7 @@ services:
     volumes:
       - hapi-target-pg-data:/var/lib/postgresql/data
     networks:
-      - processing-net
+      - target-net
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${HAPI_TARGET_DB_USER:-hapi} -d ${HAPI_TARGET_DB_NAME:-hapi_target}"]
       interval: 10s
@@ -467,7 +494,7 @@ services:
     security_opt:
       - no-new-privileges:true
 
-  # ── 6. Analytics microservice (opt-in) ────────────────────────────────────
+  # Analytics microservice (opt-in) ────────────────────────────────────
   analytics:
     build:
       context: .
@@ -498,14 +525,13 @@ services:
     cap_drop:
       - ALL
 
-  # ── 7. NLP microservice (opt-in, scalable) ─────────────────────────────────
-  # Scale with: docker compose --profile nlp up --scale nlp=2
+  # NLP microservice ────────────────────────────────────────
+  # Scale with: docker compose up --scale nlp=2
   nlp:
     build:
-      context: .
-      dockerfile: services/nlp/Dockerfile
+      context: services/nlp
+      dockerfile: Dockerfile
     image: medanon-nlp:latest
-    profiles: [nlp]
     restart: unless-stopped
     expose:
       - "8200"
@@ -530,11 +556,10 @@ services:
     cap_drop:
       - ALL
 
-  # ── 7b. NLP load balancer (least-connection across NLP replicas) ──────────
+  # NLP load balancer (least-connection across NLP replicas) ──────────
   nlp-lb:
     image: nginx:1.27-alpine
     container_name: medanon-nlp-lb
-    profiles: [nlp]
     restart: unless-stopped
     ports:
       - "${NLP_PORT:-8200}:8200"
@@ -559,8 +584,8 @@ services:
     security_opt:
       - no-new-privileges:true
 
-  # ── 8. gPAS PostgreSQL read replica (opt-in HA) ──────────────────────────
-  # Horizontal gPAS scaling (Phase 1B): run `docker compose up --scale gpas=2`
+  # gPAS PostgreSQL read replica  ──────────────────────────
+  # Horizontal gPAS scaling : run `docker compose up --scale gpas=2`
   # to start multiple WildFly instances sharing gpas-db.  The gpas-lb service
   # load-balances all traffic (anonymizer/worker route through gpas-lb).
   # For PostgreSQL read replicas (analytics/backup), enable this profile ─ it
@@ -599,9 +624,9 @@ services:
     security_opt:
       - no-new-privileges:true
 
-  # ── 9. React UI (processing-net + source-net) ────────────────────────────
-  # Needs source-net so nginx can resolve hapi-fhir for the /fhir/ proxy
-  # (Patient Browser). All other routes go through processing-net → anonymizer.
+  # React UI (processing-net + source-net + target-net) ──────────────
+  # Needs source-net for /fhir/ proxy (Patient Browser).
+  # Needs target-net for /fhir-target/ proxy (Target Browser).
   ui:
     build:
       context: client
@@ -614,6 +639,7 @@ services:
     networks:
       - processing-net
       - source-net
+      - target-net
     depends_on:
       anonymizer:
         condition: service_healthy
@@ -636,7 +662,7 @@ services:
     cap_drop:
       - ALL
 
-  # ── 10a. App-state PostgreSQL (processing-net) ─────────────────────────────
+  # App-state PostgreSQL (processing-net) ─────────────────────────────
   app-db:
     image: postgres:16-alpine
     container_name: medanon-app-db
@@ -650,6 +676,9 @@ services:
       - ./services/anonymizer/sql/init.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
     networks:
       - processing-net
+    command: >
+      postgres
+      -c max_connections=200
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${MEDANON_APP_DB_USER:-medanon} -d medanon"]
       interval: 10s
@@ -671,7 +700,7 @@ services:
           cpus: "0.25"
           memory: 64M
 
-  # ── 10. Redis (processing-net) ────────────────────────────────────────────
+  # Redis (processing-net) ────────────────────────────────────────────
   # Note: Redis logs "WARNING Memory overcommit must be enabled!" on Linux VMs.
   # This is a host kernel setting — fix with: sudo sysctl -w vm.overcommit_memory=1
   # (add to /etc/sysctl.conf for persistence). Not fixable inside the container.
@@ -709,7 +738,7 @@ services:
     cap_drop:
       - ALL
 
-  # ── 11. MinIO object storage (opt-in: MEDANON_RESULT_STORAGE=s3) ──────────
+  # MinIO object storage (opt-in: MEDANON_RESULT_STORAGE=s3) ──────────
   minio:
     image: minio/minio:RELEASE.2024-11-07T00-52-20Z
     container_name: medanon-minio
@@ -740,6 +769,34 @@ services:
         reservations:
           cpus: "0.25"
           memory: 128M
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  # Ollama LLM (opt-in AI) ──────────────────────────────────────────
+  # Local LLM server for AI agent features.  Only needed when running AI
+  # co-located; otherwise point MEDANON_AI_API_BASE to a remote Ollama VM.
+  # Usage: docker compose --profile ai up
+  ollama:
+    image: ollama/ollama:latest
+    container_name: medanon-ollama
+    profiles: [ai]
+    restart: unless-stopped
+    volumes:
+      - ollama-data:/root/.ollama
+    networks:
+      - processing-net
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 8G
     security_opt:
       - no-new-privileges:true
     cap_drop:
