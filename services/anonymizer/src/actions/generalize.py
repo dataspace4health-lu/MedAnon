@@ -72,14 +72,15 @@ def _generalize_date_year_month(value):
 
 
 def _generalize_date_decade(value):
-    """Truncate a date/dateTime to the decade (e.g. '1991-03-15' → '199x').
+    """Truncate a date/dateTime to the decade start year (e.g. '1991-03-15' → '1990').
 
     Collapses all years in the same decade into one bucket, substantially
     improving k-anonymity for birth dates while preserving rough age cohort.
+    Outputs a valid FHIR year (YYYY) rather than the non-standard '199x' form.
     """
     s = str(value).strip()
     m = re.match(r"(\d{3})", s)
-    return f"{m.group(1)}x" if m else s
+    return f"{m.group(1)}0" if m else s
 
 
 def _generalize_age_bracket(value, bracket_size=10):
@@ -207,7 +208,9 @@ def generalize_by_path(resource: dict, el: dict, params: dict) -> None:
     """
     path = el["path"].split(".")[1:]
     if len(path) == 0:
-        resource.clear()
-        return
+        raise ValueError(
+            f"Empty path after removing resource type root in generalize — "
+            f"refusing to clear entire resource (original path: {el['path']!r})"
+        )
     ret = find_nodes(resource, path[:-1], [])
     _generalize_nodes(ret, path[-1], el["value"], params)
