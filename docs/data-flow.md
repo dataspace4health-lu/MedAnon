@@ -3,44 +3,61 @@
 ## Network layout
 
 ```
-┌──────────────── host network ─────────────────────────────────┐
-│                                                               │
-│  Browser ──► :8501 (UI)   :8000 (API)    :8082   :8080       │
-│                                          HAPI    gPAS-lb      │
-│                           (source FHIR: no host port — isolated)
-└──────────────────────────────────────────────────────────────┘
+┌──────────────── host network ──────────────────────────────────────────┐
+│                                                                        │
+│  Browser ──► :8501 (UI)  :8000 (API)  :8082 (FHIR-target)  :8080 (gPAS-lb)
+│                                                                        │
+│  (source FHIR: no host port — isolated to source-net)                 │
+│  (NLP-lb: :8200 — processing-net only, not exposed by default)        │
+└────────────────────────────────────────────────────────────────────────┘
                  │             │
-        ┌────────▼─────────────▼──── processing-net ───────────┐
-        │                                                       │
-        │  medanon-ui:8501                                      │
-        │    nginx reverse proxy                                │
-        │    /api/* → medanon:8000  (strips /api prefix)        │
-        │    /fhir/* → hapi-fhir:8080  (300 s timeout)          │
-        │    /fhir-target/* → hapi-fhir-target:8080             │
-        │    / → React SPA (index.html fallback)                │
-        │                                                       │
-        │  medanon:8000  (anonymizer / FastAPI)                 │
-        │    → hapi-fhir:8080        reads source data          │
-        │    → hapi-fhir-target:8080 writes de-identified data  │
-        │    → gpas-lb:8080          pseudonymization (LB)      │
-        │    → app-db:5432           jobs, configs, staging     │
-        │    → redis:6379            job queue + cache          │
-        │                                                       │
-        │  hapi-fhir-target:8080 → hapi-target-postgres:5432   │
-        │  gpas-lb:8080     → gpas replicas:8080                │
-        │  gpas replicas    → gpas-postgres:5432                │
-        │  app-db:5432      (jobs, configs, subscriptions)      │
-        │                                                       │
-        └───────────────────────────────────────────────────────┘
-        |
-        ┌──── source-net (isolated) ─────┐
-        │  hapi-fhir:8080                │
-        │    → hapi-postgres:5432        │
-        │  medanon bridges both networks │
-        └────────────────────────────────┘
+        ┌────────▼─────────────▼──── processing-net ──────────────────────┐
+        │                                                                  │
+        │  medanon-ui:8501  (nginx reverse proxy)                          │
+        │    / → React SPA                                                 │
+        │    /api/* → anonymizer:8000  (least_conn, keepalive 16)          │
+        │    /fhir/* → hapi-fhir:8080  (300 s timeout, dynamic DNS)        │
+        │    /fhir-target/* → hapi-fhir-target:8080                        │
+        │    /healthz → 200 OK                                             │
+        │                                                                  │
+        │  anonymizer:8000  (FastAPI)                                      │
+        │    → hapi-fhir-target:8080  writes de-identified data            │
+        │    → gpas-lb:8080           pseudonymization (gPAS LB)           │
+        │    → nlp-lb:8200            NLP batch detection (NLP LB)         │
+        │    → analytics:8100         risk analysis + synthetic data        │
+        │    → app-db:5432            jobs, configs, subscriptions, staging │
+        │    → redis:6379             job queue + gPAS L2 cache + audit    │
+        │                                                                  │
+        │  worker:8000/9091  (dedicated job executor)                      │
+        │    → hapi-fhir-target:8080  bulk upload                          │
+        │    → gpas-lb:8080           pseudonymization                     │
+        │    → nlp-lb:8200            NLP batch                            │
+        │    → app-db:5432            job state                            │
+        │    → redis:6379             BLPOP job queue                      │
+        │    :9091                    Prometheus metrics + health probe     │
+        │                                                                  │
+        │  nlp-lb:8200  (nginx round-robin)                                │
+        │    → nlp replicas:8200  (Presidio + spaCy en_core_web_lg)        │
+        │                                                                  │
+        │  gpas-lb:8080  (nginx round-robin)                               │
+        │    → gpas replicas:8080  (WildFly + TTP-FHIR WAR)               │
+        │    → gpas-postgres:5432                                          │
+        │                                                                  │
+        │  hapi-fhir-target:8080 → hapi-target-postgres:5432              │
+        │  analytics:8100        (risk + synthetic — no external deps)     │
+        │  app-db:5432           (jobs, configs, subscriptions, runs)      │
+        │  redis:6379            (cache DB0, rate-limits DB2, audit stream)│
+        │                                                                  │
+        └──────────────────────────────────────────────────────────────────┘
+        │
+        ┌──── source-net (isolated) ─────────────────────┐
+        │  hapi-fhir:8080                                │
+        │    → hapi-postgres:5432                        │
+        │  anonymizer and worker bridge both networks    │
+        └────────────────────────────────────────────────┘
 ```
 
-Two networks: `processing-net` (all services) + `source-net` (isolated: source FHIR + its DB). Only anonymizer/worker bridge both networks. Source FHIR has no host port — accessed only through anonymizer endpoints.
+Two networks: `processing-net` (all services) + `source-net` (isolated: source FHIR + `hapi-postgres`). Only anonymizer and worker bridge both networks. The source FHIR server has **no host port** — it is only reachable via anonymizer proxy endpoints.
 
 ---
 
@@ -315,13 +332,13 @@ anonymizer → gpas-lb (:8080)
 anonymizer → nlp-lb (:8200)
                 │
                 ├─ /health      → 200 OK (nginx answers, no upstream)
-                └─ /*           → least_conn to nlp:8200 replicas
+                └─ /*           → DNS round-robin to nlp:8200 replicas
                                   - proxy_read_timeout 120s
                                   - client_max_body_size 10m
-                                  - least_conn for CPU-intensive inference
+                                  - resolver 127.0.0.11 for dynamic scaling
 ```
 
-**Why least_conn for NLP?** NLP inference is CPU-bound and request durations vary. `least_conn` routes to the replica with fewest active connections, ensuring even load distribution under variable-length requests.
+**NLP load balancing note:** The NLP LB uses DNS-based round-robin (standard nginx OSS). `least_conn` for DNS-resolved upstreams requires nginx Plus (`server nlp:8200 resolve`). For CPU-bound NLP inference, DNS round-robin is the practical choice. If `least_conn` is critical, use nginx Plus or replace the NLP LB with HAProxy.
 
 ---
 
@@ -353,19 +370,111 @@ HAPI responds with a batch-response Bundle where each entry has a `response.stat
 ## Job store backend selection
 
 ```
-startup (api/main.py)
+startup (api/main.py or worker_main.py)
     │
     ├── MEDANON_REDIS_URL set?
     │       YES → RedisJobStore
-    │               jobs stored as Redis hashes
+    │               jobs stored as Redis hashes + sorted set by created_at
     │               queue: BLPOP (worker wakes immediately on new job)
-    │               status index: sorted set by created_at
     │               workers share queue across replicas
+    │               secondary indexes: status set, type set (sinter for filtered list)
+    │
+    ├── NO, MEDANON_APP_DB_URL set?
+    │       YES → PostgresJobStore
+    │               jobs stored in medanon.jobs table
+    │               queue: LISTEN/NOTIFY (event-driven, no polling)
+    │               supports multiple worker replicas
+    │               persists across Redis restarts
     │
     └── NO  → SqliteJobStore  (MEDANON_JOB_DB=/output/jobs.db)
                 jobs stored as SQLite rows (WAL mode, thread-safe)
-                worker polls every 2 s
-                single-instance only
+                worker polls every 2 s (no event-driven wake-up)
+                single-instance only (file lock prevents multi-replica)
 ```
 
-**Module re-export trap (resolved):** `from pipeline.jobs.store import _job_store` captures the value `None` at import time. When `init_job_store()` is later called, it writes to `pipeline.jobs.store._job_store` but the captured reference in `pipeline.jobs._job_store` stays `None` forever. This caused 503 errors on all job endpoints. Fix: `_get_store()` in `api/services/jobs.py` now reads `pipeline.jobs.store._job_store` directly from the authoritative module instead of from a re-exported alias.
+In the default Docker Compose stack, `MEDANON_APP_DB_URL` is auto-constructed from `MEDANON_APP_DB_PASSWORD` and `app-db`, so **PostgresJobStore is the default backend** (not SQLite). Redis is optional (adds L2 cache and cross-replica event-driven dispatch).
+
+**Module re-export trap (resolved):** `from pipeline.jobs.store import _job_store` captures the value `None` at import time. When `init_job_store()` is later called, it writes to `pipeline.jobs.store._job_store` but the captured reference in `pipeline.jobs._job_store` stays `None` forever. Fixed: `_get_store()` reads directly from the authoritative module attribute.
+
+---
+
+## Scoring flow (MEDANON_SCORING_ENABLED=true)
+
+Scoring runs as a background task after every processing call. It does not block the HTTP response.
+
+```
+POST /process  → de-identified result returned to caller (synchronous)
+    │
+    └── asyncio.create_task(score_and_persist(...))
+              │
+              ├─ pipeline/scoring/engine.py  compute composite score
+              │      ├─ privacy.py    attacker model + HIPAA identifier check + text risk
+              │      ├─ utility.py    field retention + semantic preservation + info loss
+              │      └─ quality.py    success rate + rule coverage + schema + reference integrity
+              │
+              └─ integrations/postgres/processing_run_store.py
+                     INSERT INTO medanon.processing_runs
+                       (endpoint, config_profile, resource_count, composite_score,
+                        privacy_score, utility_score, quality_score, created_at)
+```
+
+For bulk jobs, scoring is triggered explicitly:
+
+```
+POST /v1/jobs/{id}/score
+    │
+    └── ScoringService.score_job(job_id)
+              │
+              ├─ read NDJSON from /output/{job_id}.ndjson
+              ├─ score each resource (privacy + utility + quality)
+              ├─ aggregate across all resources
+              ├─ write to medanon.processing_runs
+              └─ generate Markdown audit report → /output/{job_id}_score_audit.md
+
+GET /v1/jobs/{id}/score/report  → stream audit.md as text/markdown
+```
+
+---
+
+## AI agent flow (MEDANON_AI_ENABLED=true)
+
+AI endpoints use the `LLMProvider` singleton which wraps litellm. All calls go through a 3-state circuit breaker and a TTL-keyed response cache.
+
+```
+POST /v1/ai/generate-config
+    │
+    ├─ integrations/ai/provider.py  LLMProvider (litellm, circuit breaker, TTL cache)
+    │      ├─ cache hit? → return cached response (MEDANON_AI_CACHE_TTL_SEC)
+    │      └─ cache miss → litellm.completion(model, messages)
+    │              ↓
+    │          MEDANON_AI_MODEL=ollama/llama3.2
+    │          MEDANON_AI_API_BASE=http://ollama:11434  (--profile ai)
+    │                        OR
+    │          MEDANON_AI_API_BASE=https://api.openai.com  (external)
+    │
+    ├─ integrations/ai/agents/config_generator.py
+    │      RAG context: 7 bundled YAML profiles embedded as few-shot examples
+    │      prompt: user description → LLM → YAML config
+    │      validation: load_config() — rejects syntactically invalid YAML
+    │      keyword fallback: if LLM unavailable, select closest bundled profile
+    │
+    └─ response: {config_yaml, rationale, profile_basis}
+
+POST /v1/ai/detect-pii
+    │
+    ├─ integrations/ai/agents/pii_detector.py
+    │      Layer 1: regex (SSN, phone, email, MRN)
+    │      Layer 2: Presidio NER via NLP microservice (nlp-lb:8200)
+    │      Layer 3: LLM — MUST use MEDANON_AI_PII_PROVIDER (local-only model)
+    │               WARNING: no code-level enforcement of local-only — operator responsibility
+    │
+    └─ response: {entities: [{type, text, start, end, confidence}], layers_used}
+
+POST /v1/ai/explain  (SSE streaming)
+    │
+    ├─ integrations/ai/agents/rule_explainer.py
+    │      static fallback: pre-written explanations for each action type
+    │      streaming: litellm.completion(stream=True) → SSE chunks
+    │
+    └─ response: text/event-stream  OR  application/json
+```

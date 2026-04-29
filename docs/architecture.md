@@ -16,16 +16,18 @@ MedAnon is a FHIR R4 de-identification engine. It accepts FHIR resources (JSON /
                        ▼
 ┌─────────────────────────────────────────────────────────────┐
 │  nginx (medanon-ui)                                          │
-│   /api/*   → strips prefix → anonymizer:8000                 │
-│   /fhir/*  → passthrough  → hapi-fhir:8080   (300 s timeout)│
-│   /        → React SPA                                       │
+│   /api/*        → strips prefix → anonymizer:8000           │
+│   /fhir/*       → passthrough  → hapi-fhir:8080 (300 s)     │
+│   /fhir-target/*→ passthrough  → hapi-fhir-target:8080      │
+│   /             → React SPA                                  │
 └──────────────┬─────────────────────┬────────────────────────┘
                │                     │
                ▼                     ▼
 ┌──────────────────────┐   ┌──────────────────────────────────┐
 │  anonymizer :8000    │   │  hapi-fhir (source) :8080        │
 │  (FastAPI)           │◄──┤  PostgreSQL-backed FHIR R4       │
-│                      │   │  Stores IDENTIFIED patient data  │
+│  worker :9091(metrics│   │  source-net (isolated — no host  │
+│                      │   │  port; accessed only via anon.)  │
 │  reads  ──────────►  │   └──────────────────────────────────┘
 │  de-identifies       │
 │  writes ──────────►  │   ┌──────────────────────────────────┐
@@ -37,18 +39,32 @@ MedAnon is a FHIR R4 de-identification engine. It accepts FHIR resources (JSON /
        ├──► gpas-lb:8080 (nginx round-robin → gpas replicas)
        │     └──► gpas-postgres:5432
        │
+       ├──► nlp-lb:8200 (nginx least-conn → nlp replicas)
+       │     (Presidio + spaCy en_core_web_lg, ~800 MB image)
+       │
+       ├──► analytics:8100 (risk analysis + synthetic data)
+       │
        ├──► app-db:5432 (jobs, configs, subscriptions, staging)
        │
        └──► redis:6379 (password-protected)
              ├── job queue  (BLPOP event-driven)
              └── gPAS cache (L2, cross-replica)
+
+Opt-in profiles:
+  --profile ha  → gpas-db-replica (PostgreSQL streaming replica)
+  --profile s3  → minio:9000 (S3-compatible object storage)
+  --profile ai  → ollama (local LLM for AI agents)
 ```
 
 **Two separate FHIR servers** — identified and de-identified data never share a database. This is a deliberate design: it prevents accidental joins, satisfies physical separation requirements under GDPR Art. 25 (data minimization by design), and allows different access controls per server.
 
+**Why a dedicated NLP microservice?** The Presidio + spaCy `en_core_web_lg` model adds ~800 MB to the Docker image. Running it in the anonymizer process would double memory consumption for every anonymizer replica. The NLP microservice keeps this cost fixed regardless of anonymizer scaling, and its replicas can be independently sized for CPU-intensive NLP workloads.
+
 ---
 
 ## Services
+
+**Always-on (15 services):**
 
 | Container | Image | Host Port | Role |
 |---|---|---|---|
@@ -56,22 +72,25 @@ MedAnon is a FHIR R4 de-identification engine. It accepts FHIR resources (JSON /
 | `worker` | `medanon:latest` | 9091 (metrics) | Dedicated async job worker (Prometheus) |
 | `ui` | `medanon-ui:latest` | 8501 | React SPA served by nginx |
 | `fhir-server` | `hapiproject/hapi:v7.6.0` | none (isolated) | Source FHIR R4 (identified data) |
+| `hapi-db` | `postgres:16-alpine` | internal | PostgreSQL for source HAPI |
 | `fhir-target` | `hapiproject/hapi:v7.6.0` | 8082 | Target FHIR R4 (de-identified data) |
+| `hapi-target-db` | `postgres:16-alpine` | internal | PostgreSQL for target HAPI |
 | `gpas` | WildFly 38 + gPAS | via gpas-lb | Reversible pseudonymization (TTP) |
 | `gpas-lb` | `nginx:1.27-alpine` | 8080 | Round-robin LB for gPAS replicas |
 | `gpas-db` | `postgres:16-alpine` | internal | gPAS pseudonym store |
 | `app-db` | `postgres:16-alpine` | internal | Jobs, configs, subscriptions, staging |
 | `redis` | `redis:7-alpine` | internal | Shared job queue + gPAS L2 cache (password-protected) |
 | `analytics` | `medanon-analytics:latest` | 8100 | Risk analysis + synthetic data |
+| `nlp` | `medanon-nlp:latest` | via nlp-lb | Presidio NLP microservice (~800 MB image) |
+| `nlp-lb` | `nginx:1.27-alpine` | 8200 | Least-conn LB for NLP replicas |
 
-Opt-in profiles (not started by default):
+**Opt-in profiles (started with `--profile <name>`):**
 
 | Container | Profile | Host Port | Role |
 |---|---|---|---|
-| `nlp` | `nlp` | via nlp-lb | Presidio NLP microservice (~800 MB) |
-| `nlp-lb` | `nlp` | 8200 | Least-conn LB for NLP replicas |
-| `gpas-db-replica` | `ha` | internal | PostgreSQL read replica for gPAS HA |
+| `gpas-db-replica` | `ha` | internal | PostgreSQL streaming replica for gPAS HA |
 | `minio` | `s3` | 9000, 9001 | S3-compatible object storage for job results |
+| `ollama` | `ai` | internal | Local LLM inference for AI agents |
 
 ### Nginx Load Balancers
 
@@ -276,6 +295,42 @@ Auto-selection logic: `GPAS_URL` set → `config_gpas.yaml`; otherwise → `conf
 
 ---
 
+## AI agents (Phase 4)
+
+Four AI-powered agents are exposed via `/v1/ai/*` when `MEDANON_AI_ENABLED=true`:
+
+| Agent | Endpoint | Description |
+|---|---|---|
+| **Config generator** | `POST /v1/ai/generate-config` | RAG-based YAML profile generation from natural language. Uses the 7 bundled profiles as few-shot examples. Validates output through the Settings loader before returning. Falls back to keyword matching when AI is disabled. |
+| **PII detector** | `POST /v1/ai/detect-pii` | 3-layer PII scan on de-identified output: regex → NER → LLM. PHI safety boundary: the LLM used for PII detection must be local/self-hosted (`MEDANON_AI_PII_PROVIDER`). |
+| **Rule explainer** | `POST /v1/ai/explain` | Plain-language explanation of config rules via SSE streaming. Falls back to static descriptions when AI is unavailable. |
+| **Compliance advisor** | `POST /v1/ai/compliance` | Regulatory gap analysis vs HIPAA, GDPR, and other frameworks. Static HIPAA fallback when AI is unavailable. |
+
+**LLM provider:** `integrations/ai/provider.py` wraps `litellm`, which supports OpenAI-compatible APIs (OpenAI, Azure OpenAI, Anthropic) and Ollama for local inference. The `--profile ai` Docker profile starts an Ollama container.
+
+**Known limitations (tracked):**
+- PHI must not be sent to external LLM providers. Code-level enforcement for the PII detector's AI layer is pending.
+- Prompt injection: user input is interpolated into LLM messages in `config_generator.py`.
+- AI response cache (`LLMProvider._cache`) has no eviction — grows unbounded.
+
+---
+
+## Scoring system
+
+Every de-identification operation can be scored against three dimensions:
+
+| Dimension | What it measures | Weight |
+|---|---|---|
+| **Privacy** | Re-identification risk (k-anonymity, l-diversity, HIPAA identifier coverage) | Hard constraint |
+| **Utility** | Data usefulness for downstream analytics (field retention, date precision, code preservation) | Configurable |
+| **Quality** | FHIR structural validity (required fields, valid codes, reference integrity) | Configurable |
+
+The composite score is `privacy × utility × quality` (0.0–1.0). Scores are stored in `medanon.processing_runs` and exposed via `/v1/jobs/{id}/score` and `/v1/processing-runs`.
+
+Scoring is opt-in: `MEDANON_SCORING_ENABLED=true`. When enabled, every processed batch is scored and persisted. The `/v1/jobs/{id}/score/report` endpoint returns a Markdown audit report.
+
+---
+
 ## Authentication
 
 | `MEDANON_API_KEY` | Behaviour |
@@ -283,7 +338,7 @@ Auto-selection logic: `GPAS_URL` set → `config_gpas.yaml`; otherwise → `conf
 | Unset | All endpoints open (dev only) |
 | Set | All endpoints except `/health`, `/ready`, `/metrics`, `/docs` require `X-API-Key: <key>` |
 
-RBAC roles: `admin` (all), `analyst` (processing + jobs), `viewer` (read-only).
+RBAC roles: `admin` (all), `analyst` (processing + jobs + scoring + AI), `viewer` (read-only).
 
 **Health check strategy:** Docker's `healthcheck` targets `/health` (lightweight — returns `{"status":"ok"}` immediately). The `depends_on: condition: service_healthy` chain requires this. `/ready` is more expensive — it probes FHIR and gPAS connectivity with a 5 s timeout each — and is used for readiness gates only, not for Docker's healthcheck polling.
 

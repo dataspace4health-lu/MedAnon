@@ -89,7 +89,7 @@ Scans all string fields longer than 20 characters for residual PII patterns:
 
 **Regex patterns:** SSN (`\d{3}-\d{2}-\d{4}`), phone numbers, email addresses, ISO dates, IP addresses, MRN patterns (`MRN:\d{4+}`).
 
-**NER scan (optional, `MEDANON_SCORE_NER_ENABLED`):** Uses the same Presidio adapter as the de-identification pipeline (`deidentify._get_nlp_adapter()`). Only runs if the NLP adapter is already initialised — scoring never triggers a cold start of the NLP service.
+**NER scan (optional, `MEDANON_SCORE_NER_ENABLED`):** Delegates to the NLP microservice (`nlp-lb:8200`) via `RemoteNlpAdapter.detect()`. Only runs if the NLP adapter is already initialized and the microservice is reachable — scoring never blocks on a cold NLP start. If NLP is unavailable, only the regex scan is performed.
 
 `text_risk = min(1.0, entity_count × 0.15)`
 
@@ -234,15 +234,28 @@ This design was a deliberate constraint. Storing both original and de-identified
 
 ---
 
+## Persistence
+
+When `MEDANON_SCORING_ENABLED=true`, every de-identification call automatically scores its output and writes the result to the `medanon.processing_runs` PostgreSQL table (`app-db`). This enables:
+
+- Processing history via `GET /v1/processing-runs` — paginated log of all runs with scores
+- Aggregate statistics via `GET /v1/processing-runs/stats` — averages by endpoint and profile
+- Trend analysis: composite score drift over time as config profiles or source data evolve
+
+The `processing_runs` table stores: endpoint path, config profile name, resource count, composite score, and per-dimension scores. PHI is never stored — only aggregate statistics.
+
+If `MEDANON_SCORING_ENABLED=false` (default), the scoring engine is still available via the explicit endpoints (`POST /v1/score`, `POST /v1/jobs/{id}/score`) but results are not automatically persisted.
+
+---
+
 ## Configuration
 
 | Variable | Default | Effect |
 |---|---|---|
+| `MEDANON_SCORING_ENABLED` | `false` | Auto-score and persist every de-identification run to `medanon.processing_runs`. Set `true` in production to enable processing history. |
 | `MEDANON_SCORE_RISK_THRESHOLD` | `0.3` | Privacy gate threshold. Above this risk score → FAIL. |
-| `MEDANON_SCORE_NER_ENABLED` | `true` | Enable Presidio NER in text risk scan |
+| `MEDANON_SCORE_NER_ENABLED` | `true` | Enable Presidio NER in text risk scan (delegates to NLP microservice) |
 | `MEDANON_SCORE_NER_THRESHOLD` | `0.5` | Minimum Presidio confidence to count as a detection |
-| `MEDANON_SCORING_ENABLED` | `false` | Auto-score every job on completion (future) |
-| `MEDANON_SCORE_ATTACH` | `false` | Attach score as FHIR extension to each output resource (future) |
 
 ---
 

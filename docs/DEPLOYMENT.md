@@ -48,8 +48,8 @@ make build
 
 Builds `medanon:latest` (FastAPI anonymizer) and `medanon-ui:latest` (React/nginx). gPAS and HAPI FHIR use upstream images pulled automatically.
 
-The anonymizer Dockerfile uses the **repo root** as build context (required to copy `packages/medanon-core/` before `services/anonymizer/`). Four build stages:
-- `base` — Python 3.12 + deps + spaCy model
+The anonymizer Dockerfile uses `services/anonymizer/` as build context. Four build stages:
+- `base` — Python 3.12 + deps (no spaCy; NLP runs as the NLP microservice)
 - `prod` — production target (used by default)
 - `dev` — adds uvicorn `--reload`
 - `sdv` — adds SDV synthetic data engine (~2 GB)
@@ -106,17 +106,150 @@ Applies `docker-compose.dev.yml` overrides:
 
 ---
 
+## Environments
+
+Three deployment tiers are supported. Choose based on the stage of your workflow.
+
+### Development (hot-reload, ephemeral data)
+
+```bash
+make dev
+```
+
+Applies `docker-compose.dev.yml` overrides on top of the base stack:
+
+| Difference from production | Why |
+|---|---|
+| Anonymizer source mounted at `/code/src`, uvicorn `--reload` | Code changes apply instantly without rebuild |
+| HAPI FHIR uses in-memory H2 database | Data resets on restart — intentional; no migration needed during iteration |
+| gPAS management console exposed on `127.0.0.1:9990` | WildFly admin console accessible locally |
+| `MEDANON_API_KEY` typically left blank | Open mode — all callers are granted admin. Never use in non-local environments. |
+| NLP and analytics start alongside anonymizer | Same as production — both are always-on |
+
+**Not suitable for:** real patient data, performance testing, any multi-user access.
+
+### Staging (full Docker Compose, persistent volumes)
+
+Staging uses the production image with real persistent volumes, but on an isolated machine or namespace with test data only. No `dev` overrides.
+
+```bash
+# 1. Use production image (not dev target)
+make build
+
+# 2. Configure environment — use generated secrets, not placeholders
+cp .env.example .env
+# Edit .env: set MEDANON_API_KEY, MEDANON_HASH_KEY, all DB passwords
+
+# 3. Start full stack
+make up
+
+# 4. Initialize gPAS domain
+make init-domains
+
+# 5. Optionally enable opt-in profiles
+docker compose --profile s3 up -d    # MinIO for job result storage
+docker compose --profile ai up -d    # Ollama if testing AI agents
+```
+
+**Staging-specific settings to verify before release:**
+
+```bash
+MEDANON_API_KEY=<non-empty-staging-key>
+MEDANON_MANIFEST_ENABLED=true
+MEDANON_SCORING_ENABLED=true
+LOG_LEVEL=INFO                       # Never DEBUG with real data
+MEDANON_RESULT_TTL_SEC=86400         # Clean up job results after 24 hours
+```
+
+Run the full verification suite:
+
+```bash
+make verify        # Smoke tests all services
+make test          # Full pytest suite (from services/anonymizer/)
+```
+
+**Differences from production:**
+- No TLS termination (staging typically behind a VPN or internal network)
+- Single gPAS replica (no `--profile ha`)
+- `EXTERNAL_HOST` set to the staging server's IP or hostname
+
+### Production (Kubernetes / Helm)
+
+Production runs on Kubernetes using the Helm umbrella chart. Key differences from Docker Compose:
+
+| Concern | Docker Compose (staging) | Kubernetes/Helm (production) |
+|---|---|---|
+| Scaling | `--scale nlp=N --scale gpas=N` | HPA on worker (1–5 replicas); manual scale for others |
+| TLS | External reverse proxy | Ingress controller (nginx-ingress or cloud LB) with cert-manager |
+| Secrets | `.env` file | Kubernetes Secrets (or external secret manager: Vault, AWS Secrets Manager) |
+| Storage | Docker named volumes | PersistentVolumeClaims (retain policy) |
+| Log aggregation | Docker log driver | K8s log driver → ELK/Loki/Splunk |
+| Health checks | Docker HEALTHCHECK | Readiness and liveness probes in Deployment spec |
+| gPAS HA | `--profile ha` (single replica) | StatefulSet + optional read replica PVC |
+
+**Minimum production checklist:**
+
+```bash
+# 1. Build and push production images
+docker build --target prod \
+  -t registry.example.com/medanon:$(git describe --tags --abbrev=0) \
+  services/anonymizer/
+docker push registry.example.com/medanon:<tag>
+
+docker build -t registry.example.com/medanon-ui:<tag> client/
+docker push registry.example.com/medanon-ui:<tag>
+
+# 2. Validate chart (no cluster needed)
+make helm-lint
+make helm-template
+
+# 3. Install
+helm upgrade --install medanon ./helm/medanon \
+  --set global.registry=registry.example.com \
+  --set anonymizer.image.tag=<tag> \
+  --set anonymizer.secrets.MEDANON_HASH_KEY=<hex-key> \
+  --set anonymizer.secrets.MEDANON_API_KEY=<key> \
+  --set anonymizer.env.MEDANON_MANIFEST_ENABLED=true \
+  --set anonymizer.env.MEDANON_SCORING_ENABLED=true \
+  --set anonymizer.env.MEDANON_RESULT_TTL_SEC=86400 \
+  --set gpas.secrets.WF_ADMIN_PASS=<password> \
+  --set gpas.db.secrets.rootPassword=<password> \
+  --namespace medanon --create-namespace
+
+# 4. Initialize gPAS domain (first install only)
+kubectl exec -n medanon deploy/medanon-gpas -- \
+  curl -s -X POST http://localhost:8080/gpas/gpasService \
+  ... # see make init-domains for full SOAP call
+```
+
+**K3s (single-node / edge):**
+
+```bash
+# Import images into K3s containerd (separate from Docker daemon)
+docker save medanon:<tag> | sudo k3s ctr images import -
+docker save medanon-ui:<tag> | sudo k3s ctr images import -
+
+# Use K3s-specific overrides (Traefik ingress + local-path storage)
+helm upgrade --install medanon ./helm/medanon \
+  -f helm/k3s-values.yaml \
+  --namespace medanon --create-namespace
+```
+
+Note: K3s ships with Flannel which does not enforce `NetworkPolicy`. Use Cilium for regulated environments.
+
+---
+
 ## Opt-in service profiles
 
 ```bash
-docker compose --profile analytics up   # analytics microservice (risk + synthetic)
-docker compose --profile nlp up         # NLP microservice (Presidio + spaCy, ~800 MB image)
-docker compose --profile ha up          # gPAS PostgreSQL read replica (HA setup)
+docker compose --profile ha up    # gPAS PostgreSQL read replica (HA setup)
+docker compose --profile s3 up    # MinIO S3 object storage for job results
+docker compose --profile ai up    # Ollama local LLM for AI agent endpoints
 ```
 
-When `NLP_SERVICE_URL` is set, the anonymizer delegates `nlp_detect` actions to the NLP microservice instead of running Presidio in-process. This saves ~800 MB of anonymizer RAM.
+The NLP and analytics microservices are now always-on — they start with the main `make up` command. `NLP_SERVICE_URL` is hardcoded to `http://nlp-lb:8200` in docker-compose.yml. Override only to point at an external NLP deployment.
 
-When `ANALYTICS_SERVICE_URL` is set, `/analyse/risk` and `/generate/synthetic` proxy to the analytics service.
+When `ANALYTICS_SERVICE_URL` is set, `/analyse/risk` and `/generate/synthetic` proxy to the analytics service (default: `http://analytics:8100`).
 
 ---
 
@@ -156,15 +289,20 @@ MEDANON_RSA_PRIVATE_KEY=/code/keys/id_rsa
 
 ## Resource limits
 
-These are set in `docker-compose.yml` and tuned based on observed usage during bulk export (~20,000 resources):
+Tuned based on observed peak usage during bulk export (~20,000 resources):
 
 | Service | RAM limit | CPU limit | Notes |
 |---|---|---|---|
-| `anonymizer` | 6 GB | 2.0 | Peak usage ~5.7 GB during large bulk export |
+| `anonymizer` | 3 GB | 2.0 | Reduced from 6 GB; NLP no longer runs in-process |
+| `worker` | 2 GB | 1.0 | Dedicated job worker — one job at a time |
 | `fhir-server` | 3 GB | 2.0 | JVM heap |
-| `gpas` | 6 GB | 2.0 | WildFly JVM, -Xmx4G |
-| `gpas-db` | 4 GB | 1.0 | PostgreSQL shared_buffers 512 MB |
+| `gpas` | 2.5 GB | 1.0 | WildFly JVM: Xms128M Xmx1536M, G1GC |
+| `gpas-db` | 2 GB | 1.0 | PostgreSQL shared_buffers 512 MB |
+| `app-db` | 1 GB | 0.5 | Jobs, configs, staging |
+| `redis` | 512 MB | 0.5 | Cache + job queue |
 | `ui` | 128 MB | 0.5 | nginx is lightweight |
+
+Peak system memory: ~13.4 GB on a 16 GB host during large bulk export with NLP and analytics active.
 
 ---
 
