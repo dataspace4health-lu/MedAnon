@@ -17,8 +17,71 @@ import urllib3
 
 _log = logging.getLogger("medanon.nlp.remote")
 
-# NLP failure mode: always fail-closed (redact) to prevent PHI leakage.
-_NLP_FALLBACK_TEXT = "[NLP_UNAVAILABLE]"
+# Client-side batch size limit: must not exceed the NLP service's NLP_MAX_BATCH_ITEMS
+# setting (default 1000).  Using the same env var keeps them in sync.  Sending
+# more than this in a single request causes HTTP 422, which previously tripped
+# the circuit breaker and broke NLP for all subsequent chunks.
+_NLP_CLIENT_BATCH_LIMIT: int = max(
+    1, int(os.environ.get("NLP_MAX_BATCH_ITEMS", "1000"))
+)
+
+# HTTP timeouts to the NLP microservice.  Singletons (per-text) used to be
+# hard-coded at 30s and batch at 120s; both are now overridable so operators
+# can tune for slower deployments (e.g. CPU-only inference) without trip-
+# storming the circuit breaker.
+_NLP_DETECT_TIMEOUT: float = float(os.environ.get("NLP_DETECT_TIMEOUT_SEC", "30"))
+_NLP_BATCH_TIMEOUT: float = float(os.environ.get("NLP_BATCH_TIMEOUT_SEC", "120"))
+
+
+def _is_client_error(exc: Exception) -> bool:
+    """Return True when *exc* represents an HTTP 4xx client error.
+
+    HTTP 4xx responses are client-side mistakes (e.g. oversized payload → 422).
+    They should NOT be counted as server failures for circuit-breaker purposes;
+    only 5xx and network errors indicate that the upstream service is degraded.
+    """
+    msg = str(exc)
+    # proxy_post_json raises ValueError with the HTTP status in the message.
+    return isinstance(exc, ValueError) and any(
+        f"HTTP {code}" in msg
+        for code in ("400", "401", "403", "404", "405", "408", "409", "410",
+                     "413", "415", "422", "429")
+    )
+
+
+def _nlp_fallback_token(text: str | None = None, entity_type: str = "ANY") -> str:
+    """Return a deterministic redaction placeholder.
+
+    Determinism is required because identical input strings (e.g., the same
+    address string appearing on two patients) MUST produce the same scrubbed
+    output — otherwise the "NLP-unavailable" path becomes a covert linkage
+    channel whose random nonces let an attacker correlate failed-NLP records
+    by their unique placeholder.
+
+    The token is a short blake2b hash of (entity_type, text).  When *text* is
+    None (legacy callers / aggregate failures), a static placeholder is used.
+    """
+    if text is None:
+        return "[NLP_UNAVAILABLE]"
+    import hashlib
+
+    h = hashlib.blake2b(digest_size=4)
+    h.update(entity_type.encode("utf-8", errors="replace"))
+    h.update(b"\x1f")
+    h.update(text.encode("utf-8", errors="replace"))
+    return f"[NLP_UNAVAILABLE_{h.hexdigest().upper()}]"
+
+
+def _validate_detect_response(raw: dict) -> dict:
+    """Validate the NLP /v1/detect response against the contract schema."""
+    from api.schemas.nlp import NlpDetectResponse
+    return NlpDetectResponse.model_validate(raw).model_dump()
+
+
+def _validate_batch_response(raw: dict) -> dict:
+    """Validate the NLP /v1/detect/batch response against the contract schema."""
+    from api.schemas.nlp import NlpBatchResponse
+    return NlpBatchResponse.model_validate(raw).model_dump()
 
 
 class NlpUnavailableError(RuntimeError):
@@ -36,8 +99,8 @@ class NlpUnavailableError(RuntimeError):
 _nlp_cb = CircuitBreaker(
     name="nlp",
     failure_threshold=int(os.environ.get("NLP_CB_FAILURE_THRESHOLD", "5")),
-    recovery_timeout_sec=float(os.environ.get("NLP_CB_RECOVERY_TIMEOUT_SEC", "60")),
-    window_sec=float(os.environ.get("NLP_CB_WINDOW_SEC", "120")),
+    recovery_timeout_sec=float(os.environ.get("NLP_CB_RECOVERY_TIMEOUT_SEC", "30")),
+    window_sec=float(os.environ.get("NLP_CB_WINDOW_SEC", "60")),
     half_open_probes=int(os.environ.get("NLP_CB_HALF_OPEN_PROBES", "2")),
     timeout_threshold=int(os.environ.get("NLP_CB_TIMEOUT_THRESHOLD", "2")),
 )
@@ -89,10 +152,13 @@ def detect_remote(
 
     url = _nlp_service_url("/v1/detect")
     try:
-        result = proxy_post_json(url, payload, timeout=30)
+        raw = proxy_post_json(url, payload, timeout=_NLP_DETECT_TIMEOUT)
+        result = _validate_detect_response(raw)
         _nlp_cb.record_success()
-        detections = result.get("detections", [])
+        detections = result.get("detections") or []
         return [(d[0], d[1], d[2]) for d in detections]
+    except NlpUnavailableError:
+        raise
     except Exception as exc:
         _nlp_cb.record_failure()
         _log.warning(
@@ -102,24 +168,18 @@ def detect_remote(
         raise NlpUnavailableError(f"NLP detect failed: {exc}") from exc
 
 
-def detect_batch_remote(
+def _detect_batch_chunk(
     texts: list[str],
     entities: list[str],
     threshold: float,
     language: str,
 ) -> list[list[tuple[int, int, str]]]:
-    """Batch entity detection — one HTTP round-trip for all texts.
+    """Send a single batch of ≤ _NLP_CLIENT_BATCH_LIMIT texts to /v1/detect/batch.
 
-    Sends all texts with detect_only=True to /v1/detect/batch.
-    Returns list of [(start, end, entity_type)] per text.
-    Falls back to sequential per-text calls on batch failure.
+    Private helper called by detect_batch_remote after client-side sub-batching.
+    Falls back to sequential per-text detection on server errors (5xx / network),
+    but NOT on 4xx client errors — those indicate a configuration problem.
     """
-    if not texts:
-        return []
-    if not _nlp_cb.allow_request():
-        _log.warning("nlp_circuit_breaker OPEN — batch detect unavailable")
-        raise NlpUnavailableError("NLP circuit breaker OPEN")
-
     payload = _json_dumps_bytes(
         {
             "items": [
@@ -137,8 +197,9 @@ def detect_batch_remote(
 
     url = _nlp_service_url("/v1/detect/batch")
     try:
-        result = proxy_post_json(url, payload, timeout=120)
-        all_detections = result.get("detections", [])
+        raw = proxy_post_json(url, payload, timeout=_NLP_BATCH_TIMEOUT)
+        result = _validate_batch_response(raw)
+        all_detections = result.get("detections") or []
         if len(all_detections) == len(texts):
             _nlp_cb.record_success()
             return [
@@ -153,14 +214,90 @@ def detect_batch_remote(
             len(texts), len(all_detections),
         )
     except Exception as exc:
-        _nlp_cb.record_failure()
+        # Only record as a server failure when the error is NOT a client-side
+        # 4xx response.  HTTP 429 (rate-limit) counts as a CB event because it
+        # signals capacity pressure; other 4xx errors are caller mistakes and
+        # must not degrade the circuit breaker state.
+        is_rate_limit = isinstance(exc, ValueError) and "HTTP 429" in str(exc)
+        if not _is_client_error(exc) or is_rate_limit:
+            _nlp_cb.record_failure()
         _log.warning(
-            "detect_batch_remote_error type=%s — falling back to sequential",
+            "detect_batch_chunk_error type=%s — falling back to sequential",
             type(exc).__name__,
         )
 
-    # Fallback: sequential per-text detection
-    return [detect_remote(t, entities, threshold, language) for t in texts]
+    # Fallback: sequential per-text detection.
+    # Re-check the circuit breaker before each call — a run of failures during
+    # the batch may have tripped it while iterating.
+    results: list[list[tuple[int, int, str]]] = []
+    for t in texts:
+        if not _nlp_cb.allow_request():
+            raise NlpUnavailableError("NLP circuit breaker OPEN during sequential fallback")
+        results.append(detect_remote(t, entities, threshold, language))
+    return results
+
+
+def detect_batch_remote(
+    texts: list[str],
+    entities: list[str],
+    threshold: float,
+    language: str,
+) -> list[list[tuple[int, int, str]]]:
+    """Batch entity detection — one or more HTTP round-trips for all texts.
+
+    Automatically sub-batches when ``len(texts) > _NLP_CLIENT_BATCH_LIMIT`` to
+    respect the NLP service's ``NLP_MAX_BATCH_ITEMS`` cap.  Previously, sending
+    all texts in one request triggered HTTP 422 errors that incremented the NLP
+    circuit-breaker failure counter, opening the CB after five chunks and causing
+    NLP scrubbing to fail for the remainder of the bulk export.
+
+    Cached: results are memoised by content hash via :mod:`integrations.nlp.cache`,
+    so repeat runs over the same dataset (and intra-run duplicates) skip the
+    HTTP round-trip entirely.
+
+    Returns list of [(start, end, entity_type)] per text.
+    """
+    if not texts:
+        return []
+
+    # Check the cross-run NLP detection cache *first*.  Hits do not need the
+    # circuit breaker or the NLP service at all.
+    from integrations.nlp.cache import lookup_many, store_many
+
+    cached, keys = lookup_many(texts, entities, threshold, language)
+    misses_idx = [i for i, c in enumerate(cached) if c is None]
+    if not misses_idx:
+        return [c for c in cached]  # type: ignore[misc]
+
+    if not _nlp_cb.allow_request():
+        _log.warning("nlp_circuit_breaker OPEN — batch detect unavailable")
+        raise NlpUnavailableError("NLP circuit breaker OPEN")
+
+    miss_texts = [texts[i] for i in misses_idx]
+    if len(miss_texts) <= _NLP_CLIENT_BATCH_LIMIT:
+        miss_results = _detect_batch_chunk(miss_texts, entities, threshold, language)
+    else:
+        miss_results = []
+        for i in range(0, len(miss_texts), _NLP_CLIENT_BATCH_LIMIT):
+            if not _nlp_cb.allow_request():
+                raise NlpUnavailableError("NLP circuit breaker OPEN during sub-batching")
+            chunk_results = _detect_batch_chunk(
+                miss_texts[i : i + _NLP_CLIENT_BATCH_LIMIT],
+                entities, threshold, language,
+            )
+            miss_results.extend(chunk_results)
+
+    # Persist the new detections, then merge cached + fresh in original order.
+    miss_keys = [keys[i] for i in misses_idx]
+    try:
+        store_many(miss_keys, miss_results)
+    except Exception as exc:  # pragma: no cover — cache must never break the path
+        _log.warning("nlp_cache_store_failed: %s", exc)
+
+    out: list[list[tuple[int, int, str]]] = list(cached)  # type: ignore[arg-type]
+    for idx, det in zip(misses_idx, miss_results):
+        out[idx] = det
+    return out  # type: ignore[return-value]
 
 
 def analyze_and_replace_remote(
@@ -182,7 +319,7 @@ def analyze_and_replace_remote(
     """
     if not _nlp_cb.allow_request():
         _log.warning("nlp_circuit_breaker OPEN — returning redacted placeholder")
-        return _NLP_FALLBACK_TEXT
+        return _nlp_fallback_token(text)
 
     payload = _json_dumps_bytes(
         {
@@ -197,7 +334,8 @@ def analyze_and_replace_remote(
 
     url = _nlp_service_url("/v1/detect")
     try:
-        result = proxy_post_json(url, payload, timeout=30)
+        raw = proxy_post_json(url, payload, timeout=_NLP_DETECT_TIMEOUT)
+        result = _validate_detect_response(raw)
         returned_state = result.get("token_state", {})
         token_state.update(returned_state)
         _nlp_cb.record_success()
@@ -208,7 +346,7 @@ def analyze_and_replace_remote(
             "nlp_service_error type=%s — returning redacted placeholder",
             type(exc).__name__,
         )
-        return _NLP_FALLBACK_TEXT
+        return _nlp_fallback_token(text)
 
 
 def analyze_and_replace_batch_remote(
@@ -219,10 +357,13 @@ def analyze_and_replace_batch_remote(
     mode: str,
     token_state: dict,
 ) -> list[str]:
-    """Batch NLP detection — send multiple texts in one HTTP round-trip.
+    """Batch NLP detection — one or more HTTP round-trips for all texts.
 
-    Falls back to per-text sequential calls if the batch endpoint fails
-    (e.g. NLP service version doesn't support ``/v1/detect/batch``).
+    Automatically sub-batches when ``len(texts) > _NLP_CLIENT_BATCH_LIMIT`` to
+    avoid HTTP 422 from the NLP service.  Token state is threaded through all
+    sub-batches in order so surrogate tokens remain consistent within a call.
+
+    Falls back to per-text sequential calls if the batch endpoint fails.
     """
     if not texts:
         return []
@@ -232,7 +373,21 @@ def analyze_and_replace_batch_remote(
             "nlp_circuit_breaker OPEN — returning %d redacted placeholders",
             len(texts),
         )
-        return [_NLP_FALLBACK_TEXT] * len(texts)
+        return [_nlp_fallback_token(t) for t in texts]
+
+    # Pre-batch proactively to avoid NLP service 422 errors.
+    if len(texts) > _NLP_CLIENT_BATCH_LIMIT:
+        all_results: list[str] = []
+        for i in range(0, len(texts), _NLP_CLIENT_BATCH_LIMIT):
+            if not _nlp_cb.allow_request():
+                all_results.extend(_nlp_fallback_token(t) for t in texts[i:])
+                break
+            chunk_results = analyze_and_replace_batch_remote(
+                texts[i : i + _NLP_CLIENT_BATCH_LIMIT],
+                entities, threshold, language, mode, token_state,
+            )
+            all_results.extend(chunk_results)
+        return all_results
 
     payload = _json_dumps_bytes(
         {
@@ -252,7 +407,8 @@ def analyze_and_replace_batch_remote(
 
     url = _nlp_service_url("/v1/detect/batch")
     try:
-        result = proxy_post_json(url, payload, timeout=60)
+        raw = proxy_post_json(url, payload, timeout=60)
+        result = _validate_batch_response(raw)
         returned_state = result.get("token_state", {})
         token_state.update(returned_state)
         scrubbed = result.get("results", [])
@@ -275,7 +431,8 @@ def analyze_and_replace_batch_remote(
         )
         if _is_timeout:
             _nlp_cb.record_timeout()
-        else:
+        elif not _is_client_error(exc):
+            # Only record server/network failures — never 4xx client errors.
             _nlp_cb.record_failure()
         _log.warning(
             "nlp_batch_error type=%s cb_state=%s — %s",
@@ -286,10 +443,10 @@ def analyze_and_replace_batch_remote(
         # If batch failure tripped the circuit breaker, bail immediately rather than
         # spawning hundreds of sub-batch HTTP calls under degradation.
         if not _nlp_cb.allow_request():
-            return [_NLP_FALLBACK_TEXT] * len(texts)
+            return [_nlp_fallback_token(t) for t in texts]
 
-    # Fallback: sub-batch retry (batches of 10) then sequential per-text calls
-    sub_batch_size = 10
+    # Fallback: sub-batch retry (use same limit as detect_batch_remote)
+    sub_batch_size = _NLP_CLIENT_BATCH_LIMIT
     if len(texts) > sub_batch_size:
         results = []
         for i in range(0, len(texts), sub_batch_size):
@@ -310,7 +467,8 @@ def analyze_and_replace_batch_remote(
                 }
             )
             try:
-                sub_result = proxy_post_json(url, sub_payload, timeout=60)
+                sub_raw = proxy_post_json(url, sub_payload, timeout=60)
+                sub_result = _validate_batch_response(sub_raw)
                 returned_state = sub_result.get("token_state", {})
                 token_state.update(returned_state)
                 scrubbed = sub_result.get("results", [])
