@@ -11,14 +11,20 @@ FastAPI startup event when ``MEDANON_REDIS_URL`` is set.
 
 from __future__ import annotations
 
-from utils.json_fast import dumps as _json_dumps
+from collections import OrderedDict
 import logging
+import os
 import threading
 from typing import Protocol, runtime_checkable
 
 _cache_log = logging.getLogger("medanon.cache")
 
-_DEFAULT_MAX = 50_000
+# Sizing: a 130K-resource bulk export touches ~300K–400K unique values (IDs +
+# cross-resource references). The LRU must hold the entire working set to avoid
+# evictions that force re-fetches from gPAS (~150 ms each).
+# Default raised from 50K → 300K; tune via MEDANON_CACHE_MAX_ENTRIES.
+# Memory: ~150 bytes/entry × 300K ≈ 45 MB — well within the 3 GB anonymizer budget.
+_DEFAULT_MAX = int(os.environ.get("MEDANON_CACHE_MAX_ENTRIES", "300000"))
 
 
 # ---------------------------------------------------------------------------
@@ -48,7 +54,7 @@ class _LruShard:
     __slots__ = ("_cache", "_lock", "_maxsize")
 
     def __init__(self, maxsize: int) -> None:
-        self._cache: dict = {}
+        self._cache: OrderedDict = OrderedDict()
         self._lock = threading.Lock()
         self._maxsize = maxsize
 
@@ -56,18 +62,18 @@ class _LruShard:
         with self._lock:
             value = self._cache.get(key)
             if value is not None:
-                del self._cache[key]
-                self._cache[key] = value
+                self._cache.move_to_end(key)
             return value
 
     def set(self, key: tuple, value: str) -> None:
         with self._lock:
             if key in self._cache:
-                del self._cache[key]
-            elif len(self._cache) >= self._maxsize:
-                oldest_key = next(iter(self._cache))
-                del self._cache[oldest_key]
-            self._cache[key] = value
+                self._cache.move_to_end(key)
+                self._cache[key] = value
+            else:
+                if len(self._cache) >= self._maxsize:
+                    self._cache.popitem(last=False)
+                self._cache[key] = value
 
     def flush(self) -> int:
         with self._lock:
@@ -113,8 +119,7 @@ class LocalLruCache:
                 for key in ks:
                     value = shard._cache.get(key)
                     if value is not None:
-                        del shard._cache[key]
-                        shard._cache[key] = value
+                        shard._cache.move_to_end(key)
                         result[key] = value
         return result
 
@@ -130,11 +135,12 @@ class LocalLruCache:
                 for key in ks:
                     value = items[key]
                     if key in shard._cache:
-                        del shard._cache[key]
-                    elif len(shard._cache) >= shard._maxsize:
-                        oldest_key = next(iter(shard._cache))
-                        del shard._cache[oldest_key]
-                    shard._cache[key] = value
+                        shard._cache.move_to_end(key)
+                        shard._cache[key] = value
+                    else:
+                        if len(shard._cache) >= shard._maxsize:
+                            shard._cache.popitem(last=False)
+                        shard._cache[key] = value
 
 
 # ---------------------------------------------------------------------------
@@ -145,17 +151,24 @@ class LocalLruCache:
 class RedisCache:
     """Redis-backed cache for cross-replica pseudonym sharing.
 
-    Tuple keys are JSON-serialised to a Redis-compatible string.
-    Values are stored as plain strings with a configurable TTL (default 1 hour).
+    Tuple keys are serialised to a Redis-compatible string using the ASCII
+    Unit Separator (0x1f) as delimiter.
 
-    Redis errors are swallowed with a debug log so a Redis outage degrades
+    TTL behaviour:
+      ttl=None (default) — entries are written with no expiry.  Correct for
+        pseudonym mappings, which are permanent facts derived from the gPAS
+        vault.  Entries survive Redis restarts when AOF persistence is enabled.
+      ttl=<seconds>      — entries expire after the given number of seconds.
+        Use only for non-permanent data (e.g. session tokens, rate-limit keys).
+
+    Redis errors are swallowed with a warning log so a Redis outage degrades
     gracefully to direct gPAS calls rather than surfacing as processing errors.
     """
 
     def __init__(
         self,
         redis_url: str,
-        ttl: int = 3600,
+        ttl: int | None = None,
         key_prefix: str = "medanon:gpas:",
     ) -> None:
         import redis as _redis  # lazy import — redis package is optional
@@ -171,7 +184,9 @@ class RedisCache:
         self._prefix = key_prefix
 
     def _make_key(self, key: tuple) -> str:
-        return self._prefix + _json_dumps(key)
+        # Use ASCII Unit Separator (\\x1f) as delimiter — faster than JSON serialization
+        # and safe because FHIR values, URIs, and domain names never contain this byte.
+        return self._prefix + "\x1f".join(str(x) for x in key)
 
     def get(self, key: tuple) -> str | None:
         try:
@@ -182,7 +197,10 @@ class RedisCache:
 
     def set(self, key: tuple, value: str) -> None:
         try:
-            self._client.set(self._make_key(key), value, ex=self._ttl)
+            if self._ttl is not None:
+                self._client.set(self._make_key(key), value, ex=self._ttl)
+            else:
+                self._client.set(self._make_key(key), value)
         except Exception as exc:
             _cache_log.warning("redis_set_failed skipping: %s", exc)
 
@@ -226,7 +244,10 @@ class RedisCache:
         try:
             pipe = self._client.pipeline(transaction=False)
             for key, value in items.items():
-                pipe.set(self._make_key(key), value, ex=self._ttl)
+                if self._ttl is not None:
+                    pipe.set(self._make_key(key), value, ex=self._ttl)
+                else:
+                    pipe.set(self._make_key(key), value)
             pipe.execute()
         except Exception as exc:
             _cache_log.warning("redis_pipeline_set_failed skipping: %s", exc)

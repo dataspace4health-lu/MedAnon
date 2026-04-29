@@ -44,9 +44,13 @@ class HealthCheckService:
         if redis_url:
             probes["redis"] = (self._probe_redis, (redis_url, timeout))
 
-        nlp_model = os.environ.get("MEDANON_NLP_MODEL", "")
-        if nlp_model:
-            probes["nlp"] = (self._probe_nlp, ())
+        nlp_url = os.environ.get("NLP_SERVICE_URL", "").strip()
+        if nlp_url:
+            probes["nlp"] = (self._probe_nlp, (nlp_url, timeout))
+
+        app_db_url = os.environ.get("MEDANON_APP_DB_URL", "").strip()
+        if app_db_url:
+            probes["postgres"] = (self._probe_postgres, (timeout,))
 
         if not probes:
             return {}
@@ -110,12 +114,40 @@ class HealthCheckService:
             logger.debug("readiness: redis unreachable: %s", exc)
             return "error"
 
-    def _probe_nlp(self) -> str:
+    def _probe_nlp(self, url: str, timeout: float) -> str:
         try:
-            from integrations.nlp.detector import _get_analyzer
-
-            _get_analyzer()
+            probe = url.rstrip("/") + "/health"
+            _ureq.urlopen(probe, timeout=timeout)  # nosec B310
             return "ok"
         except Exception as exc:
-            logger.debug("readiness: nlp engine not ready: %s", exc)
+            logger.debug("readiness: nlp service unreachable: %s", exc)
+            return "error"
+
+    def _probe_postgres(self, timeout: float) -> str:
+        try:
+            from integrations.postgres.pool import get_pool, pool_health, safe_putconn
+
+            info = pool_health()
+            # Lazy-init: when a URL is configured but no caller has touched the
+            # pool yet (typical for the worker process when Redis is the job
+            # store and the staging store creates its own pool), force a
+            # one-shot probe so /ready doesn't flap to 503.
+            if not info.get("available"):
+                app_db_url = os.environ.get("MEDANON_APP_DB_URL", "").strip()
+                if not app_db_url:
+                    return "ok"  # nothing configured → not a failure
+                pool = get_pool(app_db_url)
+                conn = pool.getconn()
+                try:
+                    with conn.cursor() as cur:
+                        cur.execute("SELECT 1")
+                finally:
+                    safe_putconn(pool, conn)
+                return "ok"
+
+            if info.get("ping") == "ok":
+                return "ok"
+            return "error"
+        except Exception as exc:
+            logger.debug("readiness: postgres unreachable: %s", exc)
             return "error"

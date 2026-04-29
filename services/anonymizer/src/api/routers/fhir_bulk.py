@@ -21,7 +21,7 @@ import os
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 
-from medanon_core.domain import JobStatus
+from domain.jobs import JobStatus
 
 from api.deps import limiter
 from api.schemas.fhir_bulk import BulkExportManifest, BulkExportOutputFile
@@ -241,7 +241,7 @@ async def group_export(
             server_url,
             {
                 "level": "group",
-                "resource_type": group_id,
+                "group_id": group_id,
                 "since": _since,
                 "type_filter": _type,
                 "_fhir_bulk_spec": True,

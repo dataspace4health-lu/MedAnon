@@ -48,18 +48,47 @@ GPAS_CACHE_MISSES = Counter(
     "gPAS pseudonym cache misses",
 )
 
+# Cross-chunk in-process dedup capacity exhausted.  When this counter is
+# non-zero the pipeline fell back to relying on L1/L2 cache only for dedup,
+# which still preserves correctness but increases gPAS round-trips.
+SEEN_VALUES_CAP_REACHED = Counter(
+    "medanon_seen_values_cap_reached_total",
+    "Times the in-process seen-values dedup set has reached its cap",
+)
+
+# ── NLP detection cache ──────────────────────────────────────────────────────
+
+NLP_CACHE_HITS = Counter(
+    "medanon_nlp_cache_hits_total",
+    "NLP detection cache hits (cross-run reuse)",
+)
+
+NLP_CACHE_MISSES = Counter(
+    "medanon_nlp_cache_misses_total",
+    "NLP detection cache misses (forwarded to NLP service)",
+)
+
+# ── Per-stage pipeline latency (separates fetch / nlp / gpas / write) ────────
+
+PIPELINE_STAGE_LATENCY = Histogram(
+    "medanon_pipeline_stage_duration_seconds",
+    "Wall-clock seconds spent in each pipeline stage per chunk",
+    ["stage"],  # stage: "fetch" | "actions" | "nlp" | "gpas" | "post" | "write"
+    buckets=(0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0),
+)
+
 # ── FHIR server client metrics ────────────────────────────────────────────────
 
 FHIR_CALL_COUNT = Counter(
     "medanon_fhir_calls_total",
     "Total FHIR server HTTP calls",
-    ["operation", "status"],  # status: "ok" | "error"
+    ["operation", "status", "role"],  # status: "ok" | "error"; role: "source" | "target"
 )
 
 FHIR_LATENCY = Histogram(
     "medanon_fhir_duration_seconds",
     "FHIR server HTTP call latency in seconds",
-    ["operation"],
+    ["operation", "role"],
 )
 
 # ── Async job queue metrics ───────────────────────────────────────────────────
@@ -67,6 +96,32 @@ FHIR_LATENCY = Histogram(
 JOB_QUEUE_DEPTH = Gauge(
     "medanon_job_queue_pending",
     "Number of pending messages in the Redis Streams job queue (medanon:job_stream).",
+)
+
+# ── Circuit breaker observability ─────────────────────────────────────────────
+
+# Numeric encoding lets dashboards alert on "any breaker != 0 for > 1m".
+#   0 = closed, 1 = half_open, 2 = open
+CIRCUIT_BREAKER_STATE = Gauge(
+    "medanon_circuit_breaker_state",
+    "Circuit breaker state per integration (0=closed, 1=half_open, 2=open).",
+    ["name"],
+)
+
+CIRCUIT_BREAKER_TRIPS = Counter(
+    "medanon_circuit_breaker_trips_total",
+    "Total CLOSED→OPEN transitions per circuit breaker.",
+    ["name"],
+)
+
+# ── Build / version info ──────────────────────────────────────────────────────
+
+# Set once at startup with version + git_sha labels; value is always 1.
+# Lets ops correlate metric anomalies with deployments.
+BUILD_INFO = Gauge(
+    "medanon_build_info",
+    "Anonymizer service build metadata (always 1; labels carry the data).",
+    ["version", "git_sha"],
 )
 
 # ── Worker process metrics (exposed by dedicated worker container) ────────────

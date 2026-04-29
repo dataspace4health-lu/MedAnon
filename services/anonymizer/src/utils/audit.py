@@ -8,12 +8,25 @@ Audit events are:
    append-only, queryable event store.
 3. Optionally written to a local rotating file (backward compat) when
    ``MEDANON_AUDIT_LOG_FILE`` is set.
+4. Optionally written to MinIO/S3 object storage when
+   ``MEDANON_S3_AUDIT_BUCKET`` is set.  Events are batched in memory and
+   flushed as a daily NDJSON object so the bucket can be configured with
+   object-lock (WORM) to satisfy HIPAA §164.312(b) audit integrity.
+
+MinIO/S3 audit configuration:
+  MEDANON_S3_AUDIT_BUCKET   — bucket name (enables S3 sink)
+  MEDANON_S3_ENDPOINT       — e.g. http://minio:9000 (default: AWS)
+  MEDANON_S3_ACCESS_KEY     — access key / AWS_ACCESS_KEY_ID
+  MEDANON_S3_SECRET_KEY     — secret key / AWS_SECRET_ACCESS_KEY
+  MEDANON_S3_SECURE         — "true"/"false" (TLS, default false for internal)
+  MEDANON_AUDIT_FLUSH_EVERY — flush after this many events (default: 100)
 """
 
 from __future__ import annotations
 
 import logging
 import os
+import threading
 from datetime import datetime, timezone
 from typing import Any
 
@@ -24,6 +37,85 @@ _REDIS_STREAM = "medanon:audit"
 _STREAM_MAXLEN = int(os.environ.get("MEDANON_AUDIT_STREAM_MAXLEN", "50000"))
 _redis_client = None
 _redis_checked = False
+_redis_audit_warned = False  # one-shot rate limit for Redis xadd failures
+
+# ---------------------------------------------------------------------------
+# MinIO/S3 audit sink
+# ---------------------------------------------------------------------------
+_S3_BUCKET = os.environ.get("MEDANON_S3_AUDIT_BUCKET", "")
+_S3_FLUSH_EVERY = int(os.environ.get("MEDANON_AUDIT_FLUSH_EVERY", "100"))
+_s3_client = None
+_s3_checked = False
+_s3_buffer: list[str] = []
+_s3_lock = threading.Lock()
+
+
+def _get_s3():
+    """Lazy-init MinIO client; returns None if minio package or config is missing."""
+    global _s3_client, _s3_checked
+    if _s3_checked:
+        return _s3_client
+    _s3_checked = True
+    if not _S3_BUCKET:
+        return None
+    try:
+        from minio import Minio
+
+        endpoint = os.environ.get("MEDANON_S3_ENDPOINT", "s3.amazonaws.com")
+        # Strip scheme — minio client takes host:port only
+        endpoint = endpoint.removeprefix("https://").removeprefix("http://")
+        secure = os.environ.get("MEDANON_S3_SECURE", "false").lower() in ("1", "true", "yes")
+        access_key = os.environ.get("MEDANON_S3_ACCESS_KEY", "")
+        secret_key = os.environ.get("MEDANON_S3_SECRET_KEY", "")
+        _s3_client = Minio(
+            endpoint,
+            access_key=access_key or None,
+            secret_key=secret_key or None,
+            secure=secure,
+        )
+        # Ensure bucket exists (best-effort; object-lock must be set at bucket creation)
+        if not _s3_client.bucket_exists(_S3_BUCKET):
+            _s3_client.make_bucket(_S3_BUCKET)
+        _log.info("audit_s3_connected bucket=%s", _S3_BUCKET)
+    except Exception as exc:
+        _log.warning("audit_s3_unavailable: %s — audit will not write to S3", exc)
+        _s3_client = None
+    return _s3_client
+
+
+def _flush_s3_buffer(buffer: list[str]) -> None:
+    """Upload *buffer* as a dated NDJSON object to S3. Called without _s3_lock held."""
+    s3 = _s3_client
+    if s3 is None or not buffer:
+        return
+    try:
+        import io
+
+        day = datetime.now(timezone.utc).strftime("%Y/%m/%d")
+        ts = datetime.now(timezone.utc).strftime("%H%M%S%f")
+        key = f"audit/{day}/events_{ts}.ndjson"
+        payload = "\n".join(buffer).encode()
+        s3.put_object(
+            _S3_BUCKET,
+            key,
+            io.BytesIO(payload),
+            length=len(payload),
+            content_type="application/x-ndjson",
+        )
+    except Exception as exc:
+        _log.warning("audit_s3_flush_error: %s", exc)
+
+
+def _append_to_s3(line: str) -> None:
+    """Buffer *line* and flush to S3 when batch is full."""
+    flush_buf = None
+    with _s3_lock:
+        _s3_buffer.append(line)
+        if len(_s3_buffer) >= _S3_FLUSH_EVERY:
+            flush_buf = _s3_buffer.copy()
+            _s3_buffer.clear()
+    if flush_buf:
+        _flush_s3_buffer(flush_buf)
 
 
 def _get_redis():
@@ -96,7 +188,8 @@ def emit(
         entry["request_id"] = request_id
 
     # 1. Structured log line (always -- captured by Docker/K8s log driver)
-    _log.info(_json_dumps(entry))
+    line = _json_dumps(entry)
+    _log.info(line)
 
     # 2. Redis Stream (append-only, capped)
     r = _get_redis()
@@ -108,8 +201,19 @@ def emit(
                 maxlen=_STREAM_MAXLEN,
                 approximate=True,
             )
-        except Exception:
-            pass  # Best-effort; stdout log is the authoritative record
+        except Exception as exc:
+            # Best-effort: the structured stdout log above is the authoritative
+            # record, but a silent failure hides Redis auth/network problems.
+            # Log at WARNING and rate-limit by only logging the first failure
+            # per process to avoid log spam when Redis is permanently down.
+            global _redis_audit_warned
+            if not _redis_audit_warned:
+                _log.warning("audit_redis_xadd_failed: %s", exc)
+                _redis_audit_warned = True
+
+    # 3. MinIO/S3 object storage (WORM / object-lock bucket for HIPAA audit durability)
+    if _S3_BUCKET and _get_s3() is not None:
+        _append_to_s3(line)
 
 
 def query(

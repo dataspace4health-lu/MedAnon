@@ -1,7 +1,9 @@
 """Core processing endpoints: /process, /process/ndjson, /process/raw, /process/batch."""
 
+import asyncio
 import logging
 import os
+import time
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
@@ -20,6 +22,15 @@ from api.deps import (
 )
 from api.services import stream_trailer
 from api.services.processing import ProcessingError, ProcessingService
+from api.services.scoring_helpers import (
+    _is_scoring_enabled,
+    _get_config_profile,
+    make_collector,
+    score_and_persist,
+    score_json_line,
+    persist_run,
+)
+from utils import idempotency as _idem
 
 router = APIRouter()
 logger = logging.getLogger("medanon")
@@ -55,10 +66,37 @@ async def process(
         await _validate_dynamic_settings(dynamic_settings)
     runtime_settings = _runtime_settings(settings, dynamic_settings)
 
+    # Idempotency-Key support: optional header replays a prior response when
+    # the same key + same body is seen again within the TTL window.
     try:
-        return await _service.process_resource(resource, runtime_settings)
+        idem_key = _idem.validate_key(request.headers.get("Idempotency-Key"))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    body_hash = _idem.hash_body(resource) if idem_key else ""
+    if idem_key:
+        try:
+            cached = _idem.lookup_or_conflict("/v1/process", idem_key, body_hash)
+        except KeyError:
+            raise HTTPException(
+                status_code=409,
+                detail="Idempotency-Key reused with a different request body",
+            )
+        if cached is not None:
+            return cached["body"]
+
+    t0 = time.monotonic()
+    try:
+        result = await _service.process_resource(resource, runtime_settings)
     except ProcessingError as exc:
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+    if _is_scoring_enabled():
+        asyncio.create_task(
+            score_and_persist(result, "/v1/process", runtime_settings, t0)
+        )
+    if idem_key:
+        _idem.remember("/v1/process", idem_key, body_hash, 200, result)
+    return result
 
 
 @router.post("/process/ndjson")
@@ -82,19 +120,36 @@ async def process_ndjson(
 
     lines = body.decode("utf-8").splitlines()
     runtime_settings = _runtime_settings(settings)
+    profile = _get_config_profile(runtime_settings)
 
     async def _generate():
+        collector = make_collector(profile)
         count = 0
+        error_count = 0
+        t0 = time.monotonic()
         disconnected = False
         async for line in _service.process_ndjson_lines(lines, runtime_settings):
             if await request.is_disconnected():
                 logger.info("NDJSON: client disconnected")
                 disconnected = True
                 break
+            score_json_line(collector, line, runtime_settings)
             yield line + "\n"
             count += 1
+        score = collector.aggregate() if collector else None
         if not disconnected:
-            yield stream_trailer(count) + "\n"
+            yield stream_trailer(count, score) + "\n"
+        if score is not None:
+            asyncio.create_task(persist_run(
+                endpoint="/v1/process/ndjson",
+                config_profile=profile,
+                resource_count=count,
+                error_count=score.get("error_count", 0),
+                duration_ms=int((time.monotonic() - t0) * 1000),
+                input_type="ndjson",
+                summary={"total_resources": count},
+                score=score,
+            ))
 
     return StreamingResponse(_generate(), media_type="application/x-ndjson")
 
@@ -139,7 +194,14 @@ async def process_raw(
             await _validate_dynamic_settings(dynamic_settings)
         runtime_settings = _runtime_settings(settings, dynamic_settings)
 
+        t0 = time.monotonic()
         result = await _service.process_resource(payload, runtime_settings)
+
+        if _is_scoring_enabled():
+            asyncio.create_task(
+                score_and_persist(result, "/v1/process/raw", runtime_settings, t0)
+            )
+
         text, media_type = serialize_payload(result, out_format=output_format)
         return Response(content=text, media_type=media_type)
     except ProcessingError as exc:
@@ -191,13 +253,16 @@ async def process_batch(
         ) from exc
 
     runtime_settings = _runtime_settings(settings)
+    profile = _get_config_profile(runtime_settings)
 
     # Bundles are processed as a whole so cross-resource reference rewriting
     # (pre/post ID snapshot + _rewrite_references) is preserved.
     is_bundle = isinstance(payload, dict) and payload.get("resourceType") == "Bundle"
 
     async def _generate():
+        collector = make_collector(profile)
         count = 0
+        t0 = time.monotonic()
         disconnected = False
         if is_bundle:
             async for line in _service.process_bundle_stream(payload, runtime_settings):
@@ -205,6 +270,7 @@ async def process_batch(
                     logger.info("process_batch: client disconnected")
                     disconnected = True
                     break
+                score_json_line(collector, line, runtime_settings)
                 yield line + "\n"
                 count += 1
         else:
@@ -216,9 +282,22 @@ async def process_batch(
                     logger.info("process_batch: client disconnected")
                     disconnected = True
                     break
+                score_json_line(collector, line, runtime_settings)
                 yield line + "\n"
                 count += 1
+        score = collector.aggregate() if collector else None
         if not disconnected:
-            yield stream_trailer(count) + "\n"
+            yield stream_trailer(count, score) + "\n"
+        if score is not None:
+            asyncio.create_task(persist_run(
+                endpoint="/v1/process/batch",
+                config_profile=profile,
+                resource_count=count,
+                error_count=score.get("error_count", 0),
+                duration_ms=int((time.monotonic() - t0) * 1000),
+                input_type="Bundle" if is_bundle else "batch",
+                summary={"total_resources": count},
+                score=score,
+            ))
 
     return StreamingResponse(_generate(), media_type="application/x-ndjson")

@@ -26,6 +26,8 @@ import urllib.request
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from api.deps import limiter
+
 router = APIRouter()
 _log = logging.getLogger("medanon")
 
@@ -94,6 +96,7 @@ async def smart_configuration(request: Request) -> JSONResponse:
 
 
 @router.post("/oauth2/introspect")
+@limiter.limit("5/minute")
 async def introspect_token(
     request: Request,
     token: str = Form(...),

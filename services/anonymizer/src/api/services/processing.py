@@ -15,6 +15,12 @@ logger = logging.getLogger("medanon")
 
 _REQUEST_TIMEOUT = float(os.environ.get("MEDANON_REQUEST_TIMEOUT_SEC", "300"))
 
+# Auto-enable manifest attachment when scoring is on
+try:
+    from pipeline.scoring.constants import SCORING_ENABLED as _SCORING_ON
+except ImportError:
+    _SCORING_ON = False
+
 
 class ProcessingError(Exception):
     """Domain error with an HTTP-status hint for the router layer."""
@@ -44,7 +50,9 @@ class ProcessingService:
         logger.info("Processing request: resourceType=%s", resource_type)
         try:
             result = await asyncio.wait_for(
-                asyncio.to_thread(process_data, resource, settings),
+                asyncio.to_thread(
+                    process_data, resource, settings, None, _SCORING_ON
+                ),
                 timeout=_REQUEST_TIMEOUT,
             )
             logger.info("Processing complete: resourceType=%s", resource_type)
@@ -129,7 +137,10 @@ class ProcessingService:
             chunk_end = min(chunk_start + _BATCH_SIZE, len(valid_resources))
             chunk = valid_resources[chunk_start:chunk_end]
             try:
-                results = await asyncio.to_thread(process_data_batch, chunk, settings)
+                results = await asyncio.to_thread(
+                    process_data_batch, chunk, settings,
+                    None, _SCORING_ON,
+                )
                 for i, r in enumerate(results):
                     valid_results[chunk_start + i] = _json_dumps(r)
             except GpasUnavailableError as exc:
@@ -155,7 +166,10 @@ class ProcessingService:
                 for idx, res in enumerate(chunk):
                     vi = chunk_start + idx
                     try:
-                        r = await asyncio.to_thread(process_data_batch, [res], settings)
+                        r = await asyncio.to_thread(
+                            process_data_batch, [res], settings,
+                            None, _SCORING_ON,
+                        )
                         valid_results[vi] = _json_dumps(r[0])
                     except GpasUnavailableError as gexc:
                         logger.error(
@@ -212,7 +226,10 @@ class ProcessingService:
         for chunk_start in range(0, len(resources), _BATCH_SIZE):
             chunk = resources[chunk_start : chunk_start + _BATCH_SIZE]
             try:
-                results = await asyncio.to_thread(process_data_batch, chunk, settings)
+                results = await asyncio.to_thread(
+                    process_data_batch, chunk, settings,
+                    None, _SCORING_ON,
+                )
                 for result in results:
                     yield _json_dumps(result)
             except GpasUnavailableError as exc:
@@ -235,7 +252,8 @@ class ProcessingService:
                 for idx, res in enumerate(chunk):
                     try:
                         result = await asyncio.to_thread(
-                            process_data_batch, [res], settings
+                            process_data_batch, [res], settings,
+                            None, _SCORING_ON,
                         )
                         yield _json_dumps(result[0])
                     except GpasUnavailableError as gexc:

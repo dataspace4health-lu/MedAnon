@@ -24,10 +24,12 @@ class PostgresSubscriptionStore:
         self._pool = pool
 
     def _get_conn(self):
-        return self._pool.getconn()
+        from integrations.postgres.pool import get_conn
+        return get_conn(self._pool)
 
     def _put_conn(self, conn) -> None:
-        self._pool.putconn(conn)
+        from integrations.postgres.pool import safe_putconn
+        safe_putconn(self._pool, conn)
 
     # ------------------------------------------------------------------
     # Public API (same interface as SqliteSubscriptionStore)

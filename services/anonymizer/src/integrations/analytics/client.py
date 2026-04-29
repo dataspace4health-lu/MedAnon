@@ -9,7 +9,9 @@ from __future__ import annotations
 import os
 from urllib.parse import urlencode
 
-from integrations.http_client import proxy_post_json, proxy_post_raw
+import urllib3
+
+from integrations.http_client import proxy_post_json, proxy_post_raw, ProxyTimeoutError
 from utils.circuit_breaker import CircuitBreaker
 
 _analytics_cb = CircuitBreaker(
@@ -19,6 +21,20 @@ _analytics_cb = CircuitBreaker(
         os.environ.get("ANALYTICS_CB_RECOVERY_TIMEOUT_SEC", "30")
     ),
     window_sec=float(os.environ.get("ANALYTICS_CB_WINDOW_SEC", "60")),
+)
+
+# Separate connect/read timeouts (operator-tunable). The previous scalar
+# timeout coupled both; SLO-driven systems generally want a tight connect
+# budget (DNS + TCP handshake) and a generous read budget (analysis time).
+_CONNECT_TIMEOUT_SEC = float(os.environ.get("ANALYTICS_TIMEOUT_CONNECT_SEC", "5"))
+_RISK_READ_TIMEOUT_SEC = float(os.environ.get("ANALYTICS_TIMEOUT_READ_SEC", "60"))
+_SYNTHETIC_READ_TIMEOUT_SEC = float(
+    os.environ.get("ANALYTICS_SYNTHETIC_TIMEOUT_READ_SEC", "120")
+)
+
+_RISK_TIMEOUT = urllib3.Timeout(connect=_CONNECT_TIMEOUT_SEC, read=_RISK_READ_TIMEOUT_SEC)
+_SYNTHETIC_TIMEOUT = urllib3.Timeout(
+    connect=_CONNECT_TIMEOUT_SEC, read=_SYNTHETIC_READ_TIMEOUT_SEC,
 )
 
 
@@ -37,9 +53,14 @@ def proxy_analyse_risk(body: bytes, content_type: str) -> dict:
         raise ValueError("Analytics service unavailable — circuit breaker OPEN")
     url = _analytics_url("/v1/analyse/risk")
     try:
-        result = proxy_post_json(url, body, content_type=content_type, timeout=60)
+        result = proxy_post_json(url, body, content_type=content_type, timeout=_RISK_TIMEOUT)
+        if not isinstance(result, dict):
+            raise ValueError(f"Analytics returned {type(result).__name__}, expected dict")
         _analytics_cb.record_success()
         return result
+    except ProxyTimeoutError:
+        _analytics_cb.record_timeout()
+        raise
     except Exception:
         _analytics_cb.record_failure()
         raise
@@ -56,9 +77,14 @@ def proxy_generate_synthetic(body: bytes, content_type: str, params: dict) -> by
     qs = urlencode({k: v for k, v in params.items() if v is not None})
     url = _analytics_url(f"/v1/generate/synthetic?{qs}")
     try:
-        result = proxy_post_raw(url, body, content_type=content_type, timeout=120)
+        result = proxy_post_raw(
+            url, body, content_type=content_type, timeout=_SYNTHETIC_TIMEOUT,
+        )
         _analytics_cb.record_success()
         return result
+    except ProxyTimeoutError:
+        _analytics_cb.record_timeout()
+        raise
     except Exception:
         _analytics_cb.record_failure()
         raise

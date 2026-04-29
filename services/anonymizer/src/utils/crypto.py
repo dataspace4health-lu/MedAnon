@@ -1,12 +1,15 @@
 import os
 import secrets
 import threading
+from collections import OrderedDict
 
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives import hashes, serialization
 
-# RSA key cache: {resolved_path: (mtime, key_object)}
-_key_cache = {}
+# RSA key cache: bounded LRU keyed by resolved path → (mtime, key_object).
+# Capped to prevent unbounded growth in deployments that rotate keys.
+_KEY_CACHE_MAX = int(os.environ.get("MEDANON_RSA_KEY_CACHE_MAX", "32"))
+_key_cache: "OrderedDict[str, tuple]" = OrderedDict()
 _key_cache_lock = threading.Lock()
 
 
@@ -16,11 +19,17 @@ def _load_key(resolved_path, import_fn):
     with _key_cache_lock:
         cached = _key_cache.get(resolved_path)
         if cached and cached[0] == mtime:
+            # LRU touch
+            _key_cache.move_to_end(resolved_path)
             return cached[1]
     with open(resolved_path, "rb") as fin:
         key = import_fn(fin.read())
     with _key_cache_lock:
         _key_cache[resolved_path] = (mtime, key)
+        _key_cache.move_to_end(resolved_path)
+        # Evict oldest entries if we exceeded the cap.
+        while len(_key_cache) > _KEY_CACHE_MAX:
+            _key_cache.popitem(last=False)
     return key
 
 

@@ -56,10 +56,12 @@ class PostgresConfigStore:
         self._seed_system_configs()
 
     def _get_conn(self):
-        return self._pool.getconn()
+        from integrations.postgres.pool import get_conn
+        return get_conn(self._pool)
 
     def _put_conn(self, conn) -> None:
-        self._pool.putconn(conn)
+        from integrations.postgres.pool import safe_putconn
+        safe_putconn(self._pool, conn)
 
     def _seed_system_configs(self) -> None:
         """Insert system configs if not already present (idempotent)."""

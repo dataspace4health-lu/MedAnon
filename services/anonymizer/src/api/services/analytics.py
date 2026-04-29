@@ -4,7 +4,7 @@ import asyncio
 import logging
 import os
 
-from medanon_core.analytics.risk import assess_risk_resources
+from analytics.risk import assess_risk_resources
 from pipeline.io_formats import parse_payload_bytes
 
 logger = logging.getLogger("medanon")

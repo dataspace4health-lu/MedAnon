@@ -22,7 +22,7 @@ import re
 import yaml
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import PlainTextResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from api.auth import AuthContext
 
@@ -60,11 +60,39 @@ _VALID_ACTIONS = frozenset(
 # ---------------------------------------------------------------------------
 
 
+# Keys that reference filesystem paths — must come from env vars, never from
+# API callers.  Allowing these inline would enable path-traversal via the
+# encrypt/decrypt actions which call open() on the resolved path.
+_BLOCKED_PARAM_KEYS = frozenset({"public_key", "private_key", "key_file"})
+
+# Scalar types allowed as param values.  Nested dicts/lists are blocked to
+# prevent injection of complex structures that action handlers don't expect.
+_ALLOWED_PARAM_VALUE_TYPES = (str, int, float, bool)
+
+
 class RuleIn(BaseModel):
     match: str
     action: str
     params: dict | None = None
     name: str | None = None
+
+    @field_validator("params")
+    @classmethod
+    def validate_params(cls, v: dict | None) -> dict | None:
+        if v is None:
+            return v
+        for key, value in v.items():
+            if key in _BLOCKED_PARAM_KEYS:
+                raise ValueError(
+                    f"'{key}' must be configured via environment variable, "
+                    "not as an inline rule parameter"
+                )
+            if value is not None and not isinstance(value, _ALLOWED_PARAM_VALUE_TYPES):
+                raise ValueError(
+                    f"param '{key}' has unsupported type {type(value).__name__!r}; "
+                    "only str, int, float, bool values are allowed"
+                )
+        return v
 
 
 class ConfigCreateRequest(BaseModel):

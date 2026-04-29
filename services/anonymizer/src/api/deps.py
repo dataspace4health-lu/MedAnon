@@ -53,6 +53,25 @@ _RATE_LIMIT_ENABLED = os.environ.get("MEDANON_RATE_LIMIT_ENABLED", "true").lower
     "yes",
 )
 
+
+def _get_client_ip(request) -> str:
+    """Return the real client IP for rate-limiting purposes.
+
+    Prefers X-Real-IP (set by the trusted UI nginx to $remote_addr, which cannot
+    be spoofed by the client).  Falls back to the direct connection IP from ASGI
+    scope.  Explicitly ignores X-Forwarded-For because its first element can be
+    forged by a client to bypass rate limiting.
+    """
+    real_ip = request.headers.get("x-real-ip", "").strip()
+    if real_ip:
+        return real_ip
+    # ASGI direct-connection IP — safe when no trusted proxy is in front.
+    client = getattr(request, "client", None)
+    if client and client.host:
+        return client.host
+    return "unknown"
+
+
 # Use Redis-backed storage when available so rate-limit counters are shared
 # across all anonymizer replicas (required for correct horizontal scaling).
 # Falls back to in-process memory when MEDANON_REDIS_URL is not set.
@@ -63,7 +82,7 @@ _limiter_storage_uri = (
     else "memory://"
 )
 limiter = Limiter(
-    key_func=get_remote_address,
+    key_func=_get_client_ip,
     enabled=_RATE_LIMIT_ENABLED,
     storage_uri=_limiter_storage_uri,
 )

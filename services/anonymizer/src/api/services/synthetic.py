@@ -5,14 +5,14 @@ import logging
 import os
 from dataclasses import dataclass, field
 
-from medanon_core.analytics.synthetic import (
+from analytics.synthetic import (
     generate_synthetic_conditions,
     generate_synthetic_patients,
 )
 from pipeline.io_formats import parse_payload_bytes
 
 try:
-    from medanon_core.analytics.synthetic_sdv import (
+    from analytics.synthetic_sdv import (
         SDV_AVAILABLE,
         generate_synthetic_conditions_sdv,
         generate_synthetic_patients_sdv,

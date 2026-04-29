@@ -4,10 +4,16 @@ When MEDANON_API_KEY is set:
   - X-API-Key header must match on all non-open endpoints.
   - RBAC is enforced per-endpoint via roles (admin > analyst > viewer).
 
-When MEDANON_API_KEY is not set:
+
+When MEDANON_APP_DB_URL is set (PostgreSQL), per-client API keys are looked up
+from medanon.api_keys first; the MEDANON_API_KEY env-var key is a fallback for
+single-instance deployments without a database.
+
+When neither is set:
   - Open access (all users get admin role).
 """
 
+import hashlib
 import hmac
 import json
 import logging
@@ -26,6 +32,18 @@ log = logging.getLogger("medanon.auth")
 # Configuration from env
 # ---------------------------------------------------------------------------
 _API_KEY = os.environ.get("MEDANON_API_KEY", "").strip()
+
+# ---------------------------------------------------------------------------
+# Per-client API key store (set by api/main.py _startup() when Postgres available)
+# ---------------------------------------------------------------------------
+_api_key_store = None
+
+
+def init_api_key_store(store) -> None:
+    """Wire in the PostgresApiKeyStore.  Called once from _startup()."""
+    global _api_key_store
+    _api_key_store = store
+
 
 if not _API_KEY:
     log.warning(
@@ -75,6 +93,19 @@ ENDPOINT_ROLES: dict[str, str] = {
     "/fhir/Subscription": "admin",
     # SMART token introspection
     "/oauth2/introspect": "analyst",
+    # AI agent endpoints
+    "/v1/ai/status": "viewer",
+    "/v1/ai/generate-config": "admin",
+    "/v1/ai/detect-pii": "analyst",
+    "/v1/ai/explain": "analyst",
+    "/v1/ai/compliance": "analyst",
+    # Processing run history
+    "/v1/processing-runs": "analyst",
+    "/v1/processing-runs/stats": "analyst",
+    # BFF dashboard aggregation
+    "/v1/dashboard/summary": "viewer",
+    # Per-client API key management (admin-only)
+    "/v1/api-keys": "admin",
 }
 
 # Prefix-based role mapping for parameterized paths (e.g. /v1/jobs/{job_id}).
@@ -85,16 +116,25 @@ ENDPOINT_ROLE_PREFIXES: dict[str, str] = {
     "/v1/jobs/bulk-import": "admin",  # uploads to target FHIR server — requires admin
     "/v1/jobs/batch-patient-export": "analyst",
     "/v1/jobs/cohort": "analyst",
+    "/v1/jobs/dead": "analyst",  # DLQ list — read-only triage view
     "/v1/jobs/": "analyst",  # covers /v1/jobs/{id} and /v1/jobs/{id}/result
     "/v1/configs/": "viewer",  # covers /v1/configs/{name} — writes enforce admin in router
     "/fhir/Group/": "admin",  # /fhir/Group/{id}/$export
     "/fhir/export-status/": "analyst",  # /fhir/export-status/{job_id}
     "/fhir/Subscription/": "analyst",  # /fhir/Subscription/{id} CRUD
+    "/v1/ai/": "analyst",  # AI agent endpoints (generate-config enforced as admin in ENDPOINT_ROLES)
+    "/v1/processing-runs/": "analyst",  # covers /v1/processing-runs/{id}
+    "/v1/api-keys/": "admin",           # covers /v1/api-keys/{id} and /v1/api-keys/{id}/rotate
 }
 
 
 def get_required_role(path: str) -> str | None:
     """Return the minimum required role for *path*, or None if unrestricted."""
+    # Suffix-based admin overrides for destructive parameterized routes that
+    # share a prefix with lower-privilege endpoints (e.g. ``/v1/jobs/`` is
+    # ``analyst`` but ``/v1/jobs/{id}/requeue`` must be ``admin``).
+    if path.startswith("/v1/jobs/") and path.endswith("/requeue"):
+        return "admin"
     role = ENDPOINT_ROLES.get(path)
     if role is None:
         for prefix, r in ENDPOINT_ROLE_PREFIXES.items():
@@ -140,27 +180,47 @@ def get_auth_context(request: Request) -> AuthContext:
     """Resolve auth from the request; raises HTTPException(401) on failure.
 
     Auth priority:
-    1. X-API-Key header (API key mode)
-    2. Authorization: Bearer <token> (SMART bearer token)
-    3. Open access when MEDANON_API_KEY is not configured
+    1. Per-client DB key (when PostgresApiKeyStore is wired via init_api_key_store)
+    2. Single env-var API key (MEDANON_API_KEY fallback)
+    3. Authorization: Bearer <token> (SMART bearer token)
+    4. Open access when no auth is configured
     """
     api_key_header = request.headers.get("X-API-Key", "")
     bearer_token = _extract_bearer(request)
+    _auth_required = (_api_key_store is not None) or bool(_API_KEY)
 
-    if _API_KEY:
-        # API-key auth
-        if hmac.compare_digest(api_key_header, _API_KEY):
+    # --- DB-backed per-client key lookup ---
+    if _api_key_store is not None and api_key_header:
+        key_hash = hashlib.sha256(api_key_header.encode()).hexdigest()
+        row = _api_key_store.lookup_by_hash(key_hash)
+        if row:
+            try:
+                _api_key_store.touch_last_used(row["id"])
+            except Exception:
+                pass  # best-effort — never block auth
             return AuthContext(
-                subject="api-key-user",
-                roles=frozenset({"admin"}),
-                auth_method="api-key",
+                subject=row["client_id"],
+                roles=frozenset({row["role"]}),
+                auth_method="api-key-db",
             )
-        # SMART bearer token auth
-        if bearer_token:
-            return _resolve_bearer_context(bearer_token)
+
+    # --- Env-var single-key fallback ---
+    if _API_KEY and api_key_header and hmac.compare_digest(api_key_header, _API_KEY):
+        return AuthContext(
+            subject="api-key-user",
+            roles=frozenset({"admin"}),
+            auth_method="api-key",
+        )
+
+    # --- SMART bearer token ---
+    if bearer_token:
+        return _resolve_bearer_context(bearer_token)
+
+    # --- Enforce auth when configured ---
+    if _auth_required:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-    # Open access — no auth configured
+    # --- Open access ---
     return AuthContext(
         subject="anonymous", roles=frozenset({"admin"}), auth_method="none"
     )
