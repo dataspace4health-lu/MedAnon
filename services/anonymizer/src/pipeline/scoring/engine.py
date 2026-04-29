@@ -57,11 +57,20 @@ def compute_composite(
         privacy_score = 1.0
     else:
         privacy_score = 1.0 - (privacy.risk_score / privacy.threshold)
+        # When risk_score exactly equals threshold, privacy.passed=True (gate uses <=)
+        # but privacy_score collapses to 0.0 → composite = 0 → spurious FAIL.
+        # Preserve a minimal positive contribution so the composite decision
+        # matches the gate: a resource that barely passed privacy should not
+        # be reported as FAIL at the aggregate level.
+        if privacy.passed and privacy_score <= 0.0:
+            privacy_score = 0.001
     raw = privacy_score * utility.score * quality.score
+    # `composite` is on the 0-100 scale (already multiplied by 100). Persist it
+    # as-is in `score.avg_composite`; the React UI does Math.round(value) + "%"
+    # — do NOT multiply by 100 again at the display layer.
     composite = round(raw * 100, 1)
-    # A composite of exactly 0.0 means at least one dimension is zero (e.g.
-    # utility or quality is completely absent) — return FAIL even when privacy
-    # passes, since a score of zero is not a meaningful pass.
+    # A composite of exactly 0.0 means utility or quality is completely absent —
+    # return FAIL since a zero score is not a meaningful pass.
     decision = "PASS" if composite > 0.0 else "FAIL"
     return composite, decision
 
@@ -75,7 +84,66 @@ def score_resource(
     error_count: int = 0,
     total_count: int = 1,
 ) -> ScoreResult:
-    """Score a single de-identified resource."""
+    """Score a single de-identified resource.
+
+    When ``SCORING_SERVICE_URL`` is set the call is delegated to the scoring
+    microservice. Any transport/circuit-breaker failure falls back to the
+    in-process engine so privacy assessments never silently disappear.
+    """
+    remote = _get_remote_client()
+    if remote is not None:
+        try:
+            return remote.score(
+                original=original,
+                deidentified=deidentified,
+                manifest_entries=manifest_entries,
+                config_profile=config_profile,
+                error_count=error_count,
+                total_count=total_count,
+            )
+        except Exception as exc:  # noqa: BLE001 — degrade gracefully
+            _log.warning("remote scoring failed, falling back to local: %s", exc)
+
+    return _score_resource_local(
+        original,
+        deidentified,
+        manifest_entries,
+        settings,
+        config_profile,
+        error_count,
+        total_count,
+    )
+
+
+def _get_remote_client():
+    """Lazy lookup of the remote scoring client (env-driven, cached)."""
+    global _REMOTE_CLIENT, _REMOTE_CLIENT_URL
+    url = os.environ.get("SCORING_SERVICE_URL", "").strip()
+    if not url:
+        _REMOTE_CLIENT = None
+        _REMOTE_CLIENT_URL = ""
+        return None
+    if _REMOTE_CLIENT is None or _REMOTE_CLIENT_URL != url:
+        from integrations.scoring import get_remote_scoring_client
+        _REMOTE_CLIENT = get_remote_scoring_client()
+        _REMOTE_CLIENT_URL = url
+    return _REMOTE_CLIENT
+
+
+_REMOTE_CLIENT = None
+_REMOTE_CLIENT_URL = ""
+
+
+def _score_resource_local(
+    original: dict | None,
+    deidentified: dict,
+    manifest_entries: list[dict],
+    settings: Any = None,
+    config_profile: str = "auto",
+    error_count: int = 0,
+    total_count: int = 1,
+) -> ScoreResult:
+    """In-process implementation. Always available regardless of env config."""
     t0 = time.monotonic()
 
     privacy = _privacy_eval.evaluate(original, deidentified, manifest_entries, settings)
@@ -151,9 +219,11 @@ class ScoreCollector:
         "_error_count",
         "_total_count",
         "_config_profile",
+        "_lock",
     )
 
     def __init__(self, config_profile: str = "auto") -> None:
+        import threading
         self._pass_count: int = 0
         self._fail_count: int = 0
         self._composite_sum: float = 0.0
@@ -166,6 +236,11 @@ class ScoreCollector:
         self._error_count: int = 0
         self._total_count: int = 0
         self._config_profile = config_profile
+        # Guards all mutable accumulators below.  ``record_resource`` and
+        # ``aggregate`` may run concurrently from the parallel finalize stage
+        # in the pipeline; without this lock, increments and the reservoir
+        # sample would race and lose updates.
+        self._lock = threading.Lock()
 
     def record_resource(
         self,
@@ -175,12 +250,19 @@ class ScoreCollector:
         settings: Any = None,
     ) -> ScoreResult:
         """Score one resource and accumulate running totals."""
-        self._total_count += 1
-        if "error" in deidentified:
-            self._error_count += 1
-            self._fail_count += 1
+        with self._lock:
+            self._total_count += 1
+            if "error" in deidentified:
+                self._error_count += 1
+                self._fail_count += 1
+                self._composite_sum += 0.0
+                self._min_composite = min(self._min_composite, 0.0)
+                _is_error = True
+            else:
+                _is_error = False
+        if _is_error:
             # Create a minimal FAIL result for error resources
-            result = ScoreResult(
+            return ScoreResult(
                 composite=0.0,
                 decision="FAIL",
                 privacy=PrivacyDecision(
@@ -206,10 +288,9 @@ class ScoreCollector:
                 scored_at=ScoreResult.now_iso(),
                 config_profile=self._config_profile,
             )
-            self._composite_sum += 0.0
-            self._min_composite = min(self._min_composite, 0.0)
-            return result
 
+        # Heavy scoring is intentionally outside the lock to avoid serialising
+        # CPU-bound work; only the accumulation below is critical-section.
         result = score_resource(
             original,
             deidentified,
@@ -218,44 +299,42 @@ class ScoreCollector:
             self._config_profile,
         )
 
-        # Accumulate running totals
-        self._composite_sum += result.composite
-        self._min_composite = min(self._min_composite, result.composite)
-        if result.decision == "PASS":
-            self._pass_count += 1
-            if result.utility:
-                self._utility_sum += result.utility.score
-            if result.quality:
-                self._quality_sum += result.quality.score
-        else:
-            self._fail_count += 1
-
-        # Accumulate Patient QI tuples for batch-level k-anonymity (reservoir sampling).
-        # Only the 3 quasi-identifier fields are retained — not the full dict —
-        # to bound memory usage (~100 bytes/patient instead of ~5 KB).
-        if deidentified.get("resourceType") == "Patient":
-            self._patient_seen += 1
-            try:
-                from medanon_core.analytics.risk import _extract_patient_qi
-                qi = _extract_patient_qi(deidentified)
-            except ImportError:
-                qi = ("", "", "")
-            if len(self._patient_qis) < _MAX_PATIENTS:
-                self._patient_qis.append(qi)
-                self._patient_manifests.append(manifest_entries)
+        with self._lock:
+            self._composite_sum += result.composite
+            self._min_composite = min(self._min_composite, result.composite)
+            if result.decision == "PASS":
+                self._pass_count += 1
+                if result.utility:
+                    self._utility_sum += result.utility.score
+                if result.quality:
+                    self._quality_sum += result.quality.score
             else:
-                # Reservoir sampling: replace a random element with probability
-                # _MAX_PATIENTS / _patient_seen to maintain a uniform subsample.
-                j = random.randrange(self._patient_seen)
-                if j < _MAX_PATIENTS:
-                    self._patient_qis[j] = qi
-                    self._patient_manifests[j] = manifest_entries
+                self._fail_count += 1
+
+            # Accumulate Patient QI tuples for batch-level k-anonymity
+            # (reservoir sampling).
+            if deidentified.get("resourceType") == "Patient":
+                self._patient_seen += 1
+                try:
+                    from analytics.risk import _extract_patient_qi
+                    qi = _extract_patient_qi(deidentified)
+                except ImportError:
+                    qi = ("", "", "")
+                if len(self._patient_qis) < _MAX_PATIENTS:
+                    self._patient_qis.append(qi)
+                    self._patient_manifests.append(manifest_entries)
+                else:
+                    j = random.randrange(self._patient_seen)
+                    if j < _MAX_PATIENTS:
+                        self._patient_qis[j] = qi
+                        self._patient_manifests[j] = manifest_entries
 
         return result
 
     def record_error(self) -> None:
-        self._error_count += 1
-        self._total_count += 1
+        with self._lock:
+            self._error_count += 1
+            self._total_count += 1
 
     def aggregate(self) -> dict:
         """Produce batch-level aggregate score with full k-anonymity."""

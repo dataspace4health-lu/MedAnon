@@ -18,30 +18,11 @@ from typing import Any
 from utils.json_fast import loads as _json_loads
 from pipeline.scoring.engine import score_resource
 from pipeline.scoring.audit import ScoreAuditCollector
-from pipeline.manifest import MANIFEST_SYSTEM
+from pipeline.manifest import MANIFEST_SYSTEM, extract_manifest_entries as _extract_manifest_entries
 
 logger = logging.getLogger("medanon")
 
 _OUTPUT_DIR = os.environ.get("MEDANON_OUTPUT_DIR", "/output")
-
-
-def _extract_manifest_entries(resource: dict) -> list[dict]:
-    """Extract transformation manifest entries from resource meta.tag."""
-    meta = resource.get("meta")
-    if not meta or not isinstance(meta, dict):
-        return []
-    tags = meta.get("tag", [])
-    for tag in tags:
-        if isinstance(tag, dict) and tag.get("system") == MANIFEST_SYSTEM:
-            display = tag.get("display", "")
-            if display:
-                try:
-                    entries = _json_loads(display)
-                    if isinstance(entries, list):
-                        return entries
-                except (ValueError, TypeError):
-                    pass
-    return []
 
 
 class ScoringService:
@@ -72,8 +53,40 @@ class ScoringService:
         manifest_entries: list[dict],
         config_profile: str = "auto",
         settings: Any = None,
+        include_audit: bool = False,
     ) -> dict:
-        """Score a single resource and return the result as a dict."""
+        """Score a single resource and return the result as a dict.
+
+        When ``include_audit=True`` the response includes an ``audit_report``
+        field with the same Markdown report that bulk-export jobs produce,
+        scoped to this single resource.
+        """
+        if include_audit:
+            import datetime as _dt
+
+            scored_at = (
+                _dt.datetime.now(_dt.timezone.utc)
+                .isoformat()
+                .replace("+00:00", "Z")
+            )
+            collector = ScoreAuditCollector(
+                config_profile=config_profile, scored_at=scored_at
+            )
+            result = collector.record_resource(
+                original=original,
+                deidentified=deidentified,
+                manifest_entries=manifest_entries,
+                settings=settings,
+            )
+            result_dict = result.to_dict()
+            try:
+                result_dict["audit_report"] = collector.generate_report(
+                    settings=settings
+                )
+            except Exception as exc:
+                logger.debug("score_audit_report_failed: %s", exc)
+            return result_dict
+
         result = score_resource(
             original=original,
             deidentified=deidentified,
@@ -95,7 +108,7 @@ class ScoringService:
         import pipeline.jobs.store as _store_mod
         from pipeline.jobs.checkpoint import save_checkpoint
         from integrations.storage import get_result_storage
-        from medanon_core.domain import JobNotFound, JobNotComplete, JobStatus
+        from domain.jobs import JobNotFound, JobNotComplete, JobStatus
 
         store = _store_mod._job_store
         if store is None:
@@ -209,7 +222,7 @@ class ScoringService:
     def get_job_score(self, job_id: str) -> dict:
         """Return cached score summary for a job, or None if not yet scored."""
         import pipeline.jobs.store as _store_mod
-        from medanon_core.domain import JobNotFound
+        from domain.jobs import JobNotFound
 
         store = _store_mod._job_store
         if store is None:
@@ -245,7 +258,7 @@ class ScoringService:
         audit file was lost.  Raises ``JobNotFound`` when the job is unknown.
         """
         import pipeline.jobs.store as _store_mod
-        from medanon_core.domain import JobNotFound
+        from domain.jobs import JobNotFound
 
         store = _store_mod._job_store
         if store is None:
