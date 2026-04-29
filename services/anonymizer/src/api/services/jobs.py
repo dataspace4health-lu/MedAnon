@@ -3,7 +3,7 @@
 import json
 import logging
 
-from medanon_core.domain import (  # noqa: F401 — re-exported for routers
+from domain.jobs import (  # noqa: F401 — re-exported for routers
     JobNotComplete,
     JobNotFound,
     JobResultMissing,
@@ -25,8 +25,12 @@ class JobService:
 
     def _job_to_dict(self, job) -> dict:
         checkpoint = job.checkpoint_data or {}
-        # Support both old-style (lines_written) and staged (processed) checkpoint keys
-        processed = checkpoint.get("processed", checkpoint.get("lines_written", 0))
+        # "uploaded" is set by bulk-import to count only successful uploads.
+        # Export jobs use "lines_written" (resources written to NDJSON).
+        # Fall back through all keys for backward compatibility.
+        processed = checkpoint.get(
+            "uploaded", checkpoint.get("processed", checkpoint.get("lines_written", 0))
+        )
         params = getattr(job, "params", None) or {}
         return {
             "job_id": job.id,
@@ -41,6 +45,8 @@ class JobService:
             "phase": checkpoint.get("phase", "queued"),
             "summary": checkpoint.get("summary"),
             "config_profile": params.get("config_profile", "auto"),
+            "upload_errors": checkpoint.get("errors", 0),
+            "upload_error_details": checkpoint.get("error_details", []),
         }
 
     def submit_bulk_export(self, server_url: str, params: dict) -> dict:
@@ -93,9 +99,30 @@ class JobService:
             raise JobNotFound()
         if job.status.value != "done":
             raise JobNotComplete(job.status.value)
-        if not job.result_path:
-            raise JobResultMissing()
         from integrations.storage import get_result_storage
+
+        # Recovery path: an executor may have written the NDJSON to disk but
+        # crashed before persisting ``result_path`` (historical bug in the
+        # batch-patient-export staged executor, now fixed). When the canonical
+        # ``<MEDANON_OUTPUT_DIR>/{job_id}.ndjson`` file exists, surface it
+        # rather than returning HTTP 410 to the client.
+        if not job.result_path:
+            import os
+            canonical = os.path.join(
+                os.environ.get("MEDANON_OUTPUT_DIR", "/output"),
+                f"{job_id}.ndjson",
+            )
+            if get_result_storage().exists(canonical):
+                # Persist the discovered path back to the job store so future
+                # lookups don't repeat the filesystem probe.
+                job.result_path = canonical
+                try:
+                    store.update(job)
+                except Exception:
+                    logger.debug("backfill_result_path_persist_failed job=%s", job_id, exc_info=True)
+                logger.info("backfill_result_path job=%s path=%s", job_id, canonical)
+                return canonical
+            raise JobResultMissing()
 
         if not get_result_storage().exists(job.result_path):
             raise JobResultMissing()
@@ -143,6 +170,40 @@ class JobService:
                 "config_profile": config_profile,
             },
         )
+        store.notify_new_job(job.id)
+        return self._job_to_dict(job)
+
+    def requeue_dead_job(self, job_id: str) -> dict:
+        """Manually rescue a poisoned job from the DLQ.
+
+        Resets ``status`` to PENDING and clears the ``_retry_count`` checkpoint
+        so the worker gives the job a fresh budget.  Caller (admin) accepts
+        responsibility for the retry — typically after fixing the upstream
+        cause (config bug, gPAS outage, malformed input).
+
+        Raises:
+            JobNotFound: if the job does not exist.
+            ValueError: if the job is not in DEAD status (use ``cancel`` for
+                pending/running jobs; nothing to do for done/error/cancelled).
+        """
+        from domain.jobs import JobStatus
+
+        store = self._get_store()
+        job = store.get(job_id)
+        if job is None:
+            raise JobNotFound()
+        if job.status != JobStatus.DEAD:
+            raise ValueError(
+                f"Job is not in DLQ (status={job.status.value}); only "
+                f"'dead' jobs can be requeued"
+            )
+        # Clear retry counter so the rescue gets a full budget.
+        cp = dict(job.checkpoint_data or {})
+        cp.pop("_retry_count", None)
+        job.checkpoint_data = cp
+        job.status = JobStatus.PENDING
+        job.error = None
+        store.update(job)
         store.notify_new_job(job.id)
         return self._job_to_dict(job)
 

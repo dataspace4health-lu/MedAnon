@@ -16,6 +16,7 @@ Backward-compat:   Activated only when ``MEDANON_STAGING_DB_URL`` is set.  The
 from __future__ import annotations
 
 import logging
+import time
 from utils.json_fast import loads as _json_loads, dumps as _json_dumps
 import os
 from pathlib import Path
@@ -23,7 +24,7 @@ from pathlib import Path
 import queue
 import threading
 
-from medanon_core.domain import JobStatus
+from domain.jobs import JobStatus
 from pipeline.jobs.checkpoint import load_checkpoint, save_checkpoint, _truncate_to_lines
 from integrations.storage import store_result
 
@@ -31,6 +32,16 @@ _log = logging.getLogger("medanon.staged_worker")
 
 _OUTPUT_DIR = os.environ.get("MEDANON_OUTPUT_DIR", "/output")
 _BATCH_SIZE = int(os.environ.get("MEDANON_STAGING_BATCH_SIZE", "1000"))
+
+# Depth of the PostgreSQL prefetch queue — mirrors MEDANON_PIPELINE_QUEUE_SIZE used by
+# the non-staged executor_stream path for consistent fetch-ahead behaviour.
+_PREFETCH_QUEUE_SIZE: int = int(os.environ.get("MEDANON_PIPELINE_QUEUE_SIZE", "4"))
+
+# Number of parallel processor threads in Phase 2 (default 1 = single-threaded).
+# Set MEDANON_STAGING_PROCESS_WORKERS=N to parallelise gPAS/NLP I/O across N
+# concurrent batches.  The writer (file I/O + DB mark_done) remains serialised.
+# Recommended N ≤ MEDANON_JOB_WORKERS to stay within the global thread budget.
+_PROCESS_WORKERS: int = max(1, int(os.environ.get("MEDANON_STAGING_PROCESS_WORKERS", "1")))
 
 # Infrastructure resource types excluded from auto-discovery
 _INFRA = frozenset(
@@ -119,6 +130,21 @@ def _process_batch_with_fallback(
     succeeded = 0
     failed = 0
 
+    # Snapshot originals as JSON strings BEFORE batch processing.
+    # _process_batch mutates resource dicts in-place (gPAS write-back). If the
+    # batch partially succeeds then raises, batch_rows[i]["resource_json"] for
+    # already-processed rows will hold mutated dicts (id = txt_*) instead of
+    # original UUIDs. Without this snapshot the fallback would send pseudonyms
+    # back to gPAS as originals, creating double-pseudonymization chains
+    # (e.g. uuid → txt_A → txt_B). Always serialize to string here so the
+    # fallback always parses a fresh, unmutated copy of each resource.
+    original_jsons: list[str] = [
+        row["resource_json"]
+        if isinstance(row["resource_json"], str)
+        else _json_dumps(row["resource_json"])
+        for row in batch_rows
+    ]
+
     try:
         results = _process_batch(batch_rows, settings, pseudonymizer, processing_mode, seen_values)
         done_ids: list[int] = []
@@ -131,10 +157,11 @@ def _process_batch_with_fallback(
         fh.flush()
         staging.mark_done(job_id, done_ids)
     except Exception:
-        # Per-resource fallback: process each resource individually
-        for row in batch_rows:
-            rj = row["resource_json"]
-            resource = rj if isinstance(rj, dict) else _json_loads(rj)
+        # Per-resource fallback: process each resource from the pre-mutation snapshot.
+        # Using original_jsons (not row["resource_json"]) ensures the fallback always
+        # sees the original UUID-based resource, never a partially-mutated copy.
+        for orig_json, row in zip(original_jsons, batch_rows):
+            resource = _json_loads(orig_json)
             rtype = (
                 resource.get("resourceType", "Unknown")
                 if isinstance(resource, dict)
@@ -179,6 +206,101 @@ def _process_batch_with_fallback(
     return succeeded, failed
 
 
+def _compute_batch_fallback_parallel(
+    batch_rows: list[dict],
+    settings,
+    pseudonymizer,
+    processing_mode: str,
+    label: str,
+    job_id: str,
+    seen_values=None,
+) -> list[tuple[dict, int, bool]]:
+    """Compute phase for the parallel staged-worker path.
+
+    Runs the heavy gPAS + NLP I/O work and returns ``(result_dict, row_id, succeeded)``
+    per row.  No file writes or DB calls — those are handled by
+    :func:`_write_computed_results` on the serialised writer thread.
+
+    Thread-safe:
+    - ``seen_values`` (_CappedSet) is shared across workers; individual
+      ``add`` / ``__contains__`` calls are GIL-atomic.  The cap is approximate
+      under concurrent writes but the set is an optimisation hint only.
+    - All other objects are either read-only or thread-local (resource dicts).
+    """
+    from pipeline.processor import process_data_batch
+
+    orig_jsons: list[str] = [
+        row["resource_json"]
+        if isinstance(row["resource_json"], str)
+        else _json_dumps(row["resource_json"])
+        for row in batch_rows
+    ]
+
+    try:
+        results = _process_batch(batch_rows, settings, pseudonymizer, processing_mode, seen_values)
+        return [(result, row["id"], True) for result, row in zip(results, batch_rows)]
+    except Exception:
+        output: list[tuple[dict, int, bool]] = []
+        for orig_json, row in zip(orig_jsons, batch_rows):
+            resource = _json_loads(orig_json)
+            rtype = resource.get("resourceType", "Unknown") if isinstance(resource, dict) else "Unknown"
+            try:
+                result = process_data_batch(
+                    [resource], settings, pseudonymizer, attach_manifest=True
+                )[0]
+                output.append((result, row["id"], True))
+            except Exception as exc:
+                _log.error(
+                    "%s job=%s resource_type=%s row_id=%d error=%s",
+                    label, job_id, rtype, row["id"], exc,
+                )
+                output.append((
+                    {"error": "processing error", "resourceType": rtype},
+                    row["id"],
+                    False,
+                ))
+        return output
+
+
+def _write_computed_results(
+    computed: list[tuple[dict, int, bool]],
+    fh,
+    staging,
+    job_id: str,
+    label: str,
+    summary=None,
+) -> tuple[int, int]:
+    """Writer phase for the parallel staged-worker path.
+
+    Serialises file writes and staging DB updates for one pre-computed batch.
+    Must be called only from the single writer thread.
+    Returns ``(succeeded, failed)``.
+    """
+    succeeded = failed = 0
+    done_ids: list[int] = []
+
+    for result, row_id, ok in computed:
+        fh.write(_json_dumps(result) + "\n")
+        if ok:
+            done_ids.append(row_id)
+            succeeded += 1
+            if summary is not None:
+                summary.record_resource(result)
+        else:
+            try:
+                staging.mark_error(job_id, row_id, result.get("error", "processing error"))
+            except Exception:
+                _log.warning("%s job=%s mark_error failed row_id=%d", label, job_id, row_id)
+            failed += 1
+            if summary is not None:
+                summary.record_error(result.get("resourceType", "Unknown"))
+
+    if done_ids:
+        staging.mark_done(job_id, done_ids)
+    fh.flush()
+    return succeeded, failed
+
+
 def _run_staged_phase2(
     job,
     store,
@@ -193,12 +315,20 @@ def _run_staged_phase2(
     label: str,
     collector,
     staging_job_id: str | None = None,
+    phase1_done: threading.Event | None = None,
+    phase1_state: dict | None = None,
 ) -> int:
     """Run Phase 2 of any staged executor: consume pending rows → NDJSON.
 
     Provides (a) cross-batch gPAS dedup via a shared ``_CappedSet`` and
-    (b) a one-batch lookahead pipeline so PostgreSQL row fetches for batch N+1
-    overlap with gPAS HTTP calls + NLP inference for batch N.
+    (b) a ``_PREFETCH_QUEUE_SIZE``-batch lookahead pipeline so PostgreSQL
+    row fetches overlap with gPAS HTTP calls + NLP inference.
+
+    When *phase1_done* is provided, the prefetcher polls for new rows while
+    Phase 1 is still staging them — enabling Phase 1 and Phase 2 to run
+    concurrently.  *phase1_state* is a dict updated in-place by the Phase 1
+    thread; its cursor fields are merged into every checkpoint so crash-resume
+    can restart Phase 1 from its last known position.
 
     ``staging_job_id`` selects which job's rows to read from the staging table.
     Defaults to ``job.id``; pass ``source_job_id`` for reprocess jobs that read
@@ -211,17 +341,32 @@ def _run_staged_phase2(
     _staging_id = staging_job_id or job.id
     _seen_values = _CappedSet()
 
+    # Use the actual DB row count as the denominator.  On a crash-resume,
+    # staged_count (from checkpoint) only reflects rows inserted in the
+    # current session; previously-staged rows are skipped by ON CONFLICT DO
+    # NOTHING and are never counted again.  count_by_status always returns
+    # the true total regardless of how many sessions contributed rows.
+    db_total = staging.count_by_status(_staging_id).get("total", 0)
+    if db_total > staged_count:
+        staged_count = db_total
+
     _SENTINEL = object()
-    _prefetch_q: queue.Queue = queue.Queue(maxsize=1)
+    _prefetch_q: queue.Queue = queue.Queue(maxsize=_PREFETCH_QUEUE_SIZE)
     _prefetch_exc: list = []
 
     def _batch_prefetcher():
         try:
             while True:
                 batch = staging.get_pending_batch(_staging_id, _BATCH_SIZE)
-                _prefetch_q.put(batch if batch else _SENTINEL)
-                if not batch:
-                    break
+                if batch:
+                    _prefetch_q.put(batch)
+                else:
+                    if phase1_done is None or phase1_done.is_set():
+                        # Phase 1 is done (or there is no concurrent Phase 1).
+                        _prefetch_q.put(_SENTINEL)
+                        break
+                    # Phase 1 is still running — more rows may arrive shortly.
+                    time.sleep(0.1)
         except Exception as exc:
             _prefetch_exc.append(exc)
             _prefetch_q.put(_SENTINEL)
@@ -229,17 +374,15 @@ def _run_staged_phase2(
     prefetch_thread = threading.Thread(target=_batch_prefetcher, daemon=True)
     prefetch_thread.start()
 
+    _batch_num = 0
     try:
         with open(output_path, open_mode, encoding="utf-8") as fh:
             while True:
-                fresh = store.get(job.id)
-                if fresh and fresh.status == JobStatus.CANCELLED:
-                    _log.info("%s_cancelled job=%s at=%d", label, job.id, processed)
-                    return processed
-
                 batch_rows = _prefetch_q.get()
                 if batch_rows is _SENTINEL:
                     break
+
+                _batch_num += 1
 
                 ok, bad = _process_batch_with_fallback(
                     batch_rows,
@@ -254,18 +397,37 @@ def _run_staged_phase2(
                     seen_values=_seen_values,
                 )
                 processed += ok + bad
-                save_checkpoint(
-                    store,
-                    job,
-                    {
-                        "phase": "processing",
-                        "staged_count": staged_count,
-                        "processed": processed,
-                    },
-                )
+
+                # Throttle DB round-trips: check for cancellation and save a
+                # checkpoint every 5 batches (matches executor_stream cadence).
+                if _batch_num % 5 == 0:
+                    fresh = store.get(job.id)
+                    if fresh and fresh.status == JobStatus.CANCELLED:
+                        _log.info("%s_cancelled job=%s at=%d", label, job.id, processed)
+                        return processed
+
+                    # Assemble checkpoint — merge Phase 1 cursor state when
+                    # Phase 1 is still running so crash-resume can restart
+                    # fetching from the last known FHIR page offset.
+                    if phase1_done is not None and not phase1_done.is_set():
+                        chk: dict = {"phase": "fetching", "processed": processed}
+                        if phase1_state:
+                            chk.update(phase1_state)
+                        else:
+                            chk["staged_count"] = staged_count
+                    else:
+                        _sc = (
+                            phase1_state.get("staged_count", staged_count)
+                            if phase1_state
+                            else staged_count
+                        )
+                        chk = {
+                            "phase": "processing",
+                            "staged_count": _sc,
+                            "processed": processed,
+                        }
+                    save_checkpoint(store, job, chk)
     finally:
-        # Always join the prefetch thread so it doesn't continue running
-        # in the background after an exception in batch processing.
         prefetch_thread.join(timeout=5.0)
 
     if _prefetch_exc:
@@ -347,71 +509,125 @@ def execute_bulk_export_staged(job, store, staging) -> None:
     if since:
         extra_params["_lastUpdated"] = f"ge{since}"
 
+    from pipeline.jobs.summary import JobSummaryCollector
+
+    collector = JobSummaryCollector(config_profile=profile, settings=settings, job_id=job.id)
+
     # ════════════════════════════════════════════════════════════════════════
-    # Phase 1: Fetch resources → staging table
+    # Phase 1 + Phase 2 (overlapped): fetch into staging while processing
     # ════════════════════════════════════════════════════════════════════════
     if phase == "fetching":
-        _log.info("staged_fetch_start job=%s resource_types=%s", job.id, resource_types)
-        buffer: list[dict] = []
+        # Shared mutable state updated by the Phase 1 thread so Phase 2 can
+        # embed the current FHIR cursor into every checkpoint it writes.
+        # This ensures crash-resume can restart Phase 1 from where it left off
+        # even when Phase 2 has already made progress.
+        phase1_state: dict = {
+            "staged_count": staged_count,
+            "type_index": type_index,
+            "fetch_cursor": fetch_cursor,
+        }
+        phase1_done = threading.Event()
+        phase1_exc: list = []
 
-        for ti, rt in enumerate(resource_types):
-            if ti < type_index:
-                continue  # already fetched in a previous run
-            start = fetch_cursor if ti == type_index else None
+        def _run_phase1() -> None:
+            _log.info("staged_fetch_start job=%s resource_types=%s", job.id, resource_types)
+            buffer: list[dict] = []
+            try:
+                for ti, rt in enumerate(resource_types):
+                    if ti < phase1_state["type_index"]:
+                        continue  # already fetched in a previous run
+                    start = phase1_state["fetch_cursor"] if ti == phase1_state["type_index"] else None
 
-            for resource, page_url, page_offset in fetch_resource_type(
-                server_url,
-                rt,
-                params=extra_params if extra_params else None,
-                token=token,
-                timeout=timeout,
-                start_url=start,
-                yield_cursors=True,
-            ):
-                buffer.append(resource)
-                if len(buffer) >= _BATCH_SIZE:
-                    fresh = store.get(job.id)
-                    if fresh and fresh.status == JobStatus.CANCELLED:
-                        _log.info("staged_fetch_cancelled job=%s", job.id)
-                        return
-                    inserted = staging.stage_batch(job.id, buffer)
-                    staged_count += inserted
-                    buffer.clear()
-                    fetch_cursor = page_url
-                    save_checkpoint(
-                        store,
-                        job,
-                        {
-                            "phase": "fetching",
-                            "staged_count": staged_count,
-                            "type_index": ti,
-                            "fetch_cursor": fetch_cursor,
-                            "type_name": rt,
-                        },
-                    )
+                    for resource, page_url, page_offset in fetch_resource_type(
+                        server_url,
+                        rt,
+                        params=extra_params if extra_params else None,
+                        token=token,
+                        timeout=timeout,
+                        start_url=start,
+                        yield_cursors=True,
+                    ):
+                        buffer.append(resource)
+                        if len(buffer) >= _BATCH_SIZE:
+                            fresh = store.get(job.id)
+                            if fresh and fresh.status == JobStatus.CANCELLED:
+                                _log.info("staged_fetch_cancelled job=%s", job.id)
+                                return
+                            inserted = staging.stage_batch(job.id, buffer)
+                            phase1_state["staged_count"] += inserted
+                            buffer.clear()
+                            phase1_state["fetch_cursor"] = page_url
+                            phase1_state["type_index"] = ti
+                            phase1_state["type_name"] = rt
 
-            if buffer:
-                inserted = staging.stage_batch(job.id, buffer)
-                staged_count += inserted
-                buffer.clear()
-            fetch_cursor = None
+                    if buffer:
+                        inserted = staging.stage_batch(job.id, buffer)
+                        phase1_state["staged_count"] += inserted
+                        buffer.clear()
+                    phase1_state["fetch_cursor"] = None
 
-        _log.info("staged_fetch_done job=%s rows=%d", job.id, staged_count)
-        save_checkpoint(
-            store,
-            job,
-            {"phase": "processing", "staged_count": staged_count, "processed": 0},
+                _log.info(
+                    "staged_fetch_done job=%s rows=%d",
+                    job.id,
+                    phase1_state["staged_count"],
+                )
+            except Exception as exc:
+                phase1_exc.append(exc)
+            finally:
+                phase1_done.set()
+
+        phase1_thread = threading.Thread(target=_run_phase1, daemon=True)
+        phase1_thread.start()
+
+        # Phase 2 starts immediately; it polls for rows while Phase 1 is running.
+        open_mode = "a" if processed > 0 else "w"
+        if processed > 0:
+            _truncate_to_lines(output_path, processed)
+        _log.info(
+            "staged_process_start job=%s processed=%d (overlap mode)", job.id, processed
         )
-        phase = "processing"
-        processed = 0
+
+        processed = _run_staged_phase2(
+            job, store, staging, settings, pseudonymizer, processing_mode,
+            output_path, open_mode, staged_count, processed,
+            "staged_bulk_export", collector,
+            phase1_done=phase1_done,
+            phase1_state=phase1_state,
+        )
+
+        phase1_thread.join()
+        if phase1_exc:
+            raise phase1_exc[0]
+
+        staged_count = phase1_state.get("staged_count", staged_count)
+
+        job.result_path = store_result(job.id, output_path)
+        summary_dict = collector.to_dict(file_size_bytes=os.path.getsize(output_path))
+        checkpoint_data: dict = {
+            "phase": "done",
+            "staged_count": staged_count,
+            "processed": processed,
+            "summary": summary_dict,
+        }
+        audit_report = collector.generate_audit_report()
+        if audit_report:
+            try:
+                audit_path = os.path.join(_OUTPUT_DIR, f"{job.id}_score_audit.md")
+                with open(audit_path, "w", encoding="utf-8") as _fh:
+                    _fh.write(audit_report)
+                checkpoint_data["score_audit_path"] = audit_path
+            except Exception:
+                _log.debug("staged_bulk_export_audit_write_failed job=%s", job.id, exc_info=True)
+        save_checkpoint(store, job, checkpoint_data)
+        _log.info("staged_bulk_export_done job=%s processed=%d", job.id, processed)
 
     # ════════════════════════════════════════════════════════════════════════
-    # Phase 2: Process staged rows → NDJSON
+    # Phase 2 only (crash-resume: Phase 1 was already complete)
     # ════════════════════════════════════════════════════════════════════════
-    if phase == "processing":
+    elif phase == "processing":
         from pipeline.jobs.summary import JobSummaryCollector
 
-        collector = JobSummaryCollector(config_profile=profile)
+        collector = JobSummaryCollector(config_profile=profile, settings=settings, job_id=job.id)
         open_mode = "a" if processed > 0 else "w"
         if processed > 0:
             _truncate_to_lines(output_path, processed)
@@ -424,18 +640,23 @@ def execute_bulk_export_staged(job, store, staging) -> None:
         )
 
         job.result_path = store_result(job.id, output_path)
-        save_checkpoint(
-            store,
-            job,
-            {
-                "phase": "done",
-                "staged_count": staged_count,
-                "processed": processed,
-                "summary": collector.to_dict(
-                    file_size_bytes=os.path.getsize(output_path)
-                ),
-            },
-        )
+        summary_dict = collector.to_dict(file_size_bytes=os.path.getsize(output_path))
+        checkpoint_data: dict = {
+            "phase": "done",
+            "staged_count": staged_count,
+            "processed": processed,
+            "summary": summary_dict,
+        }
+        audit_report = collector.generate_audit_report()
+        if audit_report:
+            try:
+                audit_path = os.path.join(_OUTPUT_DIR, f"{job.id}_score_audit.md")
+                with open(audit_path, "w", encoding="utf-8") as _fh:
+                    _fh.write(audit_report)
+                checkpoint_data["score_audit_path"] = audit_path
+            except Exception:
+                _log.debug("staged_bulk_export_audit_write_failed job=%s", job.id, exc_info=True)
+        save_checkpoint(store, job, checkpoint_data)
         _log.info("staged_bulk_export_done job=%s processed=%d", job.id, processed)
 
 
@@ -480,59 +701,101 @@ def execute_cohort_staged(job, store, staging) -> None:
             return
 
     # ════════════════════════════════════════════════════════════════════════
-    # Phase 1: Fetch → staging table
+    # Phase 1 + Phase 2 (overlapped)
     # ════════════════════════════════════════════════════════════════════════
     if phase == "fetching":
-        _log.info("staged_cohort_fetch_start job=%s", job.id)
-        buffer: list[dict] = []
-        gen = fetch_cohort(
-            server_url,
-            search_type=search_type,
-            search_params=search_params_dict,
-            everything_params=everything_params,
-            token=token,
-            timeout=timeout,
-        )
-        for resource in gen:
-            buffer.append(resource)
-            if len(buffer) >= _BATCH_SIZE:
-                fresh = store.get(job.id)
-                if fresh and fresh.status == JobStatus.CANCELLED:
-                    _log.info("staged_cohort_fetch_cancelled job=%s", job.id)
-                    return
-                inserted = staging.stage_batch(job.id, buffer)
-                staged_count += inserted
-                buffer.clear()
-                save_checkpoint(
-                    store,
-                    job,
-                    {
-                        "phase": "fetching",
-                        "staged_count": staged_count,
-                        "processed": 0,
-                    },
+        phase1_state: dict = {"staged_count": staged_count}
+        phase1_done = threading.Event()
+        phase1_exc: list = []
+
+        def _run_phase1() -> None:
+            _log.info("staged_cohort_fetch_start job=%s", job.id)
+            buffer: list[dict] = []
+            try:
+                gen = fetch_cohort(
+                    server_url,
+                    search_type=search_type,
+                    search_params=search_params_dict,
+                    everything_params=everything_params,
+                    token=token,
+                    timeout=timeout,
                 )
+                for resource in gen:
+                    buffer.append(resource)
+                    if len(buffer) >= _BATCH_SIZE:
+                        fresh = store.get(job.id)
+                        if fresh and fresh.status == JobStatus.CANCELLED:
+                            _log.info("staged_cohort_fetch_cancelled job=%s", job.id)
+                            return
+                        inserted = staging.stage_batch(job.id, buffer)
+                        phase1_state["staged_count"] += inserted
+                        buffer.clear()
 
-        if buffer:
-            inserted = staging.stage_batch(job.id, buffer)
-            staged_count += inserted
+                if buffer:
+                    inserted = staging.stage_batch(job.id, buffer)
+                    phase1_state["staged_count"] += inserted
 
-        _log.info("staged_cohort_fetch_done job=%s rows=%d", job.id, staged_count)
-        save_checkpoint(
-            store,
-            job,
-            {"phase": "processing", "staged_count": staged_count, "processed": 0},
-        )
-        phase = "processing"
-        processed = 0
+                _log.info(
+                    "staged_cohort_fetch_done job=%s rows=%d",
+                    job.id,
+                    phase1_state["staged_count"],
+                )
+            except Exception as exc:
+                phase1_exc.append(exc)
+            finally:
+                phase1_done.set()
 
-    # ════════════════════════════════════════════════════════════════════════
-    # Phase 2: Process staged rows → NDJSON
-    # ════════════════════════════════════════════════════════════════════════
-    if phase == "processing":
+        phase1_thread = threading.Thread(target=_run_phase1, daemon=True)
+        phase1_thread.start()
+
         from pipeline.jobs.summary import JobSummaryCollector
 
-        collector = JobSummaryCollector(config_profile=profile)
+        collector = JobSummaryCollector(config_profile=profile, settings=settings, job_id=job.id)
+        _log.info(
+            "staged_cohort_process_start job=%s processed=%d (overlap mode)", job.id, processed
+        )
+
+        processed = _run_staged_phase2(
+            job, store, staging, settings, pseudonymizer, processing_mode,
+            output_path, "w", staged_count, processed,
+            "staged_cohort", collector,
+            phase1_done=phase1_done,
+            phase1_state=phase1_state,
+        )
+
+        phase1_thread.join()
+        if phase1_exc:
+            raise phase1_exc[0]
+
+        staged_count = phase1_state.get("staged_count", staged_count)
+
+        job.result_path = store_result(job.id, output_path)
+        summary_dict = collector.to_dict(file_size_bytes=os.path.getsize(output_path))
+        checkpoint_data = {
+            "phase": "done",
+            "staged_count": staged_count,
+            "processed": processed,
+            "summary": summary_dict,
+        }
+        audit_report = collector.generate_audit_report()
+        if audit_report:
+            try:
+                audit_path = os.path.join(_OUTPUT_DIR, f"{job.id}_score_audit.md")
+                with open(audit_path, "w", encoding="utf-8") as _fh:
+                    _fh.write(audit_report)
+                checkpoint_data["score_audit_path"] = audit_path
+            except Exception:
+                _log.debug("staged_cohort_audit_write_failed job=%s", job.id, exc_info=True)
+        save_checkpoint(store, job, checkpoint_data)
+        _log.info("staged_cohort_done job=%s processed=%d", job.id, processed)
+
+    # ════════════════════════════════════════════════════════════════════════
+    # Phase 2 only (crash-resume: Phase 1 was already complete)
+    # ════════════════════════════════════════════════════════════════════════
+    elif phase == "processing":
+        from pipeline.jobs.summary import JobSummaryCollector
+
+        collector = JobSummaryCollector(config_profile=profile, settings=settings, job_id=job.id)
         open_mode = "a" if processed > 0 else "w"
         if processed > 0:
             _truncate_to_lines(output_path, processed)
@@ -545,18 +808,23 @@ def execute_cohort_staged(job, store, staging) -> None:
         )
 
         job.result_path = store_result(job.id, output_path)
-        save_checkpoint(
-            store,
-            job,
-            {
-                "phase": "done",
-                "staged_count": staged_count,
-                "processed": processed,
-                "summary": collector.to_dict(
-                    file_size_bytes=os.path.getsize(output_path)
-                ),
-            },
-        )
+        summary_dict = collector.to_dict(file_size_bytes=os.path.getsize(output_path))
+        checkpoint_data = {
+            "phase": "done",
+            "staged_count": staged_count,
+            "processed": processed,
+            "summary": summary_dict,
+        }
+        audit_report = collector.generate_audit_report()
+        if audit_report:
+            try:
+                audit_path = os.path.join(_OUTPUT_DIR, f"{job.id}_score_audit.md")
+                with open(audit_path, "w", encoding="utf-8") as _fh:
+                    _fh.write(audit_report)
+                checkpoint_data["score_audit_path"] = audit_path
+            except Exception:
+                _log.debug("staged_cohort_audit_write_failed job=%s", job.id, exc_info=True)
+        save_checkpoint(store, job, checkpoint_data)
         _log.info("staged_cohort_done job=%s processed=%d", job.id, processed)
 
 
@@ -586,59 +854,101 @@ def execute_patient_export_staged(job, store, staging) -> None:
     fetch_cursor = checkpoint.get("fetch_cursor")
 
     # ════════════════════════════════════════════════════════════════════════
-    # Phase 1: Fetch $everything → staging table
+    # Phase 1 + Phase 2 (overlapped)
     # ════════════════════════════════════════════════════════════════════════
     if phase == "fetching":
-        _log.info("staged_patient_fetch_start job=%s patient=%s", job.id, patient_id)
-        buffer: list[dict] = []
-        gen = fetch_everything(
-            server_url,
-            "Patient",
-            patient_id,
-            token=token,
-            timeout=timeout,
-            start_url=fetch_cursor,
-        )
-        for resource in gen:
-            buffer.append(resource)
-            if len(buffer) >= _BATCH_SIZE:
-                fresh = store.get(job.id)
-                if fresh and fresh.status == JobStatus.CANCELLED:
-                    _log.info("staged_patient_fetch_cancelled job=%s", job.id)
-                    return
-                inserted = staging.stage_batch(job.id, buffer)
-                staged_count += inserted
-                buffer.clear()
-                save_checkpoint(
-                    store,
-                    job,
-                    {
-                        "phase": "fetching",
-                        "staged_count": staged_count,
-                        "processed": 0,
-                    },
+        phase1_state: dict = {"staged_count": staged_count, "fetch_cursor": fetch_cursor}
+        phase1_done = threading.Event()
+        phase1_exc: list = []
+
+        def _run_phase1() -> None:
+            _log.info("staged_patient_fetch_start job=%s patient=%s", job.id, patient_id)
+            buffer: list[dict] = []
+            try:
+                gen = fetch_everything(
+                    server_url,
+                    "Patient",
+                    patient_id,
+                    token=token,
+                    timeout=timeout,
+                    start_url=phase1_state["fetch_cursor"],
                 )
+                for resource in gen:
+                    buffer.append(resource)
+                    if len(buffer) >= _BATCH_SIZE:
+                        fresh = store.get(job.id)
+                        if fresh and fresh.status == JobStatus.CANCELLED:
+                            _log.info("staged_patient_fetch_cancelled job=%s", job.id)
+                            return
+                        inserted = staging.stage_batch(job.id, buffer)
+                        phase1_state["staged_count"] += inserted
+                        buffer.clear()
 
-        if buffer:
-            inserted = staging.stage_batch(job.id, buffer)
-            staged_count += inserted
+                if buffer:
+                    inserted = staging.stage_batch(job.id, buffer)
+                    phase1_state["staged_count"] += inserted
 
-        _log.info("staged_patient_fetch_done job=%s rows=%d", job.id, staged_count)
-        save_checkpoint(
-            store,
-            job,
-            {"phase": "processing", "staged_count": staged_count, "processed": 0},
-        )
-        phase = "processing"
-        processed = 0
+                _log.info(
+                    "staged_patient_fetch_done job=%s rows=%d",
+                    job.id,
+                    phase1_state["staged_count"],
+                )
+            except Exception as exc:
+                phase1_exc.append(exc)
+            finally:
+                phase1_done.set()
 
-    # ════════════════════════════════════════════════════════════════════════
-    # Phase 2: Process staged rows → NDJSON
-    # ════════════════════════════════════════════════════════════════════════
-    if phase == "processing":
+        phase1_thread = threading.Thread(target=_run_phase1, daemon=True)
+        phase1_thread.start()
+
         from pipeline.jobs.summary import JobSummaryCollector
 
-        collector = JobSummaryCollector(config_profile=profile)
+        collector = JobSummaryCollector(config_profile=profile, settings=settings, job_id=job.id)
+        _log.info(
+            "staged_patient_process_start job=%s processed=%d (overlap mode)", job.id, processed
+        )
+
+        processed = _run_staged_phase2(
+            job, store, staging, settings, pseudonymizer, processing_mode,
+            output_path, "w", staged_count, processed,
+            "staged_patient", collector,
+            phase1_done=phase1_done,
+            phase1_state=phase1_state,
+        )
+
+        phase1_thread.join()
+        if phase1_exc:
+            raise phase1_exc[0]
+
+        staged_count = phase1_state.get("staged_count", staged_count)
+
+        job.result_path = store_result(job.id, output_path)
+        summary_dict = collector.to_dict(file_size_bytes=os.path.getsize(output_path))
+        checkpoint_data = {
+            "phase": "done",
+            "staged_count": staged_count,
+            "processed": processed,
+            "summary": summary_dict,
+        }
+        audit_report = collector.generate_audit_report()
+        if audit_report:
+            try:
+                audit_path = os.path.join(_OUTPUT_DIR, f"{job.id}_score_audit.md")
+                with open(audit_path, "w", encoding="utf-8") as _fh:
+                    _fh.write(audit_report)
+                checkpoint_data["score_audit_path"] = audit_path
+            except Exception:
+                _log.debug("staged_patient_audit_write_failed job=%s", job.id, exc_info=True)
+        save_checkpoint(store, job, checkpoint_data)
+        _log.info("staged_patient_export_done job=%s processed=%d", job.id, processed)
+
+    # ════════════════════════════════════════════════════════════════════════
+    # Phase 2 only (crash-resume: Phase 1 was already complete)
+    # ════════════════════════════════════════════════════════════════════════
+    elif phase == "processing":
+        from pipeline.jobs.summary import JobSummaryCollector
+
+        collector = JobSummaryCollector(config_profile=profile, settings=settings, job_id=job.id)
         open_mode = "a" if processed > 0 else "w"
         if processed > 0:
             _truncate_to_lines(output_path, processed)
@@ -651,18 +961,23 @@ def execute_patient_export_staged(job, store, staging) -> None:
         )
 
         job.result_path = store_result(job.id, output_path)
-        save_checkpoint(
-            store,
-            job,
-            {
-                "phase": "done",
-                "staged_count": staged_count,
-                "processed": processed,
-                "summary": collector.to_dict(
-                    file_size_bytes=os.path.getsize(output_path)
-                ),
-            },
-        )
+        summary_dict = collector.to_dict(file_size_bytes=os.path.getsize(output_path))
+        checkpoint_data = {
+            "phase": "done",
+            "staged_count": staged_count,
+            "processed": processed,
+            "summary": summary_dict,
+        }
+        audit_report = collector.generate_audit_report()
+        if audit_report:
+            try:
+                audit_path = os.path.join(_OUTPUT_DIR, f"{job.id}_score_audit.md")
+                with open(audit_path, "w", encoding="utf-8") as _fh:
+                    _fh.write(audit_report)
+                checkpoint_data["score_audit_path"] = audit_path
+            except Exception:
+                _log.debug("staged_patient_audit_write_failed job=%s", job.id, exc_info=True)
+        save_checkpoint(store, job, checkpoint_data)
         _log.info("staged_patient_export_done job=%s processed=%d", job.id, processed)
 
 
@@ -691,63 +1006,86 @@ def execute_batch_patient_export_staged(job, store, staging) -> None:
     processed = checkpoint.get("processed", 0)
 
     # ════════════════════════════════════════════════════════════════════════
-    # Phase 1: Fetch $everything for all patients → staging table
+    # Phase 1 + Phase 2 (overlapped) — normal first run
     # ════════════════════════════════════════════════════════════════════════
+    collector = None
     if phase == "fetching":
-        _log.info(
-            "staged_batch_patient_fetch_start job=%s patients=%d",
-            job.id,
-            len(patient_ids),
-        )
-        buffer: list[dict] = []
-        gen = fetch_patients_everything(
-            server_url,
-            patient_ids,
-            token=token,
-            timeout=timeout,
-        )
-        for resource in gen:
-            buffer.append(resource)
-            if len(buffer) >= _BATCH_SIZE:
-                fresh = store.get(job.id)
-                if fresh and fresh.status == JobStatus.CANCELLED:
-                    _log.info("staged_batch_patient_fetch_cancelled job=%s", job.id)
-                    return
-                inserted = staging.stage_batch(job.id, buffer)
-                staged_count += inserted
-                buffer.clear()
-                save_checkpoint(
-                    store,
-                    job,
-                    {
-                        "phase": "fetching",
-                        "staged_count": staged_count,
-                        "processed": 0,
-                    },
+        phase1_state: dict = {"staged_count": staged_count}
+        phase1_done = threading.Event()
+        phase1_exc: list = []
+
+        def _run_phase1() -> None:
+            _log.info(
+                "staged_batch_patient_fetch_start job=%s patients=%d",
+                job.id,
+                len(patient_ids),
+            )
+            buffer: list[dict] = []
+            try:
+                gen = fetch_patients_everything(
+                    server_url,
+                    patient_ids,
+                    token=token,
+                    timeout=timeout,
                 )
+                for resource in gen:
+                    buffer.append(resource)
+                    if len(buffer) >= _BATCH_SIZE:
+                        fresh = store.get(job.id)
+                        if fresh and fresh.status == JobStatus.CANCELLED:
+                            _log.info("staged_batch_patient_fetch_cancelled job=%s", job.id)
+                            return
+                        inserted = staging.stage_batch(job.id, buffer)
+                        phase1_state["staged_count"] += inserted
+                        buffer.clear()
 
-        if buffer:
-            inserted = staging.stage_batch(job.id, buffer)
-            staged_count += inserted
+                if buffer:
+                    inserted = staging.stage_batch(job.id, buffer)
+                    phase1_state["staged_count"] += inserted
 
-        _log.info(
-            "staged_batch_patient_fetch_done job=%s rows=%d", job.id, staged_count
-        )
-        save_checkpoint(
-            store,
-            job,
-            {"phase": "processing", "staged_count": staged_count, "processed": 0},
-        )
-        phase = "processing"
-        processed = 0
+                _log.info(
+                    "staged_batch_patient_fetch_done job=%s rows=%d",
+                    job.id,
+                    phase1_state["staged_count"],
+                )
+            except Exception as exc:
+                phase1_exc.append(exc)
+            finally:
+                phase1_done.set()
 
-    # ════════════════════════════════════════════════════════════════════════
-    # Phase 2: Process staged rows → NDJSON
-    # ════════════════════════════════════════════════════════════════════════
-    if phase == "processing":
+        phase1_thread = threading.Thread(target=_run_phase1, daemon=True)
+        phase1_thread.start()
+
         from pipeline.jobs.summary import JobSummaryCollector
 
-        collector = JobSummaryCollector(config_profile=profile)
+        collector = JobSummaryCollector(config_profile=profile, settings=settings, job_id=job.id)
+        _log.info(
+            "staged_batch_patient_process_start job=%s processed=%d (overlap mode)",
+            job.id,
+            processed,
+        )
+
+        processed = _run_staged_phase2(
+            job, store, staging, settings, pseudonymizer, processing_mode,
+            output_path, "w", staged_count, processed,
+            "staged_batch_patient", collector,
+            phase1_done=phase1_done,
+            phase1_state=phase1_state,
+        )
+
+        phase1_thread.join()
+        if phase1_exc:
+            raise phase1_exc[0]
+
+        staged_count = phase1_state.get("staged_count", staged_count)
+
+    # ════════════════════════════════════════════════════════════════════════
+    # Phase 2 only (crash-resume: Phase 1 was already complete)
+    # ════════════════════════════════════════════════════════════════════════
+    elif phase == "processing":
+        from pipeline.jobs.summary import JobSummaryCollector
+
+        collector = JobSummaryCollector(config_profile=profile, settings=settings, job_id=job.id)
         open_mode = "a" if processed > 0 else "w"
         if processed > 0:
             _truncate_to_lines(output_path, processed)
@@ -761,22 +1099,55 @@ def execute_batch_patient_export_staged(job, store, staging) -> None:
             "staged_batch_patient", collector,
         )
 
-        job.result_path = store_result(job.id, output_path)
-        save_checkpoint(
-            store,
-            job,
-            {
-                "phase": "done",
-                "staged_count": staged_count,
-                "processed": processed,
-                "summary": collector.to_dict(
-                    file_size_bytes=os.path.getsize(output_path)
-                ),
-            },
+    # ════════════════════════════════════════════════════════════════════════
+    # Finalize — runs once after either branch completes (and not when the job
+    # was already in "done" or other phase). Persists result_path so callers
+    # can download via GET /v1/jobs/{id}/result instead of getting HTTP 410.
+    # ════════════════════════════════════════════════════════════════════════
+    if collector is None:
+        _log.warning(
+            "staged_batch_patient_unexpected_phase job=%s phase=%s — skipping finalize",
+            job.id, phase,
         )
+        return
+
+    fresh = store.get(job.id)
+    if fresh and fresh.status == JobStatus.CANCELLED:
         _log.info(
-            "staged_batch_patient_export_done job=%s processed=%d", job.id, processed
+            "staged_batch_patient_cancelled_skip_finalize job=%s processed=%d",
+            job.id, processed,
         )
+        return
+
+    if not os.path.exists(output_path):
+        _log.warning(
+            "staged_batch_patient_no_output job=%s path=%s — skipping finalize",
+            job.id, output_path,
+        )
+        return
+
+    job.result_path = store_result(job.id, output_path)
+    summary_dict = collector.to_dict(file_size_bytes=os.path.getsize(output_path))
+    checkpoint_data = {
+        "phase": "done",
+        "staged_count": staged_count,
+        "processed": processed,
+        "summary": summary_dict,
+    }
+    audit_report = collector.generate_audit_report()
+    if audit_report:
+        try:
+            audit_path = os.path.join(_OUTPUT_DIR, f"{job.id}_score_audit.md")
+            with open(audit_path, "w", encoding="utf-8") as _fh:
+                _fh.write(audit_report)
+            checkpoint_data["score_audit_path"] = audit_path
+        except Exception:
+            _log.debug("staged_batch_patient_audit_write_failed job=%s", job.id, exc_info=True)
+    save_checkpoint(store, job, checkpoint_data)
+    _log.info(
+        "staged_batch_patient_export_done job=%s processed=%d result_path=%s",
+        job.id, processed, job.result_path,
+    )
 
 
 def execute_reprocess_staged(job, store, staging) -> None:
@@ -807,7 +1178,7 @@ def execute_reprocess_staged(job, store, staging) -> None:
 
     from pipeline.jobs.summary import JobSummaryCollector
 
-    collector = JobSummaryCollector(config_profile=profile)
+    collector = JobSummaryCollector(config_profile=profile, settings=settings, job_id=job.id)
 
     _log.info(
         "staged_reprocess_start job=%s source=%s profile=%s",
@@ -827,13 +1198,20 @@ def execute_reprocess_staged(job, store, staging) -> None:
     )
 
     job.result_path = store_result(job.id, output_path)
-    save_checkpoint(
-        store,
-        job,
-        {
-            "phase": "done",
-            "processed": processed,
-            "summary": collector.to_dict(file_size_bytes=os.path.getsize(output_path)),
-        },
-    )
+    summary_dict = collector.to_dict(file_size_bytes=os.path.getsize(output_path))
+    checkpoint_data = {
+        "phase": "done",
+        "processed": processed,
+        "summary": summary_dict,
+    }
+    audit_report = collector.generate_audit_report()
+    if audit_report:
+        try:
+            audit_path = os.path.join(_OUTPUT_DIR, f"{job.id}_score_audit.md")
+            with open(audit_path, "w", encoding="utf-8") as _fh:
+                _fh.write(audit_report)
+            checkpoint_data["score_audit_path"] = audit_path
+        except Exception:
+            _log.debug("staged_reprocess_audit_write_failed job=%s", job.id, exc_info=True)
+    save_checkpoint(store, job, checkpoint_data)
     _log.info("staged_reprocess_done job=%s processed=%d", job.id, processed)

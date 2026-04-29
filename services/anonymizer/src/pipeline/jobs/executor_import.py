@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import os
 
-from medanon_core.domain import Job
+from domain.jobs import Job
 from pipeline.jobs.checkpoint import save_checkpoint
 from utils.json_fast import loads as _json_loads
 
@@ -37,10 +37,9 @@ def _execute_bulk_import(job: Job, store, staging) -> None:
     from concurrent.futures import FIRST_COMPLETED, wait as cf_wait
 
     from integrations.fhir.writer import (
-        _compute_id_map,
-        _infer_upload_tiers,
         _post_bundle_batch,
         _rewrite_references,
+        _sanitise_resource_id,
     )
     from integrations.storage import get_result_storage
     from utils.thread_pool import get_executor
@@ -66,12 +65,52 @@ def _execute_bulk_import(job: Job, store, staging) -> None:
     save_checkpoint(store, job, {"phase": "loading"})
     base = target_url.rstrip("/")
 
-    # Single-pass scan: keep raw line strings bucketed by resource type.
-    # Only (resourceType, id) metadata is kept as dicts for tier and id_map
-    # computation; all other data stays as compact strings so peak dict-object
-    # pressure is one tier's worth rather than the full file.
+    # Single-pass streaming scan.
+    #
+    # The previous implementation kept the entire NDJSON parsed in memory as
+    # ``full_objs`` so that the topological tier helper and the ID-sanitisation
+    # helper could iterate it twice.  For a 318k-resource export that means
+    # holding ~318k Python dicts simultaneously — the dominant memory cost.
+    #
+    # The streaming variant below extracts only the small metadata each helper
+    # actually needs (raw line, resourceType, id, raw reference types), then
+    # drops the parsed dict immediately.  Memory now scales with #unique types
+    # (~150 in FHIR R4) instead of #resources.
     storage = get_result_storage()
     lines_with_meta: list[tuple[str, str, str]] = []  # (raw_line, resourceType, id)
+    present: set[str] = set()
+    raw_deps: dict[str, set[str]] = {}  # rt -> set of *referenced bare types*
+    id_map: dict[tuple[str, str], str] = {}
+
+    def _scan_refs(value, dep_set: set[str]) -> None:
+        """Mirror of _infer_upload_tiers' top-3-levels reference scan."""
+        if isinstance(value, dict):
+            ref = value.get("reference")
+            if isinstance(ref, str) and "/" in ref:
+                dep_set.add(ref.split("/", 1)[0])
+            for v in value.values():
+                if isinstance(v, dict):
+                    r = v.get("reference")
+                    if isinstance(r, str) and "/" in r:
+                        dep_set.add(r.split("/", 1)[0])
+                elif isinstance(v, list):
+                    for item in v:
+                        if isinstance(item, dict):
+                            r = item.get("reference")
+                            if isinstance(r, str) and "/" in r:
+                                dep_set.add(r.split("/", 1)[0])
+        elif isinstance(value, list):
+            for item in value:
+                if isinstance(item, dict):
+                    r = item.get("reference")
+                    if isinstance(r, str) and "/" in r:
+                        dep_set.add(r.split("/", 1)[0])
+                    for vv in item.values():
+                        if isinstance(vv, dict):
+                            r2 = vv.get("reference")
+                            if isinstance(r2, str) and "/" in r2:
+                                dep_set.add(r2.split("/", 1)[0])
+
     stream = storage.open_stream(ndjson_path)
     try:
         for raw_line in stream:
@@ -87,16 +126,44 @@ def _execute_bulk_import(job: Job, store, staging) -> None:
                 obj = _json_loads(line)
             except (ValueError, TypeError):
                 continue
-            if isinstance(obj, dict) and obj.get("resourceType") and "error" not in obj:
-                lines_with_meta.append((line, obj["resourceType"], str(obj.get("id", ""))))
+            if not (isinstance(obj, dict) and obj.get("resourceType") and "error" not in obj):
+                continue
+            rt = obj["resourceType"]
+            rid = str(obj.get("id", ""))
+            present.add(rt)
+            lines_with_meta.append((line, rt, rid))
+            # Collect dependency types for this resource (filtered against
+            # ``present`` after the full pass; we don't yet know all types).
+            dep_set = raw_deps.setdefault(rt, set())
+            for v in obj.values():
+                _scan_refs(v, dep_set)
+            # Inline ID sanitisation: only record changed IDs to keep the map small.
+            if rid:
+                sanitised = _sanitise_resource_id(rid)
+                if sanitised != rid:
+                    id_map[(rt, rid)] = sanitised
+            # ``obj`` goes out of scope here — reclaimed on next iteration.
     finally:
         if hasattr(stream, "close"):
             stream.close()
 
-    meta_dicts = [{"resourceType": rt, "id": rid} for _, rt, rid in lines_with_meta]
-    tiers = _infer_upload_tiers(meta_dicts)
-    id_map = _compute_id_map(meta_dicts)
-    del meta_dicts
+    # Compute upload tiers from the collected (present, deps) using the same
+    # iterative-relaxation algorithm as _infer_upload_tiers.
+    deps: dict[str, set[str]] = {
+        rt: {d for d in raw_deps.get(rt, ()) if d in present and d != rt}
+        for rt in present
+    }
+    tiers: dict[str, int] = {rt: 0 for rt in present}
+    for _ in range(len(present)):
+        updated = False
+        for rt, dep_types in deps.items():
+            if dep_types:
+                required = max(tiers[d] for d in dep_types) + 1
+                if required > tiers[rt]:
+                    tiers[rt] = required
+                    updated = True
+        if not updated:
+            break
 
     tier_raw: defaultdict[int, list[str]] = defaultdict(list)
     for raw_line, rt, _rid in lines_with_meta:
@@ -121,8 +188,31 @@ def _execute_bulk_import(job: Job, store, staging) -> None:
             base, [_parse_and_rewrite(r) for r in chunk_lines], target_token, timeout
         )
 
+    _MAX_ERROR_DETAILS = 50  # cap stored error details to avoid bloating the checkpoint
     uploaded = errors = 0
+    error_details: list[dict] = []  # [{resourceType, error}] — first N failures
     pool = get_executor() if parallel > 1 else None
+
+    def _tally(results: list[dict]) -> None:
+        """Count results and collect up to _MAX_ERROR_DETAILS error samples."""
+        nonlocal uploaded, errors
+        for result in results:
+            if result.get("success"):
+                uploaded += 1
+            else:
+                errors += 1
+                if len(error_details) < _MAX_ERROR_DETAILS:
+                    error_details.append({
+                        "resourceType": result.get("resourceType", "Unknown"),
+                        "error": (result.get("error") or "unknown error")[:200],
+                    })
+
+    def _checkpoint_progress() -> None:
+        save_checkpoint(store, job, {
+            "phase": "uploading",
+            "lines_written": uploaded + errors,
+            "staged_count": total,
+        })
 
     for tier_level in sorted(tier_raw.keys()):
         tier_lines = tier_raw.pop(tier_level)
@@ -130,49 +220,47 @@ def _execute_bulk_import(job: Job, store, staging) -> None:
         del tier_lines
 
         if pool is not None and len(chunks) > 1:
-            # Sliding window of futures limits concurrent dict-object memory to
-            # at most `parallel` in-flight tiers rather than the whole tier at once.
+            # Sliding window: keep `parallel` futures in-flight, drain on each fill.
+            # Checkpoint after each drain so the frontend sees progress every
+            # ~(parallel × batch_size) resources rather than once per tier.
             active: set = set()
             for chunk in chunks:
                 fut = pool.submit(_upload_chunk, chunk)
                 active.add(fut)
                 if len(active) >= parallel:
-                    done, active = cf_wait(active, return_when=FIRST_COMPLETED)
-                    for f in done:
-                        for result in f.result():
-                            if result.get("success"):
-                                uploaded += 1
-                            else:
-                                errors += 1
-            done, _ = cf_wait(active)
-            for f in done:
-                for result in f.result():
-                    if result.get("success"):
-                        uploaded += 1
-                    else:
-                        errors += 1
+                    done_futs, active = cf_wait(active, return_when=FIRST_COMPLETED)
+                    for f in done_futs:
+                        _tally(f.result())
+                    _checkpoint_progress()
+            # Drain remaining futures
+            done_futs, _ = cf_wait(active)
+            for f in done_futs:
+                _tally(f.result())
+            _checkpoint_progress()
         else:
+            # Sequential: checkpoint after every chunk (= batch_size resources).
             for chunk in chunks:
-                for result in _upload_chunk(chunk):
-                    if result.get("success"):
-                        uploaded += 1
-                    else:
-                        errors += 1
-
-        done_count = uploaded + errors
-        if done_count % 500 == 0 or done_count == total:
-            save_checkpoint(store, job, {
-                "phase": "uploading",
-                "lines_written": done_count,
-                "staged_count": total,
-            })
+                _tally(_upload_chunk(chunk))
+                _checkpoint_progress()
 
     save_checkpoint(store, job, {
         "phase": "done",
         "lines_written": uploaded + errors,
+        "uploaded": uploaded,
         "staged_count": total,
         "errors": errors,
+        "error_details": error_details,
     })
     job.result_path = ndjson_path
     store.update(job)
     _worker_log.info("bulk_import_done job=%s uploaded=%d errors=%d", job.id, uploaded, errors)
+
+    # Surface a hard failure when no resource was successfully uploaded.  The
+    # job runner above us treats raised exceptions as job failure; without this,
+    # a 100 %-failure run would persist as ``status=done`` and the API would
+    # serve up a misleadingly successful result.
+    if total > 0 and uploaded == 0:
+        raise RuntimeError(
+            f"bulk_import_failed: 0/{total} resources uploaded "
+            f"({errors} errors); see error_details in checkpoint"
+        )

@@ -15,16 +15,42 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import signal
 from datetime import datetime, timedelta, timezone
 import os
 from pathlib import Path
 
-from medanon_core.domain import Job, JobStatus
+from domain.jobs import Job, JobStatus
 from pipeline.jobs.checkpoint import save_checkpoint
 from utils import audit
 
 _worker_log = logging.getLogger("medanon.worker")
+
+# Patterns that may contain PHI in exception messages.
+# UUIDs appear in FHIR resource IDs; ISO dates appear in generalization/perturb errors.
+_PHI_UUID_RE = re.compile(
+    r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
+    re.IGNORECASE,
+)
+_PHI_DATE_RE = re.compile(r"\b\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}[^\s]*)?\b")
+_PHI_EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b")
+_PHI_PHONE_RE = re.compile(r"(?<!\d)(?:\+\d{1,3}[\s\-]?)?(?:\(?\d{2,4}\)?[\s\-.]?)?\d{3,4}[\s\-.]?\d{4}(?!\d)")
+
+
+def _sanitize_error(exc: BaseException, max_len: int = 400) -> str:
+    """Return a PHI-scrubbed, truncated string representation of *exc*.
+
+    Replaces UUID-like strings (FHIR resource IDs), ISO date strings, email
+    addresses, and phone numbers with placeholders so they are never persisted
+    in the job error field or audit log.
+    """
+    text = str(exc)
+    text = _PHI_UUID_RE.sub("[ID]", text)
+    text = _PHI_DATE_RE.sub("[DATE]", text)
+    text = _PHI_EMAIL_RE.sub("[EMAIL]", text)
+    text = _PHI_PHONE_RE.sub("[PHONE]", text)
+    return text[:max_len]
 _store = None
 _staging = None  # StagingStore instance; set by init_staging() when MEDANON_STAGING_DB_URL is configured
 _OUTPUT_DIR = os.environ.get("MEDANON_OUTPUT_DIR", "/output")
@@ -131,9 +157,13 @@ def _cleanup_expired_results() -> int:
     storage = get_result_storage()
     cutoff = datetime.now(timezone.utc) - timedelta(seconds=_RESULT_TTL_SEC)
     deleted = 0
-    offset = 0
+    # Keyset cursor: ISO string of the last job's created_at seen in the previous
+    # page.  Avoids O(n) offset scans that grow with the job table size.
+    cursor: str | None = None
     while True:
-        jobs = _store.list_jobs(status="done", limit=200, offset=offset)
+        jobs = _store.list_jobs(
+            status="done", limit=200, offset=0, before_created_at=cursor
+        )
         if not jobs:
             break
         for job in jobs:
@@ -159,7 +189,9 @@ def _cleanup_expired_results() -> int:
                 )
         if len(jobs) < 200:
             break
-        offset += 200
+        # Advance cursor to the created_at of the oldest job in this page.
+        # Results are ordered newest-first so the last element is the oldest.
+        cursor = jobs[-1].created_at
     return deleted
 
 
@@ -199,12 +231,7 @@ async def _run_job(job: Job) -> None:
     cp = (job.checkpoint_data or {}) if hasattr(job, "checkpoint_data") else {}
     retry_count = int(cp.get("_retry_count", 0))
     if retry_count >= _MAX_JOB_RETRIES:
-        job.status = JobStatus.ERROR
-        job.error = f"Exceeded max retries ({_MAX_JOB_RETRIES})"
-        _store.update(job)
-        _worker_log.error(
-            "job_poison id=%s retries=%d — giving up", job.id, retry_count
-        )
+        _route_to_dlq(job, retry_count)
         return
 
     job.status = JobStatus.RUNNING
@@ -234,7 +261,7 @@ async def _run_job(job: Job) -> None:
         )
     except Exception as exc:
         job.status = JobStatus.ERROR
-        job.error = str(exc)[:500]
+        job.error = _sanitize_error(exc)
         # Increment retry count on failure so crash-recovered jobs are bounded
         cp = (job.checkpoint_data or {}) if hasattr(job, "checkpoint_data") else {}
         cp["_retry_count"] = int(cp.get("_retry_count", 0)) + 1
@@ -246,12 +273,17 @@ async def _run_job(job: Job) -> None:
             resource_id=job.id,
             resource_type=job.type,
             outcome="error",
-            detail={"error": str(exc)[:200]},
+            detail={"error": _sanitize_error(exc, max_len=200)},
         )
     finally:
         WORKER_JOB_DURATION.labels(job_type=job.type).observe(_time.monotonic() - _t0)
         WORKER_ACTIVE_JOBS.dec()
-    _store.update(job)
+        # Always persist terminal status — even if the success/error handler above
+        # raises, the job must not remain stuck in RUNNING indefinitely.
+        try:
+            _store.update(job)
+        except Exception as update_exc:
+            _worker_log.error("job_status_update_failed id=%s: %s", job.id, update_exc)
 
 
 async def _run_and_release(job: Job, message_id: str | None = None) -> None:
@@ -280,17 +312,71 @@ async def _run_and_release(job: Job, message_id: str | None = None) -> None:
 # ---------------------------------------------------------------------------
 
 
+# Dead Letter Queue stream name; consumers (alerting, manual triage tooling)
+# can XREAD this stream independently of the regular job queue.
+_DLQ_STREAM = "medanon:jobs:dlq"
+_DLQ_STREAM_MAXLEN = int(os.environ.get("MEDANON_DLQ_STREAM_MAXLEN", "10000"))
+
+
+def _emit_dlq_stream(job, retry_count: int) -> None:
+    """Best-effort: append a poison-job marker to the DLQ Redis Stream.
+
+    Silent on Redis unavailability — the job is already persisted with
+    ``status=DEAD`` in the job store, so the stream is purely an
+    observability aid.
+    """
+    try:
+        from utils.audit import _get_redis  # type: ignore[attr-defined]
+
+        r = _get_redis()
+        if r is None:
+            return
+        r.xadd(
+            _DLQ_STREAM,
+            {
+                "job_id": job.id,
+                "type": job.type,
+                "retry_count": str(retry_count),
+                "error": (job.error or "")[:200],
+            },
+            maxlen=_DLQ_STREAM_MAXLEN,
+            approximate=True,
+        )
+    except Exception:
+        # Never let DLQ instrumentation block the worker.
+        _worker_log.debug("dlq_stream_emit_failed id=%s", job.id, exc_info=True)
+
+
+def _route_to_dlq(job, retry_count: int) -> None:
+    """Mark *job* as DEAD, persist, audit, and append to the DLQ stream.
+
+    Called from poison-detection branches in ``_run_job`` and
+    ``_check_retry_limit`` so the routing logic stays in one place.
+    """
+    job.status = JobStatus.DEAD
+    job.error = f"Exceeded max retries ({_MAX_JOB_RETRIES})"
+    if _store is not None:
+        _store.update(job)
+    _worker_log.error(
+        "job_poison id=%s retries=%d type=%s — routed to DLQ",
+        job.id, retry_count, job.type,
+    )
+    audit.emit(
+        "job.poison",
+        resource_id=job.id,
+        resource_type=job.type,
+        outcome="error",
+        detail={"retry_count": retry_count, "max_retries": _MAX_JOB_RETRIES},
+    )
+    _emit_dlq_stream(job, retry_count)
+
+
 def _check_retry_limit(job) -> bool:
     """Check if a job has exceeded its retry limit. Returns True if poisoned (should not retry)."""
     cp = (job.checkpoint_data or {}) if hasattr(job, "checkpoint_data") else {}
     retry_count = int(cp.get("_retry_count", 0))
     if retry_count >= _MAX_JOB_RETRIES:
-        job.status = JobStatus.ERROR
-        job.error = f"Exceeded max retries ({_MAX_JOB_RETRIES})"
-        _store.update(job)
-        _worker_log.error(
-            "job_poison id=%s retries=%d — giving up", job.id, retry_count
-        )
+        _route_to_dlq(job, retry_count)
         return True
     return False
 

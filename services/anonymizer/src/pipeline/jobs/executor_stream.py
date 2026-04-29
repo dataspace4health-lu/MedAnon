@@ -12,10 +12,10 @@ import queue
 import threading
 from pathlib import Path
 
-from medanon_core.domain import JobStatus
+from domain.jobs import JobStatus
 from pipeline.jobs.checkpoint import save_checkpoint
 from pipeline.processor import _BATCH_SIZE, _CappedSet, process_data_batch
-from utils.json_fast import dumps as _json_dumps
+from utils.json_fast import dumps as _json_dumps, loads as _json_loads
 
 _worker_log = logging.getLogger("medanon.worker")
 _OUTPUT_DIR = os.environ.get("MEDANON_OUTPUT_DIR", "/output")
@@ -98,8 +98,16 @@ def batch_or_bisect(
                 if isinstance(resource, dict)
                 else "Unknown"
             )
-            _worker_log.error("fallback resource_type=%s error=%s", rtype, exc)
-            return [({"error": "processing error", "resourceType": rtype}, None)]
+            rid = (
+                resource.get("id", "<no-id>")
+                if isinstance(resource, dict)
+                else "<no-id>"
+            )
+            _worker_log.error(
+                "resource_processing_failed resource_type=%s id=%s error=%s",
+                rtype, rid, exc, exc_info=True,
+            )
+            return [({"error": "processing error", "resourceType": rtype, "id": rid}, None)]
 
     try:
         out = process_data_batch(
@@ -113,7 +121,10 @@ def batch_or_bisect(
             results, manifests = out
             return list(zip(results, manifests if manifests else [None] * len(results)))
         return [(r, None) for r in out]
-    except Exception:
+    except Exception as exc:
+        _worker_log.debug(
+            "batch_process_failed chunk_size=%d — bisecting: %s", len(chunk), exc
+        )
         mid = len(chunk) // 2
         return batch_or_bisect(
             chunk[:mid], settings, pseudonymizer, want_manifest
@@ -308,6 +319,11 @@ class PipelinedProcessor:
     def _process_chunk(self, chunk: list[dict], checkpoint_writer: AsyncCheckpointWriter) -> bool:
         """Process one chunk.  Returns True if the job was cancelled."""
         _want_manifest = self._summary is not None
+        # Snapshot resources before processing: process_data_batch mutates dicts
+        # in-place during _finalize_resource. If it raises after partially finalizing
+        # some resources, batch_or_bisect would re-process already-pseudonymized values
+        # (the pseudonym itself would be sent to gPAS again, producing a second entry).
+        _snapshots = [_json_dumps(r) for r in chunk]
         try:
             batch_out = process_data_batch(
                 chunk,
@@ -330,10 +346,13 @@ class PipelinedProcessor:
                     entries = manifest_list[idx] if manifest_list else None
                     self._summary.record_resource(result, manifest_entries=entries)
         except Exception:
+            # Restore originals from snapshots so batch_or_bisect works on
+            # unmodified resources, not partially pseudonymized ones.
+            fresh_chunk = [_json_loads(s) for s in _snapshots]
             # Binary-search fallback: isolates bad resources in log₂(N) depth;
             # good sub-chunks still benefit from batch gPAS de-duplication.
             pairs = batch_or_bisect(
-                chunk, self._settings, self._pseudonymizer, _want_manifest
+                fresh_chunk, self._settings, self._pseudonymizer, _want_manifest
             )
             for result, fb_entries in pairs:
                 self._fh.write(_json_dumps(result) + "\n")
@@ -346,7 +365,10 @@ class PipelinedProcessor:
 
         self._fh.flush()
 
-        if self._count % _PROGRESS_INTERVAL < len(chunk):
+        # Emit a processing checkpoint on the very first chunk so the UI transitions
+        # from "fetching" to "processing" immediately, then every _PROGRESS_INTERVAL
+        # resources thereafter.
+        if self._chunk_count == 0 or self._count % _PROGRESS_INTERVAL < len(chunk):
             chk = {"phase": "processing", "lines_written": self._count}
             if self._cursor_state:
                 chk["fhir_cursor"] = dict(self._cursor_state)
@@ -397,9 +419,11 @@ def process_stream_chunked(
     count = start_count
     chunk: list[dict] = []
     seen_values = _CappedSet()
+    _first_chunk = True
 
     def _flush() -> bool:
-        nonlocal count
+        nonlocal count, _first_chunk
+        _snapshots = [_json_dumps(r) for r in chunk]
         try:
             results = process_data_batch(
                 chunk, settings, pseudonymizer, attach_manifest=True,
@@ -412,8 +436,9 @@ def process_stream_chunked(
                 if summary is not None:
                     summary.record_resource(result)
         except Exception:
+            fresh_chunk = [_json_loads(s) for s in _snapshots]
             # Binary-search fallback: isolates bad resources in log₂(N) depth.
-            pairs = batch_or_bisect(chunk, settings, pseudonymizer, want_manifest=False)
+            pairs = batch_or_bisect(fresh_chunk, settings, pseudonymizer, want_manifest=False)
             for result, _ in pairs:
                 fh.write(_json_dumps(result) + "\n")
                 if summary is not None:
@@ -425,11 +450,12 @@ def process_stream_chunked(
 
         fh.flush()
 
-        if count % _PROGRESS_INTERVAL < len(chunk):
+        if _first_chunk or count % _PROGRESS_INTERVAL < len(chunk):
             chk = {"phase": "processing", "lines_written": count}
             if cursor_state:
                 chk["fhir_cursor"] = dict(cursor_state)
             save_checkpoint(store, job, chk)
+        _first_chunk = False
 
         fresh = store.get(job.id)
         if fresh and fresh.status == JobStatus.CANCELLED:

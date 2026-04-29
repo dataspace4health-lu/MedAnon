@@ -6,13 +6,72 @@ Provides an intermediate table so that Phase 1 (FHIR fetch) and Phase 2
   - A crash after Phase 1 completes → Phase 2 restarts from staging, no FHIR re-fetch.
   - ON CONFLICT DO NOTHING on (job_id, resource_id) → automatic dedup across pages.
   - SELECT … FOR UPDATE SKIP LOCKED → safe for future parallel workers.
+
+Field-level encryption
+----------------------
+When ``MEDANON_STAGING_ENCRYPT_KEY`` is set the ``resource_json`` column is
+encrypted with AES-128-CBC (Fernet) before INSERT and decrypted after SELECT.
+The plaintext PHI never touches the Postgres wire or WAL in unencrypted form.
+
+  MEDANON_STAGING_ENCRYPT_KEY — 32-byte URL-safe base64 Fernet key.
+  Generate once: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+
+Encrypted values are stored as ``{"_fernet": "<token>"}`` JSON, allowing
+gradual migration: rows written before encryption was enabled are read back
+as plain JSON; newly written rows are encrypted.
 """
 
 from __future__ import annotations
 
-from utils.json_fast import dumps as _json_dumps
+import base64
+import os
+from utils.json_fast import dumps as _json_dumps, loads as _json_loads
 import logging
 from typing import Iterable
+
+# ---------------------------------------------------------------------------
+# Optional Fernet field encryption
+# ---------------------------------------------------------------------------
+_STAGING_ENCRYPT_KEY = os.environ.get("MEDANON_STAGING_ENCRYPT_KEY", "").strip().encode()
+_fernet = None
+
+if _STAGING_ENCRYPT_KEY:
+    try:
+        from cryptography.fernet import Fernet as _Fernet
+        _fernet = _Fernet(_STAGING_ENCRYPT_KEY)
+    except Exception as exc:
+        logging.getLogger("medanon.staging").warning(
+            "staging_encrypt_key_invalid: %s — field encryption disabled", exc
+        )
+        _fernet = None
+
+
+def _encrypt_resource(json_str: str) -> str:
+    """Encrypt *json_str* and return a JSON wrapper ``{"_fernet": "<token>"}``.
+
+    Returns *json_str* unchanged when encryption is disabled.
+    """
+    if _fernet is None:
+        return json_str
+    token = _fernet.encrypt(json_str.encode()).decode()
+    return _json_dumps({"_fernet": token})
+
+
+def _decrypt_resource(stored: str) -> str:
+    """Decrypt a Fernet-wrapped resource JSON string.
+
+    Returns *stored* unchanged when encryption is disabled or the value is
+    a plain (legacy) JSON object.
+    """
+    if _fernet is None:
+        return stored
+    try:
+        obj = _json_loads(stored) if isinstance(stored, str) else stored
+        if isinstance(obj, dict) and "_fernet" in obj:
+            return _fernet.decrypt(obj["_fernet"].encode()).decode()
+    except Exception:
+        pass
+    return stored if isinstance(stored, str) else _json_dumps(stored)
 
 import psycopg2
 import psycopg2.extras
@@ -61,6 +120,20 @@ class StagingStore:
         pool: ThreadedConnectionPool | None = None,
     ) -> None:
         self._db_url = db_url
+        # Coerce + range-check at the boundary so the value used in the
+        # ``expires_sql`` interval string later cannot be anything other than
+        # a small non-negative integer.  This is structural defence-in-depth
+        # alongside the f-string in ``stage_resources``.
+        try:
+            retention_days = int(retention_days)
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"retention_days must be an integer (got {retention_days!r})"
+            ) from None
+        if retention_days < 0 or retention_days > 3650:
+            raise ValueError(
+                f"retention_days must be between 0 and 3650 (got {retention_days})"
+            )
         self._retention_days = retention_days
         self._pool: ThreadedConnectionPool | None = pool
         self._owns_pool = pool is None  # only close pool if we created it
@@ -72,7 +145,9 @@ class StagingStore:
     def ensure_schema(self) -> None:
         """Create schema + table + indexes if they don't already exist."""
         if self._pool is None:
-            self._pool = ThreadedConnectionPool(2, 10, self._db_url)
+            from utils.pool_budget import pg_staging_budget
+
+            self._pool = ThreadedConnectionPool(2, pg_staging_budget(), self._db_url)
             self._owns_pool = True
         conn = self._pool.getconn()
         try:
@@ -92,7 +167,13 @@ class StagingStore:
 
     def _put_conn(self, conn) -> None:
         if self._pool:
-            self._pool.putconn(conn)
+            try:
+                if conn.closed:
+                    self._pool.putconn(conn, close=True)
+                else:
+                    self._pool.putconn(conn)
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------
     # Write operations
@@ -118,7 +199,7 @@ class StagingStore:
             rtype = resource.get("resourceType", "Unknown")
             rid = resource.get("id")
             resource_id = f"{rtype}/{rid}" if rid else f"{rtype}/auto-{idx}"
-            rows.append((job_id, resource_id, rtype, _json_dumps(resource)))
+            rows.append((job_id, resource_id, rtype, _encrypt_resource(_json_dumps(resource))))
 
         conn = self._get_conn()
         try:
@@ -132,10 +213,7 @@ class StagingStore:
                         VALUES %s
                         ON CONFLICT (job_id, resource_id) DO NOTHING
                         """,
-                        [
-                            (job_id, rid, rtype, rjson, None)
-                            for job_id, rid, rtype, rjson in rows
-                        ],
+                        rows,
                         template=f"(%s, %s, %s, %s::jsonb, {expires_sql})",
                     )
                     return cur.rowcount
@@ -216,27 +294,43 @@ class StagingStore:
         finally:
             self._put_conn(conn)
 
-    def get_all_resources(self, job_id: str) -> Iterable[dict]:
-        """Iterate over every resource for a job (for re-processing)."""
-        conn = self._get_conn()
-        try:
-            with conn.cursor(
-                name=f"cursor_all_{job_id}",
-                cursor_factory=psycopg2.extras.RealDictCursor,
-            ) as cur:
-                cur.execute(
-                    """
-                    SELECT id, resource_id, resource_type, resource_json
-                      FROM medanon.staged_resources
-                     WHERE job_id = %s
-                     ORDER BY id
-                    """,
-                    (job_id,),
-                )
-                for row in cur:
-                    yield dict(row)
-        finally:
-            self._put_conn(conn)
+    def get_all_resources(
+        self, job_id: str, page_size: int = 500
+    ) -> Iterable[dict]:
+        """Iterate over every resource for a job (e.g. for re-processing).
+
+        Uses keyset pagination on the integer ``id`` PK — releases and
+        re-acquires the connection between pages so the pool is never starved
+        during long-running jobs.  Pages of *page_size* rows at a time.
+        """
+        after_id = 0
+        while True:
+            conn = self._get_conn()
+            try:
+                with conn.cursor(
+                    cursor_factory=psycopg2.extras.RealDictCursor
+                ) as cur:
+                    cur.execute(
+                        """
+                        SELECT id, resource_id, resource_type, resource_json
+                          FROM medanon.staged_resources
+                         WHERE job_id = %s AND id > %s
+                         ORDER BY id
+                         LIMIT %s
+                        """,
+                        (job_id, after_id, page_size),
+                    )
+                    rows = cur.fetchall()
+            finally:
+                self._put_conn(conn)
+
+            if not rows:
+                break
+            for row in rows:
+                yield dict(row)
+            after_id = rows[-1]["id"]
+            if len(rows) < page_size:
+                break
 
     def count_by_status(self, job_id: str) -> dict[str, int]:
         """Return ``{pending, done, error, total}`` counts for a job."""

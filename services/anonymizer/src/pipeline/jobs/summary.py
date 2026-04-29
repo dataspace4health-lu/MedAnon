@@ -14,29 +14,12 @@ from datetime import datetime, timezone
 
 _log = logging.getLogger("medanon.summary")
 
-# Manifest system constant — duplicated here to avoid circular import
-_MANIFEST_SYSTEM = "https://medanon.local/transformation-manifest"
-
-
-def _extract_manifest_entries(resource: dict) -> list[dict]:
-    """Extract transformation manifest entries from resource meta.tag."""
-    meta = resource.get("meta")
-    if not meta or not isinstance(meta, dict):
-        return []
-    tags = meta.get("tag", [])
-    for tag in tags:
-        if isinstance(tag, dict) and tag.get("system") == _MANIFEST_SYSTEM:
-            display = tag.get("display", "")
-            if display:
-                try:
-                    from utils.json_fast import loads as _json_loads
-
-                    entries = _json_loads(display)
-                    if isinstance(entries, list):
-                        return entries
-                except (ValueError, TypeError):
-                    pass
-    return []
+# Re-export the canonical extractor (single source of truth in pipeline.manifest).
+from pipeline.manifest import (  # noqa: E402
+    MANIFEST_SYSTEM as _MANIFEST_SYSTEM,
+    MANIFEST_FULL_EXT_URL as _MANIFEST_FULL_EXT_URL,
+    extract_manifest_entries as _extract_manifest_entries,
+)
 
 
 class JobSummaryCollector:
@@ -46,14 +29,23 @@ class JobSummaryCollector:
         "_type_counts",
         "_error_count",
         "_config_profile",
+        "_settings",
+        "_job_id",
         "_started_at",
         "_score_collector",
     )
 
-    def __init__(self, config_profile: str = "auto") -> None:
+    def __init__(
+        self,
+        config_profile: str = "auto",
+        settings=None,
+        job_id: str = "",
+    ) -> None:
         self._type_counts: Counter[str] = Counter()
         self._error_count: int = 0
         self._config_profile = config_profile
+        self._settings = settings
+        self._job_id = job_id
         self._started_at: float = time.monotonic()
         self._score_collector = None
         # Try to initialize scoring (may be disabled via env)
@@ -61,9 +53,12 @@ class JobSummaryCollector:
             from pipeline.scoring.constants import SCORING_ENABLED
 
             if SCORING_ENABLED:
-                from pipeline.scoring.engine import ScoreCollector
+                from pipeline.scoring.audit import ScoreAuditCollector
 
-                self._score_collector = ScoreCollector(config_profile=config_profile)
+                self._score_collector = ScoreAuditCollector(
+                    config_profile=config_profile,
+                    job_id=job_id,
+                )
         except Exception:
             _log.debug("scoring_init_skipped", exc_info=True)
 
@@ -100,7 +95,7 @@ class JobSummaryCollector:
                     original=None,
                     deidentified=resource,
                     manifest_entries=manifest_entries,
-                    settings=None,
+                    settings=self._settings,
                 )
             except Exception:
                 _log.debug("scoring_resource_error rtype=%s", rtype, exc_info=True)
@@ -110,6 +105,19 @@ class JobSummaryCollector:
         self._error_count += 1
         if self._score_collector is not None:
             self._score_collector.record_error()
+
+    def generate_audit_report(self, export_meta: dict | None = None) -> str | None:
+        """Generate the Markdown audit report; returns None when scoring is disabled."""
+        if self._score_collector is None:
+            return None
+        try:
+            return self._score_collector.generate_report(
+                settings=self._settings,
+                export_meta=export_meta or {},
+            )
+        except Exception:
+            _log.debug("scoring_audit_report_error", exc_info=True)
+            return None
 
     def to_dict(self, file_size_bytes: int = 0, compressed: bool = False) -> dict:
         """Produce the summary dict for checkpoint_data."""

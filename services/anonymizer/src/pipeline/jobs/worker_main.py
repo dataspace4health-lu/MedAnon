@@ -26,131 +26,50 @@ logger = logging.getLogger("medanon.worker_main")
 async def _main() -> None:
     from pipeline.jobs import init_job_store
     from pipeline.jobs import worker as _worker
+    from pipeline.jobs.store_factory import (
+        check_gpas_canary,
+        select_job_store,
+        setup_redis_cache,
+        setup_staging,
+    )
+
+    # Log the centralized connection pool budget so operators can verify sizing.
+    try:
+        from utils.pool_budget import log_pool_budget
+
+        log_pool_budget()
+    except Exception:
+        pass
 
     redis_url = os.environ.get("MEDANON_REDIS_URL", "").strip()
+    app_db_url = os.environ.get("MEDANON_APP_DB_URL", "").strip()
     max_concurrent = int(os.environ.get("MEDANON_JOB_WORKERS", "3"))
 
-    # Expose Prometheus metrics on a lightweight HTTP server (separate from the
+    # Expose health/ready/metrics on a lightweight HTTP server (separate from the
     # FastAPI anonymizer).  Port is configurable; set to 0 to disable.
     metrics_port = int(os.environ.get("MEDANON_WORKER_METRICS_PORT", "9091"))
     if metrics_port > 0:
         try:
-            from prometheus_client import start_http_server
+            from pipeline.jobs.worker_health import start_worker_health_server
 
-            start_http_server(metrics_port)
-            logger.info("worker_metrics_server started port=%d", metrics_port)
+            start_worker_health_server(metrics_port)
         except Exception as exc:
             logger.warning(
-                "worker_metrics_server_failed port=%d: %s", metrics_port, exc
+                "worker_health_server_failed port=%d: %s", metrics_port, exc
             )
 
-    # Opt-in Redis L2 cache for gPAS pseudonym sharing (with retry)
-    if redis_url:
-        retries = 5
-        backoff = 2.0
-        for attempt in range(1, retries + 1):
-            try:
-                from utils.cache import (
-                    RedisCache,
-                    LocalLruCache,
-                    TieredCache,
-                    configure_cache,
-                )
+    # Shared setup via store factory (identical to api/main.py)
+    await setup_redis_cache(redis_url)
+    await check_gpas_canary(redis_url)
 
-                configure_cache(TieredCache(LocalLruCache(), RedisCache(redis_url)))
-                logger.info("gpas_cache=tiered(local+redis)")
-                break
-            except Exception as exc:
-                if attempt < retries:
-                    logger.warning(
-                        "redis_cache_setup_failed attempt=%d/%d: %s — retrying in %.0fs",
-                        attempt,
-                        retries,
-                        exc,
-                        backoff,
-                    )
-                    await asyncio.sleep(backoff)
-                    backoff = min(backoff * 2, 30.0)
-                else:
-                    logger.warning(
-                        "redis_cache_setup_failed falling_back=local: %s", exc
-                    )
-
-        # gPAS cache coherence check — detect stale Redis after DB wipe
-        try:
-            from integrations.gpas.canary import check_gpas_cache_coherence
-
-            result = check_gpas_cache_coherence(redis_url)
-            if result.get("flushed"):
-                logger.warning("gpas_canary: %s", result["reason"])
-            elif result.get("checked"):
-                logger.info("gpas_canary: %s", result["reason"])
-        except Exception as exc:
-            logger.warning("gpas_canary_check_failed: %s", exc)
-
-    # Job store — prefer Redis (with retry), fall back to SQLite
-    job_store = None
-    if redis_url:
-        retries = 5
-        backoff = 2.0
-        for attempt in range(1, retries + 1):
-            try:
-                from integrations.redis.job_store import RedisJobStore
-
-                job_store = RedisJobStore(redis_url)
-                logger.info("job_store=redis")
-                break
-            except Exception as exc:
-                if attempt < retries:
-                    logger.warning(
-                        "redis_job_store_failed attempt=%d/%d: %s — retrying in %.0fs",
-                        attempt,
-                        retries,
-                        exc,
-                        backoff,
-                    )
-                    await asyncio.sleep(backoff)
-                    backoff = min(backoff * 2, 30.0)
-                else:
-                    logger.warning(
-                        "redis_job_store_failed falling_back=sqlite: %s", exc
-                    )
-
+    job_store, pg_pool = await select_job_store(redis_url, app_db_url)
     store = init_job_store(store=job_store)
     _worker.init_worker(store, max_concurrent=max_concurrent)
 
-    # Staging store (opt-in)
     staging_url = os.environ.get("MEDANON_STAGING_DB_URL", "").strip()
-    if staging_url:
-        retries = 3
-        backoff = 2.0
-        for attempt in range(1, retries + 1):
-            try:
-                from integrations.staging.store import StagingStore
-
-                retention_days = int(
-                    os.environ.get("MEDANON_STAGING_RETENTION_DAYS", "30")
-                )
-                staging_store = StagingStore(staging_url, retention_days=retention_days)
-                staging_store.ensure_schema()
-                _worker.init_staging(staging_store)
-                logger.info("staging_store=postgres retention_days=%d", retention_days)
-                break
-            except Exception as exc:
-                if attempt < retries:
-                    logger.warning(
-                        "staging_store_setup_failed attempt=%d/%d: %s — retrying in %.0fs",
-                        attempt,
-                        retries,
-                        exc,
-                        backoff,
-                    )
-                    await asyncio.sleep(backoff)
-                    backoff *= 2
-                else:
-                    logger.warning(
-                        "staging_store_setup_failed falling_back=streaming: %s", exc
-                    )
+    staging_store = await setup_staging(staging_url, app_db_url, pg_pool)
+    if staging_store is not None:
+        _worker.init_staging(staging_store)
 
     # Graceful shutdown: stop accepting new jobs on SIGTERM/SIGINT,
     # let in-progress jobs finish (up to graceful-timeout).
