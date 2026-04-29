@@ -98,6 +98,14 @@ rules:
   - match: Patient.extension.where(url.startsWith('http://synthetichealth.github.io/synthea/'))
     action: redact
 
+  # Quasi-identifiers — marital status and language are demographic attributes
+  # that combine with clinical data to enable re-identification in small cohorts.
+  - match: Patient.maritalStatus
+    action: redact
+
+  - match: Patient.communication
+    action: redact
+
   # ===========================================================================
   # 2. PATIENT — QUASI-IDENTIFIERS (generalize, not redact)
   # Preserves statistical utility for cohort and temporal analysis.
@@ -256,7 +264,36 @@ rules:
     action: redact
 
   # ===========================================================================
-  # 5. CLINICAL TEXT SCRUBBING
+  # 5. SDOH / PRAPARE QUASI-IDENTIFIERS
+  # PRAPARE (LOINC panel 93025-5) components carry social-determinant data
+  # that are quasi-identifiers in research cohorts: income, household size,
+  # education, language, and employment status can link records even after
+  # pseudonymization. Street address (LOINC 56799-0) is caught by the
+  # scrub_text street_address rule below.
+  # ===========================================================================
+
+  - name: redact PRAPARE annual income
+    match: "Observation.component.where(code.coding.where(code='63586-2').exists())"
+    action: redact
+
+  - name: redact PRAPARE household size
+    match: "Observation.component.where(code.coding.where(code='63512-8').exists())"
+    action: redact
+
+  - name: redact PRAPARE education level
+    match: "Observation.component.where(code.coding.where(code='82589-3').exists())"
+    action: redact
+
+  - name: redact PRAPARE preferred language
+    match: "Observation.component.where(code.coding.where(code='54899-0').exists())"
+    action: redact
+
+  - name: redact PRAPARE employment status
+    match: "Observation.component.where(code.coding.where(code='67875-5').exists())"
+    action: redact
+
+  # ===========================================================================
+  # 6. CLINICAL TEXT SCRUBBING
   # Preserve structured clinical codes (Condition, Observation, Medication).
   # Scrub free-text narrative and notes where names/addresses may appear.
   # ===========================================================================
@@ -316,4 +353,78 @@ rules:
   - match: "*.comment"
     action: nlp_detect_act
     params:
+      threshold: 0.4
+
+  # ===========================================================================
+  # DOCUMENTS / ATTACHMENTS — IRB-grade scrubbing
+  # text/* payloads: Base64-decoded → NLP-scrubbed → re-encoded.
+  # Longitudinal linkage is preserved via gPAS ID pseudonymisation; attachment
+  # free text must be scrubbed to remove residual direct identifiers.
+  # Non-text MIME types (image/*, application/pdf …): data field redacted.
+  # NOTE: *.attachment.data does NOT match DocumentReference — the attachment is
+  # nested under content[*].attachment, so specific paths are required per resource.
+  # ===========================================================================
+
+  # DocumentReference — clinical notes (content[*].attachment, nested one level)
+  - name: scrub document reference attachment text
+    match: DocumentReference.content.attachment.data
+    action: nlp_detect_act
+    params:
+      base64_encoded: true
+      entities: healthcare
+      threshold: 0.4
+
+  - name: redact document reference attachment url
+    match: DocumentReference.content.attachment.url
+    action: redact
+
+  - name: redact document reference attachment title
+    match: DocumentReference.content.attachment.title
+    action: redact
+
+  - name: redact document reference attachment hash
+    match: DocumentReference.content.attachment.hash
+    action: redact
+
+  # DiagnosticReport, QuestionnaireResponse — presentedForm is Attachment directly
+  - name: scrub presented form text
+    match: "*.presentedForm.data"
+    action: nlp_detect_act
+    params:
+      base64_encoded: true
+      entities: healthcare
+      threshold: 0.4
+
+  - name: redact presented form url
+    match: "*.presentedForm.url"
+    action: redact
+
+  - name: redact presented form title
+    match: "*.presentedForm.title"
+    action: redact
+
+  # Observation, Task — valueAttachment
+  - name: scrub value attachment text
+    match: "*.valueAttachment.data"
+    action: nlp_detect_act
+    params:
+      base64_encoded: true
+      entities: healthcare
+      threshold: 0.4
+
+  - name: redact value attachment url
+    match: "*.valueAttachment.url"
+    action: redact
+
+  # Photos — biometric identifiers, never NLP-scrubable
+  - name: redact photo data
+    match: "*.photo.data"
+    action: redact
+
+  - name: scrub binary resource data
+    match: Binary.data
+    action: nlp_detect_act
+    params:
+      base64_encoded: true
+      entities: healthcare
       threshold: 0.4

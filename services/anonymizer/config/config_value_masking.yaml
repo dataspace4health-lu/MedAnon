@@ -17,7 +17,7 @@
 #   - Integer PHI (multipleBirthInteger): masked to 0
 #   - Coordinates (Location.position lat/lon): masked to 0.0
 #   - Dates (birth, death, clinical, encounter): generalised to year only
-#   - Binary attachment payload (base64 data, hash): replaced with ""
+#   - Binary attachment payload (text/*): Base64-decoded, NLP-scrubbed, re-encoded
 #   - Attachment URL/title: replaced with [REDACTED]
 #   - Clinical codes, values, measurements: unchanged
 #   - Free text (narrative, notes, comments, valueString): NLP entity detection
@@ -87,13 +87,13 @@ rules:
   action: substitute
   params: *redacted
 
-- name: mask all name text
-  match: "*.name.text"
+- name: mask all name prefix
+  match: "*.name.prefix"
   action: substitute
   params: *redacted
 
-- name: mask all name prefix
-  match: "*.name.prefix"
+- name: mask all name text
+  match: "*.name.text"
   action: substitute
   params: *redacted
 
@@ -136,10 +136,18 @@ rules:
   action: substitute
   params: *redacted
 
+- name: mask all address district
+  match: "*.address.district"
+  action: substitute
+  params: *redacted
+
+# Address.text — free-text representation of an address (when the structured
+# line/city/postalCode fields aren't populated). Common in inbound bundles.
 - name: mask all address text
   match: "*.address.text"
   action: substitute
   params: *redacted
+
 
 # ==============================================================
 # 6. REFERENCE DISPLAY NAMES — cryptohash across all types
@@ -147,10 +155,6 @@ rules:
 
 - name: mask subject display
   match: "*.subject.display"
-  action: cryptohash
-
-- name: mask patient display
-  match: "*.patient.display"
   action: cryptohash
 
 - name: mask performer display
@@ -175,6 +179,25 @@ rules:
 
 - name: mask asserter display
   match: "*.asserter.display"
+  action: cryptohash
+
+# Service provider / facility — hospital / clinic name leaks identifying
+# institutional context.  Cryptohash to preserve referential consistency
+# across resources from the same encounter.
+- name: mask service provider display
+  match: "*.serviceProvider.display"
+  action: cryptohash
+
+- name: mask location display
+  match: "*.location.display"
+  action: cryptohash
+
+- name: mask managing organization display
+  match: "*.managingOrganization.display"
+  action: cryptohash
+
+- name: mask encounter location display
+  match: "*.encounter.display"
   action: cryptohash
 
 # ==============================================================
@@ -289,36 +312,77 @@ rules:
     substitute_with: "urn:void:masked"
 
 # ==============================================================
-# 9. ATTACHMENTS & BINARY — clear payload, keep field
+# 9. ATTACHMENTS & BINARY
+#    text/* payloads: Base64-decoded → NLP-scrubbed → re-encoded.
+#    Non-text MIME types (image/*, application/pdf …): data field cleared.
+#    Photos always cleared (biometric identifier — not scrubable).
 # ==============================================================
 
-- name: mask attachment data
-  match: "*.attachment.data"
+# DocumentReference — clinical notes (content[*].attachment, nested one level)
+- name: mask document reference attachment text
+  match: DocumentReference.content.attachment.data
+  action: nlp_detect_act
+  params:
+    base64_encoded: true
+    entities: healthcare
+    threshold: 0.4
+
+- name: mask document reference attachment url
+  match: DocumentReference.content.attachment.url
+  action: substitute
+  params: *redacted
+
+- name: mask document reference attachment title
+  match: DocumentReference.content.attachment.title
+  action: substitute
+  params: *redacted
+
+- name: mask document reference attachment hash
+  match: DocumentReference.content.attachment.hash
   action: substitute
   params:
     substitute_with: ""
 
-- name: mask attachment url
-  match: "*.attachment.url"
-  action: substitute
-  params: *redacted
-
-- name: mask attachment title
-  match: "*.attachment.title"
-  action: substitute
-  params: *redacted
-
-- name: mask attachment hash
-  match: "*.attachment.hash"
-  action: substitute
+# DiagnosticReport, QuestionnaireResponse — presentedForm is Attachment directly
+- name: mask presented form text
+  match: "*.presentedForm.data"
+  action: nlp_detect_act
   params:
-    substitute_with: ""
+    base64_encoded: true
+    entities: healthcare
+    threshold: 0.4
+
+- name: mask presented form url
+  match: "*.presentedForm.url"
+  action: substitute
+  params: *redacted
+
+- name: mask presented form title
+  match: "*.presentedForm.title"
+  action: substitute
+  params: *redacted
+
+# Observation, Task — valueAttachment
+- name: mask value attachment text
+  match: "*.valueAttachment.data"
+  action: nlp_detect_act
+  params:
+    base64_encoded: true
+    entities: healthcare
+    threshold: 0.4
+
+- name: mask value attachment url
+  match: "*.valueAttachment.url"
+  action: substitute
+  params: *redacted
 
 - name: mask binary data
   match: Binary.data
-  action: substitute
+  action: nlp_detect_act
   params:
-    substitute_with: ""
+    base64_encoded: true
+    entities: healthcare
+    threshold: 0.4
 
 # Photo: clear payload, keep object (Patient + Practitioner)
 - name: mask photo data
@@ -338,7 +402,27 @@ rules:
   params: *redacted
 
 # ==============================================================
-# 10. FREE-TEXT NARRATIVE — NLP entity detection
+# 10. SDOH / PRAPARE QUASI-IDENTIFIERS
+# Income (63586-2) and household size (63512-8) are valueQuantity numerics
+# with no other rule coverage — components removed (necessary exception to
+# the no-removal contract; selective substitute for numeric quantities is
+# not possible without also altering vital-sign measurements).
+# Education (82589-3), language (54899-0), employment (67875-5) are coded
+# valueCodeableConcept — already handled by *.component.valueCodeableConcept
+# rules in section 11 (text → [REDACTED], coding.display → cryptohash).
+# Street address (56799-0) is valueString — caught by scrub_text below.
+# ==============================================================
+
+- name: redact PRAPARE annual income
+  match: "Observation.component.where(code.coding.where(code='63586-2').exists())"
+  action: redact
+
+- name: redact PRAPARE household size
+  match: "Observation.component.where(code.coding.where(code='63512-8').exists())"
+  action: redact
+
+# ==============================================================
+# 11. FREE-TEXT NARRATIVE — NLP entity detection
 #     Conditional: fires only when PII is detected.
 #     Covers Resource.text, notes, comments, valueString, etc.
 # ==============================================================
@@ -349,6 +433,16 @@ rules:
   params: &nlp
     html: true
     threshold: 0.4
+
+# Composition.section[].text is a nested Narrative (BackboneElement) that the
+# wildcard `*.text` rule above does NOT reach — `*.text` expands to
+# `Composition.text` (top-level only) and the rule-matcher does not auto-descend
+# into BackboneElement arrays.  Explicitly target the section narrative so the
+# discharge-summary / clinical-document free text is NLP-scrubbed.
+- name: nlp scrub composition section narrative
+  match: "Composition.section.text"
+  action: nlp_detect_act
+  params: *nlp
 
 # Street address pattern — fires on any valueString containing a recognizable
 # address regardless of LOINC code or resource structure (covers PRAPARE 56799-0,
@@ -416,12 +510,6 @@ rules:
   params:
     threshold: 0.4
 
-- name: nlp scrub dosage instruction patient instruction
-  match: "*.dosageInstruction.patientInstruction"
-  action: nlp_detect_act
-  params:
-    threshold: 0.4
-
 - name: nlp scrub communication payload
   match: Communication.payload.contentString
   action: nlp_detect_act
@@ -429,7 +517,7 @@ rules:
     threshold: 0.4
 
 # ==============================================================
-# 11. PATIENT-SPECIFIC — fields unique to Patient
+# 12. PATIENT-SPECIFIC — fields unique to Patient
 # ==============================================================
 
 - name: mask patient Patient.birthGender
@@ -518,7 +606,7 @@ rules:
   action: cryptohash
 
 # ==============================================================
-# 12. PATIENT EXTENSIONS — mask values, keep extension objects
+# 13. PATIENT EXTENSIONS — mask values, keep extension objects
 # ==============================================================
 
 # US Core Race
@@ -539,11 +627,34 @@ rules:
 
 # US Core Ethnicity
 
+- name: mask ethnicity omb category coding display
+  match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-ethnicity').extension.where(url='ombCategory').valueCoding.display
+  action: cryptohash
+
 - name: mask ethnicity omb category coding code
   match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-ethnicity').extension.where(url='ombCategory').valueCoding.code
   action: substitute
   params:
     substitute_with: "UNK"
+
+- name: mask ethnicity text value
+  match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-ethnicity').extension.where(url='text').valueString
+  action: substitute
+  params: *redacted
+
+# Geolocation — Patient.address carries a geolocation extension with nested
+# latitude/longitude as valueDecimal; mask to 0.0 to preserve structure.
+- name: mask patient address geolocation latitude
+  match: Patient.address.extension.where(url='http://hl7.org/fhir/StructureDefinition/geolocation').extension.where(url='latitude').valueDecimal
+  action: substitute
+  params:
+    substitute_with: 0.0
+
+- name: mask patient address geolocation longitude
+  match: Patient.address.extension.where(url='http://hl7.org/fhir/StructureDefinition/geolocation').extension.where(url='longitude').valueDecimal
+  action: substitute
+  params:
+    substitute_with: 0.0
 
 # Mother's Maiden Name
 - name: mask mothers maiden name
@@ -583,7 +694,7 @@ rules:
     substitute_with: 0.0
 
 # ==============================================================
-# 13. PRACTITIONER-SPECIFIC
+# 14. PRACTITIONER-SPECIFIC
 # ==============================================================
 
 - name: mask practitioner gender
@@ -630,7 +741,7 @@ rules:
   action: cryptohash
 
 # ==============================================================
-# 14. ORGANIZATION / LOCATION — type-specific fields
+# 15. ORGANIZATION / LOCATION — type-specific fields
 # ==============================================================
 
 - name: mask organization name
@@ -653,24 +764,13 @@ rules:
   params:
     substitute_with: 0.0
 
-- name: mask location position altitude
-  match: Location.position.altitude
-  action: substitute
-  params:
-    substitute_with: 0.0
-
 - name: mask location managing org display
   match: Location.managingOrganization.display
   action: cryptohash
 
 # ==============================================================
-# 15. ENCOUNTER HOSPITALIZATION
+# 16. ENCOUNTER HOSPITALIZATION
 # ==============================================================
-
-- name: mask encounter hospitalization admit source text
-  match: Encounter.hospitalization.admitSource.text
-  action: substitute
-  params: *redacted
 
 - name: mask encounter hospitalization discharge disposition text
   match: Encounter.hospitalization.dischargeDisposition.text
@@ -678,7 +778,7 @@ rules:
   params: *redacted
 
 # ==============================================================
-# 16. COMMUNICATION / TASK / WORKFLOW
+# 17. COMMUNICATION / TASK / WORKFLOW
 # ==============================================================
 
 - name: mask communication sender display
@@ -702,7 +802,7 @@ rules:
   action: cryptohash
 
 # ==============================================================
-# 17. PROVENANCE / AUDIT
+# 18. PROVENANCE / AUDIT
 # ==============================================================
 
 - name: mask provenance agent who display
@@ -731,7 +831,7 @@ rules:
   action: cryptohash
 
 # ==============================================================
-# 18. DEVICE IDENTIFIERS
+# 19. DEVICE IDENTIFIERS
 # ==============================================================
 
 - name: pseudonymize device udi carrier device identifier
@@ -743,12 +843,6 @@ rules:
   match: Device.udiCarrier.carrierHRF
   action: substitute
   params: *redacted
-
-- name: mask device udi carrier aidc
-  match: Device.udiCarrier.carrierAIDC
-  action: substitute
-  params:
-    substitute_with: ""
 
 - name: mask device serial number
   match: Device.serialNumber
@@ -776,7 +870,7 @@ rules:
   params: *date_year
 
 # ==============================================================
-# 19. COVERAGE / INSURANCE
+# 20. COVERAGE / INSURANCE
 # ==============================================================
 
 - name: mask coverage subscriber id
