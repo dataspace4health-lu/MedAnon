@@ -263,6 +263,16 @@ export function FhirTableView({
                           gStyle ? gStyle.row : "bg-muted/20",
                         )}
                         onClick={() => toggle(gKey)}
+                        role="button"
+                        tabIndex={0}
+                        aria-expanded={isOpen}
+                        aria-label={`${isOpen ? "Collapse" : "Expand"} ${group.parentKey} (${group.entries.length} field${group.entries.length !== 1 ? "s" : ""}${changedCount > 0 ? `, ${changedCount} changed` : ""})`}
+                        onKeyDown={(ev) => {
+                          if (ev.key === "Enter" || ev.key === " ") {
+                            ev.preventDefault();
+                            toggle(gKey);
+                          }
+                        }}
                       >
                         <TableCell className="font-mono text-xs font-semibold">
                           <span className="flex items-center gap-1">

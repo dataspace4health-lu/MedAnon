@@ -1,7 +1,6 @@
 import { useState, useCallback, useRef, useMemo } from "react";
-import { Play, Square, AlertCircle, GitCompare, FileJson, TableProperties, Maximize2, Minimize2, Upload, CheckCircle2, Loader2 } from "lucide-react";
+import { Play, Square, AlertCircle, GitCompare, FileJson, TableProperties, Maximize2, Minimize2, Upload, CheckCircle2, Loader2, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import {
   Collapsible,
   CollapsibleContent,
@@ -17,6 +16,12 @@ import { buildPiiFromDeidentifiedOnly, buildFieldSummary, stripManifestTag } fro
 import { extractFieldsDeep } from "@/lib/fhirFields";
 import { getAuthHeaders } from "@/api/client";
 import { uploadToTarget } from "@/api/medanon";
+import type { BatchPrivacy } from "@/api/jobs";
+import { getGradeStyle } from "@/lib/qualityScore";
+import type { LetterGrade } from "@/lib/qualityScore";
+import {
+  Tooltip, TooltipTrigger, TooltipContent, TooltipProvider,
+} from "@/components/ui/tooltip";
 
 interface DeidentifyPanelProps {
   patientId: string;
@@ -31,6 +36,67 @@ interface StreamState {
   resourceCounts: Record<string, number>;
   errorCount: number;
   error: string | null;
+  score: Record<string, unknown> | null;
+}
+
+import { cn } from "@/lib/utils";
+
+function ScoreBadge({ score }: { score: Record<string, unknown> }) {
+  const avg = typeof score.avg_composite === "number" ? score.avg_composite : null;
+  const avgUtility = typeof score.avg_utility === "number" ? score.avg_utility : null;
+  const avgQuality = typeof score.avg_quality === "number" ? score.avg_quality : null;
+  const batchPrivacy = score.batch_privacy && typeof score.batch_privacy === "object"
+    ? (score.batch_privacy as BatchPrivacy)
+    : null;
+  const passCount   = typeof score.pass_count   === "number" ? score.pass_count   : null;
+  const totalScored = typeof score.total_scored === "number" ? score.total_scored : null;
+
+  if (avg === null) return null;
+
+  const grade: LetterGrade = avg >= 90 ? "A" : avg >= 75 ? "B" : avg >= 60 ? "C" : avg >= 40 ? "D" : "F";
+  const s = getGradeStyle(grade);
+  const decision = passCount != null && totalScored != null ? `${passCount}/${totalScored} passed` : "";
+
+  return (
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger>
+          <span className={cn(
+            "inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-xs font-semibold cursor-default",
+            s.bg, s.text, s.border,
+          )}>
+            <ShieldCheck className="size-3" />
+            {grade} ({Math.round(avg)}%)
+          </span>
+        </TooltipTrigger>
+        <TooltipContent>
+          <div className="text-xs space-y-1 min-w-[180px]">
+            <p className="font-semibold">De-identification Quality</p>
+            <p>Composite: {Math.round(avg)}%</p>
+            {avgUtility != null && <p>Utility: {Math.round(avgUtility * 100)}%</p>}
+            {avgQuality != null && <p>Quality: {Math.round(avgQuality * 100)}%</p>}
+            {batchPrivacy && (
+              <>
+                <hr className="border-muted my-1" />
+                <p className="font-semibold">Privacy Gate ({batchPrivacy.passed ? "PASS" : "FAIL"})</p>
+                <p>Risk score: {(batchPrivacy.risk_score * 100).toFixed(1)}% (threshold {(batchPrivacy.threshold * 100).toFixed(0)}%)</p>
+                <p>Attacker: {(batchPrivacy.attacker_risk * 100).toFixed(1)}%</p>
+                <p>Identifiers: {(batchPrivacy.identifier_risk * 100).toFixed(1)}%</p>
+                <p>Config coverage: {(batchPrivacy.config_identifier_risk * 100).toFixed(1)}%</p>
+                <p>Text scan: {(batchPrivacy.text_risk * 100).toFixed(1)}%</p>
+              </>
+            )}
+            {decision && (
+              <>
+                <hr className="border-muted my-1" />
+                <p>{decision}</p>
+              </>
+            )}
+          </div>
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
 }
 
 export function DeidentifyPanel({
@@ -45,6 +111,7 @@ export function DeidentifyPanel({
     resourceCounts: {},
     errorCount: 0,
     error: null,
+    score: null,
   });
   const [activeTab, setActiveTab] = useState<"output" | "diff" | "table">("output");
   const [fullView, setFullView] = useState(false);
@@ -61,6 +128,7 @@ export function DeidentifyPanel({
       resourceCounts: {},
       errorCount: 0,
       error: null,
+      score: null,
     });
     setActiveTab("output");
 
@@ -126,6 +194,7 @@ export function DeidentifyPanel({
       const counts: Record<string, number> = {};
       let errors = 0;
       let fatalError: string | null = null;
+      let streamScore: Record<string, unknown> | null = null;
       let lastFlush = 0;
 
       while (true) {
@@ -142,6 +211,15 @@ export function DeidentifyPanel({
 
           try {
             const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+
+            // Trailer line — capture score and skip as resource
+            if ("__stream_complete" in parsed) {
+              if (parsed.score && typeof parsed.score === "object") {
+                streamScore = parsed.score as Record<string, unknown>;
+              }
+              continue;
+            }
+
             const resource =
               "data" in parsed
                 ? (parsed.data as Record<string, unknown>)
@@ -204,6 +282,7 @@ export function DeidentifyPanel({
         resourceCounts: counts,
         errorCount: errors,
         error: fatalError,
+        score: streamScore,
       }));
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") {
@@ -288,22 +367,20 @@ export function DeidentifyPanel({
 
   const [uploading, setUploading] = useState(false);
   const [uploadResult, setUploadResult] = useState<{ uploaded: number; errors: number } | null>(null);
-  const [targetUrl, setTargetUrl] = useState("");
 
   const handleUploadToTarget = useCallback(async () => {
     if (uploading || cleanResources.length === 0) return;
     setUploading(true);
     setUploadResult(null);
     try {
-      const url = targetUrl.trim() || undefined;
-      const result = await uploadToTarget(cleanResources, url);
+      const result = await uploadToTarget(cleanResources);
       setUploadResult({ uploaded: result.uploaded, errors: result.errors });
     } catch {
       setUploadResult({ uploaded: 0, errors: -1 });
     } finally {
       setUploading(false);
     }
-  }, [uploading, cleanResources, targetUrl]);
+  }, [uploading, cleanResources]);
 
   const piiDetectionMap = useMemo(
     () => (hasResults ? buildPiiFromDeidentifiedOnly(state.resources) : {}),
@@ -333,17 +410,22 @@ export function DeidentifyPanel({
             {patientId}
           </span>
         </div>
-        {state.isStreaming ? (
-          <Button variant="destructive" size="sm" onClick={handleAbort}>
-            <Square className="h-3.5 w-3.5" />
-            Stop
-          </Button>
-        ) : (
-          <Button size="sm" onClick={handleRun}>
-            <Play className="h-3.5 w-3.5" />
-            Run $everything
-          </Button>
-        )}
+        <div className="flex items-center gap-2">
+          {state.score && !state.isStreaming && (
+            <ScoreBadge score={state.score} />
+          )}
+          {state.isStreaming ? (
+            <Button variant="destructive" size="sm" onClick={handleAbort}>
+              <Square className="h-3.5 w-3.5" />
+              Stop
+            </Button>
+          ) : (
+            <Button size="sm" onClick={handleRun}>
+              <Play className="h-3.5 w-3.5" />
+              Run $everything
+            </Button>
+          )}
+        </div>
       </div>
 
       {/* Progress */}
@@ -458,13 +540,6 @@ export function DeidentifyPanel({
               />
               <div className="flex flex-col gap-2">
                 <div className="flex items-center gap-2">
-                  <Input
-                    placeholder="Target FHIR server URL (optional — uses FHIR_TARGET_URL if empty)"
-                    value={targetUrl}
-                    onChange={(e) => setTargetUrl(e.target.value)}
-                    className="max-w-sm text-xs"
-                    disabled={uploading}
-                  />
                   <Button
                     variant="outline"
                     size="sm"

@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { diffLines, diffWords } from "diff";
 import { highlightJsonHtml } from "./highlightJson";
+import { CopyButton } from "./CopyButton";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -152,13 +153,18 @@ function renderWordDiff(left: string, right: string, side: "left" | "right"): st
 const CELL_BASE: React.CSSProperties = {
   display: "table-cell",
   padding: "0 0.75rem",
-  whiteSpace: "pre",
+  // Wrap long lines (long IDs, base64 blobs, URLs) so the diff never
+  // forces horizontal page overflow. Preserves whitespace + line breaks
+  // for indented JSON, but allows breaks at any character if a token
+  // exceeds the column width.
+  whiteSpace: "pre-wrap",
+  wordBreak: "break-word",
+  overflowWrap: "anywhere",
   fontSize: "0.75rem",
   lineHeight: "1.6",
   fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
   verticalAlign: "top",
   width: "50%",
-  overflowX: "hidden",
 };
 
 const NUM_CELL: React.CSSProperties = {
@@ -283,9 +289,9 @@ export function JsonDiffViewer({
   const changes = rows.filter((r) => r.kind !== "equal" && r.kind !== "gap").length;
 
   return (
-    <div className="rounded-lg border overflow-hidden">
+    <div className="rounded-lg border overflow-hidden min-w-0 max-w-full">
       {/* Header */}
-      <div className="flex items-center justify-between border-b bg-muted/40 px-3 py-2">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/40 px-3 py-2">
         <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
           Diff — Original vs De-identified
         </span>
@@ -305,6 +311,20 @@ export function JsonDiffViewer({
           {changes > 0 && (
             <span className="ml-1 font-medium text-foreground">{changes} change{changes !== 1 ? "s" : ""}</span>
           )}
+          <span className="ml-1 inline-flex items-center gap-1 border-l pl-2">
+            <CopyButton
+              value={original}
+              ariaLabel="Copy original JSON"
+              label="Original"
+              variant="ghost"
+            />
+            <CopyButton
+              value={modified}
+              ariaLabel="Copy de-identified JSON"
+              label="De-identified"
+              variant="ghost"
+            />
+          </span>
         </div>
       </div>
 
@@ -327,9 +347,9 @@ export function JsonDiffViewer({
         </div>
       </div>
 
-      {/* Rows */}
+      {/* Rows — vertical scroll only; cells wrap so we never need horizontal scroll */}
       <div style={{
-        overflowX: "auto",
+        overflowX: "hidden",
         overflowY: fullHeight ? "visible" : "auto",
         maxHeight: fullHeight ? "none" : maxHeight
       }}>

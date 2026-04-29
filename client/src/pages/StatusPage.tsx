@@ -271,6 +271,14 @@ export default function StatusPage() {
   const [countdown, setCountdown] = useState(AUTO_REFRESH_SEC);
   const autoIntervalRef  = useRef<ReturnType<typeof setInterval> | null>(null);
   const countdownRef     = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Track mount status so we don't setState on an unmounted component when
+  // the user navigates away mid-request (5 parallel fetches can each settle
+  // after unmount, producing console warnings + wasted work).
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   // ── Refresh ───────────────────────────────────────────────────────────────
 
@@ -286,6 +294,8 @@ export default function StatusPage() {
         fetchResourceTypeCounts(),
         listJobs({ limit: 100 }),
       ]);
+
+    if (!mountedRef.current) return;
 
     setState((prev) => {
       const next: PageState = { ...prev, loading: false };

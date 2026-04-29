@@ -8,13 +8,37 @@ export function StatusIcon({ status }: { status: ExportJobStatus }) {
     case "submitting":
     case "pending":
     case "running":
-      return <Loader2 className="size-4 animate-spin text-primary shrink-0" />;
+      return (
+        <Loader2
+          className="size-4 animate-spin text-primary shrink-0"
+          role="img"
+          aria-label={`Status: ${status}`}
+        />
+      );
     case "done":
-      return <CheckCircle2 className="size-4 text-green-600 shrink-0" />;
+      return (
+        <CheckCircle2
+          className="size-4 text-green-600 shrink-0"
+          role="img"
+          aria-label="Status: done"
+        />
+      );
     case "cancelled":
-      return <XCircle className="size-4 text-muted-foreground shrink-0" />;
+      return (
+        <XCircle
+          className="size-4 text-muted-foreground shrink-0"
+          role="img"
+          aria-label="Status: cancelled"
+        />
+      );
     case "error":
-      return <AlertCircle className="size-4 text-destructive shrink-0" />;
+      return (
+        <AlertCircle
+          className="size-4 text-destructive shrink-0"
+          role="img"
+          aria-label="Status: error"
+        />
+      );
   }
 }
 

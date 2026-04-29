@@ -7,6 +7,7 @@ import { useAuth } from '@/context/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
+import { CopyButton } from '@/components/shared/CopyButton';
 import {
   Card,
   CardHeader,
@@ -111,9 +112,19 @@ function ConfigCard({
           </CollapsibleTrigger>
           <CollapsibleContent>
             {yaml && (
-              <pre className="mt-2 max-h-64 overflow-y-auto rounded-md border bg-muted/50 p-3 font-mono text-xs leading-relaxed">
-                {yaml}
-              </pre>
+              <div className="relative mt-2">
+                <div className="absolute right-2 top-2 z-10">
+                  <CopyButton
+                    value={yaml}
+                    ariaLabel="Copy YAML"
+                    variant="outline"
+                    className="bg-background/80 backdrop-blur-sm shadow-sm"
+                  />
+                </div>
+                <pre className="max-h-64 overflow-y-auto rounded-md border bg-muted/50 p-3 pr-12 font-mono text-xs leading-relaxed">
+                  {yaml}
+                </pre>
+              </div>
             )}
           </CollapsibleContent>
         </Collapsible>

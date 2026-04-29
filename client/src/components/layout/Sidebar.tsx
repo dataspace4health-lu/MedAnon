@@ -12,8 +12,10 @@ import {
   SlidersHorizontal,
   PackageOpen,
   ShieldCheck,
+  History,
 } from 'lucide-react';
 import { HealthBadge } from '@/components/shared/HealthBadge';
+import { ThemeToggle } from '@/components/shared/ThemeToggle';
 import { useHealth } from '@/hooks/useHealth';
 import { useAuth } from '@/context/AuthContext';
 import { useConfig } from '@/context/ConfigContext';
@@ -78,6 +80,7 @@ const NAV_SECTIONS: NavSection[] = [
     label: 'Monitor',
     items: [
       { to: '/status', label: 'Status Dashboard', icon: BarChart3, minRole: 'viewer' },
+      { to: '/history', label: 'Processing History', icon: History, minRole: 'analyst' },
     ],
   },
 ];
@@ -138,6 +141,7 @@ export function Sidebar({ onNavigate }: SidebarProps) {
           </span>
         </div>
         <HealthBadge ok={health.ok} version={health.version} loading={health.loading} />
+        <ThemeToggle className="ml-auto" />
       </div>
 
       {/* Navigation */}

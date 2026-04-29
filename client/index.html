@@ -5,6 +5,24 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>MedAnon — FHIR De-identification</title>
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <script>
+      // Set theme class before React mounts to avoid a flash of wrong theme.
+      (function () {
+        try {
+          var stored = localStorage.getItem('medanon_theme');
+          var resolved = stored;
+          if (!resolved || resolved === 'system') {
+            resolved = window.matchMedia('(prefers-color-scheme: dark)').matches
+              ? 'dark'
+              : 'light';
+          }
+          if (resolved === 'dark') document.documentElement.classList.add('dark');
+          document.documentElement.style.colorScheme = resolved;
+        } catch (e) {
+          /* ignore */
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

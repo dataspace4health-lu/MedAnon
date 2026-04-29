@@ -1,8 +1,9 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import { toast } from 'sonner';
-import { Loader2, Play, FileCode } from 'lucide-react';
+import { Loader2, Play, FileCode, GitCompare, FileText, Maximize2, Minimize2, Wand2, Trash2 } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { FhirCodeViewer } from '@/components/shared/FhirCodeViewer';
+import { JsonDiffViewer } from '@/components/shared/JsonDiffViewer';
 import { DownloadButton } from '@/components/shared/DownloadButton';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
@@ -57,6 +58,40 @@ const MIME_MAP: Record<OutputFormat, string> = {
 // Component
 // ---------------------------------------------------------------------------
 
+type ViewMode = 'output' | 'diff';
+
+// Normalize an input string for diffing. JSON is pretty-printed so the diff
+// aligns nicely against the (also pretty-printed) backend JSON output. NDJSON
+// and XML are passed through verbatim — line-based diff still works.
+function normalizeForDiff(text: string, format: OutputFormat): string {
+  const trimmed = text.trim();
+  if (!trimmed) return '';
+  if (format === 'json') {
+    try {
+      return JSON.stringify(JSON.parse(trimmed), null, 2);
+    } catch {
+      return trimmed;
+    }
+  }
+  if (format === 'ndjson') {
+    // Re-pretty-print each NDJSON line so the structure can be diffed.
+    return trimmed
+      .split(/\r?\n/)
+      .map((line) => {
+        const l = line.trim();
+        if (!l) return '';
+        try {
+          return JSON.stringify(JSON.parse(l), null, 2);
+        } catch {
+          return l;
+        }
+      })
+      .filter(Boolean)
+      .join('\n');
+  }
+  return trimmed;
+}
+
 export default function ProcessResourcePage() {
   const { configProfile } = useConfig();
 
@@ -65,11 +100,61 @@ export default function ProcessResourcePage() {
   const [outputFormat, setOutputFormat] = useState<OutputFormat>('json');
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<ViewMode>('diff');
+  const [fullView, setFullView] = useState(false);
 
   // -- handlers -------------------------------------------------------------
 
   const handleLoadExample = useCallback(() => {
     setInput(EXAMPLE_PATIENT);
+    setOutput('');
+    setError(null);
+  }, []);
+
+  const handleFormatInput = useCallback(() => {
+    const trimmed = input.trim();
+    if (!trimmed) {
+      toast.error('Nothing to format.');
+      return;
+    }
+    if (outputFormat === 'json') {
+      try {
+        setInput(JSON.stringify(JSON.parse(trimmed), null, 2));
+        toast.success('Formatted JSON.');
+      } catch (e) {
+        toast.error('Invalid JSON', {
+          description: e instanceof Error ? e.message : String(e),
+        });
+      }
+      return;
+    }
+    if (outputFormat === 'ndjson') {
+      const lines = trimmed.split(/\r?\n/);
+      const out: string[] = [];
+      let bad = 0;
+      for (const line of lines) {
+        const l = line.trim();
+        if (!l) continue;
+        try {
+          out.push(JSON.stringify(JSON.parse(l)));
+        } catch {
+          bad++;
+          out.push(l);
+        }
+      }
+      setInput(out.join('\n'));
+      if (bad > 0) {
+        toast.warning(`Formatted ${out.length - bad} of ${out.length} NDJSON lines (${bad} invalid).`);
+      } else {
+        toast.success('Formatted NDJSON.');
+      }
+      return;
+    }
+    toast.info('Formatting not supported for XML.');
+  }, [input, outputFormat]);
+
+  const handleClearInput = useCallback(() => {
+    setInput('');
     setOutput('');
     setError(null);
   }, []);
@@ -114,69 +199,167 @@ export default function ProcessResourcePage() {
   const language = outputFormat === 'xml' ? 'xml' : 'json';
   const filename = `deid_result.${outputFormat}`;
 
+  const normalizedInput = useMemo(
+    () => normalizeForDiff(input, outputFormat),
+    [input, outputFormat],
+  );
+  const normalizedOutput = useMemo(
+    () => normalizeForDiff(output, outputFormat),
+    [output, outputFormat],
+  );
+
+  const canDiff = Boolean(output) && outputFormat !== 'xml';
+
   // -- render ---------------------------------------------------------------
 
   return (
     <div>
       <PageHeader
         title="Process Resource"
-        description="Submit FHIR resources for de-identification processing"
+        description="Submit FHIR resources for de-identification and compare input vs. output"
       />
 
-      {/* Two-column layout */}
-      <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
-        {/* ---- Left column: Input ---- */}
-        <Card className="flex flex-col">
-          <CardHeader className="flex-row items-center justify-between pb-3">
-            <CardTitle className="text-base">Input</CardTitle>
+      {/* ------------------------------------------------------------------ */}
+      {/* Top: Input editor + run controls                                   */}
+      {/* ------------------------------------------------------------------ */}
+      <Card className="mb-5 flex flex-col">
+        <CardHeader className="flex-row items-center justify-between pb-3">
+          <CardTitle className="text-base">Input</CardTitle>
+          <div className="flex items-center gap-1">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleFormatInput}
+              disabled={!input.trim() || outputFormat === 'xml'}
+              className="text-xs"
+              title="Pretty-print the input"
+            >
+              <Wand2 className="mr-1.5 h-3.5 w-3.5" />
+              Format
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleClearInput}
+              disabled={!input}
+              className="text-xs"
+              title="Clear input and output"
+            >
+              <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+              Clear
+            </Button>
             <Button variant="ghost" size="sm" onClick={handleLoadExample} className="text-xs">
               <FileCode className="mr-1.5 h-3.5 w-3.5" />
               Load example
             </Button>
-          </CardHeader>
-          <CardContent className="flex flex-1 flex-col gap-4">
-            <Textarea
-              className="flex-1 h-[520px] resize-none font-mono text-xs"
-              placeholder="Paste FHIR resource JSON, NDJSON, or XML here…"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-            />
-            <div className="flex items-center gap-3 border-t pt-3">
-              <Select
-                value={outputFormat}
-                onValueChange={(val) => setOutputFormat(val as OutputFormat)}
-              >
-                <SelectTrigger className="w-28">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {FORMAT_OPTIONS.map((opt) => (
-                    <SelectItem key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Button
-                onClick={handleDeidentify}
-                disabled={isProcessing || !input.trim()}
-                className="flex-1"
-              >
-                {isProcessing ? (
-                  <Loader2 data-icon="inline-start" className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Play data-icon="inline-start" className="h-4 w-4" />
-                )}
-                {isProcessing ? 'Processing…' : 'De-identify'}
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
+          </div>
+        </CardHeader>
+        <CardContent className="flex flex-1 flex-col gap-4">
+          <Textarea
+            className="h-[260px] resize-y font-mono text-xs"
+            placeholder="Paste FHIR resource JSON, NDJSON, or XML here…  (Cmd/Ctrl+Enter to run)"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+                e.preventDefault();
+                if (!isProcessing && input.trim()) handleDeidentify();
+              }
+            }}
+          />
+          <div className="flex flex-wrap items-center gap-3 border-t pt-3">
+            <Select
+              value={outputFormat}
+              onValueChange={(val) => setOutputFormat(val as OutputFormat)}
+            >
+              <SelectTrigger className="w-28">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {FORMAT_OPTIONS.map((opt) => (
+                  <SelectItem key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button
+              onClick={handleDeidentify}
+              disabled={isProcessing || !input.trim()}
+              className="flex-1 min-w-[180px]"
+            >
+              {isProcessing ? (
+                <Loader2 data-icon="inline-start" className="h-4 w-4 animate-spin" />
+              ) : (
+                <Play data-icon="inline-start" className="h-4 w-4" />
+              )}
+              {isProcessing ? 'Processing…' : 'De-identify'}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
 
-        {/* ---- Right column: Output ---- */}
-        <Card className="flex flex-col">
-          <CardHeader className="flex-row items-center justify-between pb-3">
-            <CardTitle className="text-base">Output</CardTitle>
+      {/* ------------------------------------------------------------------ */}
+      {/* Bottom: Result panel — Diff view or raw Output                     */}
+      {/* ------------------------------------------------------------------ */}
+      <Card className="flex flex-col">
+        <CardHeader className="flex-row flex-wrap items-center justify-between gap-3 pb-3">
+          <CardTitle className="text-base">Result</CardTitle>
+          <div className="flex flex-wrap items-center gap-2">
+            {/* View toggle (Diff / Output) */}
+            {output && (
+              <div className="inline-flex items-center rounded-md border bg-background p-0.5 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setViewMode('diff')}
+                  disabled={!canDiff}
+                  className={`inline-flex items-center gap-1.5 rounded px-2.5 py-1 transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                    viewMode === 'diff'
+                      ? 'bg-primary text-primary-foreground'
+                      : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                  title={canDiff ? 'Side-by-side diff' : 'Diff not available for XML output'}
+                >
+                  <GitCompare className="h-3.5 w-3.5" />
+                  Diff
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setViewMode('output')}
+                  className={`inline-flex items-center gap-1.5 rounded px-2.5 py-1 transition ${
+                    viewMode === 'output'
+                      ? 'bg-primary text-primary-foreground'
+                      : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  <FileText className="h-3.5 w-3.5" />
+                  Output
+                </button>
+              </div>
+            )}
+
+            {/* Full-view toggle (only meaningful for diff) */}
+            {output && viewMode === 'diff' && canDiff && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setFullView((v) => !v)}
+                className="shrink-0"
+              >
+                {fullView ? (
+                  <>
+                    <Minimize2 className="mr-1.5 h-3.5 w-3.5" />
+                    Compact
+                  </>
+                ) : (
+                  <>
+                    <Maximize2 className="mr-1.5 h-3.5 w-3.5" />
+                    Full view
+                  </>
+                )}
+              </Button>
+            )}
+
             {output && (
               <DownloadButton
                 data={output}
@@ -185,30 +368,38 @@ export default function ProcessResourcePage() {
                 label="Download"
               />
             )}
-          </CardHeader>
-          <CardContent className="flex flex-1 flex-col gap-4">
-            {error ? (
-              <div className="rounded-lg border border-destructive/50 bg-destructive/10 px-4 py-3">
-                <p className="text-sm font-medium text-destructive">Error</p>
-                <p className="mt-0.5 text-sm text-destructive/80">{error}</p>
-              </div>
-            ) : output ? (
-              <FhirCodeViewer
-                code={output}
-                language={language}
-                maxHeight="560px"
-              />
-            ) : (
-              <div className="flex h-[560px] flex-col items-center justify-center gap-2 rounded-lg border border-dashed">
-                <Play className="size-8 text-muted-foreground/30" />
-                <p className="text-sm text-muted-foreground">
-                  De-identified output will appear here
-                </p>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      </div>
+          </div>
+        </CardHeader>
+        <CardContent className="flex flex-1 flex-col gap-4">
+          {error ? (
+            <div className="rounded-lg border border-destructive/50 bg-destructive/10 px-4 py-3">
+              <p className="text-sm font-medium text-destructive">Error</p>
+              <p className="mt-0.5 text-sm text-destructive/80">{error}</p>
+            </div>
+          ) : !output ? (
+            <div className="flex h-[420px] flex-col items-center justify-center gap-2 rounded-lg border border-dashed">
+              <Play className="size-8 text-muted-foreground/30" />
+              <p className="text-sm text-muted-foreground">
+                De-identified output will appear here
+              </p>
+              <p className="text-xs text-muted-foreground/70">
+                Submit a resource above to see a side-by-side comparison of input vs. output.
+              </p>
+            </div>
+          ) : viewMode === 'diff' && canDiff ? (
+            <JsonDiffViewer
+              original={normalizedInput}
+              modified={normalizedOutput}
+              maxHeight={fullView ? 'none' : '560px'}
+              context={fullView ? 20 : 4}
+              disableGapCompression={fullView}
+              fullHeight={fullView}
+            />
+          ) : (
+            <FhirCodeViewer code={output} language={language} maxHeight="560px" />
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }

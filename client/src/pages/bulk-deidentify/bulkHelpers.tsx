@@ -8,6 +8,8 @@ export const PHASE_LABELS: Record<string, string> = {
   queued: "Queued",
   fetching: "Fetching from FHIR server",
   processing: "De-identifying resources",
+  loading: "Loading NDJSON",
+  uploading: "Uploading to target FHIR server",
   done: "Complete",
 };
 
