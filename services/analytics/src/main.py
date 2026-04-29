@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
@@ -27,12 +28,18 @@ app = FastAPI(title="MedAnon Analytics", version="1.0.0")
 # ---------------------------------------------------------------------------
 
 try:
-    from prometheus_client import CONTENT_TYPE_LATEST, Counter, generate_latest
+    from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
 
     _REQUESTS = Counter(
         "medanon_requests_total",
         "Total HTTP requests received by the analytics service",
         ["endpoint", "status_code", "medanon_service"],
+    )
+    _LATENCY = Histogram(
+        "medanon_request_duration_seconds",
+        "Analytics service request latency in seconds",
+        ["endpoint", "medanon_service"],
+        buckets=(0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0),
     )
     _PROM_AVAILABLE = True
 except ImportError:  # pragma: no cover
@@ -42,6 +49,11 @@ except ImportError:  # pragma: no cover
 def _inc_request(endpoint: str, status: int) -> None:
     if _PROM_AVAILABLE:
         _REQUESTS.labels(endpoint=endpoint, status_code=str(status), medanon_service="analytics").inc()
+
+
+def _observe_latency(endpoint: str, duration: float) -> None:
+    if _PROM_AVAILABLE:
+        _LATENCY.labels(endpoint=endpoint, medanon_service="analytics").observe(duration)
 
 
 @app.get("/metrics")
@@ -90,17 +102,18 @@ def health():
 @app.post("/v1/analyse/risk")
 async def analyse_risk(request: Request):
     """Compute re-identification risk metrics on de-identified FHIR resources."""
-    from medanon_core.analytics.risk import assess_risk_resources
+    from risk import assess_risk_resources
 
     body = await request.body()
     content_type = request.headers.get("content-type", "")
+    _t0 = time.monotonic()
     try:
         resources = _parse_body(body, content_type)
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"Could not parse input: {exc}") from exc
 
     try:
-        report = assess_risk_resources(resources)
+        report = await asyncio.to_thread(assess_risk_resources, resources)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
@@ -108,6 +121,7 @@ async def analyse_risk(request: Request):
         raise HTTPException(status_code=500, detail="Risk analysis error") from exc
 
     _inc_request("/v1/analyse/risk", 200)
+    _observe_latency("/v1/analyse/risk", time.monotonic() - _t0)
     return JSONResponse(content=report)
 
 
@@ -126,7 +140,7 @@ async def generate_synthetic(
 ):
     """Generate synthetic FHIR Patient resources from a de-identified dataset."""
     try:
-        from medanon_core.analytics.synthetic_sdv import (
+        from synthetic_sdv import (
             SDV_AVAILABLE,
             generate_synthetic_patients_sdv as _gen_patients_sdv,
             generate_synthetic_conditions_sdv as _gen_conditions_sdv,
@@ -134,7 +148,7 @@ async def generate_synthetic(
     except ImportError:
         SDV_AVAILABLE = False
 
-    from medanon_core.analytics.synthetic import generate_synthetic_patients, generate_synthetic_conditions
+    from synthetic import generate_synthetic_patients, generate_synthetic_conditions
 
     body = await request.body()
     content_type = request.headers.get("content-type", "")
@@ -163,13 +177,16 @@ async def generate_synthetic(
     elif engine != "stdlib":
         raise HTTPException(status_code=422, detail=f"Unknown engine '{engine}'. Choose: auto, sdv, stdlib")
 
+    _t0 = time.monotonic()
     try:
         if use_sdv:
             synthetic = await asyncio.to_thread(
                 _gen_patients_sdv, patients, count=count, seed=seed
             )
         else:
-            synthetic = generate_synthetic_patients(patients, count=count, seed=seed)
+            synthetic = await asyncio.to_thread(
+                generate_synthetic_patients, patients, count=count, seed=seed
+            )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
@@ -187,8 +204,8 @@ async def generate_synthetic(
                         count_per_patient=count_per_patient, seed=seed,
                     )
                 else:
-                    synthetic_conditions = generate_synthetic_conditions(
-                        conditions, synthetic,
+                    synthetic_conditions = await asyncio.to_thread(
+                        generate_synthetic_conditions, conditions, synthetic,
                         count_per_patient=count_per_patient, seed=seed,
                     )
             except ValueError:
@@ -203,6 +220,7 @@ async def generate_synthetic(
             yield json.dumps(condition) + "\n"
 
     _inc_request("/v1/generate/synthetic", 200)
+    _observe_latency("/v1/generate/synthetic", time.monotonic() - _t0)
     return StreamingResponse(
         _stream(),
         media_type="application/x-ndjson",
