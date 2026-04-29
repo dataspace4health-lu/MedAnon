@@ -103,9 +103,42 @@ class Settings:
 
                 cfg = self._expand_env(cfg)
 
+                # Compute a deterministic SHA-256 over the *resolved* config
+                # (post env-interpolation).  Stored on each processing run so
+                # auditors can prove which exact ruleset was applied without
+                # having to re-derive the YAML + env state at audit time.
+                self.config_hash = self._compute_config_hash(cfg)
+
+                # Attributes managed explicitly below — never let raw YAML keys
+                # silently overwrite them via setattr (e.g. a YAML key "filename"
+                # would corrupt the LRU cache key; "processing_errors" is
+                # validated and sanitized separately).
+                _MANAGED_ATTRS = frozenset({
+                    "filename",
+                    "processing_errors",
+                    "processingError",
+                    "rewrite_references",
+                    "rewrite_text_ids",
+                    "domain_map",
+                    "general",
+                    "config_hash",
+                })
+
                 # Set values of the dictionary as class attributes
                 for key in cfg:
-                    setattr(self, key, cfg[key])
+                    # Reject keys that target Python internals or methods on
+                    # the Settings class — a YAML file containing a key like
+                    # ``__class__`` or ``parse`` would otherwise hijack the
+                    # object via ``setattr``.
+                    if (
+                        not isinstance(key, str)
+                        or not key.isidentifier()
+                        or key.startswith("_")
+                        or hasattr(type(self), key)
+                    ):
+                        continue
+                    if key not in _MANAGED_ATTRS:
+                        setattr(self, key, cfg[key])
 
                 # Backward-compatible processing error setting inspired by
                 # Microsoft anonymizer's processingErrors policy.
@@ -160,6 +193,25 @@ class Settings:
         if isinstance(obj, str):
             return self._expand_env_str(obj)
         return obj
+
+    @staticmethod
+    def _compute_config_hash(cfg) -> str:
+        """Deterministic SHA-256 over *cfg* (post env-expansion).
+
+        ``json.dumps(..., sort_keys=True)`` gives a stable byte representation
+        regardless of YAML key ordering.  The returned value is the hex digest,
+        prefixed with ``sha256:`` so it is self-describing in audit records.
+        """
+        import hashlib
+        import json
+
+        try:
+            payload = json.dumps(cfg, sort_keys=True, default=str).encode("utf-8")
+        except (TypeError, ValueError):
+            # Fall back to repr() for any non-JSON-serialisable corner case.
+            # The hash is still deterministic per Python build for the same input.
+            payload = repr(cfg).encode("utf-8")
+        return "sha256:" + hashlib.sha256(payload).hexdigest()
 
     def _expand_env_str(self, value):
         def repl(match):

@@ -29,6 +29,7 @@ from pipeline.deidentify import (
     perform_pseudonymization,
     perform_depseudonymization,
 )
+from pipeline.structural_phi import apply_structural_heuristics as _apply_structural_heuristics
 
 audit_log = logging.getLogger("medanon.audit")
 
@@ -92,7 +93,10 @@ def dispatch_pass1(
     """
     gpas_work: list[BatchWork] = []
     nlp_work: list[NlpWork] = []
-    processed_paths: set[tuple[str, str]] = set()
+    # Dedup key: (path, action, stable_value_key) — see _stable_value_key below.
+    processed_paths: set[tuple] = set()
+
+    _apply_structural_heuristics(resource)
 
     for rule in applicable_rules:
         action = rule["action"]
@@ -151,18 +155,28 @@ def dispatch_pass1(
                     raise
 
         # Filter elements already processed by a prior rule with the same action.
-        # The key includes value identity so that different array elements at the
-        # same structural path (e.g. race vs ethnicity sub-extensions both at
-        # Patient.extension.extension.valueString) are NOT treated as duplicates.
+        # Dedup key uses a *stable, value-based* identity so output is
+        # deterministic across runs and threads.  Previously this used id() of
+        # mutable matched values, which is only unique within an object's
+        # lifetime and can be reused after GC — under parallel processing that
+        # produced non-reproducible output (a privacy-tool disqualifier).
+        def _stable_value_key(v):
+            if v is None or isinstance(v, (str, int, float, bool)):
+                return v
+            try:
+                return _json_dumps(v, sort_keys=True)
+            except Exception:
+                # Last-resort fallback — identity is OK here because the only
+                # path that hits this branch is non-JSON-serializable objects,
+                # which never come from FHIR resources in practice.
+                return f"unhashable:{id(v)}"
+
         elements_to_process = []
         for el in matched_elements:
             el_path = el.get("path", "?")
             el_val = el.get("value")
-            # id() is safe here: el_val is a live reference held in matched_elements,
-            # so the object cannot be GC'd and its id() cannot be reused within this
-            # tight loop.  Scalar values (str/int/bool) use the value itself as key.
-            val_id = id(el_val) if isinstance(el_val, (dict, list)) else el_val
-            path_key = (el_path, action, val_id)
+            val_key = _stable_value_key(el_val)
+            path_key = (el_path, action, val_key)
             if path_key in processed_paths:
                 audit_log.debug(
                     "rule_skipped_duplicate action=%s path=%s",
@@ -174,11 +188,14 @@ def dispatch_pass1(
 
         for el in elements_to_process:
             el_val = el.get("value")
-            val_id = id(el_val) if isinstance(el_val, (dict, list)) else el_val
-            processed_paths.add((el.get("path", "?"), action, val_id))
+            val_key = _stable_value_key(el_val)
+            processed_paths.add((el.get("path", "?"), action, val_key))
 
         for el in elements_to_process:
             el_path = el.get("path", "?")
+            # Copy params per-element to prevent mutations (_no_change,
+            # _actual_action) from leaking between elements sharing the same rule.
+            el_params = dict(params)
 
             audit_log.debug(
                 "rule_applied action=%s match=%s path=%s resource_type=%s",
@@ -193,23 +210,23 @@ def dispatch_pass1(
             if action in GPAS_PSEUDO_ACTIONS or action in GPAS_DEPSEUDO_ACTIONS:
                 val = el["value"]
                 serialized = str(val) if not isinstance(val, dict) else _json_dumps(val)
+                # Normalize urn:uuid: so the same bare UUID always maps to the same
+                # pseudonym regardless of reference format. Without this, a resource id
+                # "abc-123" (bare) and a reference "urn:uuid:abc-123" produce two
+                # separate gPAS entries with different pseudonyms, breaking linkage.
+                if isinstance(val, str) and val.startswith("urn:uuid:"):
+                    serialized = val[len("urn:uuid:"):]
                 gpas_work.append(
                     BatchWork(
                         rule=rule,
                         element=el,
-                        params=params,
+                        params=el_params,
                         serialized_value=serialized,
                     )
                 )
-                # Record manifest at deferral time (gPAS batch succeeds/fails together)
-                if _MANIFEST_ENABLED:
-                    manifest_entries.append(
-                        {
-                            "rule": rule.get("name", rule["match"]),
-                            "action": action,
-                            "path": el_path,
-                        }
-                    )
+                # Manifest is recorded at write-back time (run_gpas_batch /
+                # write_back_gpas_batch) so the logged action reflects the actual
+                # outcome — pseudonymization or fallback-redact if gPAS failed.
                 continue
 
             # Defer NLP actions for batch processing (Pass 1.5)
@@ -218,7 +235,7 @@ def dispatch_pass1(
                     NlpWork(
                         rule=rule,
                         element=el,
-                        params=params,
+                        params=el_params,
                         action_type=action,
                     )
                 )
@@ -227,11 +244,11 @@ def dispatch_pass1(
             actual_action = action
             try:
                 if action in DEIDENT_ACTIONS:
-                    perform_deidentification(action, resource, el, params)
+                    perform_deidentification(action, resource, el, el_params)
                 elif action in PSEUDO_ACTIONS:
-                    perform_pseudonymization(action, resource, el, params)
+                    perform_pseudonymization(action, resource, el, el_params)
                 elif action in DEPSEUDO_ACTIONS:
-                    perform_depseudonymization(action, resource, el, params)
+                    perform_depseudonymization(action, resource, el, el_params)
                 else:
                     not_implemented(f"Method {action} is not implemented")
             except Exception as exc:
@@ -269,12 +286,11 @@ def dispatch_pass1(
             if _MANIFEST_ENABLED:
                 # Conditional-manifest: nlp_detect_act skips manifest when
                 # NLP found nothing (text unchanged, no info loss to record).
-                if params.get("_no_change"):
-                    params.pop("_no_change", None)
+                if el_params.get("_no_change"):
                     continue
                 # Use the actual sub-action when the action reports one
                 # (e.g. "nlp_detect_act/redact" for targeted replacements).
-                reported_action = params.pop("_actual_action", actual_action)
+                reported_action = el_params.get("_actual_action", actual_action)
                 manifest_entries.append(
                     {
                         "rule": rule.get("name", rule["match"]),

@@ -74,9 +74,23 @@ def _resolve_profile(profile: str) -> str:
         return os.path.join(_CONFIG_DIR, filename)
 
     # User-defined profile?
+    # Reject path-traversal characters early as defence-in-depth before
+    # touching the filesystem (the realpath check below is the actual
+    # security boundary).
+    if not profile or any(c in profile for c in ("/", "\\", "\x00")) or ".." in profile:
+        raise ValueError(
+            f"Invalid profile name '{profile}': must not contain path separators."
+        )
     user_path = os.path.join(_USER_CONFIG_DIR, f"{profile}.yaml")
-    if os.path.isfile(user_path):
-        return user_path
+    # Guard against path traversal: resolved path must stay inside the user config dir.
+    resolved = os.path.realpath(user_path)
+    allowed_dir = os.path.realpath(_USER_CONFIG_DIR)
+    if not resolved.startswith(allowed_dir + os.sep) and resolved != allowed_dir:
+        raise ValueError(
+            f"Invalid profile name '{profile}': resolves outside the user config directory."
+        )
+    if os.path.isfile(resolved):
+        return resolved
 
     valid = ", ".join(_PROFILE_MAP.keys())
     raise ValueError(

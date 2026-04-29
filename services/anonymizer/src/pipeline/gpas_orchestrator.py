@@ -16,6 +16,7 @@ from utils.fhirpath import find_nodes
 from utils.thread_pool import get_executor
 from actions.substitute import _substitute_nodes
 from pipeline.action_dispatcher import BatchWork
+from pipeline.manifest import _MANIFEST_ENABLED
 from pipeline.rule_matcher import _resolve_rule_params
 from pipeline.deidentify import perform_deidentification
 from integrations.gpas.circuit_breaker import GpasUnavailableError
@@ -63,6 +64,7 @@ def run_gpas_batch(
     gpas_work: list[BatchWork],
     processing_mode: str,
     pseudonymizer,
+    manifest_entries: list | None = None,
 ) -> dict:
     """Batch-pseudonymize all deferred gPAS work items.
 
@@ -70,10 +72,11 @@ def run_gpas_batch(
     then writes each pseudonym back into *resource* in place.
 
     Args:
-        resource:        The resource being processed (mutated in place).
-        gpas_work:       Deferred work items from Pass 1.
-        processing_mode: ``'raise'`` or ``'skip'`` on error.
-        pseudonymizer:   :class:`~pipeline.ports.PseudonymizerPort` implementation.
+        resource:         The resource being processed (mutated in place).
+        gpas_work:        Deferred work items from Pass 1.
+        processing_mode:  ``'raise'`` or ``'skip'`` on error.
+        pseudonymizer:    :class:`~pipeline.ports.PseudonymizerPort` implementation.
+        manifest_entries: List to append manifest entries to (actual outcome action).
 
     Returns:
         The ``{original: pseudonym}`` mapping (used for text-ID rewriting).
@@ -88,7 +91,16 @@ def run_gpas_batch(
     domain_to_params: dict[str, dict] = {}
     domain_to_values: dict[str, list[str]] = {}
     for item in gpas_work:
-        domain = item.params.get("gpas_domain", "")
+        domain = item.params.get("gpas_domain", "").strip()
+        if not domain:
+            # An empty domain would silently route to gPAS's default domain,
+            # producing pseudonyms that are inconsistent with related resources.
+            # Fail loudly so misconfigured rules are caught before any HTTP call.
+            raise ValueError(
+                f"gpas_domain is required but missing or empty for rule "
+                f"targeting path '{item.element.get('path', '?')}'. "
+                "Check your config profile's gpas_domain parameter."
+            )
         if domain not in domain_to_params:
             domain_to_params[domain] = item.params
             domain_to_values[domain] = []
@@ -122,17 +134,8 @@ def run_gpas_batch(
                         type(exc).__name__,
                         exc_info=False,
                     )
-                    for item in gpas_work:
-                        if item.params.get("gpas_domain", "") == domain:
-                            try:
-                                perform_deidentification("redact", resource, item.element, {})
-                            except Exception as exc2:
-                                audit_log.warning(
-                                    "fallback_redact_failed path=%s error_type=%s",
-                                    item.element.get("path", "?"),
-                                    type(exc2).__name__,
-                                    exc_info=False,
-                                )
+                    # Items for this domain will get fallback-redacted in
+                    # the write-back loop below (batch_mapping miss).
                     continue
                 raise exc
             if partial:
@@ -150,39 +153,25 @@ def run_gpas_batch(
                 )
                 if processing_mode != "skip":
                     raise
-                # In skip mode, fall back to redacting all fields for this domain
-                for item in gpas_work:
-                    if item.params.get("gpas_domain", "") == d:
-                        try:
-                            perform_deidentification("redact", resource, item.element, {})
-                        except Exception:
-                            pass
+                # Items for this domain will get fallback-redacted in the
+                # write-back loop below (batch_mapping miss).
         for fut in as_completed(futures):
             domain, partial, exc = fut.result()
             if exc is not None:
                 if isinstance(exc, GpasUnavailableError):
                     raise exc
-                if processing_mode == "skip":
-                    audit_log.warning(
-                        "gpas_batch_failed domain=%s count=%d error_type=%s",
-                        domain,
-                        len(domain_to_values[domain]),
-                        type(exc).__name__,
-                        exc_info=False,
-                    )
-                    for item in gpas_work:
-                        if item.params.get("gpas_domain", "") == domain:
-                            try:
-                                perform_deidentification("redact", resource, item.element, {})
-                            except Exception as exc2:
-                                audit_log.warning(
-                                    "fallback_redact_failed path=%s error_type=%s",
-                                    item.element.get("path", "?"),
-                                    type(exc2).__name__,
-                                    exc_info=False,
-                                )
-                    continue
-                raise exc
+                if processing_mode != "skip":
+                    raise exc
+                audit_log.warning(
+                    "gpas_batch_failed domain=%s count=%d error_type=%s",
+                    domain,
+                    len(domain_to_values[domain]),
+                    type(exc).__name__,
+                    exc_info=False,
+                )
+                # Items for this domain will get fallback-redacted in the
+                # write-back loop below (batch_mapping miss).
+                continue
             if partial:
                 batch_mapping.update(partial)
 
@@ -198,6 +187,12 @@ def run_gpas_batch(
                 )
                 try:
                     perform_deidentification("redact", resource, item.element, {})
+                    if _MANIFEST_ENABLED and manifest_entries is not None:
+                        manifest_entries.append({
+                            "rule": item.rule.get("name", item.rule.get("match", "?")),
+                            "action": "redact",
+                            "path": item.element.get("path", "?"),
+                        })
                 except Exception as exc2:
                     audit_log.warning(
                         "fallback_redact_failed path=%s error_type=%s",
@@ -212,10 +207,34 @@ def run_gpas_batch(
 
         path = item.element["path"].split(".")[1:]
         if len(path) == 0:
-            resource.clear()
+            audit_log.warning(
+                "gpas_root_path_skipped path=%s — refusing to clear entire resource",
+                item.element.get("path", "?"),
+            )
+            if processing_mode != "skip":
+                raise ValueError(
+                    f"Empty path after removing resource type root in run_gpas_batch "
+                    f"— refusing to clear entire resource (original path: {item.element['path']!r})"
+                )
             continue
         ret = find_nodes(resource, path[:-1], [])
-        _substitute_nodes(ret, path[-1], item.element["value"], pseudonym)
+        # Restore urn:uuid: prefix when the original field value had it. The prefix
+        # was stripped in action_dispatcher to ensure the bare UUID reaches gPAS (so
+        # "urn:uuid:abc-123" and "abc-123" get the same pseudonym). We put it back
+        # so the rewritten reference remains a valid urn:uuid: URI.
+        _orig_val = item.element["value"]
+        _write_back = (
+            f"urn:uuid:{pseudonym}"
+            if isinstance(_orig_val, str) and _orig_val.startswith("urn:uuid:")
+            else pseudonym
+        )
+        _substitute_nodes(ret, path[-1], _orig_val, _write_back)
+        if _MANIFEST_ENABLED and manifest_entries is not None:
+            manifest_entries.append({
+                "rule": item.rule.get("name", item.rule.get("match", "?")),
+                "action": item.rule.get("action", "gpas_pseudonymize"),
+                "path": item.element.get("path", "?"),
+            })
 
     return batch_mapping
 
@@ -283,7 +302,15 @@ def run_gpas_depseudo_batch(
 
         path = item.element["path"].split(".")[1:]
         if len(path) == 0:
-            resource.clear()
+            audit_log.warning(
+                "gpas_depseudo_root_path_skipped path=%s",
+                item.element.get("path", "?"),
+            )
+            if processing_mode != "skip":
+                raise ValueError(
+                    f"Empty path after removing resource type root in depseudonymize "
+                    f"— refusing to clear entire resource (original path: {item.element['path']!r})"
+                )
             continue
         ret = find_nodes(resource, path[:-1], [])
         _substitute_nodes(ret, path[-1], item.element["value"], original)
@@ -294,6 +321,7 @@ def write_back_gpas_batch(
     gpas_work: list[BatchWork],
     batch_mapping: dict,
     processing_mode: str,
+    manifest_entries: list | None = None,
 ) -> dict:
     """Apply a pre-computed gPAS mapping to *resource* without making HTTP calls.
 
@@ -318,6 +346,12 @@ def write_back_gpas_batch(
                 )
                 try:
                     perform_deidentification("redact", resource, item.element, {})
+                    if _MANIFEST_ENABLED and manifest_entries is not None:
+                        manifest_entries.append({
+                            "rule": item.rule.get("name", item.rule.get("match", "?")),
+                            "action": "redact",
+                            "path": item.element.get("path", "?"),
+                        })
                 except Exception as exc2:
                     audit_log.warning(
                         "fallback_redact_failed path=%s error_type=%s",
@@ -332,10 +366,30 @@ def write_back_gpas_batch(
 
         path = item.element["path"].split(".")[1:]
         if len(path) == 0:
-            resource.clear()
+            audit_log.warning(
+                "gpas_writeback_root_path_skipped path=%s",
+                item.element.get("path", "?"),
+            )
+            if processing_mode != "skip":
+                raise ValueError(
+                    f"Empty path after removing resource type root in write_back_gpas_batch "
+                    f"— refusing to clear entire resource (original path: {item.element['path']!r})"
+                )
             continue
         ret = find_nodes(resource, path[:-1], [])
-        _substitute_nodes(ret, path[-1], item.element["value"], pseudonym)
+        _orig_val = item.element["value"]
+        _write_back = (
+            f"urn:uuid:{pseudonym}"
+            if isinstance(_orig_val, str) and _orig_val.startswith("urn:uuid:")
+            else pseudonym
+        )
+        _substitute_nodes(ret, path[-1], _orig_val, _write_back)
+        if _MANIFEST_ENABLED and manifest_entries is not None:
+            manifest_entries.append({
+                "rule": item.rule.get("name", item.rule.get("match", "?")),
+                "action": item.rule.get("action", "gpas_pseudonymize"),
+                "path": item.element.get("path", "?"),
+            })
 
     return batch_mapping
 
@@ -389,7 +443,15 @@ def run_gpas_batch_for_batch(
 
     for work_list in gpas_works:
         for item in work_list:
-            domain = item.params.get("gpas_domain") or gpas_params.get("gpas_domain", "")
+            domain = (
+                item.params.get("gpas_domain") or gpas_params.get("gpas_domain", "")
+            ).strip()
+            if not domain:
+                raise ValueError(
+                    f"gpas_domain is required but missing or empty for rule "
+                    f"targeting path '{item.element.get('path', '?')}'. "
+                    "Check your config profile's gpas_domain parameter."
+                )
             if domain not in domain_to_params:
                 domain_to_params[domain] = item.params
                 domain_to_values[domain] = []
@@ -486,6 +548,41 @@ def run_gpas_batch_for_batch(
             continue
         d, partial, exc = _call_domain(domain, unique_values)
         _process_result(d, partial, exc)
+
+    # --- Supplement excluded values not yet in combined_mapping ---
+    # Values in exclude_cached were skipped from the gPAS HTTP call assuming they
+    # remain in L1 cache.  With a large L1 (default 300K) most will be hot;
+    # with Redis L2 configured, evicted values are warm (~1 ms).
+    # Strategy: try cache-only first (zero network I/O in hot/warm state), then
+    # fall back to pseudonymize_batch only for the cold remainder.
+    if exclude_cached:
+        for domain in primary_domains:
+            all_vals = list(dict.fromkeys(domain_to_values[domain]))
+            need = [v for v in all_vals if v in exclude_cached and v not in combined_mapping]
+            if not need:
+                continue
+            # Pass 1: pure cache lookup — hot L1 hit → O(1) shard lock, no HTTP;
+            # warm L2 hit → one Redis mget (~1 ms), promotes to L1.
+            try:
+                cached_partial = pseudonymizer.lookup_cache_batch(need, domain_to_params[domain])
+                combined_mapping.update(cached_partial)
+            except Exception:
+                cached_partial = {}
+            # Pass 2: anything still missing must go to gPAS (cold miss).
+            cold = [v for v in need if v not in combined_mapping]
+            if not cold:
+                continue
+            try:
+                partial = pseudonymizer.pseudonymize_batch(cold, domain_to_params[domain])
+                combined_mapping.update(partial)
+            except Exception as exc:
+                audit_log.warning(
+                    "gpas_excluded_supplement_failed domain=%s count=%d error_type=%s",
+                    domain,
+                    len(cold),
+                    type(exc).__name__,
+                    exc_info=False,
+                )
 
     audit_log.debug(
         "gpas_prefetch domains=%d batch_size=%d",

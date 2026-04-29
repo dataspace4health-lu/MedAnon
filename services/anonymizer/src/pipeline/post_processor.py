@@ -44,6 +44,10 @@ def _aho_replace(text: str, automaton, id_map: dict) -> str:
 
     Only replaces on word boundaries to match the behavior of the regex
     ``\\b(id1|id2|...)\\b`` pattern.
+
+    Overlapping matches are resolved by selecting non-overlapping spans
+    greedily from left to right, preferring the longer match when two
+    patterns start at the same position.
     """
     # Collect matches (end_index, (original, replacement))
     matches = []
@@ -60,10 +64,23 @@ def _aho_replace(text: str, automaton, id_map: dict) -> str:
     if not matches:
         return text
 
+    # Resolve overlaps: sort by start ascending, then length descending
+    # (prefer longer match at the same start), then select greedily.
+    matches.sort(key=lambda m: (m[0], -(m[1] - m[0])))
+    selected = []
+    last_end = 0
+    for start, end, replacement in matches:
+        if start >= last_end:
+            selected.append((start, end, replacement))
+            last_end = end
+
+    if not selected:
+        return text
+
     # Build result from string slices (avoids per-character list allocation)
     parts = []
     prev = 0
-    for start, end, replacement in matches:
+    for start, end, replacement in selected:
         parts.append(text[prev:start])
         parts.append(replacement)
         prev = end
@@ -205,7 +222,13 @@ def _collect_reference_ids(
     via the domain_map rather than always using the default domain.
     """
     if _depth > _MAX_NESTING_DEPTH:
-        return
+        # Refuse to silently drop reference IDs at depth — missed pseudonyms
+        # leave the original value in the output, which is a PHI exposure
+        # risk.  Other walkers in this module raise; match them.
+        raise ValueError(
+            f"FHIR resource nesting exceeds maximum depth of {_MAX_NESTING_DEPTH} "
+            "while collecting reference IDs"
+        )
     if isinstance(obj, dict):
         ref = obj.get("reference")
         if isinstance(ref, str) and ref and "?" not in ref and not ref.startswith("#"):
@@ -278,20 +301,41 @@ def _apply_reference_pseudonyms(obj, ref_mapping: dict, _depth: int = 0) -> None
             _apply_reference_pseudonyms(item, ref_mapping, _depth + 1)
 
 
-def _deep_rewrite_references_gpas(obj, gpas_params: dict, pseudonymizer) -> None:
+def _deep_rewrite_references_gpas(obj, gpas_params: dict, pseudonymizer) -> dict:
     """Deep-walk *obj* and pseudonymize all direct reference IDs via gPAS.
 
     Three-pass approach:
     1. Collect all reference IDs.
     2. Batch-pseudonymize via *pseudonymizer*.
     3. Rewrite references using the mapping.
+
+    Returns the computed ``ref_mapping`` so callers can reuse it for a
+    subsequent merged walk (e.g. text-ID replacement) without re-collecting.
+    Returns an empty dict when there are no references to rewrite.
     """
     ref_ids: set[str] = set()
     _collect_reference_ids(obj, ref_ids)
     if not ref_ids:
-        return
+        return {}
     ref_mapping = pseudonymizer.pseudonymize_batch(list(ref_ids), gpas_params)
     _apply_reference_pseudonyms(obj, ref_mapping)
+    return ref_mapping
+
+
+def _collect_gpas_reference_mapping(obj, gpas_params: dict, pseudonymizer) -> dict:
+    """Pass 1 of split gPAS reference rewriting: collect IDs and round-trip gPAS.
+
+    Same as ``_deep_rewrite_references_gpas`` but stops short of applying the
+    mapping to *obj*.  Returned mapping should be passed into the next merged
+    tree walk (e.g. via ``_post_process_resource(ref_mapping=..., id_map=...)``)
+    so that reference rewriting and text-ID replacement share a single walk.
+    Returns ``{}`` when nothing needs to be pseudonymized.
+    """
+    ref_ids: set[str] = set()
+    _collect_reference_ids(obj, ref_ids)
+    if not ref_ids:
+        return {}
+    return pseudonymizer.pseudonymize_batch(list(ref_ids), gpas_params)
 
 
 # ---------------------------------------------------------------------------
@@ -325,6 +369,13 @@ def _post_process_resource(
             f"FHIR resource nesting exceeds maximum depth of {_MAX_NESTING_DEPTH}"
         )
 
+    # Lazily build the text-ID matcher on first call when caller provided an
+    # id_map but no pre-built matcher.  Mirrors ``_rewrite_text_ids`` so the
+    # merged walk is a drop-in replacement for caller code that previously
+    # relied on ``_rewrite_text_ids`` building the matcher itself.
+    if id_map and automaton is None and compiled is None:
+        automaton, compiled = _build_text_id_matcher(id_map)
+
     if isinstance(obj, dict):
         # --- Reference pseudonymization (same logic as _apply_reference_pseudonyms)
         if ref_mapping:
@@ -334,9 +385,9 @@ def _post_process_resource(
                 if new_ref != ref:
                     audit_log.debug("reference_pseudonymized field=reference")
                     obj["reference"] = new_ref
-                if "display" in obj:
-                    audit_log.debug("reference_display_redacted field=display")
-                    del obj["display"]
+                    if "display" in obj:
+                        audit_log.debug("reference_display_redacted field=display")
+                        del obj["display"]
             # Also rewrite "url" fields (Bundle entries may use url for references)
             url = obj.get("url")
             if isinstance(url, str):
@@ -346,7 +397,7 @@ def _post_process_resource(
                     obj["url"] = new_url
 
         # --- Text-ID replacement + recurse
-        for key in list(obj.keys()):
+        for key in obj.keys():
             value = obj[key]
             if isinstance(value, str):
                 # text-ID replacement (skip structural fields)
@@ -381,3 +432,65 @@ def _post_process_resource(
                     compiled,
                     _depth + 1,
                 )
+
+
+# ---------------------------------------------------------------------------
+# Bundle-optimised post-processing  (ref-rewrite only, no text-ID scan)
+# ---------------------------------------------------------------------------
+
+# Keys in a Bundle entry dict that hold the already-processed inner resource.
+# These are skipped in ref-only Bundle walks because individual processing
+# already applied the shared pseudonym mapping to every resource's references.
+_BUNDLE_RESOURCE_KEYS = frozenset({"resource"})
+
+
+def _shallow_post_process_bundle(
+    bundle: dict,
+    ref_mapping: dict,
+) -> None:
+    """Rewrite cross-resource references in a Bundle without re-walking entry[].resource.
+
+    Used when *only* reference rewriting is needed (no text-ID substitution).
+    Each inner resource was already processed individually with the same shared
+    pseudonym mapping, so their ``reference`` fields are already correct.
+    This function walks only Bundle-level metadata and ``entry[]`` housekeeping
+    fields (``fullUrl``, ``request``, ``response``, ``search``) — skipping the
+    ``entry[i].resource`` sub-trees that are already up-to-date.
+
+    When text-ID replacement is also required use the full ``_post_process_resource``
+    call instead (cross-resource text references are not handled during individual
+    resource processing).
+    """
+    if not ref_mapping or not isinstance(bundle, dict):
+        return
+
+    entries = bundle.get("entry")
+    for key, value in bundle.items():
+        if key == "entry" and isinstance(value, list):
+            for entry_item in value:
+                if not isinstance(entry_item, dict):
+                    continue
+                # Process all entry-level fields except the inner resource payload.
+                # fullUrl:  string — handled via text-ID style rewrite below.
+                # request:  dict with url / method / ifNoneMatch / ... — recurse normally.
+                # response: dict with location / status / ... — recurse normally.
+                # search:   dict with mode / score               — recurse normally.
+                for entry_key, entry_val in entry_item.items():
+                    if entry_key in _BUNDLE_RESOURCE_KEYS:
+                        continue
+                    if isinstance(entry_val, str):
+                        # Rewrite reference-like strings (fullUrl, request.url handled
+                        # below for dict; top-level entry strings like fullUrl handled here).
+                        new_val = _pseudonymize_reference_string(entry_val, ref_mapping)
+                        if new_val != entry_val:
+                            entry_item[entry_key] = new_val
+                    else:
+                        # Sub-dicts (request, response, search) — full walk is safe
+                        # because they contain no resource payload.
+                        _post_process_resource(entry_val, ref_mapping, None)
+        elif isinstance(value, str):
+            new_val = _pseudonymize_reference_string(value, ref_mapping)
+            if new_val != value:
+                bundle[key] = new_val
+        else:
+            _post_process_resource(value, ref_mapping, None)

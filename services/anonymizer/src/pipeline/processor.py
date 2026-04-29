@@ -26,13 +26,13 @@ import logging
 import os
 
 from utils.json_fast import dumps_bytes as _json_dumps_bytes, loads as _json_loads
+from utils.metrics import PIPELINE_STAGE_LATENCY
 from utils.thread_pool import get_executor
 
 from pipeline.manifest import _MANIFEST_ENABLED, _attach_manifest
 from pipeline.rule_matcher import _get_rules_for_resource
 from pipeline.action_dispatcher import dispatch_pass1
 from pipeline.gpas_orchestrator import (
-    run_gpas_batch,
     run_gpas_batch_for_batch,
     run_gpas_depseudo_batch,
     write_back_gpas_batch,
@@ -40,13 +40,10 @@ from pipeline.gpas_orchestrator import (
 )
 from pipeline.post_processor import (
     _build_text_id_matcher,
-    _deep_rewrite_references_gpas,
-    _post_process_resource,
-    _rewrite_references,
-    _rewrite_text_ids,
     _collect_reference_ids,
+    _post_process_resource,
+    _shallow_post_process_bundle,
 )
-from integrations.gpas.circuit_breaker import GpasUnavailableError
 
 audit_log = logging.getLogger("medanon.audit")
 
@@ -58,28 +55,98 @@ _BATCH_SIZE = int(os.environ.get("MEDANON_BATCH_SIZE", "1000"))
 # Set to 0 to disable parallelism (sequential processing).
 _PARALLEL_WORKERS = int(os.environ.get("MEDANON_PARALLEL_WORKERS", "8"))
 
-_SEEN_VALUES_CAP = int(os.environ.get("MEDANON_SEEN_VALUES_CAP", "200000"))
+_SEEN_VALUES_CAP = int(os.environ.get("MEDANON_SEEN_VALUES_CAP", "2000000"))
+_PII_GATE = os.environ.get("MEDANON_PII_GATE", "false").strip().lower() in (
+    "true", "1", "yes",
+)
+
+# When set, forces sequential processing and clears all rule caches at the
+# start of every process_data_batch call.  Intended for tests only — never
+# set in production (disables parallelism and defeats caching).
+_DETERMINISTIC = os.environ.get("MEDANON_PIPELINE_DETERMINISTIC", "").strip().lower() in (
+    "true", "1",
+)
+if _DETERMINISTIC:
+    _PARALLEL_WORKERS = 0
+
+
+class PiiLeakError(Exception):
+    """Raised when the PII blocking gate detects critical PII in output."""
+
+    def __init__(self, detections: list[dict]):
+        self.detections = detections
+        critical = [d for d in detections if d.get("severity") == "critical"]
+        super().__init__(
+            f"PII gate blocked: {len(critical)} critical PII leak(s) detected"
+        )
+
+
+def _run_pii_gate(results: list[dict]) -> None:
+    """Run fast PII scan on de-identified results and raise on critical PII."""
+    if not _PII_GATE:
+        return
+    from integrations.ai.agents.pii_detector import detect_pii_fast
+
+    valid_resources = [r for r in results if isinstance(r, dict) and "error" not in r]
+    if not valid_resources:
+        return
+    detections = detect_pii_fast(valid_resources)
+    critical = [d for d in detections if d.get("severity") == "critical"]
+    if critical:
+        audit_log.warning(
+            "pii_gate_blocked count=%d critical=%d", len(detections), len(critical),
+        )
+        raise PiiLeakError(critical)
 
 
 class _CappedSet:
-    """A set that stops accepting new entries once a capacity limit is reached.
+    """A set that emits a loud warning once it reaches its capacity limit.
 
-    After the cap is hit, ``add()`` and ``update()`` silently drop new values.
-    Existing values remain queryable via ``__contains__``.  This is safe because
-    the set is an optimization hint only — the L1 gPAS cache is the
-    authoritative dedup layer and will still serve cache hits for values
-    not in this set.
+    After the cap is hit, ``add()`` and ``update()`` silently drop new values
+    *for tracking purposes only* — the L1/L2 gPAS cache remains the
+    authoritative dedup layer and will still serve hits for values not in
+    this set, so correctness is preserved.
+
+    What we lost when the cap is hit is *cross-chunk in-process dedup*: a
+    value seen in chunk N may be re-sent to gPAS in chunk N+k (it will hit
+    the cache and return the same pseudonym, so referential integrity holds,
+    but it adds round-trip cost).  Operators must size ``MEDANON_SEEN_VALUES_CAP``
+    above the dataset's expected unique-value count to avoid this.
+
+    The warning is logged exactly once per process and a Prometheus counter
+    is incremented so the condition is observable in dashboards.
     """
 
-    __slots__ = ("_set", "_cap", "_frozen")
+    __slots__ = ("_set", "_cap", "_frozen", "_warned")
 
     def __init__(self, cap: int = _SEEN_VALUES_CAP):
         self._set: set[str] = set()
         self._cap = cap
         self._frozen = False
+        self._warned = False
 
     def __contains__(self, item) -> bool:
         return item in self._set
+
+    def __len__(self) -> int:
+        return len(self._set)
+
+    def _on_freeze(self) -> None:
+        # Log + metric exactly once per process lifetime.
+        if self._warned:
+            return
+        self._warned = True
+        audit_log.warning(
+            "seen_values_cap_reached cap=%d — cross-chunk in-process dedup "
+            "disabled; gPAS calls will continue but will rely on the L1/L2 "
+            "cache. Increase MEDANON_SEEN_VALUES_CAP if dataset > %d unique "
+            "values.", self._cap, self._cap,
+        )
+        try:
+            from utils.metrics import SEEN_VALUES_CAP_REACHED
+            SEEN_VALUES_CAP_REACHED.inc()
+        except Exception:
+            pass
 
     def add(self, item: str) -> None:
         if self._frozen:
@@ -87,6 +154,7 @@ class _CappedSet:
         self._set.add(item)
         if len(self._set) >= self._cap:
             self._frozen = True
+            self._on_freeze()
 
     def update(self, items) -> None:
         if self._frozen:
@@ -94,6 +162,7 @@ class _CappedSet:
         self._set.update(items)
         if len(self._set) >= self._cap:
             self._frozen = True
+            self._on_freeze()
 
 # Module-level singleton — GpasPseudonymizerAdapter is stateless (no instance
 # data; all state lives in the module-level gPAS client, circuit breaker, and   
@@ -133,30 +202,35 @@ def _finalize_resource(
     prebuilt_text_id_automaton=None,
     attach_manifest: bool = False,
 ) -> dict:
-    """Run Pass 2 (gPAS) + post-processing for one resource.
+    """Run Pass 2 (gPAS write-back) + post-processing for one resource.
 
-    When *precomputed_mapping* is provided (N>1 batch path), applies the
-    shared mapping directly with **zero** additional HTTP calls — used after
-    :func:`run_gpas_batch_for_batch` has already fetched all pseudonyms.
-
-    When *precomputed_ref_mapping* is provided, applies it directly instead
-    of re-collecting reference IDs from the resource (avoids redundant deep walk).
-
-    When *precomputed_mapping* is ``None`` (N=1 fast path), calls
-    :func:`run_gpas_batch` which makes its own ``pseudonymize_batch`` call.
+    Always invoked from :func:`process_data_batch` / :func:`_process_bundle`
+    *after* :func:`run_gpas_batch_for_batch` has already returned the shared
+    pseudonymisation map for the whole batch — this function is therefore a
+    pure write-back + single-walk post-processor with **zero** per-resource
+    HTTP calls.  ``precomputed_mapping`` and (when ``rewrite_references`` is
+    on) ``precomputed_ref_mapping`` MUST be supplied by the caller; the
+    legacy "N=1 fallback" that re-issued gPAS HTTP calls inside this function
+    has been removed because it was unreachable from production code paths
+    (all three callers in :mod:`processor` pass the mappings explicitly).
     """
+    if precomputed_mapping is None:
+        # Defensive guard — preserves the public signature for the perf bench
+        # while making the contract explicit.  See process_data_batch / chunk
+        # path which always supply ``shared_mapping``.
+        raise ValueError(
+            "_finalize_resource requires precomputed_mapping; "
+            "call process_data_batch() instead of _finalize_resource directly.",
+        )
+
     # Separate depseudo work items from pseudo work items
     depseudo_work = [w for w in gpas_work if w.rule.get("action") == "gpas_depseudonymize"]
     pseudo_work = [w for w in gpas_work if w.rule.get("action") != "gpas_depseudonymize"] if depseudo_work else gpas_work
 
-    if precomputed_mapping is not None:
-        batch_mapping = write_back_gpas_batch(
-            resource, pseudo_work, precomputed_mapping, processing_mode
-        )
-    else:
-        batch_mapping = run_gpas_batch(
-            resource, pseudo_work, processing_mode, pseudonymizer
-        )
+    batch_mapping = write_back_gpas_batch(
+        resource, pseudo_work, precomputed_mapping, processing_mode,
+        manifest_entries=manifest_entries,
+    )
 
     # Batch de-pseudonymization (separate from pseudonymization)
     if depseudo_work:
@@ -178,31 +252,18 @@ def _finalize_resource(
         else:
             audit_log.debug("rewriting_text_ids count=%d", len(id_text_map))
 
-    # Merged single-walk path: when we have a pre-computed ref mapping
-    # (N>1 batch) we can do both ref pseudonymization + text-ID replacement
-    # in one tree walk instead of two.
-    if precomputed_ref_mapping is not None and do_refs:
+    # Single-walk post-processing: ref pseudonymisation + text-ID replacement
+    # share one tree traversal via ``_post_process_resource`` (the legacy
+    # apply-refs walk + text-ID walk were merged in an earlier refactor).
+    ref_mapping_to_apply = precomputed_ref_mapping if do_refs else None
+    if ref_mapping_to_apply or id_text_map:
         _post_process_resource(
             resource,
-            ref_mapping=precomputed_ref_mapping,
+            ref_mapping=ref_mapping_to_apply,
             id_map=id_text_map,
             automaton=prebuilt_text_id_automaton,
             compiled=precompiled_text_id_regex,
         )
-    else:
-        # N=1 path or no precomputed mapping — separate walks
-        if do_refs:
-            gpas_params = _extract_gpas_params(settings)
-            if gpas_params:
-                _deep_rewrite_references_gpas(resource, gpas_params, pseudonymizer)
-
-        if id_text_map:
-            _rewrite_text_ids(
-                resource,
-                id_text_map,
-                compiled=precompiled_text_id_regex,
-                automaton=prebuilt_text_id_automaton,
-            )
 
     # Attach transformation manifest (when enabled or forced for scoring)
     if (attach_manifest or _MANIFEST_ENABLED) and manifest_entries:
@@ -250,16 +311,31 @@ def _pass1_single(resource, settings, processing_mode, collect_refs=False):
             _ref_ids: set[str] = set()
             ref_type_map = {}
             _collect_reference_ids(resource, _ref_ids, ref_types=ref_type_map)
+            # Include urn:uuid: IDs (not captured in ref_type_map) under type ""
+            # so the N>1 batch path routes them to the default gPAS domain.
+            for _rid in _ref_ids:
+                if _rid not in ref_type_map:
+                    ref_type_map[_rid] = ""
         gpas_work, nlp_work = dispatch_pass1(
             resource, rules, settings, manifest_entries, processing_mode
         )
         return resource, gpas_work, nlp_work, manifest_entries, ref_type_map
-    except Exception:
+    except Exception as original_exc:
         if snapshot is not None:
-            # Restore original resource to prevent emitting partial de-identification
-            resource.clear()
-            resource.update(_json_loads(snapshot))
-        raise
+            # Restore original resource to prevent emitting partial de-identification.
+            # If restoration itself fails the resource is cleared (empty output) rather
+            # than left in a partially de-identified state — never leak PHI.
+            try:
+                resource.clear()
+                resource.update(_json_loads(snapshot))
+            except Exception as restore_exc:
+                audit_log.error(
+                    "snapshot_restore_failed resource_type=%s — resource cleared to prevent PHI leak: %s",
+                    resource.get("resourceType", "unknown"),
+                    restore_exc,
+                )
+                resource.clear()
+        raise original_exc
 
 
 def process_data_batch(
@@ -274,14 +350,11 @@ def process_data_batch(
     """De-identify / pseudonymize a batch of FHIR resources with cross-resource
     gPAS batching.
 
-    For *N=1*, skips the cross-resource pre-fetch and goes straight to
-    per-resource processing — identical performance to the old single-resource
-    path.
-
-    For *N>1*:
+    All N resources:
       1. Pass 1 on ALL resources (FHIRPath + non-gPAS actions, collect BatchWork)
-      2. ONE gPAS HTTP call for all deduped values across all resources
-      3. Pass 2 on each resource (cache hits, zero additional HTTP calls)
+         — runs in thread pool when ``MEDANON_PARALLEL_WORKERS > 0``
+      2. ONE gPAS HTTP call for all deduped values + reference IDs across all resources
+      3. Pass 2 on each resource (write-back from shared mapping, zero additional HTTP)
       4. Post-processing on each resource
 
     Args:
@@ -304,129 +377,12 @@ def process_data_batch(
     if not resources:
         return []
 
+    if _DETERMINISTIC:
+        from pipeline.rule_matcher import clear_rule_caches
+        clear_rule_caches()
+
     processing_mode = _processing_errors_mode(settings)
 
-    # -- N=1 fast path -------------------------------------------------------
-    # Collect reference IDs BEFORE Pass 1 so original UUIDs are captured, then
-    # batch all gPAS IDs (values + references) in ONE HTTP round-trip.
-    if len(resources) == 1:
-        resource = resources[0]
-        try:
-            rules = _get_rules_for_resource(resource, settings)
-            manifest_entries: list[dict] = []
-            gpas_params = _extract_gpas_params(settings)
-            do_refs = getattr(settings, "rewrite_references", False)
-
-            # Collect reference IDs BEFORE Pass 1 mutates the resource so that
-            # outbound references capture original (pre-pseudonymisation) IDs.
-            # Collecting after dispatch_pass1 would yield already-pseudonymised
-            # IDs, producing useless pseudonym→pseudonym entries in combined_mapping.
-            ref_ids: set[str] = set()
-            ref_type_map_n1: dict[str, str] = {}
-            if do_refs and gpas_params:
-                _collect_reference_ids(resource, ref_ids, ref_types=ref_type_map_n1)
-
-            gpas_work, nlp_work = dispatch_pass1(
-                resource, rules, settings, manifest_entries, processing_mode
-            )
-
-            # Pass 1.5: NLP batch (single resource)
-            if nlp_work:
-                from pipeline.nlp_orchestrator import run_nlp_batch_single
-
-                run_nlp_batch_single(
-                    resource, nlp_work, manifest_entries, processing_mode
-                )
-
-            # Build combined unique ID list: gpas_work values first, then any
-            # reference IDs not already present (dedup via set membership).
-            value_id_set = {item.serialized_value for item in gpas_work}
-            combined_ids = list(value_id_set) + [
-                r for r in ref_ids if r not in value_id_set
-            ]
-
-            # Group the combined IDs by their resolved gpas_domain and call gPAS
-            # once per distinct domain.  This ensures reference IDs (which use
-            # gpas_params / the default domain) and value IDs (which may have been
-            # routed to per-resource-type leaf domains by domain_map) each land in
-            # the correct gPAS pseudonym namespace.
-            combined_mapping: dict = {}
-            if combined_ids and (gpas_work or gpas_params):
-                # Build a per-domain bucket: value IDs inherit their BatchWork domain;
-                # reference IDs that are NOT in gpas_work use the default domain.
-                _domain_map_n1 = getattr(settings, "domain_map", None)
-                value_id_to_params: dict[str, dict] = {}
-                for item in gpas_work:
-                    value_id_to_params[item.serialized_value] = item.params
-                domain_to_params_n1: dict[str, dict] = {}
-                domain_to_values_n1: dict[str, list[str]] = {}
-                for vid in combined_ids:
-                    # Cross-chunk dedup: skip values already pseudonymized in a
-                    # previous chunk (their mappings are in the cache).
-                    if _exclude_cached and vid in _exclude_cached:
-                        continue
-                    params_for_id = value_id_to_params.get(vid)
-                    if params_for_id is None:
-                        # Reference ID: route by resource type if domain_map is configured
-                        rtype = ref_type_map_n1.get(vid)
-                        if rtype and _domain_map_n1 and rtype in _domain_map_n1:
-                            params_for_id = dict(gpas_params)
-                            params_for_id["gpas_domain"] = _domain_map_n1[rtype]
-                        else:
-                            params_for_id = gpas_params
-                    if params_for_id is None:
-                        continue
-                    d = params_for_id.get("gpas_domain", "")
-                    if d not in domain_to_params_n1:
-                        domain_to_params_n1[d] = params_for_id
-                        domain_to_values_n1[d] = []
-                    domain_to_values_n1[d].append(vid)
-                for d, vals in domain_to_values_n1.items():
-                    try:
-                        partial = pseudonymizer.pseudonymize_batch(
-                            list(dict.fromkeys(vals)), domain_to_params_n1[d]
-                        )
-                        combined_mapping.update(partial)
-                    except GpasUnavailableError:
-                        raise
-                    except Exception:
-                        if processing_mode != "skip":
-                            raise
-                # Accumulate newly-pseudonymized values for the next chunk's exclusion.
-                if _seen_accumulator is not None:
-                    _seen_accumulator.update(combined_mapping.keys())
-
-            precomputed_ref_mapping = combined_mapping if ref_ids else None
-
-            result = _finalize_resource(
-                resource,
-                settings,
-                pseudonymizer,
-                gpas_work,
-                manifest_entries,
-                processing_mode,
-                precomputed_mapping=combined_mapping,
-                precomputed_ref_mapping=precomputed_ref_mapping,
-                attach_manifest=attach_manifest,
-            )
-            if _return_manifest:
-                return [result], [manifest_entries]
-            return [result]
-        except Exception as exc:
-            rtype = (
-                resource.get("resourceType", "Unknown")
-                if isinstance(resource, dict)
-                else "Unknown"
-            )
-            audit_log.error("batch_single_error resource_type=%s: %s", rtype, exc)
-            if processing_mode != "skip":
-                raise
-            err = [{"error": "processing error", "resourceType": rtype}]
-            if _return_manifest:
-                return err, [[]]
-            return err
-
-    # -- N>1 batch path: cross-resource gPAS pre-fetch ----------------------
     gpas_params = _extract_gpas_params(settings)
     _need_refs = bool(getattr(settings, "rewrite_references", False) and gpas_params)
 
@@ -439,6 +395,8 @@ def process_data_batch(
     # Step 1: Pass 1 on all resources (optionally parallel).
     # Collects reference IDs during the same call so that reference collection
     # benefits from thread pool parallelism instead of running serially after.
+    _stage_actions_timer = PIPELINE_STAGE_LATENCY.labels(stage="actions").time()
+    _stage_actions_timer.__enter__()
     if _PARALLEL_WORKERS > 0:
         pool = get_executor()
         futures = []
@@ -471,7 +429,7 @@ def process_data_batch(
                 if ref_type_map_:
                     _all_ref_type_map.update(ref_type_map_)
             except Exception as exc:
-                audit_log.error("batch_pass1_error: %s", exc)
+                audit_log.error("batch_pass1_error error_type=%s", type(exc).__name__)
                 if processing_mode != "skip":
                     raise
                 parsed.append(None)
@@ -487,7 +445,7 @@ def process_data_batch(
                         collect_refs=_need_refs,
                     )
                 except Exception as exc:
-                    audit_log.error("batch_pass1_error (sequential fallback): %s", exc)
+                    audit_log.error("batch_pass1_error (sequential fallback) error_type=%s", type(exc).__name__)
                     if processing_mode != "skip":
                         raise
                     parsed.append(None)
@@ -514,7 +472,7 @@ def process_data_batch(
                     if isinstance(resource, dict)
                     else "Unknown"
                 )
-                audit_log.error("batch_pass1_error resource_type=%s: %s", rtype, exc)
+                audit_log.error("batch_pass1_error resource_type=%s error_type=%s", rtype, type(exc).__name__)
                 if processing_mode != "skip":
                     raise
                 parsed.append(None)
@@ -529,14 +487,16 @@ def process_data_batch(
             all_manifest_entries.append(manifest_entries_)
             if ref_type_map_:
                 _all_ref_type_map.update(ref_type_map_)
+    _stage_actions_timer.__exit__(None, None, None)
 
     # Step 1.5: NLP batch across all resources (detect → replace).
     if any(nw for nw in all_nlp_works):
         from pipeline.nlp_orchestrator import run_nlp_batch_for_batch
 
-        run_nlp_batch_for_batch(
-            parsed, all_nlp_works, all_manifest_entries, processing_mode
-        )
+        with PIPELINE_STAGE_LATENCY.labels(stage="nlp").time():
+            run_nlp_batch_for_batch(
+                parsed, all_nlp_works, all_manifest_entries, processing_mode
+            )
 
     # Step 2: ONE gPAS HTTP call for all unique values across all resources.
     # Reference IDs were already collected during _pass1_single (above) so they
@@ -555,14 +515,15 @@ def process_data_batch(
             _dom = (_domain_map or {}).get(_rtype, _def_domain)
             _extra_values_by_domain.setdefault(_dom, []).append(_rid)
 
-    shared_mapping = run_gpas_batch_for_batch(
-        all_gpas_works,
-        processing_mode,
-        pseudonymizer,
-        gpas_params,
-        extra_values_by_domain=_extra_values_by_domain,
-        exclude_cached=_exclude_cached,
-    )
+    with PIPELINE_STAGE_LATENCY.labels(stage="gpas").time():
+        shared_mapping = run_gpas_batch_for_batch(
+            all_gpas_works,
+            processing_mode,
+            pseudonymizer,
+            gpas_params,
+            extra_values_by_domain=_extra_values_by_domain,
+            exclude_cached=_exclude_cached,
+        )
     if _seen_accumulator is not None and shared_mapping:
         _seen_accumulator.update(shared_mapping.keys())
 
@@ -589,7 +550,9 @@ def process_data_batch(
     results: list[dict | None] = [None] * len(parsed)
     n_resources = len(parsed)
 
-    if n_resources > 4:
+    _stage_post_timer = PIPELINE_STAGE_LATENCY.labels(stage="post").time()
+    _stage_post_timer.__enter__()
+    if n_resources > 4 and _PARALLEL_WORKERS > 0:
         # Parallel finalization: each resource is independent (shared_mapping is read-only)
         pool = get_executor()
         futures = {}
@@ -629,59 +592,61 @@ def process_data_batch(
 
         from concurrent.futures import as_completed
 
-        for fut in as_completed(futures):
-            i = futures[fut]
-            try:
-                results[i] = fut.result()
-            except Exception as exc:
-                resource = parsed[i]
-                rtype = (
-                    resource.get("resourceType", "Unknown")
-                    if isinstance(resource, dict)
-                    else "Unknown"
-                )
-                audit_log.error("batch_process_error resource_type=%s: %s", rtype, exc)
-                if processing_mode != "skip":
-                    raise
-                results[i] = {"error": "processing error", "resourceType": rtype}
-
-        # Finalize remaining resources sequentially if pool submit timed out
-        if _finalize_sequential_start is not None:
-            for i, (resource, gpas_work, manifest_entries_) in enumerate(
-                zip(
-                    parsed[_finalize_sequential_start:],
-                    all_gpas_works[_finalize_sequential_start:],
-                    all_manifest_entries[_finalize_sequential_start:],
-                ),
-                start=_finalize_sequential_start,
-            ):
-                if resource is None:
-                    results[i] = {"error": "pass1 error", "resourceType": "Unknown"}
-                    continue
+        try:
+            for fut in as_completed(futures):
+                i = futures[fut]
                 try:
-                    results[i] = _finalize_resource(
-                        resource, settings, pseudonymizer, gpas_work, manifest_entries_,
-                        processing_mode,
-                        precomputed_mapping=shared_mapping,
-                        precompiled_text_id_regex=_batch_text_id_regex,
-                        precomputed_ref_mapping=_batch_ref_mapping,
-                        prebuilt_text_id_automaton=_batch_text_id_automaton,
-                        attach_manifest=attach_manifest,
-                    )
+                    results[i] = fut.result()
                 except Exception as exc:
-                    rtype = resource.get("resourceType", "Unknown") if isinstance(resource, dict) else "Unknown"
+                    resource = parsed[i]
+                    rtype = (
+                        resource.get("resourceType", "Unknown")
+                        if isinstance(resource, dict)
+                        else "Unknown"
+                    )
                     audit_log.error("batch_process_error resource_type=%s: %s", rtype, exc)
                     if processing_mode != "skip":
                         raise
                     results[i] = {"error": "processing error", "resourceType": rtype}
 
-        # Free intermediate data after all futures complete
-        for i in range(n_resources):
-            parsed[i] = None
-            all_gpas_works[i] = []
-            all_nlp_works[i] = []
-            if not _return_manifest:
-                all_manifest_entries[i] = []
+            # Finalize remaining resources sequentially if pool submit timed out
+            if _finalize_sequential_start is not None:
+                for i, (resource, gpas_work, manifest_entries_) in enumerate(
+                    zip(
+                        parsed[_finalize_sequential_start:],
+                        all_gpas_works[_finalize_sequential_start:],
+                        all_manifest_entries[_finalize_sequential_start:],
+                    ),
+                    start=_finalize_sequential_start,
+                ):
+                    if resource is None:
+                        results[i] = {"error": "pass1 error", "resourceType": "Unknown"}
+                        continue
+                    try:
+                        results[i] = _finalize_resource(
+                            resource, settings, pseudonymizer, gpas_work, manifest_entries_,
+                            processing_mode,
+                            precomputed_mapping=shared_mapping,
+                            precompiled_text_id_regex=_batch_text_id_regex,
+                            precomputed_ref_mapping=_batch_ref_mapping,
+                            prebuilt_text_id_automaton=_batch_text_id_automaton,
+                            attach_manifest=attach_manifest,
+                        )
+                    except Exception as exc:
+                        rtype = resource.get("resourceType", "Unknown") if isinstance(resource, dict) else "Unknown"
+                        audit_log.error("batch_process_error resource_type=%s: %s", rtype, exc)
+                        if processing_mode != "skip":
+                            raise
+                        results[i] = {"error": "processing error", "resourceType": rtype}
+        finally:
+            # Always free intermediate per-resource data to cap peak memory,
+            # even when an exception propagates (e.g. processing_mode=raise).
+            for i in range(n_resources):
+                parsed[i] = None
+                all_gpas_works[i] = []
+                all_nlp_works[i] = []
+                if not _return_manifest:
+                    all_manifest_entries[i] = []
     else:
         # Small batch — sequential (no thread pool overhead)
         for i, (resource, gpas_work, manifest_entries_) in enumerate(
@@ -721,6 +686,8 @@ def process_data_batch(
             all_nlp_works[i] = []
             if not _return_manifest:
                 all_manifest_entries[i] = []
+
+    _stage_post_timer.__exit__(None, None, None)
 
     if _return_manifest:
         return results, all_manifest_entries
@@ -791,18 +758,24 @@ def _process_bundle(
                 id_text_map[old_id] = new_id
 
         do_text_ids = getattr(settings, "rewrite_text_ids", False) and id_text_map
-        if bare_id_map or do_text_ids:
-            automaton, compiled = (None, None)
-            if do_text_ids:
-                automaton, compiled = _build_text_id_matcher(id_text_map)
-                audit_log.debug("rewriting_text_ids count=%d", len(id_text_map))
+        if do_text_ids:
+            # Text-ID replacement requires a full walk of all Bundle content
+            # including entry[].resource (cross-resource text refs not fixed
+            # during individual processing).
+            automaton, compiled = _build_text_id_matcher(id_text_map)
+            audit_log.debug("rewriting_text_ids count=%d", len(id_text_map))
             _post_process_resource(
                 resource,
                 ref_mapping=bare_id_map or None,
-                id_map=id_text_map if do_text_ids else None,
+                id_map=id_text_map,
                 automaton=automaton,
                 compiled=compiled,
             )
+        elif bare_id_map:
+            # Reference-only rewrite: skip entry[].resource — individual resource
+            # processing already applied the shared pseudonym mapping to every
+            # reference field.  Only Bundle-level metadata needs updating.
+            _shallow_post_process_bundle(resource, ref_mapping=bare_id_map)
     elif getattr(settings, "rewrite_text_ids", False):
         # No ref_map but text_ids requested — nothing to rewrite
         pass
@@ -832,16 +805,22 @@ def process_data(resource, settings, pseudonymizer=None, attach_manifest: bool =
     if pseudonymizer is None:
         pseudonymizer = _get_default_pseudonymizer()
     if isinstance(resource, list):
-        return process_data_batch(
+        result = process_data_batch(
             resource, settings, pseudonymizer, attach_manifest=attach_manifest
         )
+        _run_pii_gate(result)
+        return result
     if isinstance(resource, dict) and resource.get("resourceType") == "Bundle":
-        return _process_bundle(
+        result = _process_bundle(
             resource, settings, pseudonymizer, attach_manifest=attach_manifest
         )
-    return process_data_batch(
+        _run_pii_gate([result])
+        return result
+    result = process_data_batch(
         [resource], settings, pseudonymizer, attach_manifest=attach_manifest
     )[0]
+    _run_pii_gate([result])
+    return result
 
 
 def process_data_stream(

@@ -5,30 +5,98 @@ from utils.json_fast import (
     dumps_pretty as _json_dumps_pretty,
 )
 import defusedxml.ElementTree as ET
-import xml.etree.ElementTree as _ET_WRITE  # stdlib ET used only for write operations
+import xml.etree.ElementTree as _ET_WRITE  
 
 
 # Common FHIR repeating element names that should be represented as lists even
 # when a single occurrence appears in XML.
 _REPEATING_KEYS = {
+    # --- Bundle / resource collection ---
     "entry",
+    "contained",
+    "link",
+    # --- Human name ---
     "name",
     "given",
-    "identifier",
-    "extension",
-    "coding",
-    "component",
-    "category",
+    # --- Contact / address ---
     "address",
-    "telecom",
-    "note",
     "line",
-    "contained",
+    "telecom",
+    "contact",
+    # --- Identifiers & coding ---
+    "identifier",
+    "coding",
+    "extension",
+    # --- Clinical data ---
+    "category",
+    "component",
+    "note",
     "dosage",
     "performer",
     "participant",
     "reasonCode",
     "reasonReference",
+    "basedOn",
+    "partOf",
+    # --- Patient ---
+    "communication",
+    "photo",
+    # --- Practitioner ---
+    "qualification",
+    # --- Organization ---
+    "alias",
+    "endpoint",
+    # --- DiagnosticReport ---
+    "result",
+    "specimen",
+    "media",
+    "presentedForm",
+    # --- Procedure ---
+    "report",
+    "complication",
+    "followUp",
+    "usedCode",
+    # --- OperationOutcome ---
+    "issue",
+    # --- Audit / provenance ---
+    "agent",
+    "entity",
+    "signature",
+    "policy",
+    # --- Encounter / clinical workflow ---
+    "diagnosis",
+    "statusHistory",
+    "classHistory",
+    "location",
+    # --- CarePlan / CareTeam ---
+    "activity",
+    "goal",
+    "addresses",
+    # --- Claim / EOB ---
+    "item",
+    "insurance",
+    "careTeam",
+    "supportingInfo",
+    # --- Immunization ---
+    "reaction",
+    "protocolApplied",
+    # --- AllergyIntolerance ---
+    # "reaction" already above
+    # --- Composition ---
+    "author",
+    "attester",
+    "section",
+    "relatesTo",
+    # --- ImagingStudy ---
+    "series",
+    # --- Task ---
+    "input",
+    "output",
+    # --- Communication ---
+    "payload",
+    # --- Device ---
+    "udiCarrier",
+    "deviceName",
 }
 
 
@@ -91,7 +159,7 @@ def _xml_to_obj(elem):
         else:
             ret[key] = val
 
-    for key in list(ret.keys()):
+    for key in list(ret):
         if key in _REPEATING_KEYS and not isinstance(ret[key], list):
             ret[key] = [ret[key]]
 
