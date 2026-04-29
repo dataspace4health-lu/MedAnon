@@ -7,6 +7,7 @@ topological upload ordering, and cross-resource reference rewriting.
 import os
 
 from ._transport import (
+    FhirCircuitBreakerOpen,
     _RESOURCE_TYPE_RE,
     _sanitise_resource_id,
     _validate_resource_id,
@@ -326,9 +327,14 @@ def _parse_batch_response(resp_bundle: dict, meta_list: list) -> list:
 
         server_id = None
         if location:
-            parts = location.split("/")
-            if len(parts) >= 2:
-                server_id = parts[1]
+            # Location may be absolute (http://host/fhir/Patient/id/_history/v)
+            # or relative (Patient/id/_history/v).  Split from the right to find
+            # the id reliably regardless of base-URL depth.
+            segs = location.rstrip("/").rsplit("/", 3)
+            if len(segs) >= 4 and segs[-2] == "_history":
+                server_id = segs[-3]  # .../{type}/{id}/_history/{v}
+            elif len(segs) >= 2:
+                server_id = segs[-1]  # .../{type}/{id}
 
         if success:
             results.append(
@@ -410,7 +416,7 @@ def _post_bundle_batch(base: str, chunk: list[dict], token, timeout) -> list[dic
             operation="batch_upload",
             target=True,
         )
-    except ValueError as exc:
+    except (ValueError, FhirCircuitBreakerOpen) as exc:
         log.warning("batch_upload chunk failed: %s", exc)
         for rt, source_id in meta_list:
             results.append(

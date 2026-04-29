@@ -186,6 +186,7 @@ def bulk_export_kick_off(
     base_url,
     level="system",
     resource_type=None,
+    group_id=None,
     type_filter=None,
     since=None,
     token=None,
@@ -195,6 +196,11 @@ def bulk_export_kick_off(
 
     This is the first phase of the bulk export protocol.  Returns the
     ``Content-Location`` URL that should be polled for completion.
+
+    Supported levels:
+    - ``"system"``  → ``GET /$export``
+    - ``"type"``    → ``GET /{ResourceType}/$export``  (requires *resource_type*)
+    - ``"group"``   → ``GET /Group/{id}/$export``      (requires *group_id*)
 
     Raises ``ValueError`` on kick-off failure or missing headers.
     """
@@ -207,6 +213,12 @@ def bulk_export_kick_off(
             raise ValueError("resource_type is required for type-level bulk export")
         _validate_resource_type(resource_type)
         kickoff_url = f"{base}/{resource_type}/$export"
+    elif level == "group":
+        if not group_id:
+            raise ValueError("group_id is required for group-level bulk export")
+        kickoff_url = f"{base}/Group/{group_id}/$export"
+        if type_filter:
+            params["_type"] = type_filter
     else:
         kickoff_url = f"{base}/$export"
         _type = type_filter or resource_type
@@ -322,6 +334,7 @@ def bulk_export(
     base_url,
     level="system",
     resource_type=None,
+    group_id=None,
     type_filter=None,
     since=None,
     token=None,
@@ -334,11 +347,12 @@ def bulk_export(
 
     Args:
         base_url:      FHIR server base URL, e.g. ``http://host:8080/fhir``
-        level:         ``"system"`` for ``/$export`` or ``"type"`` for ``/{Type}/$export``
+        level:         ``"system"``, ``"type"``, or ``"group"``
         resource_type: Required when ``level="type"``.  For system-level, used as
                        the ``_type`` param when ``type_filter`` is not set.
+        group_id:      Required when ``level="group"`` — FHIR Group.id.
         type_filter:   Comma-separated resource types for the ``_type`` param
-                       (system-level only; overrides ``resource_type``).
+                       (overrides ``resource_type`` for system-level).
         since:         ``_since`` instant, e.g. ``"2024-01-01T00:00:00Z"``
         token:         Optional Bearer token (overrides ``FHIR_SOURCE_TOKEN`` env).
         timeout:       HTTP timeout per individual request in seconds.
@@ -349,6 +363,7 @@ def bulk_export(
         base_url,
         level=level,
         resource_type=resource_type,
+        group_id=group_id,
         type_filter=type_filter,
         since=since,
         token=token,

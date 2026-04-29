@@ -23,8 +23,10 @@ class FhirCircuitBreakerOpen(Exception):
 
 
 __all__ = [
-    # Connection pool & logger
-    "_pool",
+    # Connection pools & logger
+    "_pool",          # back-compat alias → _pool_source
+    "_pool_source",
+    "_pool_target",
     "log",
     # Configuration constants
     "_FHIR_MAX_PAGES",
@@ -51,16 +53,39 @@ __all__ = [
 ]
 
 # ---------------------------------------------------------------------------
-# Connection pool (reuses TCP/TLS connections across requests)
+# Connection pools (reuse TCP/TLS connections across requests)
+#
+# Source and target FHIR servers get *separate* PoolManager instances so that
+# heavy writes to the target (e.g. a 318k-resource bulk import) cannot starve
+# concurrent reads from the source (e.g. a paginated $everything from another
+# job, or the UI patient browser).  This is the bulkhead pattern: one failing
+# or saturated downstream cannot drag down the other.
 # ---------------------------------------------------------------------------
 
-_FHIR_POOL_SIZE = int(os.environ.get("FHIR_POOL_SIZE", "10"))
-_pool = urllib3.PoolManager(
+from utils.pool_budget import fhir_pool_budget
+_FHIR_POOL_SIZE = fhir_pool_budget()
+
+# Per-role timeouts.  Defaults preserve the previous behaviour (5s connect /
+# 30s read) so nothing changes unless an operator opts in to tuning them.
+_FHIR_SOURCE_CONNECT = float(os.environ.get("FHIR_SOURCE_TIMEOUT_CONNECT_SEC", "5"))
+_FHIR_SOURCE_READ = float(os.environ.get("FHIR_SOURCE_TIMEOUT_READ_SEC", "30"))
+_FHIR_TARGET_CONNECT = float(os.environ.get("FHIR_TARGET_TIMEOUT_CONNECT_SEC", "5"))
+_FHIR_TARGET_READ = float(os.environ.get("FHIR_TARGET_TIMEOUT_READ_SEC", "30"))
+
+_pool_source = urllib3.PoolManager(
     num_pools=4,
     maxsize=_FHIR_POOL_SIZE,
     retries=False,
-    timeout=urllib3.Timeout(connect=5, read=30),
+    timeout=urllib3.Timeout(connect=_FHIR_SOURCE_CONNECT, read=_FHIR_SOURCE_READ),
 )
+_pool_target = urllib3.PoolManager(
+    num_pools=4,
+    maxsize=_FHIR_POOL_SIZE,
+    retries=False,
+    timeout=urllib3.Timeout(connect=_FHIR_TARGET_CONNECT, read=_FHIR_TARGET_READ),
+)
+# Back-compat alias: legacy callers / external imports keep working.
+_pool = _pool_source
 
 log = logging.getLogger("medanon.fhir_server")
 
@@ -182,8 +207,11 @@ def _retry_request(
     When *target* is True, the target-server circuit breaker is used instead of source.
     """
     cb = _fhir_target_cb if target else _fhir_cb
+    pool = _pool_target if target else _pool_source
+    role = "target" if target else "source"
+    connect_timeout = _FHIR_TARGET_CONNECT if target else _FHIR_SOURCE_CONNECT
     if not cb.allow_request():
-        FHIR_CALL_COUNT.labels(operation=operation, status="error").inc()
+        FHIR_CALL_COUNT.labels(operation=operation, status="error", role=role).inc()
         raise FhirCircuitBreakerOpen(
             f"FHIR server unavailable — circuit breaker OPEN ({operation})"
         )
@@ -191,12 +219,12 @@ def _retry_request(
     t0 = time.perf_counter()
     for attempt in range(_FHIR_RETRY_COUNT + 1):
         try:
-            resp = _pool.request(
+            resp = pool.request(
                 method,
                 url,
                 headers=headers,
                 body=body,
-                timeout=urllib3.Timeout(connect=5, read=timeout),
+                timeout=urllib3.Timeout(connect=connect_timeout, read=timeout),
             )
             if resp.status >= 400:
                 should_retry = resp.status in (429, 500, 502, 503, 504)
@@ -212,23 +240,27 @@ def _retry_request(
                         _FHIR_RETRY_BACKOFF * (2**attempt) * (0.5 + random.random())
                     )
                     continue
-                FHIR_LATENCY.labels(operation=operation).observe(
+                FHIR_LATENCY.labels(operation=operation, role=role).observe(
                     time.perf_counter() - t0
                 )
-                FHIR_CALL_COUNT.labels(operation=operation, status="error").inc()
+                FHIR_CALL_COUNT.labels(operation=operation, status="error", role=role).inc()
                 if should_retry:
                     cb.record_failure()
-                body_snippet = (
-                    resp.data[:400].decode("utf-8", errors="replace")
-                    if resp.data
-                    else ""
-                )
+                if resp.data and log.isEnabledFor(logging.DEBUG):
+                    # Log raw body only at DEBUG so it never surfaces in production
+                    # logs or exception messages (response may contain PHI).
+                    log.debug(
+                        "fhir_error_body status=%s url=%s body=%s",
+                        resp.status,
+                        url,
+                        resp.data[:400].decode("utf-8", errors="replace"),
+                    )
                 raise ValueError(
-                    f"FHIR server HTTP {resp.status} for {url}: {body_snippet}"
+                    f"FHIR server HTTP {resp.status} for {url} (see DEBUG log for details)"
                 )
 
-            FHIR_LATENCY.labels(operation=operation).observe(time.perf_counter() - t0)
-            FHIR_CALL_COUNT.labels(operation=operation, status="ok").inc()
+            FHIR_LATENCY.labels(operation=operation, role=role).observe(time.perf_counter() - t0)
+            FHIR_CALL_COUNT.labels(operation=operation, status="ok", role=role).inc()
             cb.record_success()
 
             if parse_json:
@@ -244,8 +276,8 @@ def _retry_request(
                 )
                 time.sleep(_FHIR_RETRY_BACKOFF * (2**attempt) * (0.5 + random.random()))
                 continue
-            FHIR_LATENCY.labels(operation=operation).observe(time.perf_counter() - t0)
-            FHIR_CALL_COUNT.labels(operation=operation, status="error").inc()
+            FHIR_LATENCY.labels(operation=operation, role=role).observe(time.perf_counter() - t0)
+            FHIR_CALL_COUNT.labels(operation=operation, status="error", role=role).inc()
             cb.record_failure()
             raise ValueError(f"FHIR server connection error for {url}: {exc}") from exc
 
