@@ -1,0 +1,22 @@
+{{- /*
+Self-signed cert-manager Issuer for non-production edge TLS.
+
+Only rendered when:
+  - global.mtls.certManager.enabled=true
+  - global.mtls.certManager.issuerRef.kind="Issuer"  (namespace-scoped)
+
+For production, disable this template and create a ClusterIssuer for Let's Encrypt:
+  global.mtls.certManager.issuerRef.name: letsencrypt-prod
+  global.mtls.certManager.issuerRef.kind: ClusterIssuer
+*/ -}}
+{{- if and .Values.global.mtls.certManager.enabled (eq .Values.global.mtls.certManager.issuerRef.kind "Issuer") }}
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ .Values.global.mtls.certManager.issuerRef.name | quote }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "medanon.labels" . | nindent 4 }}
+spec:
+  selfSigned: {}
+{{- end }}

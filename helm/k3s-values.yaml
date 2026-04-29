@@ -31,6 +31,12 @@ global:
   registry: ""
   # Never pull from a remote registry; use only what was imported with k3s ctr.
   imagePullPolicy: Never
+  # mTLS disabled by default. To enable Linkerd on K3s:
+  #   1. linkerd install | kubectl apply -f -
+  #   2. Set: global.mtls.enabled=true,global.mtls.provider=linkerd
+  mtls:
+    enabled: false
+    provider: linkerd
 
 # ─── Anonymizer ───────────────────────────────────────────────────────────────
 anonymizer:

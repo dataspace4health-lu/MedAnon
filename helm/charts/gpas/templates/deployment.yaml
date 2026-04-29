@@ -28,6 +28,14 @@ spec:
         prometheus.io/scrape: "true"
         prometheus.io/port: "{{ .Values.port }}"
         prometheus.io/path: "/metrics"
+        {{- with .Values.global.mtls }}
+        {{- if and .enabled (eq .provider "linkerd") }}
+        linkerd.io/inject: "enabled"
+        {{- end }}
+        {{- if and .enabled (eq .provider "istio") }}
+        sidecar.istio.io/inject: "true"
+        {{- end }}
+        {{- end }}
     spec:
       serviceAccountName: {{ include "gpas.fullname" . }}
       securityContext:

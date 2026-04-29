@@ -15,6 +15,14 @@ spec:
         {{- include "analytics.selectorLabels" . | nindent 8 }}
       annotations:
         prometheus.io/scrape: "false"
+        {{- with .Values.global.mtls }}
+        {{- if and .enabled (eq .provider "linkerd") }}
+        linkerd.io/inject: "enabled"
+        {{- end }}
+        {{- if and .enabled (eq .provider "istio") }}
+        sidecar.istio.io/inject: "true"
+        {{- end }}
+        {{- end }}
     spec:
       securityContext:
         runAsNonRoot: true

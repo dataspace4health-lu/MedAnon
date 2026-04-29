@@ -23,6 +23,31 @@ global:
   #   - name: my-registry-secret
   imagePullSecrets: []
 
+  # ── mTLS / Service Mesh ────────────────────────────────────────────────────
+  # Set global.mtls.enabled=true after the mesh control plane is installed.
+  #
+  # Linkerd (recommended for K3s — lightweight, no config changes needed):
+  #   1. Install: linkerd install | kubectl apply -f -
+  #   2. Enable:  --set global.mtls.enabled=true,global.mtls.provider=linkerd
+  #
+  # Istio:
+  #   1. Install: istioctl install --set profile=minimal
+  #   2. Enable:  --set global.mtls.enabled=true,global.mtls.provider=istio
+  #
+  # cert-manager (Ingress edge TLS, separate from pod-to-pod mTLS):
+  #   Set global.mtls.certManager.enabled=true to deploy a Certificate +
+  #   Issuer for the Ingress TLS secret (requires cert-manager CRDs installed).
+  mtls:
+    enabled: false        # set true after mesh control plane is installed
+    provider: linkerd      # "linkerd" | "istio"
+    certManager:
+      enabled: false       # deploy cert-manager Certificate + Issuer for edge TLS
+      issuerRef:
+        name: letsencrypt-prod
+        kind: ClusterIssuer
+      commonName: ""       # e.g. medanon.example.com
+      dnsNames: []
+
 # ─── Anonymizer overrides ─────────────────────────────────────────────────────
 anonymizer:
   # When using the umbrella, set this to "<release>-gpas" so the anonymizer

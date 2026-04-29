@@ -20,6 +20,14 @@ spec:
       annotations:
         # Force pod restart when nginx config changes
         checksum/nginx: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.global.mtls }}
+        {{- if and .enabled (eq .provider "linkerd") }}
+        linkerd.io/inject: "enabled"
+        {{- end }}
+        {{- if and .enabled (eq .provider "istio") }}
+        sidecar.istio.io/inject: "true"
+        {{- end }}
+        {{- end }}
     spec:
       serviceAccountName: {{ include "ui.fullname" . }}
       securityContext:

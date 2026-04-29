@@ -1,0 +1,32 @@
+{{- /*
+cert-manager Certificate for Ingress edge TLS.
+
+Prerequisites:
+  - cert-manager CRDs installed (kubectl apply -f https://github.com/cert-manager/cert-manager/releases/latest/download/cert-manager.crds.yaml)
+  - A ClusterIssuer or Issuer named .Values.global.mtls.certManager.issuerRef.name must exist
+    (use the companion issuer.yaml for a self-signed Issuer, or configure Let's Encrypt externally)
+
+Enable with:
+  --set ingress.enabled=true,ingress.tls.enabled=true,global.mtls.certManager.enabled=true,global.mtls.certManager.commonName=medanon.example.com
+*/ -}}
+{{- if and .Values.ingress.enabled .Values.ingress.tls.enabled .Values.global.mtls.certManager.enabled }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "medanon.fullname" . }}-tls
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "medanon.labels" . | nindent 4 }}
+spec:
+  secretName: {{ .Values.ingress.tls.secretName | quote }}
+  issuerRef:
+    name: {{ .Values.global.mtls.certManager.issuerRef.name | quote }}
+    kind: {{ .Values.global.mtls.certManager.issuerRef.kind | quote }}
+  {{- if .Values.global.mtls.certManager.commonName }}
+  commonName: {{ .Values.global.mtls.certManager.commonName | quote }}
+  {{- end }}
+  {{- if .Values.global.mtls.certManager.dnsNames }}
+  dnsNames:
+    {{- toYaml .Values.global.mtls.certManager.dnsNames | nindent 4 }}
+  {{- end }}
+{{- end }}
