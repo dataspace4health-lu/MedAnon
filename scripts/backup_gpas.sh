@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# backup_gpas.sh — encrypted backup of the gPAS MySQL pseudonym database.
+# backup_gpas.sh — encrypted backup of the gPAS PostgreSQL pseudonym database.
 #
 # USAGE
 #   ./scripts/backup_gpas.sh [--restore <backup-file>]
 #
 # PREREQUISITES
-#   - Docker + docker compose must be running (gpas-mysql container up).
+#   - Docker + docker compose must be running (gpas-db container up).
 #   - BACKUP_PASSPHRASE environment variable must be set (min 32 chars recommended).
 #     Generate once: openssl rand -base64 48
 #   - Optional: set BACKUP_DIR to override the default backup destination.
 #
 # BACKUP BEHAVIOUR
-#   1. Dumps all gPAS databases from the running gpas-mysql container via mysqldump.
+#   1. Dumps the gPAS PostgreSQL database from the running gpas-db container via pg_dump.
 #   2. Compresses the dump with gzip.
 #   3. Encrypts with AES-256-CBC (PBKDF2, 600 000 iterations) using BACKUP_PASSPHRASE.
 #   4. Writes a timestamped .sql.gz.enc file to BACKUP_DIR (default: ./backups/gpas/).
@@ -19,7 +19,7 @@
 #
 # RESTORE BEHAVIOUR
 #   ./scripts/backup_gpas.sh --restore ./backups/gpas/gpas_20260330_020000.sql.gz.enc
-#   Decrypts → decompresses → replays SQL into the running gpas-mysql container.
+#   Decrypts → decompresses → replays SQL into the running gpas-db container.
 #   WARNING: this replaces ALL existing pseudonym mappings. Ensure gPAS (WildFly) is
 #   stopped before restoring to avoid in-flight pseudonymization conflicts.
 #
@@ -38,8 +38,9 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-CONTAINER_NAME="${GPAS_MYSQL_CONTAINER:-gpas-mysql}"
-MYSQL_ROOT_PASSWORD="${GPAS_MYSQL_ROOT_PASSWORD:?GPAS_MYSQL_ROOT_PASSWORD must be set}"
+CONTAINER_NAME="${GPAS_DB_CONTAINER:-gpas-db}"
+GPAS_DB_USER="${GPAS_DB_USER:-gpas_user}"
+GPAS_DB_NAME="${GPAS_DB_NAME:-gpas}"
 BACKUP_PASSPHRASE="${BACKUP_PASSPHRASE:?BACKUP_PASSPHRASE must be set (min 32 chars)}"
 BACKUP_DIR="${BACKUP_DIR:-$(dirname "$0")/../backups/gpas}"
 BACKUP_RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-30}"
@@ -77,7 +78,7 @@ if [[ "${1:-}" == "--restore" ]]; then
         -in "$RESTORE_FILE" \
         | gunzip \
         | docker exec -i "$CONTAINER_NAME" \
-            mysql -uroot -p"${MYSQL_ROOT_PASSWORD}" \
+            psql -U "$GPAS_DB_USER" -d "$GPAS_DB_NAME" \
         && log "Restore complete." \
         || die "Restore failed."
     exit 0
@@ -96,20 +97,20 @@ docker inspect --format '{{.State.Status}}' "$CONTAINER_NAME" 2>/dev/null \
 
 mkdir -p "$BACKUP_DIR"
 
-log "Starting gPAS MySQL backup → $BACKUP_FILE"
+log "Starting gPAS PostgreSQL backup → $BACKUP_FILE"
 
-# Dump all databases (excludes information_schema, performance_schema, sys)
-# --single-transaction: consistent InnoDB snapshot without locking tables
-# --routines + --events: include stored procedures and scheduled events
+# Dump the gPAS database.
+# --no-owner: restore works regardless of the target Postgres user.
+# --no-acl:   ACLs are environment-specific, skip them for portability.
+# --clean:    DROP before CREATE so restore is idempotent.
 docker exec "$CONTAINER_NAME" \
-    mysqldump \
-        -uroot -p"${MYSQL_ROOT_PASSWORD}" \
-        --single-transaction \
-        --routines \
-        --events \
-        --all-databases \
-        --ignore-table=mysql.innodb_table_stats \
-        --ignore-table=mysql.innodb_index_stats \
+    pg_dump \
+        -U "$GPAS_DB_USER" \
+        -d "$GPAS_DB_NAME" \
+        --no-owner \
+        --no-acl \
+        --clean \
+        --if-exists \
     | gzip \
     | openssl enc -aes-256-cbc -pbkdf2 -iter 600000 \
         -pass "env:BACKUP_PASSPHRASE" \

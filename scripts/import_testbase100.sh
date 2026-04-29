@@ -16,7 +16,7 @@
 set -euo pipefail
 
 FHIR_URL="${FHIR_SOURCE_URL:-http://localhost:8081/fhir}"
-DATA_DIR="${1:-$(cd "$(dirname "$0")/.." && pwd)/services/anonymizer/tests/data/TestBase100}"
+DATA_DIR="${1:-$(cd "$(dirname "$0")/.." && pwd)/services/anonymizer/tests/data/TestBase}"
 BATCH_SIZE=300
 PROXY_CONTAINER="fhir-source-proxy-import"
 PROXY_STARTED=false
