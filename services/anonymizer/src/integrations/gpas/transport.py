@@ -33,7 +33,8 @@ gpas_log = logging.getLogger("medanon.gpas")
 # ---------------------------------------------------------------------------
 
 _JOB_WORKERS = int(os.environ.get("MEDANON_JOB_WORKERS", "3"))
-_GPAS_POOL_SIZE = int(os.environ.get("GPAS_POOL_SIZE", str(_JOB_WORKERS * 8)))
+from utils.pool_budget import gpas_pool_budget
+_GPAS_POOL_SIZE = gpas_pool_budget()
 _gpas_pool = urllib3.PoolManager(
     num_pools=2,
     maxsize=_GPAS_POOL_SIZE,
@@ -235,8 +236,8 @@ def _call_gpas_operation(base_url, operation, fhir_params, params):
     timeout_sec = float(params.get("gpas_timeout_sec", 30))
     payload = _json_dumps_bytes(fhir_params)
 
-    gpas_log.info(
-        "calling %s with %d parameter(s)", url, len(fhir_params.get("parameter", []))
+    gpas_log.debug(
+        "gpas_call operation=%s parameters=%d", operation, len(fhir_params.get("parameter", []))
     )
 
     retry_count = int(
@@ -247,6 +248,9 @@ def _call_gpas_operation(base_url, operation, fhir_params, params):
             "gpas_retry_backoff_sec", os.environ.get("GPAS_RETRY_BACKOFF_SEC", 0.2)
         )
     )
+    # Build headers once — env-var and param lookups are redundant on every
+    # retry attempt; X-Request-ID is fixed for the lifetime of this call.
+    headers = _resolve_gpas_headers(params)
 
     t0 = time.perf_counter()
     for attempt in range(retry_count + 1):
@@ -255,7 +259,7 @@ def _call_gpas_operation(base_url, operation, fhir_params, params):
                 "POST",
                 url,
                 body=payload,
-                headers=_resolve_gpas_headers(params),
+                headers=headers,
                 timeout=urllib3.Timeout(connect=5, read=timeout_sec),
             )
             if resp.status >= 400:
@@ -269,23 +273,31 @@ def _call_gpas_operation(base_url, operation, fhir_params, params):
                     if resp.data
                     else ""
                 )
+                # Extract diagnostics for internal logging only — never include
+                # raw diagnostics in the raised exception because gPAS may echo
+                # back the original value (e.g. "Value 'abc-123' not found") which
+                # constitutes a PHI leak into API error responses and job error fields.
                 try:
                     diagnostics = []
                     outcome = _json_loads(detail)
                     for issue in outcome.get("issue", []):
                         if issue.get("diagnostics"):
-                            diagnostics.append(issue["diagnostics"][:100])
-                    detail_message = "; ".join(diagnostics)[:200] if diagnostics else ""
+                            diagnostics.append(issue["diagnostics"][:200])
+                    internal_detail = "; ".join(diagnostics)[:400] if diagnostics else detail[:200]
                 except Exception:
-                    detail_message = ""
+                    internal_detail = detail[:200]
 
-                if "Unknown domain" in detail_message:
-                    try:
-                        domains = list_gpas_domains(params)
-                        if domains:
-                            detail_message = f"Unknown domain. Available domains: {', '.join(domains)}"
-                    except Exception:
-                        pass
+                gpas_log.debug(
+                    "gpas_error_detail operation=%s status=%d detail=%s",
+                    operation, resp.status, internal_detail,
+                )
+
+                # Build the safe public error message — operational info only.
+                # Do not call list_gpas_domains() here: it adds a second HTTP round-trip
+                # on every "Unknown domain" error and amplifies load when misconfigured.
+                # The full diagnostic is available at DEBUG level above.
+                safe_message = "Unknown domain" if "Unknown domain" in internal_detail else ""
+
                 GPAS_LATENCY.labels(operation=operation).observe(
                     time.perf_counter() - t0
                 )
@@ -293,7 +305,8 @@ def _call_gpas_operation(base_url, operation, fhir_params, params):
                 if should_retry:
                     _gpas_circuit_breaker.record_failure()
                 raise ValueError(
-                    f"gPAS HTTP {resp.status} on ${operation}: {detail_message[:200]}"
+                    f"gPAS HTTP {resp.status} on ${operation}"
+                    + (f": {safe_message}" if safe_message else "")
                 )
             body = resp.data.decode("utf-8")
             GPAS_LATENCY.labels(operation=operation).observe(time.perf_counter() - t0)
