@@ -1,4 +1,4 @@
-# SPE FHIR BlackBox (MedAnon)
+# MedAnon
 
 A rule-driven FHIR R4 de-identification engine that transforms patient data for research, compliance, and data sharing.
 
@@ -11,7 +11,6 @@ MedAnon accepts FHIR resources (JSON, NDJSON, XML), applies configurable match-a
 **Why it exists:** Clinical data must be de-identified before secondary use. MedAnon automates this with auditable, reversible, and compliance-mapped transformations — without manual scripting.
 
 **Key capabilities:**
-- 7 built-in de-identification profiles (GDPR, HIPAA, gPAS, research, and more)
 - Reversible pseudonymization via gPAS TTP
 - NLP-based free-text scrubbing (Presidio + spaCy)
 - Async bulk export for large cohorts
