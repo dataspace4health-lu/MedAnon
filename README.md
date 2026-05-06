@@ -164,8 +164,6 @@ make dev
 ```bash
 make up                              # start all services
 docker compose --profile ha up       # + gPAS PostgreSQL read replica
-docker compose --profile s3 up       # + MinIO S3 for job results
-docker compose --profile ai up       # + Ollama for AI agents
 ```
 
 **Kubernetes (Helm):**
