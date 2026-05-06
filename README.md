@@ -8,7 +8,7 @@ A rule-driven FHIR R4 de-identification engine that transforms patient data for 
 
 MedAnon accepts FHIR resources (JSON, NDJSON, XML), applies configurable match-action rules, and returns de-identified output. It supports GDPR, HIPAA Safe Harbor, and IRB research profiles out of the box.
 
-**Why it exists:** Clinical data must be de-identified before secondary use. MedAnon automates this with auditable, reversible, and compliance-mapped transformations — without manual scripting.
+**Why it exists:** Clinical data must be de-identified before secondary use. MedAnon automates this with auditable, reversible, and compliance-mapped transformations  without manual scripting.
 
 **Key capabilities:**
 - Reversible pseudonymization via gPAS TTP
@@ -64,8 +64,8 @@ Browser
               ├── PostgreSQL (app-db)        jobs, configs, staging
               └── Redis                      job queue + cache
 
-Source FHIR server (no host port — isolated network, accessed only via anonymizer)
-Target FHIR server (:8082) — de-identified output
+Source FHIR server (no host port  isolated network, accessed only via anonymizer)
+Target FHIR server (:8082)  de-identified output
 ```
 
 **4-pass pipeline per resource:**
@@ -94,7 +94,7 @@ Target FHIR server (:8082) — de-identified output
 | `GET` | `/health` | Liveness check |
 | `GET` | `/ready` | Readiness check (probes all upstreams) |
 
-Select a profile per request: `?config_profile=gdpr` — values: `gdpr`, `hipaa`, `gpas`, `research`, `structural`, `value-masking`, `minimal`.
+Select a profile per request: `?config_profile=gdpr`  values: `gdpr`, `hipaa`, `gpas`, `research`, `structural`, `value-masking`, `minimal`.
 
 Full reference: [docs/api-reference.md](docs/api-reference.md)
 
@@ -102,11 +102,11 @@ Full reference: [docs/api-reference.md](docs/api-reference.md)
 
 ## Configuration
 
-Copy `.env.example` to `.env`. All secrets stay in `.env` — never committed.
+Copy `.env.example` to `.env`. All secrets stay in `.env`  never committed.
 
 | Variable | Required | Description |
 |---|---|---|
-| `MEDANON_API_KEY` | Production | API auth key — blank = open mode (dev only) |
+| `MEDANON_API_KEY` | Production | API auth key  blank = open mode (dev only) |
 | `MEDANON_HASH_KEY` | Production | HMAC key for pseudonymization: `openssl rand -hex 32` |
 | `GPAS_URL` | gPAS profile | gPAS gateway URL |
 | `GPAS_DOMAIN` | gPAS profile | Pseudonymization domain name |
@@ -201,7 +201,7 @@ More: [docs/RUNBOOK.md](docs/RUNBOOK.md)
 
 | Document | Description |
 |---|---|
-| [docs/INDEX.md](docs/INDEX.md) | Full documentation index — start here |
+| [docs/INDEX.md](docs/INDEX.md) | Full documentation index  start here |
 | [docs/architecture.md](docs/architecture.md) | System design, pipeline, config profiles |
 | [docs/data-flow.md](docs/data-flow.md) | Request traces, network layout, NLP/gPAS/AI flows |
 | [docs/api-reference.md](docs/api-reference.md) | All REST endpoints with request/response examples |
