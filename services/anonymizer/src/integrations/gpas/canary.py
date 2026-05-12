@@ -48,8 +48,6 @@ def check_gpas_cache_coherence(redis_url: str | None = None) -> dict:
 
 
 def _run_canary_probe(redis_url: str, gpas_url: str, domain: str) -> dict:
-    import redis as _redis
-
     from .transport import _call_gpas_operation, _resolve_gpas_base
     from .protocol import _build_pseudonymize_params, _parse_pseudonymize_response
 
@@ -69,11 +67,13 @@ def _run_canary_probe(redis_url: str, gpas_url: str, domain: str) -> dict:
     if not current_pseudonym:
         return {"checked": False, "flushed": False, "reason": "canary not returned by gPAS"}
 
-    # 2. Compare with stored canary in Redis
+    # 2. Compare with stored canary in Redis (shared pool — no per-call client)
     canary_key = CANARY_KEY_PREFIX + domain
-    client = _redis.StrictRedis.from_url(
-        redis_url, decode_responses=True, socket_timeout=5, socket_connect_timeout=2,
-    )
+    from utils.redis_pool import get_redis
+
+    client = get_redis(redis_url, decode_responses=True)
+    if client is None:
+        return {"checked": False, "flushed": False, "reason": "redis client unavailable"}
     stored_pseudonym = client.get(canary_key)
 
     if stored_pseudonym is None:

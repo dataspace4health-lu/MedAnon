@@ -57,12 +57,17 @@ class RedisJobStore:
         )
 
     def _ensure_stream_group(self) -> None:
-        """Idempotent consumer-group creation.  BUSYGROUP = already exists, ignore."""
+        """Idempotent consumer-group creation.  BUSYGROUP = already exists, ignore.
+
+        Uses id="0" (not "$") so the group starts from the beginning of the
+        stream — any messages enqueued before the group was created are still
+        delivered rather than silently skipped.
+        """
         import redis as _redis
 
         try:
             self._client.xgroup_create(
-                _STREAM_KEY, _STREAM_GROUP, id="$", mkstream=True
+                _STREAM_KEY, _STREAM_GROUP, id="0", mkstream=True
             )
         except _redis.exceptions.ResponseError as exc:
             # BUSYGROUP means the group already exists — expected on restart.
@@ -314,6 +319,52 @@ class RedisJobStore:
                 pass
         return jobs
 
+    def cleanup_orphan_index(self, batch_size: int = 500) -> int:
+        """Remove zset/secondary-set members whose job hash has expired.
+
+        ``_batch_get_jobs`` already cleans ghosts opportunistically, but only
+        for IDs returned by a query. Members that are never read again (e.g.
+        old ``done`` jobs after the hash TTL expires) would accumulate in
+        ``medanon:jobs_by_time`` and the per-status sets indefinitely.
+
+        This method walks the time index in pages, EXISTS-checks each ID,
+        and removes orphans. It is safe to call concurrently — Redis SREM /
+        ZREM on missing members is a no-op.
+
+        Returns the number of orphan IDs removed (for diagnostics / metrics).
+        """
+        removed = 0
+        cursor: int | str = 0
+        # ZSCAN guarantees we see every member at least once even when the
+        # set is being mutated concurrently.
+        while True:
+            cursor, items = self._client.zscan(_INDEX_KEY, cursor=cursor, count=batch_size)
+            if items:
+                ids = [member for member, _score in items]
+                pipe = self._client.pipeline(transaction=False)
+                for jid in ids:
+                    pipe.exists(self._job_key(jid))
+                exists_flags = pipe.execute()
+                ghosts = [jid for jid, ex in zip(ids, exists_flags) if not ex]
+                if ghosts:
+                    cleanup = self._client.pipeline(transaction=False)
+                    cleanup.zrem(_INDEX_KEY, *ghosts)
+                    for status_val in (
+                        "pending", "running", "done", "failed", "cancelled"
+                    ):
+                        cleanup.srem(f"{_STATUS_PREFIX}{status_val}", *ghosts)
+                    # Type sets are unbounded by name, so scan them too.
+                    type_keys = self._client.keys(f"{_TYPE_PREFIX}*")
+                    for tk in type_keys:
+                        cleanup.srem(tk, *ghosts)
+                    cleanup.execute()
+                    removed += len(ghosts)
+            if cursor == 0 or cursor == "0":
+                break
+        if removed:
+            _log.info("redis_job_store_orphan_sweep removed=%d", removed)
+        return removed
+
     # -------------------------------------------------------------------------
     # Stream-based notification (replaces RPUSH / BLPOP)
     # -------------------------------------------------------------------------
@@ -339,7 +390,15 @@ class RedisJobStore:
                 block=timeout * 1000,
             )
         except Exception as exc:
-            _log.warning("xreadgroup_error: %s — retrying", type(exc).__name__)
+            err_str = str(exc)
+            # NOGROUP means the consumer group vanished (e.g. Redis restart with
+            # no persistence, or first deployment race).  Re-create it and let
+            # the caller retry on the next loop iteration.
+            if "NOGROUP" in err_str:
+                _log.warning("xreadgroup_nogroup — recreating consumer group")
+                self._ensure_stream_group()
+            else:
+                _log.warning("xreadgroup_error: %s — retrying", type(exc).__name__)
             return None
 
         if not results:

@@ -79,6 +79,8 @@ from psycopg2.pool import ThreadedConnectionPool
 
 logger = logging.getLogger("medanon.staging")
 
+_PARTITION_TARGET_ROWS: int = int(os.environ.get("MEDANON_PARTITION_TARGET_ROWS", "50000"))
+
 _DDL = """
 CREATE SCHEMA IF NOT EXISTS medanon;
 
@@ -102,6 +104,55 @@ CREATE INDEX IF NOT EXISTS idx_staged_job_status
 CREATE INDEX IF NOT EXISTS idx_staged_expires
     ON medanon.staged_resources (expires_at)
     WHERE expires_at IS NOT NULL;
+"""
+
+# ---------------------------------------------------------------------------
+# Idempotent migration: partition columns + staged_partitions table.
+# Run after _DDL in ensure_schema() so both fresh installs and existing
+# deployments get the partition support without manual intervention.
+# ---------------------------------------------------------------------------
+_PARTITION_DDL = """
+ALTER TABLE medanon.staged_resources
+    ADD COLUMN IF NOT EXISTS partition_id     INT,
+    ADD COLUMN IF NOT EXISTS partition_status TEXT DEFAULT 'unclaimed';
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+         WHERE conname = 'chk_staged_partition_status'
+           AND conrelid = 'medanon.staged_resources'::regclass
+    ) THEN
+        ALTER TABLE medanon.staged_resources
+            ADD CONSTRAINT chk_staged_partition_status
+            CHECK (partition_status IN ('unclaimed', 'claimed', 'done', 'error'));
+    END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS medanon.staged_partitions (
+    job_id       TEXT NOT NULL,
+    partition_id INT  NOT NULL,
+    status       TEXT NOT NULL DEFAULT 'unclaimed'
+        CHECK (status IN ('unclaimed', 'claimed', 'done', 'error')),
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    claimed_at   TIMESTAMPTZ,
+    PRIMARY KEY (job_id, partition_id)
+);
+
+ALTER TABLE medanon.staged_partitions
+    ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ;
+
+CREATE INDEX IF NOT EXISTS idx_staged_partition_id
+    ON medanon.staged_resources (job_id, partition_id)
+    WHERE partition_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_staged_partitions_unclaimed
+    ON medanon.staged_partitions (job_id, partition_id)
+    WHERE status = 'unclaimed';
+
+CREATE INDEX IF NOT EXISTS idx_staged_partitions_claimed
+    ON medanon.staged_partitions (job_id, claimed_at)
+    WHERE status = 'claimed';
 """
 
 
@@ -154,6 +205,9 @@ class StagingStore:
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(_DDL)
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(_PARTITION_DDL)
             logger.info(
                 "staging schema ready (retention_days=%d)", self._retention_days
             )
@@ -215,13 +269,26 @@ class StagingStore:
                         """,
                         rows,
                         template=f"(%s, %s, %s, %s::jsonb, {expires_sql})",
+                        # page_size=len(rows) ensures a single INSERT statement so
+                        # cur.rowcount reflects the total inserted count, not just
+                        # the last internal page (the default page_size=100 splits
+                        # large batches into multiple statements and leaves
+                        # cur.rowcount set to only the final page's count — causing
+                        # staged_count to be ~10× too small in the progress display).
+                        page_size=len(rows),
                     )
                     return cur.rowcount
         finally:
             self._put_conn(conn)
 
     def mark_done(self, job_id: str, staged_ids: list[int]) -> None:
-        """Mark a list of staged row IDs as processed (processing → done)."""
+        """Mark a list of staged row IDs as processed.
+
+        Accepts rows in either ``processing`` (streaming path that calls
+        ``get_pending_batch`` first) or ``pending`` (partition-claim path
+        where ``iter_partition`` doesn't transition status — the partition
+        lock provides exclusivity instead).
+        """
         if not staged_ids:
             return
         conn = self._get_conn()
@@ -233,7 +300,7 @@ class StagingStore:
                         UPDATE medanon.staged_resources
                            SET status = 'done', processed_at = NOW()
                          WHERE job_id = %s AND id = ANY(%s)
-                           AND status = 'processing'
+                           AND status IN ('processing', 'pending')
                         """,
                         (job_id, staged_ids),
                     )
@@ -439,6 +506,238 @@ class StagingStore:
             if recovered:
                 logger.info(
                     "recovered %d stale processing rows (timeout=%dmin)",
+                    recovered,
+                    timeout_minutes,
+                )
+            return recovered
+        finally:
+            self._put_conn(conn)
+
+    # ------------------------------------------------------------------
+    # Partition-claim API (Phase 1 / Argo fan-out)
+    # ------------------------------------------------------------------
+
+    def plan_partitions(self, job_id: str, target_rows: int | None = None) -> int:
+        """Assign ``partition_id`` to all unpartitioned rows for *job_id*.
+
+        Uses ``ROW_NUMBER() OVER (PARTITION BY job_id ORDER BY id)`` bucketed
+        by *target_rows* (default ``MEDANON_PARTITION_TARGET_ROWS``, 50 000)
+        so each partition covers exactly ``target_rows`` consecutive rows.
+
+        Inserts one row per distinct partition into ``medanon.staged_partitions``
+        (upsert — safe to call more than once).
+
+        Returns the total number of distinct partitions for the job.
+        """
+        n = target_rows or _PARTITION_TARGET_ROWS
+        conn = self._get_conn()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE medanon.staged_resources AS sr
+                           SET partition_id     = sub.pid,
+                               partition_status = 'unclaimed'
+                          FROM (
+                                SELECT id,
+                                       ((ROW_NUMBER() OVER (
+                                            PARTITION BY job_id ORDER BY id
+                                       ) - 1) / %s)::INT AS pid
+                                  FROM medanon.staged_resources
+                                 WHERE job_id = %s AND partition_id IS NULL
+                               ) AS sub
+                         WHERE sr.id = sub.id
+                        """,
+                        (n, job_id),
+                    )
+                    cur.execute(
+                        """
+                        INSERT INTO medanon.staged_partitions (job_id, partition_id)
+                        SELECT DISTINCT %s, partition_id
+                          FROM medanon.staged_resources
+                         WHERE job_id = %s AND partition_id IS NOT NULL
+                        ON CONFLICT (job_id, partition_id) DO NOTHING
+                        """,
+                        (job_id, job_id),
+                    )
+                    cur.execute(
+                        "SELECT COUNT(*) FROM medanon.staged_partitions WHERE job_id = %s",
+                        (job_id,),
+                    )
+                    row = cur.fetchone()
+                    return int(row[0]) if row else 0
+        finally:
+            self._put_conn(conn)
+
+    def claim_next_partition(self, job_id: str) -> tuple[str, int] | None:
+        """Atomically claim the next unclaimed partition for *job_id*.
+
+        Uses ``FOR UPDATE SKIP LOCKED`` on the ``staged_partitions`` row so
+        concurrent workers each claim distinct partitions — at-most-one-worker-
+        per-partition guarantee.
+
+        Returns ``(resource_type, partition_id)`` or ``None`` when all
+        partitions are claimed or done.
+        """
+        conn = self._get_conn()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        WITH next AS (
+                            SELECT job_id, partition_id
+                              FROM medanon.staged_partitions
+                             WHERE job_id = %s AND status = 'unclaimed'
+                             ORDER BY partition_id
+                             LIMIT 1
+                             FOR UPDATE SKIP LOCKED
+                        )
+                        UPDATE medanon.staged_partitions sp
+                           SET status = 'claimed', claimed_at = NOW()
+                          FROM next
+                         WHERE sp.job_id = next.job_id
+                           AND sp.partition_id = next.partition_id
+                        RETURNING sp.partition_id
+                        """,
+                        (job_id,),
+                    )
+                    row = cur.fetchone()
+                    if row is None:
+                        return None
+                    partition_id: int = row[0]
+                    # Resolve the representative resource_type for this partition.
+                    cur.execute(
+                        """
+                        SELECT resource_type
+                          FROM medanon.staged_resources
+                         WHERE job_id = %s AND partition_id = %s
+                         LIMIT 1
+                        """,
+                        (job_id, partition_id),
+                    )
+                    rtype_row = cur.fetchone()
+                    resource_type = rtype_row[0] if rtype_row else "Unknown"
+                    return resource_type, partition_id
+        finally:
+            self._put_conn(conn)
+
+    def iter_partition(
+        self,
+        job_id: str,
+        resource_type: str,
+        partition_id: int,
+        page_size: int = 500,
+    ) -> Iterable[dict]:
+        """Stream rows for a single claimed partition via keyset pagination.
+
+        Releases and re-acquires the connection between pages so the pool is
+        never starved during large partitions (same pattern as
+        ``get_all_resources``).
+        """
+        after_id = 0
+        while True:
+            conn = self._get_conn()
+            try:
+                with conn.cursor(
+                    cursor_factory=psycopg2.extras.RealDictCursor
+                ) as cur:
+                    cur.execute(
+                        """
+                        SELECT id, resource_id, resource_type, resource_json
+                          FROM medanon.staged_resources
+                         WHERE job_id = %s
+                           AND partition_id = %s
+                           AND id > %s
+                         ORDER BY id
+                         LIMIT %s
+                        """,
+                        (job_id, partition_id, after_id, page_size),
+                    )
+                    rows = cur.fetchall()
+            finally:
+                self._put_conn(conn)
+
+            if not rows:
+                break
+            for row in rows:
+                yield dict(row)
+            after_id = rows[-1]["id"]
+            if len(rows) < page_size:
+                break
+
+    def mark_partition_done(
+        self, job_id: str, resource_type: str, partition_id: int
+    ) -> None:
+        """Mark a partition as ``done`` in ``staged_partitions``."""
+        conn = self._get_conn()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE medanon.staged_partitions
+                           SET status = 'done'
+                         WHERE job_id = %s AND partition_id = %s
+                        """,
+                        (job_id, partition_id),
+                    )
+        finally:
+            self._put_conn(conn)
+
+    def release_partition(
+        self, job_id: str, resource_type: str, partition_id: int
+    ) -> None:
+        """Reset a ``claimed`` partition back to ``unclaimed``.
+
+        Called from the ``deid`` step's exception handler so that the next
+        worker or Argo retry pod can reclaim and reprocess the partition.
+        """
+        conn = self._get_conn()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE medanon.staged_partitions
+                           SET status = 'unclaimed', claimed_at = NULL
+                         WHERE job_id = %s
+                           AND partition_id = %s
+                           AND status = 'claimed'
+                        """,
+                        (job_id, partition_id),
+                    )
+        finally:
+            self._put_conn(conn)
+
+    def recover_stale_partitions(self, timeout_minutes: int = 10) -> int:
+        """Reset partitions stuck in ``claimed`` for longer than *timeout_minutes*.
+
+        A worker that crashes mid-shard without reaching the ``release_partition``
+        call in its exception handler leaves the partition ``claimed`` forever.
+        This method resets those partitions to ``unclaimed`` so a sibling worker
+        or Argo retry pod can reclaim them.
+
+        Returns the number of partitions recovered.
+        """
+        conn = self._get_conn()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE medanon.staged_partitions
+                           SET status = 'unclaimed', claimed_at = NULL
+                         WHERE status = 'claimed'
+                           AND claimed_at < NOW() - INTERVAL '%s minutes'
+                        """,
+                        (timeout_minutes,),
+                    )
+                    recovered = cur.rowcount
+            if recovered:
+                logger.info(
+                    "recovered %d stale claimed partitions (timeout=%dmin)",
                     recovered,
                     timeout_minutes,
                 )

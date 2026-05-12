@@ -32,6 +32,14 @@ _NLP_CLIENT_BATCH_LIMIT: int = max(
 _NLP_DETECT_TIMEOUT: float = float(os.environ.get("NLP_DETECT_TIMEOUT_SEC", "30"))
 _NLP_BATCH_TIMEOUT: float = float(os.environ.get("NLP_BATCH_TIMEOUT_SEC", "120"))
 
+# When detect_batch_remote sub-batches a large request, sub-batches are
+# independent HTTP calls (no shared mutable state) and can be issued in
+# parallel.  Default 4 concurrent sub-batches matches the NLP service's
+# NLP_BATCH_THREADS=4.  Set to 1 to fall back to fully sequential behaviour.
+_NLP_CLIENT_SUBBATCH_PARALLEL: int = max(
+    1, int(os.environ.get("NLP_CLIENT_SUBBATCH_PARALLEL", "4"))
+)
+
 
 def _is_client_error(exc: Exception) -> bool:
     """Return True when *exc* represents an HTTP 4xx client error.
@@ -135,7 +143,20 @@ def detect_remote(
     Raises ``NlpUnavailableError`` when the NLP service is unreachable so that
     callers (``nlp_detect_act``) fail-closed rather than treating the text as
     clean.
+
+    Fast path: checks the process-local L1 LRU + Redis L2 cache before making
+    an HTTP round-trip.  Phase B of the NLP batch orchestrator (``_batch_detect_prewarm``)
+    populates both caches for every text in the current chunk, so Phase-C
+    per-field calls are L1 hits and avoid the network entirely.
     """
+    # Fast path: L1 + L2 cache lookup (populated by _batch_detect_prewarm in Phase B).
+    # This eliminates the HTTP round-trip for every text that was already seen during
+    # the same bulk run — the dominant cost for large bulk jobs.
+    from integrations.nlp.cache import lookup_many, store_many
+    _cached, _keys = lookup_many([text], entities, threshold, language)
+    if _cached[0] is not None:
+        return _cached[0]
+
     if not _nlp_cb.allow_request():
         _log.warning("nlp_circuit_breaker OPEN — detect unavailable")
         raise NlpUnavailableError("NLP circuit breaker OPEN")
@@ -152,11 +173,21 @@ def detect_remote(
 
     url = _nlp_service_url("/v1/detect")
     try:
-        raw = proxy_post_json(url, payload, timeout=_NLP_DETECT_TIMEOUT)
+        from utils.bulkhead import bulkhead, UpstreamSaturated
+        try:
+            with bulkhead("nlp", wait_sec=float(os.environ.get("BULKHEAD_NLP_WAIT_SEC", "1"))):
+                raw = proxy_post_json(url, payload, timeout=_NLP_DETECT_TIMEOUT)
+        except UpstreamSaturated as exc:
+            raise NlpUnavailableError("NLP bulkhead saturated") from exc
         result = _validate_detect_response(raw)
         _nlp_cb.record_success()
         detections = result.get("detections") or []
-        return [(d[0], d[1], d[2]) for d in detections]
+        hits = [(d[0], d[1], d[2]) for d in detections]
+        try:
+            store_many(_keys, [hits])
+        except Exception:
+            pass  # cache must never break the data path
+        return hits
     except NlpUnavailableError:
         raise
     except Exception as exc:
@@ -197,7 +228,12 @@ def _detect_batch_chunk(
 
     url = _nlp_service_url("/v1/detect/batch")
     try:
-        raw = proxy_post_json(url, payload, timeout=_NLP_BATCH_TIMEOUT)
+        from utils.bulkhead import bulkhead, UpstreamSaturated
+        try:
+            with bulkhead("nlp", wait_sec=float(os.environ.get("BULKHEAD_NLP_WAIT_SEC", "1"))):
+                raw = proxy_post_json(url, payload, timeout=_NLP_BATCH_TIMEOUT)
+        except UpstreamSaturated as exc:
+            raise NlpUnavailableError("NLP bulkhead saturated") from exc
         result = _validate_batch_response(raw)
         all_detections = result.get("detections") or []
         if len(all_detections) == len(texts):
@@ -277,15 +313,47 @@ def detect_batch_remote(
     if len(miss_texts) <= _NLP_CLIENT_BATCH_LIMIT:
         miss_results = _detect_batch_chunk(miss_texts, entities, threshold, language)
     else:
-        miss_results = []
-        for i in range(0, len(miss_texts), _NLP_CLIENT_BATCH_LIMIT):
+        # Sub-batches are independent HTTP calls — issue them concurrently to
+        # avoid serialising N round-trips behind one another.  We still respect
+        # the circuit breaker: it is checked before submission, and a sub-batch
+        # that fails is propagated through future.result() below.
+        chunks = [
+            miss_texts[i : i + _NLP_CLIENT_BATCH_LIMIT]
+            for i in range(0, len(miss_texts), _NLP_CLIENT_BATCH_LIMIT)
+        ]
+        if _NLP_CLIENT_SUBBATCH_PARALLEL <= 1 or len(chunks) == 1:
+            miss_results = []
+            for chunk in chunks:
+                if not _nlp_cb.allow_request():
+                    raise NlpUnavailableError(
+                        "NLP circuit breaker OPEN during sub-batching"
+                    )
+                miss_results.extend(
+                    _detect_batch_chunk(chunk, entities, threshold, language)
+                )
+        else:
+            from concurrent.futures import ThreadPoolExecutor
+
             if not _nlp_cb.allow_request():
-                raise NlpUnavailableError("NLP circuit breaker OPEN during sub-batching")
-            chunk_results = _detect_batch_chunk(
-                miss_texts[i : i + _NLP_CLIENT_BATCH_LIMIT],
-                entities, threshold, language,
-            )
-            miss_results.extend(chunk_results)
+                raise NlpUnavailableError(
+                    "NLP circuit breaker OPEN during sub-batching"
+                )
+            workers = min(_NLP_CLIENT_SUBBATCH_PARALLEL, len(chunks))
+            # Per-call pool so a slow batch can never exhaust the global one.
+            # Sub-batches are CPU-light (HTTP wait) so the pool is cheap.
+            with ThreadPoolExecutor(
+                max_workers=workers, thread_name_prefix="nlp-subbatch"
+            ) as pool:
+                # Preserve ordering: collect futures by index, then read in order.
+                futures = [
+                    pool.submit(
+                        _detect_batch_chunk, chunk, entities, threshold, language
+                    )
+                    for chunk in chunks
+                ]
+                miss_results = []
+                for fut in futures:
+                    miss_results.extend(fut.result())
 
     # Persist the new detections, then merge cached + fresh in original order.
     miss_keys = [keys[i] for i in misses_idx]
@@ -334,7 +402,13 @@ def analyze_and_replace_remote(
 
     url = _nlp_service_url("/v1/detect")
     try:
-        raw = proxy_post_json(url, payload, timeout=_NLP_DETECT_TIMEOUT)
+        from utils.bulkhead import bulkhead, UpstreamSaturated
+        try:
+            with bulkhead("nlp", wait_sec=float(os.environ.get("BULKHEAD_NLP_WAIT_SEC", "1"))):
+                raw = proxy_post_json(url, payload, timeout=_NLP_DETECT_TIMEOUT)
+        except UpstreamSaturated:
+            _log.warning("nlp_bulkhead_saturated — returning redacted placeholder")
+            return _nlp_fallback_token(text)
         result = _validate_detect_response(raw)
         returned_state = result.get("token_state", {})
         token_state.update(returned_state)

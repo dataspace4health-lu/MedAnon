@@ -225,12 +225,32 @@ def _call_gpas_operation(base_url, operation, fhir_params, params):
     Returns:
         Parsed JSON response (dict)
     """
+    from utils.bulkhead import bulkhead, UpstreamSaturated
+
     if not _gpas_circuit_breaker.allow_request():
         GPAS_CALL_COUNT.labels(operation=operation, status="error").inc()
         raise GpasUnavailableError(
             f"gPAS is unavailable — circuit breaker OPEN for ${operation}. "
             f"Processing halted; retry after gPAS recovers."
         )
+
+    try:
+        with bulkhead("gpas", wait_sec=float(os.environ.get("BULKHEAD_GPAS_WAIT_SEC", "2"))):
+            return _call_gpas_operation_impl(base_url, operation, fhir_params, params)
+    except UpstreamSaturated as exc:
+        GPAS_CALL_COUNT.labels(operation=operation, status="error").inc()
+        raise GpasUnavailableError(
+            f"gPAS bulkhead saturated for ${operation} — retry shortly"
+        ) from exc
+
+
+def _call_gpas_operation_impl(base_url, operation, fhir_params, params):
+    """Inner implementation of _call_gpas_operation — actual HTTP loop.
+
+    Split out so the bulkhead semaphore is not held while raising or while the
+    caller serialises results; the slot is owned strictly for the HTTP round
+    trip(s) of one chunk.
+    """
 
     url = f"{base_url}/${operation}"
     timeout_sec = float(params.get("gpas_timeout_sec", 30))

@@ -34,10 +34,20 @@ def _build_gpas_cb() -> CircuitBreaker:
     redis_url = os.environ.get("MEDANON_REDIS_URL", "")
     if redis_url:
         try:
-            import redis as _redis_mod
-            r = _redis_mod.Redis.from_url(redis_url, socket_timeout=1, decode_responses=True)
-            r.ping()
-            return RedisCircuitBreaker(redis_client=r, **kwargs)
+            # Share the process-wide pool (utils.redis_pool) so the
+            # circuit-breaker doesn't open its own. socket_timeout=1 is the
+            # default but actually configured via MEDANON_REDIS_SOCKET_TIMEOUT.
+            from utils.redis_pool import get_redis
+
+            r = get_redis(redis_url, decode_responses=True)
+            if r is not None:
+                r.ping()
+                from utils.redis_pool import get_redis
+
+            r = get_redis(redis_url, decode_responses=True)
+            if r is not None:
+                r.ping()
+                return RedisCircuitBreaker(redis_client=r, **kwargs)
         except Exception:
             pass  # Redis unavailable — fall through to in-process breaker
     return CircuitBreaker(**kwargs)

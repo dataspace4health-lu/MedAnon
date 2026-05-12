@@ -76,6 +76,7 @@ HEALTHCARE_ENTITIES: list[str] = [
     # Synthetic data artifacts
     "SYNTHEA_SEED",
     # Clinical note PHI — inline demographic / administrative
+    "GENDER",              # inline patient gender (male/female/non-binary etc.)
     "RACE_ETHNICITY",      # bare inline race/ethnicity (not label-prefixed)
     "INSURANCE_STATUS",    # coverage status, named payers
     "GEO_COORDINATES",     # decimal/DMS lat-long pairs

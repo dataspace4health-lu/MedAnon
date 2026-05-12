@@ -10,7 +10,8 @@ All call sites import from this module; the sub-modules are internal.
 
 import logging
 import os
-from concurrent.futures import as_completed
+import threading
+from concurrent.futures import as_completed, ThreadPoolExecutor
 
 from utils.fhirpath import find_nodes
 from utils.thread_pool import get_executor
@@ -36,6 +37,38 @@ from .protocol import (
 
 _GPAS_MAX_BATCH = int(os.environ.get("GPAS_MAX_BATCH_SIZE", "500"))
 _log = logging.getLogger("medanon.gpas")
+
+# Dedicated executor for gPAS sub-batches.
+#
+# Why a separate pool?  When ``gpas_pseudonymize_batch`` is called from a
+# worker thread of the global ``utils.thread_pool`` executor (which happens
+# constantly during bulk processing), submitting sub-batches back to that
+# same pool risks livelock if every worker is itself blocked on its own
+# nested future.  Using a dedicated pool eliminates the deadlock concern,
+# so sub-batches always run in parallel regardless of where the call
+# originated.
+#
+# Sized small (8) because each sub-batch is HTTP-bound — gPAS itself is
+# the bottleneck, not the client thread count.  Override via
+# GPAS_SUBBATCH_PARALLEL.
+_GPAS_SUBBATCH_PARALLEL = max(
+    1, int(os.environ.get("GPAS_SUBBATCH_PARALLEL", "8"))
+)
+_subbatch_executor: ThreadPoolExecutor | None = None
+_subbatch_executor_lock = threading.Lock()
+
+
+def _get_subbatch_executor() -> ThreadPoolExecutor:
+    """Lazily create the dedicated sub-batch executor."""
+    global _subbatch_executor
+    if _subbatch_executor is None:
+        with _subbatch_executor_lock:
+            if _subbatch_executor is None:
+                _subbatch_executor = ThreadPoolExecutor(
+                    max_workers=_GPAS_SUBBATCH_PARALLEL,
+                    thread_name_prefix="gpas-subbatch",
+                )
+    return _subbatch_executor
 
 
 # ---------------------------------------------------------------------------
@@ -94,63 +127,39 @@ def gpas_pseudonymize_batch(values, params):
             # Single batch — common fast path
             mapping = _call_chunk(unique_uncached)
         else:
-            # Split into sub-batches.  When the current thread was dispatched from
-            # the shared executor (name prefix "medanon"), fall back to sequential
-            # processing — submitting to the same pool from within a pool thread
-            # risks livelock when all workers are occupied waiting for their own
-            # nested futures.  Sequential processing is correct in all cases;
-            # parallelism here is an optimisation only safe at the call stack root.
-            import threading
-            _use_parallel = not threading.current_thread().name.startswith("medanon")
-
+            # Split into sub-batches and submit them to the dedicated
+            # gPAS sub-batch executor.  This pool is independent of the
+            # global ``utils.thread_pool`` executor, so we can safely
+            # parallelise even when the caller is itself running on a
+            # global-pool worker thread (no nested-pool livelock risk).
             chunks = [
                 unique_uncached[i : i + _GPAS_MAX_BATCH]
                 for i in range(0, len(unique_uncached), _GPAS_MAX_BATCH)
             ]
             mapping = {}
             failed_chunks = []
+            executor = _get_subbatch_executor()
 
-            if _use_parallel:
-                futures = {get_executor().submit(_call_chunk, c): c for c in chunks}
-                for future in as_completed(futures):
-                    try:
-                        partial = future.result()
-                        mapping.update(partial)
-                        if use_cache:
-                            _cache_set_many({
-                                ("pseudonymize", base_url, domain, operation, orig): psn
-                                for orig, psn in partial.items()
-                            })
-                    except GpasUnavailableError:
-                        raise
-                    except Exception as exc:
-                        failed_chunk = futures[future]
-                        _log.warning(
-                            "gpas sub-batch failed (%d values): %s — will retry",
-                            len(failed_chunk),
-                            type(exc).__name__,
-                        )
-                        failed_chunks.append(failed_chunk)
-            else:
-                # Sequential — called from within a pool thread
-                for chunk in chunks:
-                    try:
-                        partial = _call_chunk(chunk)
-                        mapping.update(partial)
-                        if use_cache:
-                            _cache_set_many({
-                                ("pseudonymize", base_url, domain, operation, orig): psn
-                                for orig, psn in partial.items()
-                            })
-                    except GpasUnavailableError:
-                        raise
-                    except Exception as exc:
-                        _log.warning(
-                            "gpas sub-batch failed (%d values): %s — will retry",
-                            len(chunk),
-                            type(exc).__name__,
-                        )
-                        failed_chunks.append(chunk)
+            futures = {executor.submit(_call_chunk, c): c for c in chunks}
+            for future in as_completed(futures):
+                try:
+                    partial = future.result()
+                    mapping.update(partial)
+                    if use_cache:
+                        _cache_set_many({
+                            ("pseudonymize", base_url, domain, operation, orig): psn
+                            for orig, psn in partial.items()
+                        })
+                except GpasUnavailableError:
+                    raise
+                except Exception as exc:
+                    failed_chunk = futures[future]
+                    _log.warning(
+                        "gpas sub-batch failed (%d values): %s — will retry",
+                        len(failed_chunk),
+                        type(exc).__name__,
+                    )
+                    failed_chunks.append(failed_chunk)
 
             # Retry failed chunks once (sequentially to avoid thundering herd)
             for retry_chunk in failed_chunks:

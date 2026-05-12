@@ -29,6 +29,28 @@ _pool = urllib3.PoolManager(
     timeout=urllib3.Timeout(connect=_DEFAULT_CONNECT_TIMEOUT, read=60),
 )
 
+
+def _upstream_label(url: str) -> str:
+    """Best-effort upstream label for metrics — host only, no path/query."""
+    try:
+        from urllib.parse import urlparse
+
+        host = urlparse(url).hostname or "unknown"
+        # Strip docker-compose suffixes like "-lb" so a single label covers
+        # all replicas of one logical service.
+        return host
+    except Exception:
+        return "unknown"
+
+
+def _record_retry(url: str, reason: str) -> None:
+    try:
+        from utils.metrics import PROXY_RETRIES
+
+        PROXY_RETRIES.labels(upstream=_upstream_label(url), reason=reason).inc()
+    except Exception:
+        pass  # metrics must never break the data path
+
 # Raised (instead of plain ValueError) when all retry attempts exhaust on a
 # connect/read timeout so callers can distinguish timeout failures from other
 # upstream errors and call circuit_breaker.record_timeout() accordingly.
@@ -81,6 +103,7 @@ def proxy_request(
                         attempt + 1,
                         _RETRY_COUNT,
                     )
+                    _record_retry(url, "http_429" if resp.status == 429 else "http_5xx")
                     time.sleep(_RETRY_BACKOFF * (2**attempt) * (0.5 + random.random()))
                     continue
                 detail = (
@@ -100,6 +123,7 @@ def proxy_request(
                     attempt + 1,
                     _RETRY_COUNT,
                 )
+                _record_retry(url, "connection")
                 time.sleep(_RETRY_BACKOFF * (2**attempt) * (0.5 + random.random()))
                 continue
             if isinstance(exc, (
@@ -168,6 +192,7 @@ def proxy_post_stream(
                         "proxy stream %s HTTP %d — retrying (%d/%d)",
                         url, resp.status, attempt + 1, _RETRY_COUNT,
                     )
+                    _record_retry(url, "http_429" if resp.status == 429 else "http_5xx")
                     time.sleep(_RETRY_BACKOFF * (2**attempt) * (0.5 + random.random()))
                     continue
                 raise ValueError(
@@ -186,6 +211,7 @@ def proxy_post_stream(
                     "proxy stream %s connection error — retrying (%d/%d)",
                     url, attempt + 1, _RETRY_COUNT,
                 )
+                _record_retry(url, "connection")
                 time.sleep(_RETRY_BACKOFF * (2**attempt) * (0.5 + random.random()))
                 continue
             if isinstance(exc, (
