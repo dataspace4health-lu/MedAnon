@@ -95,6 +95,12 @@ def health():
     return {"status": "ok"}
 
 
+@app.get("/ready")
+def ready():
+    """Readiness probe — analytics is stateless so /ready mirrors /health."""
+    return {"status": "ok"}
+
+
 # ---------------------------------------------------------------------------
 # Risk analysis
 # ---------------------------------------------------------------------------
