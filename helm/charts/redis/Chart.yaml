@@ -1,0 +1,9 @@
+apiVersion: v2
+name: redis
+description: >
+  Redis 7 instance for MedAnon shared cache (gPAS L2 pseudonym cache,
+  NLP detection L2 cache on DB 2) and job queue (Redis Streams).
+  AOF persistence is required so caches survive restart.
+type: application
+version: "0.1.0"
+appVersion: "7"

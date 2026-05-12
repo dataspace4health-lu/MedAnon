@@ -1,0 +1,35 @@
+# Redis chart defaults
+image: redis
+tag: "7-alpine"
+imagePullPolicy: IfNotPresent
+port: 6379
+
+# Password is REQUIRED. Override via --set secrets.password=<pwd>
+secrets:
+  password: ""
+
+# Memory cap for the Redis server (matches docker-compose REDIS_MAXMEMORY)
+maxmemory: "2gb"
+maxclients: "2000"
+# volatile-lru only evicts keys with TTL; gPAS pseudonym entries (no TTL) are pinned.
+maxmemoryPolicy: "volatile-lru"
+
+# AOF persistence — REQUIRED so gPAS/NLP caches survive restart.
+appendonly: "yes"
+appendfsync: "everysec"
+
+persistence:
+  storageClass: ""
+  size: 5Gi
+
+resources:
+  requests:
+    memory: "256Mi"
+    cpu: "100m"
+  limits:
+    memory: "2560Mi"   # maxmemory + ~25% overhead for AOF/snapshot
+    cpu: "2000m"
+
+# Network policy
+networkPolicy:
+  additionalIngressNamespaces: []

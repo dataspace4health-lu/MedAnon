@@ -1,0 +1,103 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "app-db.fullname" . }}-init
+  labels:
+    {{- include "app-db.labels" . | nindent 4 }}
+data:
+  init.sql: |
+    -- MedAnon Application State Schema
+    CREATE SCHEMA IF NOT EXISTS medanon;
+
+    CREATE TABLE IF NOT EXISTS medanon.jobs (
+        id              TEXT PRIMARY KEY,
+        type            TEXT NOT NULL,
+        params          JSONB NOT NULL,
+        status          TEXT NOT NULL,
+        created_at      TEXT NOT NULL,
+        updated_at      TEXT NOT NULL,
+        result_path     TEXT,
+        error           TEXT,
+        checkpoint_data JSONB
+    );
+    CREATE INDEX IF NOT EXISTS idx_jobs_status_created ON medanon.jobs (status, created_at);
+    CREATE INDEX IF NOT EXISTS idx_jobs_type_created ON medanon.jobs (type, created_at);
+
+    CREATE TABLE IF NOT EXISTS medanon.subscriptions (
+        id           TEXT PRIMARY KEY,
+        status       TEXT NOT NULL,
+        criteria     TEXT NOT NULL,
+        channel_type TEXT NOT NULL,
+        endpoint     TEXT NOT NULL,
+        headers      TEXT NOT NULL DEFAULT '[]',
+        created_at   TEXT NOT NULL,
+        updated_at   TEXT NOT NULL,
+        resource     TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS medanon.configs (
+        name        TEXT PRIMARY KEY,
+        description TEXT NOT NULL DEFAULT '',
+        created_at  TEXT NOT NULL,
+        is_system   BOOLEAN NOT NULL DEFAULT FALSE
+    );
+
+    CREATE TABLE IF NOT EXISTS medanon.staged_resources (
+        id            BIGSERIAL PRIMARY KEY,
+        job_id        TEXT NOT NULL,
+        resource_id   TEXT NOT NULL,
+        resource_type TEXT NOT NULL,
+        resource_json JSONB NOT NULL,
+        status        TEXT NOT NULL DEFAULT 'pending',
+        error         TEXT,
+        fetched_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        processed_at  TIMESTAMPTZ,
+        expires_at    TIMESTAMPTZ,
+        CONSTRAINT uq_job_resource UNIQUE (job_id, resource_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_staged_job_status ON medanon.staged_resources (job_id, status);
+    CREATE INDEX IF NOT EXISTS idx_staged_expires ON medanon.staged_resources (expires_at) WHERE expires_at IS NOT NULL;
+
+    CREATE TABLE IF NOT EXISTS medanon.processing_runs (
+        id              TEXT PRIMARY KEY,
+        created_at      TEXT NOT NULL,
+        endpoint        TEXT NOT NULL,
+        config_profile  TEXT NOT NULL DEFAULT 'auto',
+        config_hash     TEXT,
+        resource_count  INTEGER NOT NULL DEFAULT 0,
+        error_count     INTEGER NOT NULL DEFAULT 0,
+        duration_ms     INTEGER NOT NULL DEFAULT 0,
+        input_type      TEXT NOT NULL DEFAULT '',
+        summary         JSONB,
+        score           JSONB
+    );
+    CREATE INDEX IF NOT EXISTS idx_processing_runs_created ON medanon.processing_runs (created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_processing_runs_endpoint ON medanon.processing_runs (endpoint, created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS medanon.job_details (
+        job_id     TEXT PRIMARY KEY,
+        detail     JSONB NOT NULL,
+        created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS medanon.api_keys (
+        id           TEXT PRIMARY KEY,
+        key_hash     TEXT NOT NULL UNIQUE,
+        client_id    TEXT NOT NULL,
+        role         TEXT NOT NULL DEFAULT 'analyst',
+        created_at   TEXT NOT NULL,
+        expires_at   TEXT,
+        revoked      BOOLEAN NOT NULL DEFAULT FALSE,
+        last_used_at TEXT,
+        description  TEXT NOT NULL DEFAULT ''
+    );
+    CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON medanon.api_keys (key_hash);
+    CREATE INDEX IF NOT EXISTS idx_api_keys_client ON medanon.api_keys (client_id);
+    CREATE INDEX IF NOT EXISTS idx_api_keys_active ON medanon.api_keys (revoked, expires_at);
+    {{- if .Values.adminApiKeyHash }}
+
+    -- Seed admin API key (hash of the key, set via adminApiKeyHash values)
+    INSERT INTO medanon.api_keys (id, key_hash, client_id, role, created_at, description)
+    VALUES ('admin-bootstrap', {{ .Values.adminApiKeyHash | quote }}, 'bootstrap', 'admin', '2026-01-01T00:00:00', 'Bootstrap admin key')
+    ON CONFLICT (id) DO UPDATE SET key_hash = EXCLUDED.key_hash;
+    {{- end }}

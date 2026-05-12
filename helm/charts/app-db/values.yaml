@@ -1,0 +1,26 @@
+image: postgres
+tag: "16-alpine"
+imagePullPolicy: IfNotPresent
+
+port: 5432
+
+database: medanon_app
+username: medanon
+
+# Set via --set or existing secret
+secrets:
+  password: ""
+  # existingSecret: ""  # K8s secret name with key "password"
+
+persistence:
+  enabled: true
+  storageClass: ""
+  size: 2Gi
+
+resources:
+  requests:
+    memory: "128Mi"
+    cpu: "50m"
+  limits:
+    memory: "512Mi"
+    cpu: "500m"

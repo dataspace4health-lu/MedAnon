@@ -1,0 +1,9 @@
+apiVersion: v2
+name: nlp
+description: >
+  MedAnon NLP microservice — Presidio + spaCy en_core_web_lg for PII detection
+  and de-identification. Exposed internally on port 8200; the anonymizer reaches
+  it via NLP_SERVICE_URL (default http://<release>-nlp:8200).
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

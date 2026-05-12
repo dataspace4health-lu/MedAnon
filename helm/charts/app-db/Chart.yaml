@@ -1,0 +1,8 @@
+apiVersion: v2
+name: app-db
+description: >
+  PostgreSQL instance for MedAnon application state
+  (jobs, configs, subscriptions, staging, processing runs).
+type: application
+version: "0.1.0"
+appVersion: "16"

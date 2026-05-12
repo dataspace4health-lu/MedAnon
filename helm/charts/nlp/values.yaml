@@ -1,0 +1,46 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# MedAnon NLP sub-chart — default values
+# ─────────────────────────────────────────────────────────────────────────────
+
+enabled: true
+
+global:
+  registry: ""
+  imagePullPolicy: ""
+  imagePullSecrets: []
+  mtls:
+    enabled: false
+    provider: linkerd
+
+registry: ""
+imagePullPolicy: IfNotPresent
+imagePullSecrets: []
+
+image: medanon-nlp
+tag: "1.0.0"
+replicas: 1
+port: 8200
+
+# Number of uvicorn workers per pod (each loads a spaCy model copy ~560 MB).
+workers: 2
+
+# Optional Redis L2 cache for NLP detection results.
+# Leave empty to disable (uses in-process LRU only).
+redisUrl: ""
+redisTtlSec: "604800"
+
+# ─── Observability ─────────────────────────────────────────────────────────
+monitoring:
+  serviceMonitor:
+    enabled: false
+    interval: "30s"
+    scrapeTimeout: "10s"
+    labels: {}
+
+resources:
+  requests:
+    memory: "600Mi"
+    cpu: "250m"
+  limits:
+    memory: "1800Mi"
+    cpu: "2000m"
