@@ -40,34 +40,244 @@ global:
 
 # ─── Anonymizer ───────────────────────────────────────────────────────────────
 anonymizer:
+  tag: "latest"
+  # Two replicas — share work via Redis Streams job queue.
+  replicas: 2
+  networkPolicy:
+    # K3s uses Traefik (kube-system) as ingress controller — must allow it in.
+    additionalIngressNamespaces:
+      - kube-system
   # Wait for gPAS to be ready before the anonymizer starts.
   gpasServiceName: "medanon-gpas"
-
+  secrets:
+    MEDANON_APP_DB_URL: "postgresql://medanon:medanon_dev@medanon-app-db:5432/medanon_app"
   env:
     # In-cluster service DNS names (release name "medanon" + chart name).
     GPAS_URL: "http://medanon-gpas:8080/ttp-fhir/fhir/gpas"
     FHIR_SOURCE_URL: "http://medanon-fhir-server:8080/fhir"
+    FHIR_TARGET_URL: "http://medanon-fhir-target:8080/fhir"
+    ANALYTICS_SERVICE_URL: "http://medanon-analytics:8100"
+    NLP_SERVICE_URL: "http://medanon-nlp:8200"
+    # Standalone Redis chart — must be in env: (not secrets) because the umbrella
+    # values.yaml declares MEDANON_REDIS_URL="" in env and K8s env takes precedence
+    # over envFrom (would null out a secret-only value).
+    MEDANON_REDIS_URL: "redis://:medanon_redis_dev@medanon-redis:6379/0"
+    # Dev/test: env-var key accepted as fallback alongside DB keys.
+    # In the UI: Settings → API Key → paste this value.
+    MEDANON_API_KEY: "medanon_admin_dev_key"
+    # ─── High-volume tuning ───────────────────────────────────────────────
+    MEDANON_PARALLEL_WORKERS: "4"
+    MEDANON_GLOBAL_MAX_THREADS: "96"
+    MEDANON_BATCH_SIZE: "500"
+    MEDANON_STAGING_BATCH_SIZE: "5000"
+    MEDANON_FHIR_FETCH_PARALLEL: "8"
+    MEDANON_BULK_DOWNLOAD_PARALLEL: "8"
+    GPAS_MAX_BATCH_SIZE: "500"
+    GPAS_POOL_SIZE: "32"
+    GPAS_SUBBATCH_PARALLEL: "16"
+    NLP_CLIENT_SUBBATCH_PARALLEL: "8"
+    MEDANON_NLP_CACHE_MAX_ENTRIES: "500000"
+    MEDANON_REDIS_MAX_CONNECTIONS: "128"
+    MEDANON_JOB_WORKERS: "6"
+    MEDANON_REQUIRE_DURABLE_STORE: "true"
+    BULKHEAD_GPAS_MAX_CONCURRENT: "64"
+    BULKHEAD_NLP_MAX_CONCURRENT: "32"
+    BULKHEAD_FHIR_MAX_CONCURRENT: "32"
+  sharedOutputPVC: "medanon-output"
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "250m"
+    limits:
+      memory: "2Gi"
+      cpu: "2000m"
+
+# ─── App DB (PostgreSQL for jobs, configs, subscriptions) ─────────────────────
+app-db:
+  secrets:
+    password: "medanon_dev"
+  # SHA256 of the bootstrap admin API key — seeded into medanon.api_keys at DB init.
+  # Key value: medanon_admin_dev_key  (change in production!)
+  #
+  # When MEDANON_APP_DB_URL is set the anonymizer wires in PostgresApiKeyStore,
+  # which means X-API-Key auth IS REQUIRED on every protected endpoint —
+  # callers without a valid key receive 401 Unauthorized.
+  #
+  # For the React UI: open the app, go to Settings → API Key, paste:
+  #   medanon_admin_dev_key
+  # The UI persists it in localStorage and sends it as X-API-Key on every call.
+  adminApiKeyHash: "2c4065ddedc049e6bd440b352fd285dfe6088d18e2363e4cd8b17701135533d0"
+
+# ─── Worker ───────────────────────────────────────────────────────────────────
+worker:
+  tag: "latest"
+  secrets:
+    MEDANON_APP_DB_URL: "postgresql://medanon:medanon_dev@medanon-app-db:5432/medanon_app"
+  env:
+    # Results written to shared PVC so the anonymizer API can serve them
+    MEDANON_OUTPUT_DIR: "/output"
+    FHIR_TARGET_URL: "http://medanon-fhir-target:8080/fhir"
+    GPAS_URL: "http://medanon-gpas:8080/ttp-fhir/fhir/gpas"
+    FHIR_SOURCE_URL: "http://medanon-fhir-server:8080/fhir"
+    NLP_SERVICE_URL: "http://medanon-nlp:8200"
+    ANALYTICS_SERVICE_URL: "http://medanon-analytics:8100"
+    # Same Redis as anonymizer — enables RedisJobStore (Streams + consumer groups)
+    MEDANON_REDIS_URL: "redis://:medanon_redis_dev@medanon-redis:6379/0"
+    # ─── High-volume tuning (workers do the heavy lifting) ───────────────────────────
+    MEDANON_PARALLEL_WORKERS: "4"
+    MEDANON_GLOBAL_MAX_THREADS: "128"
+    MEDANON_BATCH_SIZE: "500"
+    MEDANON_STAGING_BATCH_SIZE: "5000"
+    MEDANON_STAGING_PROCESS_WORKERS: "4"
+    MEDANON_FHIR_FETCH_PARALLEL: "12"
+    MEDANON_BULK_DOWNLOAD_PARALLEL: "12"
+    GPAS_MAX_BATCH_SIZE: "500"
+    GPAS_POOL_SIZE: "32"
+    GPAS_SUBBATCH_PARALLEL: "16"
+    NLP_CLIENT_SUBBATCH_PARALLEL: "8"
+    MEDANON_NLP_CACHE_MAX_ENTRIES: "500000"
+    MEDANON_REDIS_MAX_CONNECTIONS: "128"
+    MEDANON_JOB_WORKERS: "6"
+    MEDANON_REQUIRE_DURABLE_STORE: "true"
+    BULKHEAD_GPAS_MAX_CONCURRENT: "64"
+    BULKHEAD_NLP_MAX_CONCURRENT: "32"
+    BULKHEAD_FHIR_MAX_CONCURRENT: "32"
+  sharedOutputPVC: "medanon-output"
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "500m"
+    limits:
+      memory: "3Gi"
+      cpu: "3000m"
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+
+# ─── Analytics ────────────────────────────────────────────────────────────────
+analytics:
+  enabled: true
+  tag: "latest"
+
+# ─── NLP ──────────────────────────────────────────────────────────────────────
+nlp:
+  enabled: true
+  tag: "latest"
+  replicas: 2                # 2 replicas split detection load
+  workers: 2                 # uvicorn workers per replica = 4 total inference processes
+  # NLP detection L2 cache on Redis DB 2 (isolates from anonymizer/job-queue on DB 0)
+  redisUrl: "redis://:medanon_redis_dev@medanon-redis:6379/2"
+  redisTtlSec: "604800"
+
+# ─── Redis (shared cache + job queue + NLP L2) ──────────────────────────────
+redis:
+  enabled: true
+  secrets:
+    password: "medanon_redis_dev"
+  maxmemory: "1500mb"
+  persistence:
+    storageClass: ""
+    size: 5Gi
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "2Gi"
+      cpu: "2000m"
+
+# ─── Scoring ──────────────────────────────────────────────────────────────────
+scoring:
+  tag: "latest"
 
 # ─── FHIR Server ──────────────────────────────────────────────────────────────
 fhir-server:
   # Must match the hostname used to reach the cluster from outside.
   # For local development, use the node IP or a /etc/hosts alias.
   serverAddress: "http://medanon.local/fhir"
+  networkPolicy:
+    additionalIngressNamespaces:
+      - kube-system
+  # Cap JVM heap — saves ~400MB vs default (was ~938Mi at idle, now ~700Mi)
+  javaOpts: "-Xms128m -Xmx768m"
+  resources:
+    requests:
+      memory: "384Mi"
+      cpu: "100m"
+    limits:
+      memory: "1280Mi"
+      cpu: "1000m"
+
+# ─── FHIR Target (de-identified output server) ────────────────────────────────
+# Use H2 in-memory DB for K3s single-node dev (no external PostgreSQL needed).
+fhir-target:
+  db:
+    type: h2
+  javaOpts: "-Xms128m -Xmx768m"
+  resources:
+    requests:
+      memory: "384Mi"
+      cpu: "100m"
+    limits:
+      memory: "1280Mi"
+      cpu: "1000m"
 
 # ─── gPAS ─────────────────────────────────────────────────────────────────────
 gpas:
+  tag: "latest"
+  # 2 replicas — gPAS replicas share the same PostgreSQL backend so they
+  # serve pseudonymisation requests in parallel. Stickiness is only needed
+  # for the JSF web console; API/REST traffic is round-robin.
+  replicas: 2
+  networkPolicy:
+    additionalIngressNamespaces:
+      - kube-system
+  # gPAS (WildFly) uses ~1.5GB; cap at 2Gi to leave headroom without waste.
+  resources:
+    requests:
+      memory: "1Gi"
+      cpu: "250m"
+    limits:
+      memory: "2Gi"
+      cpu: "2000m"
+  autoscaling:
+    enabled: true
+    # Single-node k3s: gpas image is ~880MB and WildFly heap ~1.5GB.
+    # Keep replicas low to avoid disk-pressure eviction cascades on /dev/sda2 (14GB).
+    minReplicas: 1
+    maxReplicas: 2
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
   db:
     persistence:
       # K3s ships with the "local-path" provisioner as the default StorageClass.
       # Leave storageClass empty to use the cluster default (local-path on K3s).
       storageClass: ""
       size: 10Gi
+    resources:
+      requests:
+        memory: "256Mi"
+        cpu: "250m"
+      limits:
+        memory: "1Gi"
+        cpu: "2000m"
 
 # ─── UI ──────────────────────────────────────────────────────────────────────
 ui:
+  tag: "latest"
   # In-cluster service DNS names (release name "medanon" + chart name).
   anonymizerServiceName: "medanon-anonymizer"
   fhirServerServiceName: "medanon-fhir-server"
+  fhirTargetServiceName: "medanon-fhir-target"
+  fhirTargetPort: 8080
+  # Inject the dev API key via nginx — no browser Settings config needed.
+  injectApiKey: "medanon_admin_dev_key"
+  networkPolicy:
+    additionalIngressNamespaces:
+      - kube-system
 
 # ─── Ingress ──────────────────────────────────────────────────────────────────
 ingress:
@@ -78,10 +288,9 @@ ingress:
   # change this to "nginx".
   className: "traefik"
 
-  # For local development, add this to /etc/hosts:
-  #   <node-ip>  medanon.local
-  # For production, replace with a real DNS name.
-  host: "medanon.local"
+  # Leave host empty to accept any hostname/IP (useful when DNS is not available).
+  # Set to a real DNS name (e.g. "medanon.local") to restrict routing to that host.
+  host: ""
 
   tls:
     # Set to true and provide a cert secret for HTTPS.

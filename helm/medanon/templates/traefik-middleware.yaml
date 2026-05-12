@@ -1,0 +1,42 @@
+{{- if and .Values.ingress.enabled (eq (.Values.ingress.className | default "") "traefik") }}
+# Strip /api prefix so the anonymizer receives requests at their native paths
+# (e.g. /api/health → /health, /api/process → /process)
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: {{ include "medanon.fullname" . }}-strip-api
+  labels:
+    {{- include "medanon.labels" . | nindent 4 }}
+spec:
+  stripPrefix:
+    prefixes:
+      - /api
+---
+# Rewrite /fhir-target/* → /fhir/* for the HAPI FHIR target server
+# (HAPI serves at /fhir, not at /fhir-target)
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: {{ include "medanon.fullname" . }}-strip-fhir-target
+  labels:
+    {{- include "medanon.labels" . | nindent 4 }}
+spec:
+  replacePathRegex:
+    regex: ^/fhir-target(/?.*)
+    replacement: /fhir$1
+{{- if .Values.anonymizer.env.MEDANON_API_KEY }}
+---
+# Inject X-API-Key header so browser clients don't need to configure it manually.
+# Traefik adds the header before forwarding to the anonymizer.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: {{ include "medanon.fullname" . }}-inject-api-key
+  labels:
+    {{- include "medanon.labels" . | nindent 4 }}
+spec:
+  headers:
+    customRequestHeaders:
+      X-API-Key: {{ .Values.anonymizer.env.MEDANON_API_KEY | quote }}
+{{- end }}
+{{- end }}

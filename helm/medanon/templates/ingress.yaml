@@ -22,7 +22,7 @@ spec:
       secretName: {{ .Values.ingress.tls.secretName | quote }}
   {{- end }}
   rules:
-    - host: {{ .Values.ingress.host | quote }}
+    - {{- if .Values.ingress.host }}host: {{ .Values.ingress.host | quote }}{{ end }}
       http:
         paths:
           # React UI — SPA served via nginx (root path)
@@ -35,28 +35,12 @@ spec:
                 name: {{ printf "%s-ui" .Release.Name | trunc 63 | trimSuffix "-" }}
                 port:
                   name: http
-          # MedAnon anonymizer API — direct access for CLI / external clients
-          - path: /api
-            pathType: Prefix
-            backend:
-              service:
-                name: {{ printf "%s-anonymizer" .Release.Name | trunc 63 | trimSuffix "-" }}
-                port:
-                  name: http
-          # HAPI FHIR server (identified data source)
+          # HAPI FHIR server (identified data source) — keeps /fhir prefix (HAPI serves at /fhir)
           - path: /fhir
             pathType: Prefix
             backend:
               service:
                 name: {{ printf "%s-fhir-server" .Release.Name | trunc 63 | trimSuffix "-" }}
-                port:
-                  name: http
-          # HAPI FHIR target server (de-identified data store)
-          - path: /fhir-target
-            pathType: Prefix
-            backend:
-              service:
-                name: {{ printf "%s-fhir-target" .Release.Name | trunc 63 | trimSuffix "-" }}
                 port:
                   name: http
           # gPAS web UI
@@ -73,6 +57,95 @@ spec:
             backend:
               service:
                 name: {{ printf "%s-gpas" .Release.Name | trunc 63 | trimSuffix "-" }}
+                port:
+                  name: http
+{{- end }}
+{{- if and .Values.ingress.enabled (eq (.Values.ingress.className | default "") "traefik") }}
+---
+# Separate ingress for /api with strip-prefix middleware
+# Traefik middleware applies per-ingress (per-router), not per-path — requires a separate resource.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "medanon.fullname" . }}-api
+  labels:
+    {{- include "medanon.labels" . | nindent 4 }}
+  annotations:
+    kubernetes.io/ingress.class: {{ .Values.ingress.className | quote }}
+    # Strip /api prefix: /api/health → /health, /api/process → /process
+    # Also inject X-API-Key header when the dev key is configured (no browser setup needed).
+    traefik.ingress.kubernetes.io/router.middlewares: >-
+      {{ .Release.Namespace }}-{{ include "medanon.fullname" . }}-strip-api@kubernetescrd
+      {{- if .Values.anonymizer.env.MEDANON_API_KEY }},{{ .Release.Namespace }}-{{ include "medanon.fullname" . }}-inject-api-key@kubernetescrd{{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className | quote }}
+  rules:
+    - {{- if .Values.ingress.host }}host: {{ .Values.ingress.host | quote }}{{ end }}
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ printf "%s-anonymizer" .Release.Name | trunc 63 | trimSuffix "-" }}
+                port:
+                  name: http
+---
+# Separate ingress for /fhir-target with prefix-rewrite middleware
+# /fhir-target/Patient → /fhir/Patient (HAPI FHIR target also serves at /fhir)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "medanon.fullname" . }}-fhir-target
+  labels:
+    {{- include "medanon.labels" . | nindent 4 }}
+  annotations:
+    kubernetes.io/ingress.class: {{ .Values.ingress.className | quote }}
+    traefik.ingress.kubernetes.io/router.middlewares: >-
+      {{ .Release.Namespace }}-{{ include "medanon.fullname" . }}-strip-fhir-target@kubernetescrd
+spec:
+  ingressClassName: {{ .Values.ingress.className | quote }}
+  rules:
+    - {{- if .Values.ingress.host }}host: {{ .Values.ingress.host | quote }}{{ end }}
+      http:
+        paths:
+          - path: /fhir-target
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ printf "%s-fhir-target" .Release.Name | trunc 63 | trimSuffix "-" }}
+                port:
+                  name: http
+{{- else if .Values.ingress.enabled }}
+---
+# For nginx ingress: /api and /fhir-target with prefix rewrite
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "medanon.fullname" . }}-rewrite
+  labels:
+    {{- include "medanon.labels" . | nindent 4 }}
+  annotations:
+    kubernetes.io/ingress.class: {{ .Values.ingress.className | quote }}
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+spec:
+  ingressClassName: {{ .Values.ingress.className | quote }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: /api(/|$)(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ printf "%s-anonymizer" .Release.Name | trunc 63 | trimSuffix "-" }}
+                port:
+                  name: http
+          - path: /fhir-target(/|$)(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ printf "%s-fhir-target" .Release.Name | trunc 63 | trimSuffix "-" }}
                 port:
                   name: http
 {{- end }}

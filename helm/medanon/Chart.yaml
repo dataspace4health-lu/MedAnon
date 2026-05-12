@@ -14,6 +14,13 @@ keywords:
   - gpas
   - healthcare
 dependencies:
+  - name: app-db
+    version: "0.1.0"
+    repository: "file://../charts/app-db"
+  - name: redis
+    version: "0.1.0"
+    repository: "file://../charts/redis"
+    condition: redis.enabled
   - name: anonymizer
     version: "0.1.0"
     repository: "file://../charts/anonymizer"
@@ -39,3 +46,9 @@ dependencies:
     version: "0.1.0"
     repository: "file://../charts/analytics"
     condition: analytics.enabled
+  # NLP microservice (Presidio + spaCy) for PII detection.
+  # Enable with: --set nlp.enabled=true (or in values.yaml)
+  - name: nlp
+    version: "0.1.0"
+    repository: "file://../charts/nlp"
+    condition: nlp.enabled

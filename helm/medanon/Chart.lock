@@ -1,4 +1,10 @@
 dependencies:
+- name: app-db
+  repository: file://../charts/app-db
+  version: 0.1.0
+- name: redis
+  repository: file://../charts/redis
+  version: 0.1.0
 - name: anonymizer
   repository: file://../charts/anonymizer
   version: 0.1.0
@@ -20,5 +26,8 @@ dependencies:
 - name: analytics
   repository: file://../charts/analytics
   version: 0.1.0
-digest: sha256:9623c35f3e44805ef5f6a00f616c827c357fb462c0d5cf3b0e079a6867c85ad2
-generated: "2026-04-09T14:46:36.732896505+02:00"
+- name: nlp
+  repository: file://../charts/nlp
+  version: 0.1.0
+digest: sha256:4460745bdc6f7b2e8c42ddedeb44342d40066b813a51752ba51955f1aeee50c2
+generated: "2026-05-07T14:00:38.301807622+02:00"
