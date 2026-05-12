@@ -6,7 +6,7 @@
 set -euo pipefail
 
 FHIR_URL="${FHIR_SOURCE_URL:-http://localhost:8081/fhir}"
-DATA_DIR="${1:-$(cd "$(dirname "$0")/.." && pwd)/services/anonymizer/tests/data/TestBase}"
+DATA_DIR="${1:-$(cd "$(dirname "$0")/.." && pwd)/services/anonymizer/tests/data/TestBase100}"
 BATCH_SIZE=300
 
 echo "FHIR server : ${FHIR_URL}"

@@ -24,7 +24,11 @@ if ! curl -sf "${MEDANON_URL}/health" > /dev/null 2>&1; then
   echo "MedAnon not reachable at ${MEDANON_URL} — starting container..."
   docker rm -f medanon-test 2>/dev/null || true
 # Detect the Docker network where gPAS is running
-  GPAS_NET=$(docker inspect gpas-lb --format '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{end}}' 2>/dev/null || echo "bridge")
+  # Use the stable network name declared in docker-compose.yml.  Falls back to
+  # inspecting the gateway container (which carries the gpas-lb network alias).
+  GPAS_NET=$(docker network inspect medanon-processing-net --format '{{.Name}}' 2>/dev/null \
+    || docker inspect medanon-gateway --format '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{end}}' 2>/dev/null \
+    || echo "bridge")
 
   docker run -d --name medanon-test \
     -p "${MEDANON_PORT}:8000" \
