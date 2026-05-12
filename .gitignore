@@ -79,6 +79,11 @@ pip-delete-this-directory.txt
 *.swo
 *~
 
+# ── GitHub Copilot ────────────────────────────────────────────────────────────
+.github/copilot-instructions.md
+.copilot/
+.copilotignore
+
 # ── Secrets & environment ─────────────────────────────────────────────────────
 # Never commit real env — only .env.example is tracked
 .env
@@ -135,5 +140,15 @@ services/gpas/
 CLAUDE.md
 .claude/
 
+# ── Internal documentation ────────────────────────────────────────────────────
+# Architecture reviews, security audits, competitive analysis, planning docs.
+# Tracked locally but not published to the repository.
+docs/internal/
+
 # ── Tests ─────────────────────────────────────────────────────────────────────
-services/anonymizer/tests/
+**/tests/
+
+# scripts/ — generally not tracked, but some scripts are important for local development and are tracked. If you add a new script that should be tracked, add an exception here and document it in the README.
+scripts/
+
+services/anonymizer/MagicMock

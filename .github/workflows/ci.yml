@@ -110,6 +110,22 @@ jobs:
       - name: npm audit
         run: npm audit --audit-level=high
 
+  secret-scan:
+    name: Secret Scan – gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history so gitleaks can scan past commits
+          fetch-depth: 0
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Fail the job on any leaked secret. Tune via .gitleaks.toml if needed.
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "true"
+          GITLEAKS_ENABLE_SUMMARY: "true"
+
   # ── Stage 2: Build + Test (depends on lint passing) ────────────────────────
 
   test:

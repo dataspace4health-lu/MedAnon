@@ -13,8 +13,10 @@ DEV_COMPOSE := $(COMPOSE) -f docker-compose.yml -f docker-compose.dev.yml
 # Replica counts — read from .env (default to 1 if not set or .env absent).
 GPAS_REPLICAS  := $(shell grep -s '^GPAS_REPLICAS=' .env | cut -d= -f2 | tr -d '[:space:]')
 NLP_REPLICAS   := $(shell grep -s '^NLP_REPLICAS='  .env | cut -d= -f2 | tr -d '[:space:]')
+WORKER_REPLICAS := $(shell grep -s '^WORKER_REPLICAS=' .env | cut -d= -f2 | tr -d '[:space:]')
 GPAS_REPLICAS  := $(if $(GPAS_REPLICAS),$(GPAS_REPLICAS),1)
-NLP_REPLICAS   := $(if $(NLP_REPLICAS),$(NLP_REPLICAS),1)
+NLP_REPLICAS   := $(if $(NLP_REPLICAS),$(NLP_REPLICAS),2)
+WORKER_REPLICAS := $(if $(WORKER_REPLICAS),$(WORKER_REPLICAS),2)
 
 # HAPI FHIR image — update both together when bumping the HAPI version.
 # v7.x uses Java 17 (eclipse-temurin:17-jre-jammy base).
@@ -23,7 +25,7 @@ HAPI_JAVA_VER  := 17
 HC_DIR      := services/fhir-server/healthcheck
 
 .PHONY: help setup test test-cov lint format batch fetch sync-check \
-        up down dev logs build build-ui build-sdv up-sdv build-healthcheck clean \
+        up down down-wipe dev logs build build-ui build-sdv up-sdv build-healthcheck clean \
         init-domains preflight verify _dirs \
         helm-install helm-uninstall helm-lint helm-template helm-build-gpas
 
@@ -42,7 +44,8 @@ help:
 	@echo ""
 	@echo "  make up                 Start full stack (preflight + docker compose + verify) — scales gPAS and NLP from .env"
 	@echo "  make dev                Start stack with hot-reload (dev overrides)"
-	@echo "  make down               Stop and remove containers"
+	@echo "  make down               Stop and remove containers (data volumes are preserved)"
+	@echo "  make down-wipe          Stop + remove containers AND all volumes (full reset)"
 	@echo "  make build              (Re)build all images"
 	@echo "  make build-ui           Build only the React UI image"
 	@echo "  make build-sdv          Build anonymizer with SDV synthetic engine (GaussianCopula)"
@@ -162,10 +165,11 @@ build-sdv:
 up-sdv: _dirs preflight build-sdv
 	ANONYMIZER_IMAGE=medanon-sdv:latest $(COMPOSE) --profile nlp up -d \
 		--scale gpas=$(GPAS_REPLICAS) \
-		--scale nlp=$(NLP_REPLICAS)
+		--scale nlp=$(NLP_REPLICAS) \
+		--scale worker=$(WORKER_REPLICAS)
 	@echo ""
 	@echo "SDV stack running — /generate/synthetic will use GaussianCopula engine"
-	@echo "gPAS replicas: $(GPAS_REPLICAS)  |  NLP replicas: $(NLP_REPLICAS)"
+	@echo "gPAS replicas: $(GPAS_REPLICAS)  |  NLP replicas: $(NLP_REPLICAS)  |  Worker replicas: $(WORKER_REPLICAS)"
 
 _dirs:
 	mkdir -p data output
@@ -173,9 +177,10 @@ _dirs:
 up: _dirs preflight
 	$(COMPOSE) --profile nlp up -d \
 		--scale gpas=$(GPAS_REPLICAS) \
-		--scale nlp=$(NLP_REPLICAS)
+		--scale nlp=$(NLP_REPLICAS) \
+		--scale worker=$(WORKER_REPLICAS)
 	@echo ""
-	@echo "gPAS replicas: $(GPAS_REPLICAS)  |  NLP replicas: $(NLP_REPLICAS)"
+	@echo "gPAS replicas: $(GPAS_REPLICAS)  |  NLP replicas: $(NLP_REPLICAS)  |  Worker replicas: $(WORKER_REPLICAS)"
 	@echo "Waiting for services to become healthy..."
 	@bash scripts/verify_deployment.sh || true
 
@@ -183,6 +188,10 @@ dev: build-healthcheck
 	$(DEV_COMPOSE) up
 
 down:
+	$(COMPOSE) --profile analytics --profile nlp --profile ha --profile s3 down --remove-orphans
+
+# Wipes ALL volumes including HAPI source DB — only for a full reset.
+down-wipe:
 	$(COMPOSE) --profile analytics --profile nlp --profile ha --profile s3 down --remove-orphans -v
 
 logs:

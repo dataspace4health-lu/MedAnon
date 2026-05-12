@@ -186,7 +186,7 @@ Full guide: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
 |---|---|---|
 | `/ready` returns false | gPAS still initializing | Wait 90 s; `docker compose ps` until all `healthy` |
 | `Unknown Domain` on pseudonymization | gPAS domain not created | `make init-domains` (never insert domain via SQL) |
-| Text fields contain `[NLP_UNAVAILABLE]` | NLP microservice down | `docker compose ps nlp nlp-lb`; check `docker compose logs nlp` |
+| Text fields contain `[NLP_UNAVAILABLE]` | NLP microservice down | `docker compose ps nlp gateway`; check `docker compose logs nlp` |
 | `503` on `/v1/jobs/*` | Job store not initialized | Check `MEDANON_APP_DB_URL` / `MEDANON_REDIS_URL` in `.env` |
 | `gPAS circuit breaker OPEN` | gPAS failed 5+ times | `docker compose restart gpas`; circuit self-recovers after 30 s |
 | `413 Request Too Large` | Body exceeds limit | Increase `MEDANON_MAX_BODY_BYTES` in `.env` |
