@@ -65,6 +65,17 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.get("/ready")
+def ready() -> dict[str, str]:
+    """Readiness probe — scoring is stateless so /ready mirrors /health.
+
+    Kept as a separate endpoint so K8s startup vs liveness probes can be
+    tuned independently and so dashboards can distinguish "process up" from
+    "can serve traffic".
+    """
+    return {"status": "ok"}
+
+
 @app.get("/metrics")
 def metrics() -> Response:
     return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)

@@ -194,7 +194,6 @@ class PrivacyRiskEvaluator:
     def evaluate_batch_from_qis(
         self,
         patient_qis: list[tuple[str, str, str]],
-        all_manifest_entries: list[list[dict]],
     ) -> PrivacyDecision:
         """Batch-level evaluation using pre-extracted QI tuples.
 
