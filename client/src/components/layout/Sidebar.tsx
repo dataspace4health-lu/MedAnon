@@ -13,6 +13,7 @@ import {
   PackageOpen,
   ShieldCheck,
   History,
+  MonitorDot,
 } from 'lucide-react';
 import { HealthBadge } from '@/components/shared/HealthBadge';
 import { ThemeToggle } from '@/components/shared/ThemeToggle';
@@ -81,6 +82,7 @@ const NAV_SECTIONS: NavSection[] = [
     items: [
       { to: '/status', label: 'Status Dashboard', icon: BarChart3, minRole: 'viewer' },
       { to: '/history', label: 'Processing History', icon: History, minRole: 'analyst' },
+      { to: '/monitoring', label: 'Monitoring', icon: MonitorDot, minRole: 'viewer' },
     ],
   },
 ];
@@ -133,19 +135,22 @@ export function Sidebar({ onNavigate }: SidebarProps) {
   return (
     <div className="flex h-full flex-col">
       {/* Header */}
-      <div className="flex items-center gap-2.5 border-b px-4 py-3.5">
-        <div className="flex flex-col leading-tight">
-          <span className="text-base font-bold tracking-tight">MedAnon</span>
-          <span className="text-[10px] font-medium uppercase tracking-widest text-muted-foreground">
-            FHIR Privacy Toolkit
-          </span>
+      <div className="border-b px-4 pt-3.5 pb-3">
+        {/* Top row: controls */}
+        <div className="flex items-center justify-between mb-2.5">
+          <span className="text-sm font-black uppercase tracking-wide">Data Privacy Toolkit</span>
+          <div className="flex items-center gap-1.5">
+            <HealthBadge ok={health.ok} version={health.version} loading={health.loading} />
+            <ThemeToggle />
+          </div>
         </div>
-        <HealthBadge ok={health.ok} version={health.version} loading={health.loading} />
-        <ThemeToggle className="ml-auto" />
+        {/* NTT DATA logo */}
+        <div className="flex items-center">
+        </div>
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 overflow-y-auto px-2 py-3">
+      <nav className="flex-1 overflow-y-auto scrollbar-hidden px-2 py-3">
         {/* Top-level items (Home) */}
         <ul className="mb-3 space-y-0.5">
           {NAV_TOP.filter((item) => hasRole(item.minRole)).map((entry) => (
