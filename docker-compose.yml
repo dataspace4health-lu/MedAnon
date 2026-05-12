@@ -15,6 +15,9 @@
 networks:
   processing-net:
     driver: bridge
+    # Stable network name (independent of compose project) so the Traefik
+    # gateway labels can pin upstream lookups via traefik.docker.network.
+    name: medanon-processing-net
   source-net:
     driver: bridge
   target-net:
@@ -30,6 +33,8 @@ volumes:
   redis-data:
   minio-data:
   ollama-data:
+  prometheus-data:
+  grafana-data:
 
 # ── Shared environment (anonymizer + worker) ──────────────────────────────────
 # Both services run the same image; this anchor eliminates the ~40-line duplication.
@@ -53,16 +58,44 @@ x-worker-env: &worker-env
   MEDANON_SCORE_NER_ENABLED: ${MEDANON_SCORE_NER_ENABLED:-false}
   # MEDANON_REDIS_URL must be set explicitly in .env — no default password shipped here.
   MEDANON_REDIS_URL: ${MEDANON_REDIS_URL:?MEDANON_REDIS_URL must be set in .env}
+  # Shared Redis client pool (utils/redis_pool.py). Bump for big-volume workloads —
+  # Redis itself caps at `maxclients` (default 10000), so headroom is generous.
+  MEDANON_REDIS_MAX_CONNECTIONS: ${MEDANON_REDIS_MAX_CONNECTIONS:-128}
+  MEDANON_REDIS_SOCKET_TIMEOUT: ${MEDANON_REDIS_SOCKET_TIMEOUT:-5}
+  MEDANON_REDIS_CONNECT_TIMEOUT: ${MEDANON_REDIS_CONNECT_TIMEOUT:-2}
+  MEDANON_REDIS_HEALTHCHECK_SEC: ${MEDANON_REDIS_HEALTHCHECK_SEC:-30}
   MEDANON_JOB_WORKERS: ${MEDANON_JOB_WORKERS:-3}
   MEDANON_STAGING_DB_URL: ${MEDANON_STAGING_DB_URL:-}
   MEDANON_APP_DB_URL: ${MEDANON_APP_DB_URL:-postgresql://${MEDANON_APP_DB_USER:-medanon}:${MEDANON_APP_DB_PASSWORD:-medanon_dev}@app-db:5432/medanon}
   MEDANON_STAGING_RETENTION_DAYS: ${MEDANON_STAGING_RETENTION_DAYS:-30}
-  MEDANON_STAGING_BATCH_SIZE: ${MEDANON_STAGING_BATCH_SIZE:-1000}
+  # Bigger staging batches => fewer Pass-1/gPAS/NLP cycles, larger gPAS dedup
+  # window (better cache hit-rate), and fewer Postgres round-trips. 5000 is
+  # safe for 8-CPU/3GB workers; drop to 2000 for 4-CPU/2GB.
+  MEDANON_STAGING_BATCH_SIZE: ${MEDANON_STAGING_BATCH_SIZE:-5000}
+  # Skip staged path for jobs below this row count; use fast stream executor.
+  MEDANON_STAGED_THRESHOLD_ROWS: ${MEDANON_STAGED_THRESHOLD_ROWS:-500000}
+  # Process-level parallelism for the staged worker bypasses the Python GIL.
+  # Each process gets its own ``MEDANON_PARALLEL_WORKERS`` thread pool, so
+  # total CPU usage = PROCESS_WORKERS * PARALLEL_WORKERS. Default 4 leaves
+  # 2 CPUs of the 8-CPU worker free for I/O.
+  MEDANON_STAGING_PROCESS_WORKERS: ${MEDANON_STAGING_PROCESS_WORKERS:-4}
+  # Rows per partition for shards mode. Smaller = better load balance.
+  MEDANON_PARTITION_TARGET_ROWS: ${MEDANON_PARTITION_TARGET_ROWS:-10000}
   MEDANON_FHIR_FETCH_PARALLEL: ${MEDANON_FHIR_FETCH_PARALLEL:-4}
   MEDANON_COHORT_PARALLEL: ${MEDANON_COHORT_PARALLEL:-4}
   MEDANON_BATCH_SIZE: ${MEDANON_BATCH_SIZE:-1000}
-  MEDANON_PARALLEL_WORKERS: ${MEDANON_PARALLEL_WORKERS:-8}
-  MEDANON_GLOBAL_MAX_THREADS: ${MEDANON_GLOBAL_MAX_THREADS:-96}
+  # With process workers, threads-per-process should stay modest to avoid
+  # GIL contention. 4 is the sweet spot once PROCESS_WORKERS=4.
+  MEDANON_PARALLEL_WORKERS: ${MEDANON_PARALLEL_WORKERS:-4}
+  # Headroom for 4 processes × 32 threads + integration sub-pools.
+  MEDANON_GLOBAL_MAX_THREADS: ${MEDANON_GLOBAL_MAX_THREADS:-128}
+  # gPAS sub-batch executor (independent from the global pool).
+  GPAS_SUBBATCH_PARALLEL: ${GPAS_SUBBATCH_PARALLEL:-16}
+  # NLP client — parallel sub-batches when a single chunk exceeds
+  # NLP_MAX_BATCH_ITEMS. Match this to the NLP service's NLP_BATCH_THREADS.
+  NLP_CLIENT_SUBBATCH_PARALLEL: ${NLP_CLIENT_SUBBATCH_PARALLEL:-8}
+  # Bigger anonymizer-side L1 cache => fewer NLP RPCs across batches.
+  MEDANON_NLP_CACHE_MAX_ENTRIES: ${MEDANON_NLP_CACHE_MAX_ENTRIES:-500000}
   MEDANON_SEEN_VALUES_CAP: ${MEDANON_SEEN_VALUES_CAP:-1000000}
   MEDANON_PROGRESS_INTERVAL: ${MEDANON_PROGRESS_INTERVAL:-500}
   MEDANON_PIPELINE_ENABLED: ${MEDANON_PIPELINE_ENABLED:-true}
@@ -109,6 +142,57 @@ x-worker-env: &worker-env
 # ── Services ──────────────────────────────────────────────────────────────────
 services:
 
+  # ── 0. API Gateway (Traefik) ──────────────────────────────────────────────
+  # Replaces the legacy nginx gpas-lb + nlp-lb containers with a single
+  # service-mesh-aware gateway.  Routes are configured via Docker labels on
+  # the gpas / nlp services (see their respective definitions below).
+  #
+  # Backward compatibility: the gateway joins processing-net under the legacy
+  # network aliases ``gpas-lb`` and ``nlp-lb`` so existing GPAS_URL /
+  # NLP_SERVICE_URL values (e.g. ``http://gpas-lb:80/...``) keep working
+  # without any .env changes.
+  gateway:
+    image: traefik:v3.2
+    container_name: medanon-gateway
+    restart: unless-stopped
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      # Two entrypoints mirror the legacy LB ports so existing client URLs
+      # continue to resolve.
+      - --entrypoints.gpas.address=:80
+      - --entrypoints.nlp.address=:8200
+      # Built-in observability surface.
+      - --metrics.prometheus=true
+      - --metrics.prometheus.entrypoint=metrics
+      - --entrypoints.metrics.address=:8082
+      - --accesslog=true
+      - --log.level=INFO
+    ports:
+      - "${GPAS_PORT:-8080}:80"
+      - "${NLP_PORT:-8200}:8200"
+    volumes:
+      # Read-only socket mount — Traefik discovers labels but cannot mutate.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      processing-net:
+        aliases:
+          - gpas-lb
+          - nlp-lb
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8082/metrics"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.3"
+          memory: 96M
+    security_opt:
+      - no-new-privileges:true
+
   # FHIR de-identification / anonymiser ──────────────────────────────────
   anonymizer:
     build:
@@ -138,13 +222,15 @@ services:
       - source-net      # source HAPI (read-only fetch)
       - target-net      # target HAPI (write de-identified results)
     depends_on:
-      nlp-lb:
+      gateway:
         condition: service_healthy
       analytics:
         condition: service_healthy
       scoring:
         condition: service_healthy
-      gpas-lb:
+      gpas:
+        condition: service_healthy
+      nlp:
         condition: service_healthy
       fhir-server:
         condition: service_healthy
@@ -186,16 +272,21 @@ services:
       dockerfile: Dockerfile
       target: worker
     image: ${WORKER_IMAGE:-medanon-worker:latest}
-    container_name: medanon-worker
+    # container_name intentionally absent — allows `--scale worker=N` and
+    # prevents port-binding conflicts when running multiple replicas.
+    # Scale via: make up  (reads WORKER_REPLICAS from .env, default 2)
     restart: unless-stopped
     # ENTRYPOINT is baked into the worker stage; no override needed.
     env_file:
       - .env
     environment:
       <<: *worker-env
-      MEDANON_WORKER_METRICS_PORT: ${MEDANON_WORKER_METRICS_PORT:-9091}
-    ports:
-      - "${WORKER_METRICS_PORT:-9091}:9091"
+      MEDANON_WORKER_METRICS_PORT: "9091"
+      # Shards mode: each worker claims partitions independently via
+      # FOR UPDATE SKIP LOCKED.  The last replica to finish calls _merge_shards.
+      MEDANON_OUTPUT_MODE: ${MEDANON_OUTPUT_MODE:-shards}
+    expose:
+      - "9091"
     volumes:
       - ./output:/output
     networks:
@@ -203,7 +294,11 @@ services:
       - source-net      # source HAPI (read-only fetch)
       - target-net      # target HAPI (write de-identified results)
     depends_on:
-      nlp-lb:
+      gateway:
+        condition: service_healthy
+      nlp:
+        condition: service_healthy
+      gpas:
         condition: service_healthy
       fhir-target:
         condition: service_healthy
@@ -214,8 +309,6 @@ services:
       redis:
         condition: service_healthy
       app-db:
-        condition: service_healthy
-      gpas-lb:
         condition: service_healthy
     deploy:
       resources:
@@ -429,9 +522,10 @@ services:
 
   # ── 5. gPAS TTP pseudonymisation service (processing-net) ─────────────────
   # No container_name or static host-port binding here — both would block
-  # `docker compose up --scale gpas=N`.  External access goes via gpas-lb.
-  # Anonymizer/worker route through gpas-lb (GPAS_URL=http://gpas-lb:80/...)
-  # which re-resolves DNS per-request, distributing load across all replicas.
+  # `docker compose up --scale gpas=N`.  External access goes via the Traefik
+  # gateway which exposes the legacy ``gpas-lb`` network alias on port 80.
+  # Anonymizer/worker route through ``http://gpas-lb:80/...`` (re-resolved on
+  # every request via Docker DNS, so scaling gpas adds replicas to the pool).
   gpas:
     image: mosaicgreifswald/wildfly:38
     restart: unless-stopped
@@ -459,6 +553,25 @@ services:
       - ./services/gpas/addins:/entrypoint-wildfly-addins
     networks:
       - processing-net
+    labels:
+      # ── Traefik routing (replaces the legacy gpas-lb nginx container) ──
+      - traefik.enable=true
+      - traefik.docker.network=medanon-processing-net
+      # FHIR API path — round-robin across all gpas replicas (default LB).
+      - traefik.http.routers.gpas-fhir.entrypoints=gpas
+      - traefik.http.routers.gpas-fhir.rule=PathPrefix(`/`)
+      - traefik.http.routers.gpas-fhir.priority=1
+      - traefik.http.routers.gpas-fhir.service=gpas-svc
+      - traefik.http.services.gpas-svc.loadbalancer.server.port=8080
+      # JSF web UI — sticky cookie keeps each session pinned to one replica
+      # so WildFly's in-memory ViewState does not raise ViewExpiredException.
+      - traefik.http.routers.gpas-web.entrypoints=gpas
+      - traefik.http.routers.gpas-web.rule=PathPrefix(`/gpas-web`) || PathPrefix(`/gras-web`)
+      - traefik.http.routers.gpas-web.priority=10
+      - traefik.http.routers.gpas-web.service=gpas-web-svc
+      - traefik.http.services.gpas-web-svc.loadbalancer.server.port=8080
+      - traefik.http.services.gpas-web-svc.loadbalancer.sticky.cookie.name=gpas_session
+      - traefik.http.services.gpas-web-svc.loadbalancer.sticky.cookie.httpOnly=true
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/ttp-fhir/fhir/gpas/metadata"]
       interval: 30s
@@ -473,36 +586,6 @@ services:
         reservations:
           cpus: "0.5"
           memory: 384M
-    security_opt:
-      - no-new-privileges:true
-
-  # ── 5b. gPAS nginx load balancer (processing-net) ─────────────────────────
-  # Exposes host port ${GPAS_PORT:-8080} and round-robins across all running
-  # gPAS instances.  Scale gPAS with: docker compose up --scale gpas=2
-  gpas-lb:
-    image: nginx:1.27-alpine
-    container_name: gpas-lb
-    restart: unless-stopped
-    ports:
-      - "${GPAS_PORT:-8080}:80"
-    volumes:
-      - ./services/gpas/lb/nginx.conf:/etc/nginx/conf.d/default.conf:ro
-    networks:
-      - processing-net
-    depends_on:
-      gpas:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/ping"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
-    deploy:
-      resources:
-        limits:
-          cpus: "0.2"
-          memory: 64M
     security_opt:
       - no-new-privileges:true
 
@@ -572,6 +655,8 @@ services:
 
   # NLP microservice ────────────────────────────────────────
   # Scale with: docker compose up --scale nlp=2
+  # External access goes through the Traefik gateway under the legacy
+  # ``nlp-lb`` network alias on port 8200, so NLP_SERVICE_URL stays the same.
   nlp:
     build:
       context: services/nlp
@@ -580,8 +665,30 @@ services:
     restart: unless-stopped
     expose:
       - "8200"
+    environment:
+      # ── L2 cache (Redis) — shared across replicas, survives restarts.
+      # Uses DB 2 to stay isolated from anonymizer L2 (db 0) and job queue (db 1).
+      NLP_REDIS_URL: ${NLP_REDIS_URL:-redis://:${MEDANON_REDIS_PASSWORD:-}@redis:6379/2}
+      NLP_REDIS_TTL_SEC: ${NLP_REDIS_TTL_SEC:-604800}
+      # Threads used by /v1/detect/batch when all items are detect-only and by
+      # the new mixed-batch parallel detect path. spaCy releases the GIL for
+      # most pipeline components, so 8 threads scale near-linearly on 4 CPUs.
+      NLP_BATCH_THREADS: ${NLP_BATCH_THREADS:-8}
+      # Larger batches => fewer HTTP round-trips between anonymizer and NLP.
+      # Must stay <= the client's _NLP_CLIENT_BATCH_LIMIT default (also 2000).
+      NLP_MAX_BATCH_ITEMS: ${NLP_MAX_BATCH_ITEMS:-2000}
     networks:
       - processing-net
+    depends_on:
+      redis:
+        condition: service_healthy
+    labels:
+      # ── Traefik routing (replaces the legacy nlp-lb nginx container) ──
+      - traefik.enable=true
+      - traefik.docker.network=medanon-processing-net
+      - traefik.http.routers.nlp.entrypoints=nlp
+      - traefik.http.routers.nlp.rule=PathPrefix(`/`)
+      - traefik.http.services.nlp.loadbalancer.server.port=8200
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8200/health')"]
       interval: 60s
@@ -591,8 +698,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "2.0"
-          memory: 1800M
+          cpus: "${NLP_CPU_LIMIT:-4.0}"
+          memory: ${NLP_MEMORY_LIMIT:-3G}
         reservations:
           cpus: "0.5"
           memory: 512M
@@ -600,34 +707,6 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
-
-  # NLP load balancer (least-connection across NLP replicas) ──────────
-  nlp-lb:
-    image: nginx:1.27-alpine
-    container_name: medanon-nlp-lb
-    restart: unless-stopped
-    ports:
-      - "${NLP_PORT:-8200}:8200"
-    volumes:
-      - ./services/nlp/nginx.conf:/etc/nginx/conf.d/default.conf:ro
-    networks:
-      - processing-net
-    depends_on:
-      nlp:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8200/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
-    deploy:
-      resources:
-        limits:
-          cpus: "0.2"
-          memory: 64M
-    security_opt:
-      - no-new-privileges:true
 
   # gPAS PostgreSQL read replica  ──────────────────────────
   # Horizontal gPAS scaling : run `docker compose up --scale gpas=2`
@@ -761,8 +840,9 @@ services:
     # pseudonym entries are pinned for the lifetime of the dataset.
     command: >
       redis-server
-      --maxmemory 1gb
+      --maxmemory ${REDIS_MAXMEMORY:-2gb}
       --maxmemory-policy volatile-lru
+      --maxclients ${REDIS_MAXCLIENTS:-2000}
       --appendonly yes
       --appendfsync everysec
       --auto-aof-rewrite-percentage 100
@@ -854,3 +934,89 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+
+  # ── Monitoring stack (opt-in) ─────────────────────────────────────────────
+  # Usage: docker compose --profile monitoring up
+  # Prometheus scrapes all services; Grafana is proxied through the UI nginx
+  # at /grafana/ so dashboards are accessible within the SPA; cAdvisor
+  # exposes per-container CPU/memory metrics to Prometheus.
+
+  prometheus:
+    image: prom/prometheus:v2.51.2
+    container_name: medanon-prometheus
+    profiles: [monitoring]
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+      - --web.enable-lifecycle
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    networks:
+      - processing-net
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9090/-/ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    container_name: medanon-grafana
+    profiles: [monitoring]
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_SECURITY_ALLOW_EMBEDDING: "true"
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_SERVER_ROOT_URL: "%(protocol)s://%(domain)s/grafana/"
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    networks:
+      - processing-net
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    container_name: medanon-cadvisor
+    profiles: [monitoring]
+    restart: unless-stopped
+    privileged: true
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker:/var/lib/docker:ro
+      - /dev/disk:/dev/disk:ro
+    networks:
+      - processing-net
+    ports:
+      - "${CADVISOR_PORT:-8888}:8080"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
