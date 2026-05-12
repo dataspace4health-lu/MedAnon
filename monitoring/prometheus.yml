@@ -1,0 +1,45 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    project: medanon
+
+scrape_configs:
+  - job_name: anonymizer
+    static_configs:
+      - targets: ['medanon:8000']
+    metrics_path: /metrics
+
+  - job_name: worker
+    # Docker Compose internal DNS ('worker') resolves to all replica IPs.
+    # dns_sd_configs re-resolves on every scrape interval so newly-scaled
+    # replicas are picked up automatically without reloading Prometheus.
+    dns_sd_configs:
+      - names: ['worker']
+        type: A
+        port: 9091
+    metrics_path: /metrics
+
+  - job_name: analytics
+    static_configs:
+      - targets: ['medanon-analytics:8100']
+    metrics_path: /metrics
+
+  - job_name: nlp
+    static_configs:
+      - targets: ['nlp:8200']
+    metrics_path: /metrics
+
+  - job_name: gateway
+    static_configs:
+      - targets: ['gateway:8082']
+    metrics_path: /metrics
+
+  - job_name: cadvisor
+    static_configs:
+      - targets: ['cadvisor:8080']
+    metrics_path: /metrics
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ['localhost:9090']
