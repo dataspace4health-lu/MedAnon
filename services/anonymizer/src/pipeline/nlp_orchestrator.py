@@ -142,7 +142,11 @@ def _extract_fields(resource: dict, work_item: NlpWork, resource_idx: int) -> li
                 # Fallback: data field already contains plain text (common with
                 # inbound bundles that ignore the FHIR base64-only spec).  Scrub
                 # in-place WITHOUT re-encoding so the field stays human-readable.
-                if current.isprintable() or any(c in current for c in "\n\r\t "):
+                # Require whitespace as proof of prose — strings like
+                # "not!!valid==base64" (no spaces, contains non-base64 chars)
+                # are corrupt payloads, not plain text, and must be redacted.
+                has_whitespace = any(c.isspace() for c in current)
+                if has_whitespace:
                     decoded = current
                     is_b64 = False
                     _log.info(

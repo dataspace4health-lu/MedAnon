@@ -141,6 +141,72 @@ async def _cleanup_loop() -> None:
             _worker_log.warning("staging_cleanup_error: %s", type(exc).__name__)
 
 
+# ---------------------------------------------------------------------------
+# Stale `processing` row recovery (PR #7)
+# ---------------------------------------------------------------------------
+
+_STALE_RECOVERY_INTERVAL_SEC: int = int(
+    os.environ.get("MEDANON_STALE_RECOVERY_INTERVAL_SEC", "300")
+)
+_STALE_RECOVERY_TIMEOUT_MIN: int = int(
+    os.environ.get("MEDANON_STALE_RECOVERY_TIMEOUT_MIN", "10")
+)
+
+
+async def _stale_recovery_loop() -> None:
+    """Periodically reclaim staged rows and partitions stuck in-progress.
+
+    Two recovery paths:
+    1. Rows stuck in ``processing`` — a worker that crashes between
+       ``get_pending_batch`` and ``mark_done`` leaves rows invisible to all
+       other workers.  ``recover_stale_processing`` resets them to ``pending``.
+    2. Partitions stuck in ``claimed`` — a worker that crashes mid-shard
+       without reaching its ``release_partition`` exception handler leaves the
+       partition locked forever.  ``recover_stale_partitions`` resets those to
+       ``unclaimed`` so another worker or Argo retry pod can reclaim them.
+
+    Disabled when staging is not configured or the interval is ``<= 0``.
+    """
+    if _STALE_RECOVERY_INTERVAL_SEC <= 0:
+        return
+    while True:
+        await asyncio.sleep(_STALE_RECOVERY_INTERVAL_SEC)
+        if _staging is None:
+            continue
+        try:
+            recovered = await asyncio.to_thread(
+                _staging.recover_stale_processing,
+                timeout_minutes=_STALE_RECOVERY_TIMEOUT_MIN,
+            )
+            if recovered:
+                _worker_log.warning(
+                    "stale_recovery reclaimed=%d timeout_min=%d "
+                    "(likely a worker crash mid-batch)",
+                    recovered,
+                    _STALE_RECOVERY_TIMEOUT_MIN,
+                )
+        except Exception as exc:
+            _worker_log.warning(
+                "stale_recovery_error: %s", type(exc).__name__
+            )
+        try:
+            recovered_parts = await asyncio.to_thread(
+                _staging.recover_stale_partitions,
+                timeout_minutes=_STALE_RECOVERY_TIMEOUT_MIN,
+            )
+            if recovered_parts:
+                _worker_log.warning(
+                    "stale_partition_recovery reclaimed=%d timeout_min=%d "
+                    "(likely a worker crash mid-shard)",
+                    recovered_parts,
+                    _STALE_RECOVERY_TIMEOUT_MIN,
+                )
+        except Exception as exc:
+            _worker_log.warning(
+                "stale_partition_recovery_error: %s", type(exc).__name__
+            )
+
+
 def _cleanup_expired_results() -> int:
     """Delete result files for done jobs older than ``_RESULT_TTL_SEC``.
 
@@ -207,6 +273,33 @@ async def _result_cleanup_loop() -> None:
                 _worker_log.info("result_cleanup deleted=%d files", deleted)
         except Exception as exc:
             _worker_log.warning("result_cleanup_error: %s", type(exc).__name__)
+
+
+_REDIS_INDEX_SWEEP_INTERVAL_SEC = int(
+    os.environ.get("MEDANON_REDIS_INDEX_SWEEP_SEC", "3600")
+)
+
+
+async def _redis_index_sweep_loop() -> None:
+    """Periodically remove orphan IDs from the Redis job index sorted set.
+
+    Job hashes have a TTL (default 7 days) but the time-ordered sorted set
+    ``medanon:jobs_by_time`` and the ``medanon:jobs:status:*`` /
+    ``medanon:jobs:type:*`` index sets do not. Without this sweep, expired
+    job IDs remain in those indexes forever.
+
+    No-op when the store backend is not Redis.
+    """
+    while True:
+        await asyncio.sleep(_REDIS_INDEX_SWEEP_INTERVAL_SEC)
+        if _store is None or not hasattr(_store, "cleanup_orphan_index"):
+            continue
+        try:
+            removed = await asyncio.to_thread(_store.cleanup_orphan_index)
+            if removed:
+                _worker_log.info("redis_index_sweep removed=%d", removed)
+        except Exception as exc:
+            _worker_log.warning("redis_index_sweep_error: %s", type(exc).__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -517,13 +610,25 @@ async def worker_loop() -> None:
         )
 
     if _staging is not None:
-        asyncio.create_task(_cleanup_loop())
+        from utils.tasks import retain_task
+        retain_task(_cleanup_loop(), name="staging_cleanup")
         _worker_log.info(
             "staging_cleanup scheduled interval_sec=%d", _STAGING_CLEANUP_INTERVAL_SEC
         )
+        # PR #7: Periodic stale-`processing` row recovery.  Mandatory for
+        # multi-worker safety — without it, a crashed worker leaves staged
+        # rows stuck in ``processing`` until manual intervention.
+        if _STALE_RECOVERY_INTERVAL_SEC > 0:
+            retain_task(_stale_recovery_loop(), name="stale_recovery")
+            _worker_log.info(
+                "stale_recovery scheduled interval_sec=%d timeout_min=%d",
+                _STALE_RECOVERY_INTERVAL_SEC,
+                _STALE_RECOVERY_TIMEOUT_MIN,
+            )
 
     if _RESULT_TTL_SEC > 0:
-        asyncio.create_task(_result_cleanup_loop())
+        from utils.tasks import retain_task
+        retain_task(_result_cleanup_loop(), name="result_cleanup")
         _worker_log.info(
             "result_cleanup scheduled interval_sec=%d ttl_days=%.1f",
             _RESULT_CLEANUP_INTERVAL_SEC,
@@ -532,6 +637,15 @@ async def worker_loop() -> None:
     else:
         _worker_log.warning(
             "result_cleanup disabled (MEDANON_RESULT_TTL_SEC=0) — NDJSON files will accumulate"
+        )
+
+    # Periodic Redis index orphan sweep — no-op for non-Redis backends.
+    if _store is not None and hasattr(_store, "cleanup_orphan_index"):
+        from utils.tasks import retain_task
+        retain_task(_redis_index_sweep_loop(), name="redis_index_sweep")
+        _worker_log.info(
+            "redis_index_sweep scheduled interval_sec=%d",
+            _REDIS_INDEX_SWEEP_INTERVAL_SEC,
         )
 
     _poll_count = 0

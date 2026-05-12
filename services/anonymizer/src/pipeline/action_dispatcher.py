@@ -8,7 +8,7 @@ accumulates gPAS work items for the batch Pass 2.
 from __future__ import annotations
 
 import logging
-from utils.json_fast import dumps as _json_dumps
+from utils.json_fast import dumps as _json_dumps, dumps_sorted as _json_dumps_sorted
 from dataclasses import dataclass, field
 
 from utils.fhirpath import not_implemented
@@ -164,7 +164,9 @@ def dispatch_pass1(
             if v is None or isinstance(v, (str, int, float, bool)):
                 return v
             try:
-                return _json_dumps(v, sort_keys=True)
+                # Sorted keys make the digest stable across runs / Python
+                # processes (orjson preserves insertion order otherwise).
+                return _json_dumps_sorted(v)
             except Exception:
                 # Last-resort fallback — identity is OK here because the only
                 # path that hits this branch is non-JSON-serializable objects,

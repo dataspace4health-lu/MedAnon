@@ -37,11 +37,21 @@ _BATCH_SIZE = int(os.environ.get("MEDANON_STAGING_BATCH_SIZE", "1000"))
 # the non-staged executor_stream path for consistent fetch-ahead behaviour.
 _PREFETCH_QUEUE_SIZE: int = int(os.environ.get("MEDANON_PIPELINE_QUEUE_SIZE", "4"))
 
-# Number of parallel processor threads in Phase 2 (default 1 = single-threaded).
-# Set MEDANON_STAGING_PROCESS_WORKERS=N to parallelise gPAS/NLP I/O across N
-# concurrent batches.  The writer (file I/O + DB mark_done) remains serialised.
-# Recommended N ≤ MEDANON_JOB_WORKERS to stay within the global thread budget.
+# Number of parallel compute threads in Phase 2 (default 1 = single-threaded).
+# When > 1, ``_run_staged_phase2`` runs gPAS + NLP I/O for up to N batches
+# concurrently via a ThreadPoolExecutor while file writes and DB mark_done
+# remain serialised on the calling (writer) thread, preserving NDJSON order.
+# Recommended N \u2264 MEDANON_JOB_WORKERS to stay within the global thread budget.
+# Counter-intuitively this gives the biggest single-process throughput win:
+# Pass 1 alone is GIL-bound, but each batch spends >50% of its time waiting
+# on gPAS/NLP HTTP, so overlapping multiple batches reclaims that time.
 _PROCESS_WORKERS: int = max(1, int(os.environ.get("MEDANON_STAGING_PROCESS_WORKERS", "1")))
+
+# Output mode: "stream" (default) writes a single NDJSON file; "shards" writes
+# one {job_id}_p{NNNNNN}.ndjson per partition so multiple workers can claim
+# and write partitions concurrently without file-level conflicts.  The join
+# step concatenates shards into the final result.
+_OUTPUT_MODE: str = os.environ.get("MEDANON_OUTPUT_MODE", "stream").lower()
 
 # Infrastructure resource types excluded from auto-discovery
 _INFRA = frozenset(
@@ -65,6 +75,47 @@ _INFRA = frozenset(
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+
+def _checkpoint_or_cancel(
+    store,
+    job,
+    processed: int,
+    label: str,
+    phase1_done: "threading.Event | None",
+    phase1_state: dict | None,
+    staged_count: int,
+) -> bool:
+    """Save a Phase-2 checkpoint and check for cancellation.
+
+    Returns True if the job has been cancelled and the caller should stop.
+    Extracted from the original inline block in :func:`_run_staged_phase2`
+    so both the sequential and parallel paths share one source of truth.
+    """
+    fresh = store.get(job.id)
+    if fresh and fresh.status == JobStatus.CANCELLED:
+        _log.info("%s_cancelled job=%s at=%d", label, job.id, processed)
+        return True
+
+    if phase1_done is not None and not phase1_done.is_set():
+        chk: dict = {"phase": "fetching", "processed": processed}
+        if phase1_state:
+            chk.update(phase1_state)
+        else:
+            chk["staged_count"] = staged_count
+    else:
+        _sc = (
+            phase1_state.get("staged_count", staged_count)
+            if phase1_state
+            else staged_count
+        )
+        chk = {
+            "phase": "processing",
+            "staged_count": _sc,
+            "processed": processed,
+        }
+    save_checkpoint(store, job, chk)
+    return False
 
 
 def _process_batch(
@@ -375,64 +426,313 @@ def _run_staged_phase2(
     prefetch_thread.start()
 
     _batch_num = 0
+    # When _PROCESS_WORKERS > 1, run gPAS/NLP I/O for up to N batches in
+    # parallel (compute pool) while the file writes / staging.mark_done
+    # remain on the calling thread (writer).  Output line order is preserved
+    # because we drain futures in submission order.
+    from concurrent.futures import ThreadPoolExecutor
+
+    _compute_pool: ThreadPoolExecutor | None = (
+        ThreadPoolExecutor(
+            max_workers=_PROCESS_WORKERS, thread_name_prefix="staged-compute"
+        )
+        if _PROCESS_WORKERS > 1
+        else None
+    )
     try:
         with open(output_path, open_mode, encoding="utf-8") as fh:
-            while True:
-                batch_rows = _prefetch_q.get()
-                if batch_rows is _SENTINEL:
-                    break
+            if _compute_pool is None:
+                # ── Sequential path (default) ──────────────────────────
+                while True:
+                    batch_rows = _prefetch_q.get()
+                    if batch_rows is _SENTINEL:
+                        break
 
-                _batch_num += 1
+                    _batch_num += 1
 
-                ok, bad = _process_batch_with_fallback(
-                    batch_rows,
-                    settings,
-                    pseudonymizer,
-                    processing_mode,
-                    fh,
-                    staging,
-                    _staging_id,
-                    label,
-                    summary=collector,
-                    seen_values=_seen_values,
-                )
-                processed += ok + bad
+                    ok, bad = _process_batch_with_fallback(
+                        batch_rows,
+                        settings,
+                        pseudonymizer,
+                        processing_mode,
+                        fh,
+                        staging,
+                        _staging_id,
+                        label,
+                        summary=collector,
+                        seen_values=_seen_values,
+                    )
+                    processed += ok + bad
 
-                # Throttle DB round-trips: check for cancellation and save a
-                # checkpoint every 5 batches (matches executor_stream cadence).
-                if _batch_num % 5 == 0:
-                    fresh = store.get(job.id)
-                    if fresh and fresh.status == JobStatus.CANCELLED:
-                        _log.info("%s_cancelled job=%s at=%d", label, job.id, processed)
+                    if _batch_num % 5 == 0:
+                        if _checkpoint_or_cancel(
+                            store, job, processed, label,
+                            phase1_done, phase1_state, staged_count,
+                        ):
+                            return processed
+            else:
+                # ── Parallel compute, sequential write ─────────────────
+                from collections import deque
+
+                inflight: deque = deque()
+
+                def _drain_one() -> int:
+                    nonlocal processed, _batch_num
+                    head = inflight.popleft()
+                    computed = head.result()
+                    ok, bad = _write_computed_results(
+                        computed, fh, staging, _staging_id, label, summary=collector,
+                    )
+                    processed += ok + bad
+                    _batch_num += 1
+                    if _batch_num % 5 == 0:
+                        return 1 if _checkpoint_or_cancel(
+                            store, job, processed, label,
+                            phase1_done, phase1_state, staged_count,
+                        ) else 0
+                    return 0
+
+                while True:
+                    batch_rows = _prefetch_q.get()
+                    if batch_rows is _SENTINEL:
+                        break
+
+                    fut = _compute_pool.submit(
+                        _compute_batch_fallback_parallel,
+                        batch_rows,
+                        settings,
+                        pseudonymizer,
+                        processing_mode,
+                        label,
+                        _staging_id,
+                        _seen_values,
+                    )
+                    inflight.append(fut)
+
+                    if len(inflight) >= _PROCESS_WORKERS:
+                        if _drain_one() == 1:
+                            return processed
+
+                # Drain the remaining in-flight batches.
+                while inflight:
+                    if _drain_one() == 1:
                         return processed
-
-                    # Assemble checkpoint — merge Phase 1 cursor state when
-                    # Phase 1 is still running so crash-resume can restart
-                    # fetching from the last known FHIR page offset.
-                    if phase1_done is not None and not phase1_done.is_set():
-                        chk: dict = {"phase": "fetching", "processed": processed}
-                        if phase1_state:
-                            chk.update(phase1_state)
-                        else:
-                            chk["staged_count"] = staged_count
-                    else:
-                        _sc = (
-                            phase1_state.get("staged_count", staged_count)
-                            if phase1_state
-                            else staged_count
-                        )
-                        chk = {
-                            "phase": "processing",
-                            "staged_count": _sc,
-                            "processed": processed,
-                        }
-                    save_checkpoint(store, job, chk)
     finally:
+        if _compute_pool is not None:
+            _compute_pool.shutdown(wait=True)
         prefetch_thread.join(timeout=5.0)
 
     if _prefetch_exc:
         raise _prefetch_exc[0]
     return processed
+
+
+def _run_staged_phase2_partition_claim(
+    job,
+    store,
+    staging,
+    settings,
+    pseudonymizer,
+    processing_mode: str,
+    output_dir: str,
+    label: str,
+    collector,
+) -> int:
+    """Run Phase 2 using the partition-claim API (``MEDANON_OUTPUT_MODE=shards``).
+
+    Calls ``plan_partitions`` once (idempotent), then loops through
+    ``claim_next_partition`` / ``iter_partition`` / ``mark_partition_done``
+    until no unclaimed partitions remain.  Each partition is written to an
+    independent shard file ``{job.id}_p{NNNNNN}.ndjson`` under *output_dir*.
+
+    On exception, the partition is released back to ``unclaimed`` via
+    ``release_partition`` so a sibling worker or an Argo retry pod reclaims it.
+
+    This function is safe to call concurrently from multiple worker threads or
+    pods: the ``FOR UPDATE SKIP LOCKED`` in ``claim_next_partition`` ensures
+    each partition is processed by exactly one caller at a time.
+
+    Returns the total number of resources processed by *this* call.
+    """
+    from contextlib import suppress
+    from pipeline.processor import _CappedSet
+
+    _seen_values = _CappedSet()
+    partition_count = staging.plan_partitions(job.id)
+    _log.info(
+        "%s_partition_plan job=%s partitions=%d",
+        label, job.id, partition_count,
+    )
+
+    processed = 0
+    _partitions_done = 0
+    _LOG_EVERY = max(1, partition_count // 20)  # ~5% progress intervals
+    while True:
+        claim = staging.claim_next_partition(job.id)
+        if claim is None:
+            _log.info("%s_partitions_exhausted job=%s processed=%d", label, job.id, processed)
+            break
+
+        resource_type, partition_id = claim
+        shard_path = os.path.join(output_dir, f"{job.id}_p{partition_id:06d}.ndjson")
+
+        # Stream the partition in _BATCH_SIZE chunks rather than buffering all
+        # rows at once.  A single 50 000-row partition processed as one batch
+        # would (a) spike RAM, (b) defer mark_done until the whole partition
+        # finished (no incremental progress), and (c) trigger a 50 000-resource
+        # per-resource fallback on a single failure.
+        shard_ok = shard_bad = 0
+        chunk: list[dict] = []
+        try:
+            with open(shard_path, "w", encoding="utf-8") as fh:
+                for row in staging.iter_partition(job.id, resource_type, partition_id):
+                    chunk.append(row)
+                    if len(chunk) >= _BATCH_SIZE:
+                        ok, bad = _process_batch_with_fallback(
+                            chunk, settings, pseudonymizer, processing_mode,
+                            fh, staging, job.id, label,
+                            summary=collector, seen_values=_seen_values,
+                        )
+                        shard_ok += ok
+                        shard_bad += bad
+                        chunk = []
+                if chunk:
+                    ok, bad = _process_batch_with_fallback(
+                        chunk, settings, pseudonymizer, processing_mode,
+                        fh, staging, job.id, label,
+                        summary=collector, seen_values=_seen_values,
+                    )
+                    shard_ok += ok
+                    shard_bad += bad
+            staging.mark_partition_done(job.id, resource_type, partition_id)
+            processed += shard_ok + shard_bad
+            _partitions_done += 1
+            # Log at INFO every ~5% to give visibility without flooding.
+            if _partitions_done % _LOG_EVERY == 0:
+                _log.info(
+                    "%s_partition_progress job=%s done=%d/%d processed=%d",
+                    label, job.id, _partitions_done, partition_count, processed,
+                )
+            else:
+                _log.debug(
+                    "%s_partition_done job=%s partition=%d ok=%d bad=%d",
+                    label, job.id, partition_id, shard_ok, shard_bad,
+                )
+        except Exception as exc:
+            _log.error(
+                "%s_partition_failed job=%s partition=%d: %s",
+                label, job.id, partition_id, exc, exc_info=True,
+            )
+            with suppress(Exception):
+                staging.release_partition(job.id, resource_type, partition_id)
+            with suppress(Exception):
+                import os as _os
+                _os.unlink(shard_path)
+            raise
+
+    return processed
+
+
+def _run_staged_phase2_shards(
+    job,
+    store,
+    staging,
+    settings,
+    pseudonymizer,
+    processing_mode: str,
+    output_dir: str,
+    output_path: str,
+    label: str,
+    collector,
+    phase1_done: "threading.Event | None" = None,
+    phase1_thread: "threading.Thread | None" = None,
+    phase1_exc: list | None = None,
+) -> int:
+    """Phase-2 dispatcher for ``MEDANON_OUTPUT_MODE=shards``.
+
+    Waits for Phase 1 to complete (``plan_partitions`` needs all rows staged),
+    runs ``_PROCESS_WORKERS`` partition-claim worker threads in parallel, then
+    merges the per-partition shard files into *output_path*.
+
+    Each worker thread claims partitions atomically via
+    ``staging.claim_next_partition`` (``FOR UPDATE SKIP LOCKED``), so they
+    never collide and load is naturally balanced.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    # Shards mode requires all rows staged before plan_partitions can bucket them.
+    if phase1_thread is not None:
+        phase1_thread.join()
+        if phase1_exc:
+            raise phase1_exc[0]
+
+    parallelism = max(1, _PROCESS_WORKERS)
+    _log.info(
+        "%s_shards_start job=%s parallelism=%d",
+        label, job.id, parallelism,
+    )
+
+    if parallelism == 1:
+        processed = _run_staged_phase2_partition_claim(
+            job, store, staging, settings, pseudonymizer, processing_mode,
+            output_dir, label, collector,
+        )
+    else:
+        # Plan once (idempotent) so all worker threads see the partition set.
+        partition_count = staging.plan_partitions(job.id)
+        _log.info(
+            "%s_shards_planned job=%s partitions=%d", label, job.id, partition_count,
+        )
+
+        results: list[int] = []
+        with ThreadPoolExecutor(
+            max_workers=parallelism, thread_name_prefix="shards-claim"
+        ) as pool:
+            futures = [
+                pool.submit(
+                    _run_staged_phase2_partition_claim,
+                    job, store, staging, settings, pseudonymizer, processing_mode,
+                    output_dir, label, collector,
+                )
+                for _ in range(parallelism)
+            ]
+            for fut in as_completed(futures):
+                results.append(fut.result())
+        processed = sum(results)
+
+    # Merge shards → final output_path so downstream code (store_result,
+    # file_size_bytes, scoring) sees the conventional single-file output.
+    merged_lines = _merge_shards(job.id, output_dir, output_path)
+    _log.info(
+        "%s_shards_merged job=%s lines=%d processed=%d",
+        label, job.id, merged_lines, processed,
+    )
+    return processed
+
+
+def _merge_shards(job_id: str, output_dir: str, output_path: str) -> int:
+    """Concatenate ``{job_id}_p*.ndjson`` shards into *output_path*.
+
+    Shards are merged in ascending partition order.  Returns the total line
+    count written.  Safe to call after all ``_run_staged_phase2_partition_claim``
+    callers have finished.
+    """
+    import glob
+
+    pattern = os.path.join(output_dir, f"{job_id}_p*.ndjson")
+    shard_files = sorted(glob.glob(pattern))
+    total_lines = 0
+    with open(output_path, "w", encoding="utf-8") as out:
+        for shard in shard_files:
+            with open(shard, encoding="utf-8") as fh:
+                for line in fh:
+                    out.write(line)
+                    total_lines += 1
+            try:
+                os.unlink(shard)
+            except Exception:
+                pass
+    return total_lines
 
 
 # ---------------------------------------------------------------------------
@@ -587,17 +887,27 @@ def execute_bulk_export_staged(job, store, staging) -> None:
             "staged_process_start job=%s processed=%d (overlap mode)", job.id, processed
         )
 
-        processed = _run_staged_phase2(
-            job, store, staging, settings, pseudonymizer, processing_mode,
-            output_path, open_mode, staged_count, processed,
-            "staged_bulk_export", collector,
-            phase1_done=phase1_done,
-            phase1_state=phase1_state,
-        )
+        if _OUTPUT_MODE == "shards":
+            processed = _run_staged_phase2_shards(
+                job, store, staging, settings, pseudonymizer, processing_mode,
+                _OUTPUT_DIR, output_path,
+                "staged_bulk_export", collector,
+                phase1_done=phase1_done,
+                phase1_thread=phase1_thread,
+                phase1_exc=phase1_exc,
+            )
+        else:
+            processed = _run_staged_phase2(
+                job, store, staging, settings, pseudonymizer, processing_mode,
+                output_path, open_mode, staged_count, processed,
+                "staged_bulk_export", collector,
+                phase1_done=phase1_done,
+                phase1_state=phase1_state,
+            )
 
-        phase1_thread.join()
-        if phase1_exc:
-            raise phase1_exc[0]
+            phase1_thread.join()
+            if phase1_exc:
+                raise phase1_exc[0]
 
         staged_count = phase1_state.get("staged_count", staged_count)
 
@@ -633,11 +943,18 @@ def execute_bulk_export_staged(job, store, staging) -> None:
             _truncate_to_lines(output_path, processed)
         _log.info("staged_process_start job=%s processed=%d", job.id, processed)
 
-        processed = _run_staged_phase2(
-            job, store, staging, settings, pseudonymizer, processing_mode,
-            output_path, open_mode, staged_count, processed,
-            "staged_bulk_export", collector,
-        )
+        if _OUTPUT_MODE == "shards":
+            processed = _run_staged_phase2_shards(
+                job, store, staging, settings, pseudonymizer, processing_mode,
+                _OUTPUT_DIR, output_path,
+                "staged_bulk_export", collector,
+            )
+        else:
+            processed = _run_staged_phase2(
+                job, store, staging, settings, pseudonymizer, processing_mode,
+                output_path, open_mode, staged_count, processed,
+                "staged_bulk_export", collector,
+            )
 
         job.result_path = store_result(job.id, output_path)
         summary_dict = collector.to_dict(file_size_bytes=os.path.getsize(output_path))

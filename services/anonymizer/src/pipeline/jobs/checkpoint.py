@@ -50,20 +50,55 @@ def load_checkpoint(job) -> dict | None:
     return job.checkpoint_data
 
 
-def _truncate_to_lines(path: str, line_count: int) -> None:
-    """Truncate *path* to exactly *line_count* newline-terminated lines.
+def _truncate_to_lines(path: str, line_count: int) -> int:
+    """Truncate *path* to at most *line_count* newline-terminated lines.
 
-    On resume, the file may contain more lines than the checkpoint recorded
-    (crash after write but before checkpoint update).  Truncating prevents
-    duplicate resources in the output.
+    Returns the number of complete lines retained (``<= line_count``).
+
+    Two crash-resume cases are handled:
+
+    1. **File has more lines than checkpoint recorded** (crash after write
+       but before checkpoint update): truncate the surplus lines.
+    2. **File ends mid-line** (crash mid-flush, no trailing ``\\n``): drop
+       the partial trailing line so subsequent appends don't concatenate
+       with it and corrupt the JSONL stream.
+
+    The implementation walks the file in 64 KiB chunks counting ``\\n``
+    bytes; when it has seen ``line_count`` newlines, it truncates at the
+    byte immediately after the Nth newline.  A file with fewer than
+    ``line_count`` newlines is truncated to its last newline boundary
+    (any partial trailing line is discarded).
     """
     import os
 
     if line_count <= 0 or not os.path.exists(path):
-        return
+        return 0
+
+    _CHUNK = 64 * 1024
+    seen = 0
+    last_complete_pos = 0  # byte offset right after the most recent \n
+    cut_pos: int | None = None
     with open(path, "r+b") as f:
-        for _ in range(line_count):
-            line = f.readline()
-            if not line:
-                return  # file has fewer lines than expected — nothing to truncate
-        f.truncate()
+        pos = 0
+        while True:
+            chunk = f.read(_CHUNK)
+            if not chunk:
+                break
+            for byte in chunk:
+                pos += 1
+                if byte == 0x0A:  # '\n'
+                    seen += 1
+                    last_complete_pos = pos
+                    if seen == line_count:
+                        cut_pos = pos
+                        break
+            if cut_pos is not None:
+                break
+        # If we hit the requested count, truncate the remainder.
+        # Otherwise truncate any partial trailing line (drop bytes after
+        # the last observed '\n'); on a clean file this is a no-op.
+        target = cut_pos if cut_pos is not None else last_complete_pos
+        if target < pos:
+            f.seek(target)
+            f.truncate()
+    return seen if cut_pos is not None else seen

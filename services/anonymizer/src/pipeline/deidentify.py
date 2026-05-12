@@ -243,6 +243,7 @@ _DEFAULT_ENTITY_ACTIONS: dict[str, str] = {
     "EU_POSTCODE": "redact",
     # Labeled markers
     "DOB_MARKER": "generalize",
+    "AGE_MARKER": "generalize",
     "NATIONAL_ID_LABEL": "redact",
     "ACCOUNT_LABEL": "redact",
     "LICENSE_PLATE": "redact",
@@ -251,11 +252,19 @@ _DEFAULT_ENTITY_ACTIONS: dict[str, str] = {
     "RELIGION_LABEL": "redact",
     "POLITICAL_LABEL": "redact",
     "ETHNICITY_LABEL": "redact",
+    # GDPR Art.9 / HIPAA — bare inline demographic (no label prefix required)
+    "GENDER": "redact",
+    "RACE_ETHNICITY": "redact",
     # EU dates
     "EU_DATE": "generalize",
     "EU_DATE_WRITTEN": "generalize",
     # Synthetic artifacts
     "SYNTHEA_SEED": "redact",
+    # Clinical note PHI — inline administrative / geographic
+    "INSURANCE_STATUS": "redact",
+    "GEO_COORDINATES": "redact",
+    # Healthcare / payer organisations
+    "ORGANIZATION": "redact",
     # Financial / fiscal identifiers
     "SWIFT_BIC": "redact",
     "EU_VAT": "redact",

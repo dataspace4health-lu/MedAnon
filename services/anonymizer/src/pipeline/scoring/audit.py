@@ -431,34 +431,34 @@ def _render_report(
             W(f"- {icon} **{severity}:** {msg}")
         W("")
 
-    # -----------------------------------------------------------------------
-    # Scoring Methodology — explain WHAT we measured and HOW it was computed.
-    # Always rendered so every report is self-documenting.
-    # -----------------------------------------------------------------------
-    W("### How These Numbers Are Computed")
-    W("")
-    W("**Composite formula (multiplicative — no dimension compensates for another):**")
-    W("")
-    W("```")
-    W("composite = privacy_score × utility_score × quality_score      (range 0..1)")
-    W(f"privacy_score = max(0, 1 − risk_score / risk_threshold)         (threshold = {RISK_THRESHOLD})")
-    W("utility_score = Σ (sub_dim_value × sub_dim_weight)             (4 sub-dims, weights sum to 1.0)")
-    W("quality_score = Σ (sub_dim_value × sub_dim_weight)             (4 sub-dims, weights sum to 1.0)")
-    W("```")
-    W("")
-    W("**What each module measures:**")
-    W("")
-    W(f"- **Privacy** (gate) — runs 4 sub-evaluators per resource (attacker model, identifier coverage, config coverage, text-PII scan). The maximum risk across all of them must be ≤ `{RISK_THRESHOLD}` (configurable via `MEDANON_SCORE_RISK_THRESHOLD`) or the resource FAILs.")
-    W("- **Utility** (informational) — how much analytical value survived the de-identification.")
-    W("- **Quality** (informational) — how well the rule pipeline executed and produced valid FHIR.")
-    W("")
-    W("**Letter grade scale (applied to composite):**")
-    W("`A ≥ 90%` · `B ≥ 75%` · `C ≥ 60%` · `D ≥ 40%` · `F < 40%`")
-    W("")
-
-    # -----------------------------------------------------------------------
-    # Problems Only — skip sections with no issues
-    # -----------------------------------------------------------------------
+#    # -----------------------------------------------------------------------
+#    # Scoring Methodology — explain WHAT we measured and HOW it was computed.
+#    # Always rendered so every report is self-documenting.
+#    # -----------------------------------------------------------------------
+#    W("### How These Numbers Are Computed")
+#    W("")
+#    W("**Composite formula (multiplicative — no dimension compensates for another):**")
+#    W("")
+#    W("```")
+#    W("composite = privacy_score × utility_score × quality_score      (range 0..1)")
+#    W(f"privacy_score = max(0, 1 − risk_score / risk_threshold)         (threshold = {RISK_THRESHOLD})")
+#    W("utility_score = Σ (sub_dim_value × sub_dim_weight)             (4 sub-dims, weights sum to 1.0)")
+#    W("quality_score = Σ (sub_dim_value × sub_dim_weight)             (4 sub-dims, weights sum to 1.0)")
+#    W("```")
+#    W("")
+#    W("**What each module measures:**")
+#    W("")
+#    W(f"- **Privacy** (gate) — runs 4 sub-evaluators per resource (attacker model, identifier coverage, config coverage, text-PII scan). The maximum risk across all of them must be ≤ `{RISK_THRESHOLD}` (configurable via `MEDANON_SCORE_RISK_THRESHOLD`) or the resource FAILs.")
+#    W("- **Utility** (informational) — how much analytical value survived the de-identification.")
+#    W("- **Quality** (informational) — how well the rule pipeline executed and produced valid FHIR.")
+#    W("")
+#    W("**Letter grade scale (applied to composite):**")
+#    W("`A ≥ 90%` · `B ≥ 75%` · `C ≥ 60%` · `D ≥ 40%` · `F < 40%`")
+#    W("")
+#
+#    # -----------------------------------------------------------------------
+#    # Problems Only — skip sections with no issues
+#    # -----------------------------------------------------------------------
 
     # Uncovered HIPAA paths — grouped by resource type with qualified paths
     if uncovered_hipaa:

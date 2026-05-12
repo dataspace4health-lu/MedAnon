@@ -85,6 +85,70 @@ async def select_job_store(redis_url: str, app_db_url: str):
     return job_store, pg_pool
 
 
+def assert_durable_store_or_exit(
+    job_store, *, role: str, require_durable: bool | None = None
+) -> None:
+    """Refuse to start with SQLite when running in multi-container mode.
+
+    SQLite WAL mode is not safe across container boundaries — both the API
+    and the dedicated worker bind-mount ``./output`` so a shared SQLite DB
+    risks data loss and double-claim races.
+
+    Behaviour:
+      - ``role="worker"``: SQLite is *always* unsafe (the worker only exists
+        as a separate container) — exit on SQLite regardless of env.
+      - ``role="api"``: exit on SQLite only when
+        ``MEDANON_REQUIRE_DURABLE_STORE=true`` *or* the dedicated worker is
+        enabled separately (``MEDANON_WORKER_ENABLED=false`` here implies
+        an external worker container).
+
+    Set ``MEDANON_ALLOW_SQLITE_FALLBACK=true`` to override the guard for
+    single-container local development.
+    """
+    if job_store is not None:  # Redis or PostgreSQL — durable, all good
+        return
+    if os.environ.get("MEDANON_ALLOW_SQLITE_FALLBACK", "").lower() in ("true", "1", "yes"):
+        logger.warning(
+            "sqlite_fallback_allowed role=%s — only safe in single-container "
+            "local dev; set MEDANON_REDIS_URL or MEDANON_APP_DB_URL in production",
+            role,
+        )
+        return
+
+    if require_durable is None:
+        require_durable = (
+            os.environ.get("MEDANON_REQUIRE_DURABLE_STORE", "").lower()
+            in ("true", "1", "yes")
+        )
+
+    if role == "worker":
+        # The dedicated worker container ALWAYS shares /output with the API
+        # container — SQLite here is unsafe. No exception.
+        msg = (
+            "FATAL: worker_main started without a durable job store. "
+            "Set MEDANON_REDIS_URL or MEDANON_APP_DB_URL — SQLite at "
+            "/output/jobs.db is not safe across container boundaries. "
+            "Override (single-container dev only): MEDANON_ALLOW_SQLITE_FALLBACK=true"
+        )
+        logger.error(msg)
+        raise SystemExit(2)
+
+    if require_durable:
+        msg = (
+            "FATAL: api startup with MEDANON_REQUIRE_DURABLE_STORE=true but "
+            "neither MEDANON_REDIS_URL nor MEDANON_APP_DB_URL is reachable. "
+            "Refusing SQLite fallback in production mode."
+        )
+        logger.error(msg)
+        raise SystemExit(2)
+
+    # Permissive default for the API (matches historical single-container dev)
+    logger.warning(
+        "sqlite_job_store role=api — single-container mode only. Set "
+        "MEDANON_REDIS_URL or MEDANON_APP_DB_URL for multi-replica deployments."
+    )
+
+
 async def setup_redis_cache(redis_url: str) -> None:
     """Configure tiered gPAS cache (local LRU + Redis L2).
 
@@ -169,3 +233,36 @@ async def setup_staging(
     if result is not None:
         logger.info("staging_store=postgres retention_days=%d", retention_days)
     return result
+
+
+def select_staging_store(
+    *,
+    app_db_url: str | None = None,
+    staging_db_url: str | None = None,
+    backend: str | None = None,
+):
+    """Synchronous backend selector for the staging store.
+
+    Resolution order (mirrors ``select_job_store`` conventions):
+
+      1. ``MEDANON_STAGING_BACKEND=iceberg`` → ``IcebergStagingStore`` (Phase 4).
+      2. *staging_db_url* or *app_db_url* → ``StagingStore`` (Postgres, default).
+      3. Neither configured → returns ``None``.
+
+    Does **not** call ``ensure_schema()`` — callers that need DDL must do so
+    explicitly (``setup_staging()`` in ``api/main.py`` handles this for the
+    API path; the Argo ``deid`` step calls it directly).
+    """
+    resolved_backend = (
+        backend or os.environ.get("MEDANON_STAGING_BACKEND", "postgres")
+    ).lower()
+
+    if resolved_backend == "iceberg":
+        from integrations.iceberg.staging_store import IcebergStagingStore  # type: ignore[import]
+        return IcebergStagingStore.from_env()
+
+    url = staging_db_url or app_db_url
+    if not url:
+        return None
+    from integrations.staging.store import StagingStore
+    return StagingStore(url)

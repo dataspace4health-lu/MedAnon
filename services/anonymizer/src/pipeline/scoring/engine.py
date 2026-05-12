@@ -214,7 +214,6 @@ class ScoreCollector:
         "_utility_sum",
         "_quality_sum",
         "_patient_qis",
-        "_patient_manifests",
         "_patient_seen",
         "_error_count",
         "_total_count",
@@ -231,7 +230,6 @@ class ScoreCollector:
         self._utility_sum: float = 0.0
         self._quality_sum: float = 0.0
         self._patient_qis: list[tuple[str, str, str]] = []
-        self._patient_manifests: list[list[dict]] = []
         self._patient_seen: int = 0
         self._error_count: int = 0
         self._total_count: int = 0
@@ -322,12 +320,10 @@ class ScoreCollector:
                     qi = ("", "", "")
                 if len(self._patient_qis) < _MAX_PATIENTS:
                     self._patient_qis.append(qi)
-                    self._patient_manifests.append(manifest_entries)
                 else:
                     j = random.randrange(self._patient_seen)
                     if j < _MAX_PATIENTS:
                         self._patient_qis[j] = qi
-                        self._patient_manifests[j] = manifest_entries
 
         return result
 
@@ -347,7 +343,6 @@ class ScoreCollector:
         if self._patient_qis:
             batch_privacy = _privacy_eval.evaluate_batch_from_qis(
                 self._patient_qis,
-                self._patient_manifests,
             )
 
         avg_composite = self._composite_sum / total if total else 0.0

@@ -7,12 +7,22 @@ parameter-interpolation helpers used by the action dispatch loop.
 from __future__ import annotations
 
 import logging
+import os
 import re as _re
 import threading
 from copy import deepcopy
 from functools import lru_cache
 
 audit_log = logging.getLogger("medanon.audit")
+
+# Cache sizes are env-tunable so operators can grow them when running with
+# very large rule sets without a code change.  Defaults are sized to comfortably
+# absorb every bundled profile (~50 unique paths) plus an order-of-magnitude
+# headroom for custom profiles.
+_FHIRPATH_CACHE_SIZE = int(os.environ.get("FHIRPATH_CACHE_SIZE", "512"))
+_CLASSIFY_CACHE_SIZE = int(os.environ.get("FHIRPATH_CLASSIFY_CACHE_SIZE", "256"))
+_WHERE_PLAN_CACHE_SIZE = int(os.environ.get("FHIRPATH_WHERE_CACHE_SIZE", "128"))
+_CANDIDATES_CACHE_SIZE = int(os.environ.get("FHIRPATH_CANDIDATES_CACHE_SIZE", "512"))
 
 # ---------------------------------------------------------------------------
 # FHIRPath expression cache — compile once, reuse across resources
@@ -22,7 +32,7 @@ _fhirpathpy_log_registered = False
 _fhirpathpy_log_lock = threading.Lock()
 
 
-@lru_cache(maxsize=512)
+@lru_cache(maxsize=_FHIRPATH_CACHE_SIZE)
 def _compile_fhirpath(expression: str):
     """Compile a FHIRPath expression (LRU-bounded, thread-safe).
 
@@ -60,7 +70,7 @@ _SIMPLE_PATH_RE = _re.compile(r"^[A-Z][a-zA-Z]+(\.[a-zA-Z][a-zA-Z0-9]*)+$")
 _WILDCARD_PATH_RE = _re.compile(r"^\*(\.[a-zA-Z][a-zA-Z0-9]*)+$")
 
 
-@lru_cache(maxsize=256)
+@lru_cache(maxsize=_CLASSIFY_CACHE_SIZE)
 def _classify_match(expression: str) -> str:
     """Classify a match expression for fast-path routing.
 
@@ -95,7 +105,7 @@ _WHERE_SEGMENT_RE = _re.compile(
 )
 
 
-@lru_cache(maxsize=128)
+@lru_cache(maxsize=_WHERE_PLAN_CACHE_SIZE)
 def _parse_where_plan(expression: str):
     """Parse a ``.where(url=...)``-containing expression into a traversal plan.
 
@@ -317,7 +327,7 @@ def _traverse(node, path_parts: list[str], prefix: str) -> list:
 # ---------------------------------------------------------------------------
 
 
-@lru_cache(maxsize=512)
+@lru_cache(maxsize=_CANDIDATES_CACHE_SIZE)
 def _build_match_candidates_cached(match_expr: str, resource_type: str | None) -> tuple:
     """Expand match expression into concrete candidates (LRU-cached, thread-safe)."""
     if not isinstance(match_expr, str):
@@ -338,6 +348,41 @@ def _build_match_candidates(match_expr: str, resource: dict) -> tuple:
     """
     resource_type = resource.get("resourceType") if isinstance(resource, dict) else None
     return _build_match_candidates_cached(match_expr, resource_type)
+
+
+# ---------------------------------------------------------------------------
+# Cache observability — sampled on /metrics scrape
+# ---------------------------------------------------------------------------
+
+_CACHED_FUNCS = {
+    "compile": _compile_fhirpath,
+    "classify": _classify_match,
+    "where_plan": _parse_where_plan,
+    "candidates": _build_match_candidates_cached,
+}
+
+
+def sample_cache_metrics() -> None:
+    """Push current ``cache_info()`` of every FHIRPath LRU cache to Prometheus.
+
+    Called from the ``/metrics`` endpoint so the cost is paid only at scrape
+    time (not per request).  Safe to call without prometheus_client installed.
+    """
+    try:
+        from utils.metrics import (
+            FHIRPATH_CACHE_HITS,
+            FHIRPATH_CACHE_MAXSIZE,
+            FHIRPATH_CACHE_MISSES,
+            FHIRPATH_CACHE_SIZE,
+        )
+    except Exception:  # pragma: no cover - metrics optional
+        return
+    for name, fn in _CACHED_FUNCS.items():
+        info = fn.cache_info()
+        FHIRPATH_CACHE_HITS.labels(cache=name).set(info.hits)
+        FHIRPATH_CACHE_MISSES.labels(cache=name).set(info.misses)
+        FHIRPATH_CACHE_SIZE.labels(cache=name).set(info.currsize)
+        FHIRPATH_CACHE_MAXSIZE.labels(cache=name).set(info.maxsize or 0)
 
 
 # ---------------------------------------------------------------------------

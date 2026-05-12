@@ -26,6 +26,30 @@ from pipeline.jobs.executor_stream import (
 _worker_log = logging.getLogger("medanon.worker")
 _OUTPUT_DIR = os.environ.get("MEDANON_OUTPUT_DIR", "/output")
 
+# Jobs with an estimated row count *below* this threshold skip the two-phase
+# staged path and use the fast stream executor instead.  The stream path still
+# supports crash-resume at FHIR pagination granularity; the staged path adds
+# per-row resume and cross-pod parallelism which only pays off for large jobs.
+# Set to 0 to always use staging when a store is configured.
+_STAGED_THRESHOLD_ROWS: int = int(
+    os.environ.get("MEDANON_STAGED_THRESHOLD_ROWS", "500000")
+)
+
+
+def _use_staged(staging, estimated_rows: int | None) -> bool:
+    """Return True when the staged path should be used for this job."""
+    if staging is None:
+        return False
+    if _STAGED_THRESHOLD_ROWS <= 0:
+        return True  # always staged if threshold explicitly disabled
+    if estimated_rows is not None and estimated_rows < _STAGED_THRESHOLD_ROWS:
+        _worker_log.info(
+            "staged_threshold_skip estimated_rows=%d threshold=%d — using stream path",
+            estimated_rows, _STAGED_THRESHOLD_ROWS,
+        )
+        return False
+    return True
+
 
 def _secure_open(path: str, mode: str, **kw):
     """Open *path* for writing with owner-only permissions (mode 0o600).
@@ -57,7 +81,29 @@ def _mkdir_secure(path: str) -> None:
 
 def _execute_bulk_export(job: Job, store, staging) -> None:
     """Run a bulk-export job synchronously, resuming from checkpoint when available."""
-    if staging is not None:
+    estimated_rows = job.params.get("estimated_rows")
+    if staging is not None and estimated_rows is None:
+        # Fast preflight: GET /Patient?_summary=count&_count=0 as a proxy for
+        # total job size.  Takes ~100 ms and avoids staging overhead for small
+        # servers.  Multiply by a conservative factor (15×) to account for
+        # Observation/Condition/Procedure/etc. resources per patient.
+        try:
+            from integrations.fhir.reader import preflight_resource_count
+            _token = job.params.get("token") or os.environ.get("FHIR_SOURCE_TOKEN")
+            _patient_count = preflight_resource_count(
+                job.params["server_url"], resource_type="Patient",
+                token=_token, timeout=5,
+            )
+            if _patient_count > 0:
+                estimated_rows = _patient_count * 15
+                _worker_log.info(
+                    "bulk_export_estimated_rows job=%s patients=%d estimated=%d",
+                    job.id, _patient_count, estimated_rows,
+                )
+        except Exception:
+            pass  # preflight failure → _use_staged will default to True (safe)
+
+    if _use_staged(staging, estimated_rows):
         from pipeline.jobs.staged_worker import execute_bulk_export_staged
         return execute_bulk_export_staged(job, store, staging)
 
@@ -250,7 +296,25 @@ def _execute_bulk_export(job: Job, store, staging) -> None:
 
 def _execute_cohort(job: Job, store, staging) -> None:
     """Run a cohort export job synchronously, resuming from checkpoint when available."""
-    if staging is not None:
+    estimated_rows = job.params.get("estimated_rows")
+    if staging is not None and estimated_rows is None:
+        try:
+            from integrations.fhir.reader import preflight_resource_count
+            _token = job.params.get("token") or os.environ.get("FHIR_SOURCE_TOKEN")
+            _count = preflight_resource_count(
+                job.params["server_url"],
+                resource_type=job.params.get("search_type"),
+                token=_token, timeout=5,
+            )
+            if _count > 0:
+                estimated_rows = _count * 10  # cohort: fewer linked resources than system export
+                _worker_log.info(
+                    "cohort_estimated_rows job=%s preflight=%d estimated=%d",
+                    job.id, _count, estimated_rows,
+                )
+        except Exception:
+            pass
+    if _use_staged(staging, estimated_rows):
         from pipeline.jobs.staged_worker import execute_cohort_staged
         return execute_cohort_staged(job, store, staging)
 

@@ -12,6 +12,20 @@ audit_log = logging.getLogger("medanon.audit")
 
 _MAX_NESTING_DEPTH = 50
 
+# FHIR resource types that represent people — their display labels are
+# directly identifying (patient name, practitioner name) and must always
+# be removed when the reference ID is pseudonymised.  Clinical resource
+# types (Observation, Organization, Location, …) may have non-PHI display
+# labels (e.g. "Leukocytes [#/volume] in Blood"); those are preserved and
+# handled by the Pass-1 nlp_detect_act rule on "*.display" instead.
+_PERSON_RESOURCE_TYPES = frozenset({
+    "Patient",
+    "Practitioner",
+    "Person",
+    "RelatedPerson",
+    "PractitionerRole",
+})
+
 # ---------------------------------------------------------------------------
 # Aho-Corasick text-ID replacement (optional, falls back to regex)
 # ---------------------------------------------------------------------------
@@ -288,12 +302,18 @@ def _apply_reference_pseudonyms(obj, ref_mapping: dict, _depth: int = 0) -> None
             if new_ref != ref:
                 audit_log.debug("reference_pseudonymized field=reference")
                 obj["reference"] = new_ref
-                # Remove display only when the reference ID changed — the label
-                # is now inconsistent with the pseudonymized ID.  Unchanged
-                # references keep their display value intact.
+                # Mask display for person-type resource references
+                # (patient name, practitioner name are directly identifying).
+                # Use substitute rather than delete: the value-masking profile
+                # contract requires fields to stay present; the field must exist
+                # with a masked value, not disappear entirely.
+                # For other profiles that already ran action:redact on the
+                # display, the field is already gone before this point — no-op.
                 if "display" in obj:
-                    audit_log.debug("reference_display_redacted field=display")
-                    del obj["display"]
+                    ref_type = new_ref.split("/")[0] if "/" in new_ref else ""
+                    if ref_type in _PERSON_RESOURCE_TYPES:
+                        audit_log.debug("reference_display_masked field=display")
+                        obj["display"] = "[REDACTED]"
         for value in obj.values():
             _apply_reference_pseudonyms(value, ref_mapping, _depth + 1)
     elif isinstance(obj, list):
@@ -386,8 +406,10 @@ def _post_process_resource(
                     audit_log.debug("reference_pseudonymized field=reference")
                     obj["reference"] = new_ref
                     if "display" in obj:
-                        audit_log.debug("reference_display_redacted field=display")
-                        del obj["display"]
+                        ref_type = new_ref.split("/")[0] if "/" in new_ref else ""
+                        if ref_type in _PERSON_RESOURCE_TYPES:
+                            audit_log.debug("reference_display_masked field=display")
+                            obj["display"] = "[REDACTED]"
             # Also rewrite "url" fields (Bundle entries may use url for references)
             url = obj.get("url")
             if isinstance(url, str):

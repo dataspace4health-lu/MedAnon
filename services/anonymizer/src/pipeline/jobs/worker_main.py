@@ -63,6 +63,9 @@ async def _main() -> None:
     await check_gpas_canary(redis_url)
 
     job_store, pg_pool = await select_job_store(redis_url, app_db_url)
+    # C11 guard: a dedicated worker container with SQLite is never safe.
+    from pipeline.jobs.store_factory import assert_durable_store_or_exit
+    assert_durable_store_or_exit(job_store, role="worker")
     store = init_job_store(store=job_store)
     _worker.init_worker(store, max_concurrent=max_concurrent)
 
