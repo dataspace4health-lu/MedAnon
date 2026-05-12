@@ -116,16 +116,38 @@ spec:
               mountPath: /code/config/config_structure_preserving.yaml
               subPath: config_structure_preserving.yaml
               readOnly: true
+            - name: config
+              mountPath: /code/config/config_value_masking.yaml
+              subPath: config_value_masking.yaml
+              readOnly: true
+            # Imported user-defined configs (read-only ConfigMap)
+            - name: user-configs
+              mountPath: /output/user-configs
+              readOnly: true
             {{- if and .Values.secrets.rsaPublicKey .Values.secrets.rsaPrivateKey }}
             # RSA keys mounted at /code/keys/
             - name: rsa-keys
               mountPath: /code/keys
               readOnly: true
             {{- end }}
+            # Writable /output for job results (shared PVC with worker)
+            - name: output
+              mountPath: /output
             # Writable /tmp required by Python and spaCy (readOnlyRootFilesystem=true)
             - name: tmp
               mountPath: /tmp
           # ── Health checks ─────────────────────────────────────────────────────
+          # startupProbe gives slow dependencies (gPAS WildFly cold-start ~90 s,
+          # HAPI initial schema migration) up to 5 minutes to come online before
+          # liveness kicks in.  Without it, an aggressive livenessProbe would
+          # restart-loop the pod during normal cluster boot.
+          startupProbe:
+            httpGet:
+              path: /ready
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 60
           livenessProbe:
             httpGet:
               path: /health
@@ -148,6 +170,10 @@ spec:
         - name: config
           configMap:
             name: {{ include "anonymizer.fullname" . }}-config
+        - name: user-configs
+          configMap:
+            name: {{ include "anonymizer.fullname" . }}-user-configs
+            optional: true
         {{- if and .Values.secrets.rsaPublicKey .Values.secrets.rsaPrivateKey }}
         - name: rsa-keys
           secret:
@@ -159,5 +185,12 @@ spec:
                 path: id_rsa
                 mode: 0600
         {{- end }}
+        - name: output
+          {{- if .Values.sharedOutputPVC }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.sharedOutputPVC }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
         - name: tmp
           emptyDir: {}

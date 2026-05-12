@@ -1,0 +1,71 @@
+{{- /*
+  Post-install/post-upgrade Job that seeds medanon.configs metadata rows for
+  every YAML file under helm/charts/anonymizer/files/user-configs/.
+  Idempotent (ON CONFLICT DO NOTHING). Runs only if user-configs files exist
+  and the anonymizer secret contains MEDANON_APP_DB_URL.
+*/ -}}
+{{- $files := .Files.Glob "files/user-configs/*.yaml" -}}
+{{- if and $files .Values.secrets.MEDANON_APP_DB_URL }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "anonymizer.fullname" . }}-import-user-configs
+  labels:
+    {{- include "anonymizer.labels" . | nindent 4 }}
+    app.kubernetes.io/component: anonymizer
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        {{- include "anonymizer.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: anonymizer-import
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: importer
+          image: postgres:16-alpine
+          env:
+            - name: MEDANON_APP_DB_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "anonymizer.fullname" . }}-secret
+                  key: MEDANON_APP_DB_URL
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              echo "Waiting for app-db ..."
+              for i in $(seq 1 60); do
+                if psql "$MEDANON_APP_DB_URL" -c 'SELECT 1' >/dev/null 2>&1; then
+                  break
+                fi
+                sleep 2
+              done
+              psql "$MEDANON_APP_DB_URL" -v ON_ERROR_STOP=1 <<'SQL'
+              CREATE SCHEMA IF NOT EXISTS medanon;
+              CREATE TABLE IF NOT EXISTS medanon.configs (
+                name        TEXT PRIMARY KEY,
+                description TEXT NOT NULL DEFAULT '',
+                created_at  TEXT NOT NULL,
+                is_system   BOOLEAN NOT NULL DEFAULT FALSE
+              );
+              {{- range $path, $_ := $files }}
+              {{- $name := trimSuffix ".yaml" (base $path) }}
+              INSERT INTO medanon.configs (name, description, created_at, is_system)
+              VALUES ('{{ $name }}',
+                      'Imported from chart files/user-configs/{{ base $path }}',
+                      now()::text,
+                      FALSE)
+              ON CONFLICT (name) DO NOTHING;
+              {{- end }}
+              SELECT name, is_system FROM medanon.configs ORDER BY is_system DESC, name;
+              SQL
+              echo "User-config metadata import complete."
+{{- end }}

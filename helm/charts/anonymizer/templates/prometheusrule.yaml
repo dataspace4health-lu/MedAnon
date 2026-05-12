@@ -1,0 +1,92 @@
+{{- if .Values.monitoring.prometheusRule.enabled }}
+# PrometheusRule — starter alerting rules for the anonymizer.
+# Tune thresholds in values.yaml under monitoring.prometheusRule.thresholds.
+# CRD (monitoring.coreos.com/v1) is provided by the Prometheus Operator.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "anonymizer.fullname" . }}
+  labels:
+    {{- include "anonymizer.labels" . | nindent 4 }}
+    app.kubernetes.io/component: anonymizer
+    {{- with .Values.monitoring.prometheusRule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: medanon.anonymizer.availability
+      rules:
+        - alert: MedanonAnonymizerDown
+          expr: |
+            up{job=~".*{{ include "anonymizer.fullname" . }}.*"} == 0
+          for: 2m
+          labels:
+            severity: critical
+            component: anonymizer
+          annotations:
+            summary: "Anonymizer instance is down"
+            description: "Pod {{`{{ $labels.pod }}`}} has been unreachable for >2m."
+
+        - alert: MedanonAnonymizerHighErrorRate
+          expr: |
+            (sum by (instance) (rate(medanon_requests_total{status=~"5.."}[5m])))
+            /
+            (sum by (instance) (rate(medanon_requests_total[5m]))) > {{ .Values.monitoring.prometheusRule.thresholds.errorRate | default "0.05" }}
+          for: 10m
+          labels:
+            severity: warning
+            component: anonymizer
+          annotations:
+            summary: "5xx error rate >5% for 10m"
+            description: "Instance {{`{{ $labels.instance }}`}} is returning HTTP 5xx for >5% of requests."
+
+    - name: medanon.anonymizer.latency
+      rules:
+        - alert: MedanonAnonymizerSlowRequests
+          expr: |
+            histogram_quantile(0.95, sum by (le) (rate(medanon_request_latency_seconds_bucket[5m])))
+            > {{ .Values.monitoring.prometheusRule.thresholds.p95LatencySeconds | default "2" }}
+          for: 10m
+          labels:
+            severity: warning
+            component: anonymizer
+          annotations:
+            summary: "p95 request latency above threshold"
+            description: "p95 latency is {{`{{ $value }}`}}s — investigate gPAS/NLP/FHIR upstream health."
+
+    - name: medanon.anonymizer.upstreams
+      rules:
+        - alert: MedanonGpasCircuitBreakerOpen
+          expr: medanon_circuit_breaker_state{upstream="gpas"} == 1
+          for: 1m
+          labels:
+            severity: critical
+            component: anonymizer
+          annotations:
+            summary: "gPAS circuit breaker is OPEN"
+            description: "All gPAS calls are short-circuiting. Pseudonymisation degraded."
+
+        - alert: MedanonGpasCacheLowHitRate
+          expr: |
+            (sum(rate(medanon_gpas_cache_hits_total[15m])))
+            /
+            (sum(rate(medanon_gpas_cache_hits_total[15m])) + sum(rate(medanon_gpas_cache_misses_total[15m])))
+            < {{ .Values.monitoring.prometheusRule.thresholds.gpasCacheHitRate | default "0.5" }}
+          for: 30m
+          labels:
+            severity: info
+            component: anonymizer
+          annotations:
+            summary: "gPAS cache hit rate <50% over 30m"
+            description: "Consider increasing GPAS cache size or enabling Redis L2."
+
+        - alert: MedanonSeenValuesCapReached
+          expr: increase(medanon_seen_values_cap_reached_total[1h]) > 0
+          for: 5m
+          labels:
+            severity: warning
+            component: anonymizer
+          annotations:
+            summary: "Cross-chunk dedup cap exhausted"
+            description: "Job is processing more unique values than MEDANON_SEEN_VALUES_CAP. Increase cap or accept duplicate gPAS lookups."
+{{- end }}

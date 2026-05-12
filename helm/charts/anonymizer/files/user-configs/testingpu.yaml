@@ -1,0 +1,527 @@
+# =============================================================================
+# MedAnon User Config: testingpu
+# Field-complete masking: no fields removed, all PII values replaced in place. IDs via gPAS, binary payloads cleared.
+# =============================================================================
+
+general:
+  appname: SPE-FHIR-BlackBox
+rules:
+- match: '*.id'
+  action: gpas_pseudonymize
+  name: pseudonymize resource ids
+- match: '*.subject.display'
+  action: cryptohash
+  name: mask subject display
+- match: '*.patient.display'
+  action: cryptohash
+  name: mask patient display
+- match: Patient.name.family
+  action: substitute
+  name: mask patient name family
+- match: Patient.name.given
+  action: substitute
+  name: mask patient name given
+- match: Patient.name.text
+  action: substitute
+  name: mask patient name text
+- match: Patient.name.prefix
+  action: substitute
+  name: mask patient name prefix
+- match: Patient.name.suffix
+  action: substitute
+  name: mask patient name suffix
+- match: Patient.telecom.value
+  action: substitute
+  name: mask patient telecom value
+- match: Patient.address.line
+  action: substitute
+  name: mask patient address line
+- match: Patient.address.city
+  action: substitute
+  name: mask patient address city
+- match: Patient.address.district
+  action: substitute
+  name: mask patient address district
+- match: Patient.address.postalCode
+  action: substitute
+  name: mask patient address postal code
+- match: Patient.address.text
+  action: substitute
+  name: mask patient address text
+- match: Patient.address.state
+  action: substitute
+  name: mask patient address state
+- match: Patient.address.country
+  action: substitute
+  name: mask patient address country
+- match: Patient.identifier.value
+  action: gpas_pseudonymize
+  name: pseudonymize patient identifier value
+- match: Patient.photo.data
+  action: substitute
+  name: mask patient photo data
+- match: Patient.photo.url
+  action: substitute
+  name: mask patient photo url
+- match: Patient.photo.title
+  action: substitute
+  name: mask patient photo title
+- match: Patient.contact.name.family
+  action: substitute
+  name: mask patient contact name family
+- match: Patient.contact.name.given
+  action: substitute
+  name: mask patient contact name given
+- match: Patient.contact.name.text
+  action: substitute
+  name: mask patient contact name text
+- match: Patient.contact.telecom.value
+  action: substitute
+  name: mask patient contact telecom value
+- match: Patient.gender
+  action: substitute
+  name: mask patient gender
+- match: Patient.maritalStatus.text
+  action: substitute
+  name: mask patient marital status text
+- match: Patient.maritalStatus.coding.display
+  action: cryptohash
+  name: mask patient marital status coding display
+- match: Patient.multipleBirthBoolean
+  action: substitute
+  name: mask patient multiple birth boolean
+- match: Patient.multipleBirthInteger
+  action: substitute
+  name: mask patient multiple birth integer
+- match: Patient.communication.language.text
+  action: substitute
+  name: mask patient communication language text
+- match: Patient.communication.language.coding.display
+  action: cryptohash
+  name: mask patient communication language coding display
+- match: Patient.deceasedBoolean
+  action: substitute
+  name: mask patient deceased boolean
+- match: Patient.generalPractitioner.display
+  action: cryptohash
+  name: mask patient general practitioner display
+- match: Patient.managingOrganization.display
+  action: cryptohash
+  name: mask patient managing organization display
+- match: Patient.link.other.display
+  action: cryptohash
+  name: mask patient link other display
+- match: Patient.birthDate
+  action: generalize
+  name: generalise birth date to decade
+- match: Patient.deceasedDateTime
+  action: generalize
+  name: generalise deceased date to year
+- match: Practitioner.name.family
+  action: substitute
+  name: mask practitioner name family
+- match: Practitioner.name.given
+  action: substitute
+  name: mask practitioner name given
+- match: Practitioner.name.text
+  action: substitute
+  name: mask practitioner name text
+- match: Practitioner.name.prefix
+  action: substitute
+  name: mask practitioner name prefix
+- match: Practitioner.name.suffix
+  action: substitute
+  name: mask practitioner name suffix
+- match: Practitioner.telecom.value
+  action: substitute
+  name: mask practitioner telecom value
+- match: Practitioner.address.line
+  action: substitute
+  name: mask practitioner address line
+- match: Practitioner.address.city
+  action: substitute
+  name: mask practitioner address city
+- match: Practitioner.address.postalCode
+  action: substitute
+  name: mask practitioner address postal code
+- match: Practitioner.address.state
+  action: substitute
+  name: mask practitioner address state
+- match: Practitioner.address.country
+  action: substitute
+  name: mask practitioner address country
+- match: Practitioner.identifier.value
+  action: gpas_pseudonymize
+  name: pseudonymize practitioner identifier value
+- match: Practitioner.photo.data
+  action: substitute
+  name: mask practitioner photo data
+- match: Practitioner.photo.url
+  action: substitute
+  name: mask practitioner photo url
+- match: Practitioner.photo.title
+  action: substitute
+  name: mask practitioner photo title
+- match: Practitioner.gender
+  action: substitute
+  name: mask practitioner gender
+- match: Practitioner.birthDate
+  action: generalize
+  name: generalise practitioner birth date
+- match: Practitioner.qualification.identifier.value
+  action: gpas_pseudonymize
+  name: pseudonymize practitioner qualification identifier value
+- match: Practitioner.qualification.code.text
+  action: substitute
+  name: mask practitioner qualification code text
+- match: Practitioner.qualification.code.coding.display
+  action: cryptohash
+  name: mask practitioner qualification code coding display
+- match: Practitioner.qualification.issuer.display
+  action: cryptohash
+  name: mask practitioner qualification issuer display
+- match: PractitionerRole.code.text
+  action: substitute
+  name: mask practitioner role code text
+- match: PractitionerRole.code.coding.display
+  action: cryptohash
+  name: mask practitioner role code coding display
+- match: PractitionerRole.organization.display
+  action: cryptohash
+  name: mask practitioner role organization display
+- match: RelatedPerson.name.family
+  action: substitute
+  name: mask related person name family
+- match: RelatedPerson.name.given
+  action: substitute
+  name: mask related person name given
+- match: RelatedPerson.name.text
+  action: substitute
+  name: mask related person name text
+- match: RelatedPerson.telecom.value
+  action: substitute
+  name: mask related person telecom value
+- match: Organization.name
+  action: cryptohash
+  name: mask organization name
+- match: Organization.telecom.value
+  action: substitute
+  name: mask organization telecom value
+- match: Organization.address.line
+  action: substitute
+  name: mask organization address line
+- match: Organization.address.city
+  action: substitute
+  name: mask organization address city
+- match: Organization.address.postalCode
+  action: substitute
+  name: mask organization address postal code
+- match: Organization.address.state
+  action: substitute
+  name: mask organization address state
+- match: Organization.address.country
+  action: substitute
+  name: mask organization address country
+- match: Organization.identifier.value
+  action: gpas_pseudonymize
+  name: pseudonymize organization identifier value
+- match: Location.name
+  action: cryptohash
+  name: mask location name
+- match: Location.address.line
+  action: substitute
+  name: mask location address line
+- match: Location.address.city
+  action: substitute
+  name: mask location address city
+- match: Location.address.postalCode
+  action: substitute
+  name: mask location address postal code
+- match: Location.address.state
+  action: substitute
+  name: mask location address state
+- match: Location.address.country
+  action: substitute
+  name: mask location address country
+- match: Location.telecom.value
+  action: substitute
+  name: mask location telecom value
+- match: Location.position.latitude
+  action: substitute
+  name: mask location position latitude
+- match: Location.position.longitude
+  action: substitute
+  name: mask location position longitude
+- match: Location.position.altitude
+  action: substitute
+  name: mask location position altitude
+- match: Location.managingOrganization.display
+  action: cryptohash
+  name: mask location managing org display
+- match: Encounter.hospitalization.origin.display
+  action: cryptohash
+  name: mask encounter hospitalization origin display
+- match: Encounter.hospitalization.destination.display
+  action: cryptohash
+  name: mask encounter hospitalization destination display
+- match: Encounter.hospitalization.admitSource.text
+  action: substitute
+  name: mask encounter hospitalization admit source text
+- match: Encounter.hospitalization.dischargeDisposition.text
+  action: substitute
+  name: mask encounter hospitalization discharge disposition text
+- match: Encounter.hospitalization.dietPreference.text
+  action: substitute
+  name: mask encounter hospitalization diet preference text
+- match: '*.performer.display'
+  action: cryptohash
+  name: mask performer display
+- match: '*.author.display'
+  action: cryptohash
+  name: mask author display
+- match: '*.requester.display'
+  action: cryptohash
+  name: mask requester display
+- match: '*.recorder.display'
+  action: cryptohash
+  name: mask recorder display
+- match: '*.participant.individual.display'
+  action: cryptohash
+  name: mask participant display
+- match: '*.asserter.display'
+  action: cryptohash
+  name: mask asserter display
+- match: CareTeam.participant.individual.display
+  action: cryptohash
+  name: mask care team participant display
+- match: Encounter.participant.individual.display
+  action: cryptohash
+  name: mask encounter participant display
+- match: '*.effectiveDateTime'
+  action: generalize
+  name: generalise effective date to year
+- match: '*.issued'
+  action: generalize
+  name: generalise issued date to year
+- match: '*.authoredOn'
+  action: generalize
+  name: generalise authored on to year
+- match: '*.recordedDate'
+  action: generalize
+  name: generalise recorded date to year
+- match: '*.onsetDateTime'
+  action: generalize
+  name: generalise onset date to year
+- match: '*.abatementDateTime'
+  action: generalize
+  name: generalise abatement date to year
+- match: '*.performedDateTime'
+  action: generalize
+  name: generalise performed date to year
+- match: '*.performedPeriod.start'
+  action: generalize
+  name: generalise performed period start to year
+- match: '*.performedPeriod.end'
+  action: generalize
+  name: generalise performed period end to year
+- match: '*.occurrenceDateTime'
+  action: generalize
+  name: generalise occurrence date to year
+- match: Encounter.period.start
+  action: generalize
+  name: generalise encounter period start to year
+- match: Encounter.period.end
+  action: generalize
+  name: generalise encounter period end to year
+- match: '*.participant.period.start'
+  action: generalize
+  name: generalise participant period start to year
+- match: '*.participant.period.end'
+  action: generalize
+  name: generalise participant period end to year
+- match: DocumentReference.date
+  action: generalize
+  name: generalise document date to year
+- match: DocumentReference.context.period.start
+  action: generalize
+  name: generalise document context period start to year
+- match: DocumentReference.context.period.end
+  action: generalize
+  name: generalise document context period end to year
+- match: '*.meta.lastUpdated'
+  action: generalize
+  name: mask meta last updated
+- match: '*.meta.versionId'
+  action: substitute
+  name: mask meta version id
+- match: '*.meta.source'
+  action: substitute
+  name: mask meta source
+- match: '*.attachment.data'
+  action: substitute
+  name: mask attachment data
+- match: '*.attachment.url'
+  action: substitute
+  name: mask attachment url
+- match: '*.attachment.title'
+  action: substitute
+  name: mask attachment title
+- match: '*.attachment.hash'
+  action: substitute
+  name: mask attachment hash
+- match: DocumentReference.content.attachment.data
+  action: substitute
+  name: mask document reference content attachment data
+- match: DocumentReference.content.attachment.url
+  action: substitute
+  name: mask document reference content attachment url
+- match: DocumentReference.content.attachment.title
+  action: substitute
+  name: mask document reference content attachment title
+- match: DocumentReference.content.attachment.hash
+  action: substitute
+  name: mask document reference content attachment hash
+- match: Binary.data
+  action: substitute
+  name: mask binary data
+- match: Observation.valueString
+  action: scrub_text
+  name: scrub observation value string
+- match: '*.text'
+  action: scrub_text
+  name: scrub narrative text
+- match: '*.note.text'
+  action: scrub_text
+  name: scrub note text
+- match: '*.comment'
+  action: scrub_text
+  name: scrub comment fields
+- match: '*.dosage.text'
+  action: scrub_text
+  name: scrub dosage text
+- match: '*.dosage.patientInstruction'
+  action: scrub_text
+  name: scrub dosage patient instruction
+- match: '*.reaction.description'
+  action: scrub_text
+  name: scrub reaction description
+- match: Communication.sender.display
+  action: cryptohash
+  name: mask communication sender display
+- match: Communication.recipient.display
+  action: cryptohash
+  name: mask communication recipient display
+- match: Communication.payload.contentString
+  action: scrub_text
+  name: scrub communication payload
+- match: Task.requester.display
+  action: cryptohash
+  name: mask task requester display
+- match: Task.owner.display
+  action: cryptohash
+  name: mask task owner display
+- match: ServiceRequest.requester.display
+  action: cryptohash
+  name: mask service request requester display
+- match: Provenance.agent.who.display
+  action: cryptohash
+  name: mask provenance agent who display
+- match: Provenance.agent.onBehalfOf.display
+  action: cryptohash
+  name: mask provenance agent on behalf of display
+- match: AuditEvent.agent.name
+  action: cryptohash
+  name: mask audit event agent name
+- match: AuditEvent.agent.who.display
+  action: cryptohash
+  name: mask audit event agent who display
+- match: AuditEvent.agent.network.address
+  action: substitute
+  name: mask audit event agent network address
+- match: AuditEvent.source.observer.display
+  action: cryptohash
+  name: mask audit event source observer display
+- match: Device.udiCarrier.deviceIdentifier
+  action: gpas_pseudonymize
+  name: pseudonymize device udi carrier device identifier
+- match: Device.udiCarrier.carrierHRF
+  action: substitute
+  name: mask device udi carrier hrf
+- match: Device.udiCarrier.carrierAIDC
+  action: substitute
+  name: mask device udi carrier aidc
+- match: Device.serialNumber
+  action: substitute
+  name: mask device serial number
+- match: Device.lotNumber
+  action: substitute
+  name: mask device lot number
+- match: Device.distinctIdentifier
+  action: substitute
+  name: mask device distinct identifier
+- match: Device.manufactureDate
+  action: generalize
+  name: generalise device manufacture date
+- match: Device.expirationDate
+  action: generalize
+  name: generalise device expiration date
+- match: Device.identifier.value
+  action: gpas_pseudonymize
+  name: pseudonymize device identifier value
+- match: '*.identifier.value'
+  action: gpas_pseudonymize
+  name: pseudonymize all identifier values
+- match: '*.name.family'
+  action: substitute
+  name: mask all name family
+- match: '*.name.given'
+  action: substitute
+  name: mask all name given
+- match: '*.name.text'
+  action: substitute
+  name: mask all name text
+- match: '*.name.prefix'
+  action: substitute
+  name: mask all name prefix
+- match: '*.name.suffix'
+  action: substitute
+  name: mask all name suffix
+- match: '*.telecom.value'
+  action: substitute
+  name: mask all telecom values
+- match: '*.address.line'
+  action: substitute
+  name: mask all address line
+- match: '*.address.city'
+  action: substitute
+  name: mask all address city
+- match: '*.address.district'
+  action: substitute
+  name: mask all address district
+- match: '*.address.postalCode'
+  action: substitute
+  name: mask all address postal code
+- match: '*.address.state'
+  action: substitute
+  name: mask all address state
+- match: '*.address.country'
+  action: substitute
+  name: mask all address country
+- match: '*.address.text'
+  action: substitute
+  name: mask all address text
+- match: Coverage.subscriberId
+  action: substitute
+  name: mask coverage subscriber id
+- match: Coverage.dependent
+  action: substitute
+  name: mask coverage dependent
+- match: Coverage.subscriber.display
+  action: cryptohash
+  name: mask coverage subscriber display
+- match: Coverage.beneficiary.display
+  action: cryptohash
+  name: mask coverage beneficiary display
+- match: Coverage.payor.display
+  action: cryptohash
+  name: mask coverage payor display

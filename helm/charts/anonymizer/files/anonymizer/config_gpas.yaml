@@ -20,6 +20,90 @@ general:
   appname: SPE-FHIR-BlackBox
   rewrite_references: true
   rewrite_text_ids: true
+  domain_map:
+    # ── Patient demographics ──────────────────────────────────────────────────
+    Patient:                     spe.direct.patient-admin
+    RelatedPerson:               spe.direct.patient-admin
+    Person:                      spe.direct.patient-admin
+
+    # ── Clinical workforce ────────────────────────────────────────────────────
+    Practitioner:                spe.operational.org-practitioner
+    PractitionerRole:            spe.operational.org-practitioner
+    Organization:                spe.operational.org-practitioner
+    OrganizationAffiliation:     spe.operational.org-practitioner
+    HealthcareService:           spe.operational.org-practitioner
+    Location:                    spe.operational.org-practitioner
+    Endpoint:                    spe.operational.org-practitioner
+
+    # ── Clinical observations ─────────────────────────────────────────────────
+    Observation:                 spe.clinical.observation
+    QuestionnaireResponse:       spe.clinical.observation
+    RiskAssessment:              spe.clinical.observation
+
+    # ── Conditions, procedures, allergies, medications ────────────────────────
+    Condition:                   spe.clinical.condition-procedure
+    Procedure:                   spe.clinical.condition-procedure
+    AllergyIntolerance:          spe.clinical.condition-procedure
+    FamilyMemberHistory:         spe.clinical.condition-procedure
+    ClinicalImpression:          spe.clinical.condition-procedure
+    DetectedIssue:               spe.clinical.condition-procedure
+    MedicationRequest:           spe.clinical.condition-procedure
+    MedicationAdministration:    spe.clinical.condition-procedure
+    MedicationDispense:          spe.clinical.condition-procedure
+    MedicationStatement:         spe.clinical.condition-procedure
+    Medication:                  spe.clinical.condition-procedure
+    Immunization:                spe.clinical.condition-procedure
+    ImmunizationEvaluation:      spe.clinical.condition-procedure
+    ImmunizationRecommendation:  spe.clinical.condition-procedure
+    NutritionOrder:              spe.clinical.condition-procedure
+    VisionPrescription:          spe.clinical.condition-procedure
+
+    # ── Reports & documents ───────────────────────────────────────────────────
+    DiagnosticReport:            spe.clinical.report-text
+    DocumentReference:           spe.clinical.report-text
+    Composition:                 spe.clinical.report-text
+    Media:                       spe.clinical.report-text
+    DocumentManifest:            spe.clinical.report-text
+
+    # ── Encounters & care ─────────────────────────────────────────────────────
+    Encounter:                   spe.direct.resource-id
+    EpisodeOfCare:               spe.direct.resource-id
+    CarePlan:                    spe.direct.resource-id
+    CareTeam:                    spe.direct.resource-id
+    Goal:                        spe.direct.resource-id
+
+    # ── Scheduling & workflow ─────────────────────────────────────────────────
+    ServiceRequest:              spe.operational.scheduling
+    Appointment:                 spe.operational.scheduling
+    AppointmentResponse:         spe.operational.scheduling
+    Schedule:                    spe.operational.scheduling
+    Slot:                        spe.operational.scheduling
+    Task:                        spe.operational.scheduling
+    Communication:               spe.operational.scheduling
+    CommunicationRequest:        spe.operational.scheduling
+
+    # ── Financial / billing ───────────────────────────────────────────────────
+    Coverage:                    spe.financial.coverage
+    Claim:                       spe.financial.claims
+    ClaimResponse:               spe.financial.claims
+    ExplanationOfBenefit:        spe.financial.claims
+    CoverageEligibilityRequest:  spe.financial.claims
+    CoverageEligibilityResponse: spe.financial.claims
+    PaymentNotice:               spe.financial.claims
+    PaymentReconciliation:       spe.financial.claims
+
+    # ── Devices & media ───────────────────────────────────────────────────────
+    Device:                      spe.direct.document-media
+    DeviceRequest:               spe.direct.document-media
+    DeviceUseStatement:          spe.direct.document-media
+    Binary:                      spe.direct.document-media
+
+    # ── Audit / provenance ────────────────────────────────────────────────────
+    Provenance:                  spe.technical.references
+    AuditEvent:                  spe.technical.references
+    Consent:                     spe.technical.references
+
+    # Any resource type NOT listed above falls back to ${GPAS_DOMAIN}
 
 rules:
 
@@ -46,6 +130,13 @@ rules:
   action: redact
 
 - match: Patient.address
+  action: redact
+
+# Geolocation extension nested inside Patient.address — lat/lon are re-identification PHI.
+# Must be listed explicitly because the parent address rule redacts scalar fields
+# but nested extension objects survive without their own rule.
+- name: "redact patient address geolocation"
+  match: Patient.address.extension
   action: redact
 
 - match: Patient.photo
@@ -211,36 +302,147 @@ rules:
 # 8. DISPLAY FIELDS AND SUBJECT/PATIENT REFERENCES
 # ==========================================================
 
-#- match: "*.display"
-# action: redact
+# Person-type references always contain a name — redact unconditionally.
+- match: "*.subject.display"
+  action: redact
 
-#- match: "*.subject.display"
-#  action: redact
+- match: "*.patient.display"
+  action: redact
 
-- match: "*.subject.reference"
-  action: gpas_pseudonymize
-  params: *gpas
+# All other display fields: NLP-scrub to replace PII tokens while preserving
+# clinical labels (e.g. "Leukocytes [#/volume] in Blood by Automated count").
+- match: "*.display"
+  action: nlp_detect_act
+  params:
+    entities: healthcare
 
-- match: "*.patient.reference"
-  action: gpas_pseudonymize
-  params: *gpas
+# Cross-resource references (subject, patient, etc.) are handled by rewrite_references: true
+# via _deep_rewrite_references_gpas, which strips the "ResourceType/" prefix, pseudonymizes
+# only the bare ID using the same gPAS domain as the *.id rule, then reassembles the full
+# reference string (e.g. "Patient/abc123" → "Patient/<pseudonym>").
+#
+# DO NOT add gpas_pseudonymize rules for *.subject.reference or *.patient.reference here.
+# Those would send the compound string "Patient/abc123" to gPAS as an opaque token; gPAS
+# returns a bare ID with no resource-type prefix, causing HAPI-0505 referential integrity
+# failures on upload. The rewrite_references mechanism avoids this correctly.
 
 # ==========================================================
 # 9. DOCUMENTS / ATTACHMENTS
+# text/* payloads: Base64-decoded → NLP-scrubbed → re-encoded.
+# Non-text MIME types (image/*, application/pdf …): data field redacted.
+# NOTE: *.attachment.data does NOT match DocumentReference — the attachment is
+# nested under content[*].attachment, so specific paths are required per resource.
 # ==========================================================
 
-- match: "*.attachment"
+# DocumentReference — clinical notes (content[*].attachment, nested one level)
+- name: scrub document reference attachment text
+  match: DocumentReference.content.attachment.data
+  action: nlp_detect_act
+  params:
+    base64_encoded: true
+    entities: healthcare
+    threshold: 0.4
+
+- name: redact document reference attachment url
+  match: DocumentReference.content.attachment.url
   action: redact
 
-- match: DocumentReference.content
+- name: redact document reference attachment title
+  match: DocumentReference.content.attachment.title
   action: redact
 
-- match: Binary.data
+- name: redact document reference attachment hash
+  match: DocumentReference.content.attachment.hash
+  action: redact
+
+# DiagnosticReport, QuestionnaireResponse — presentedForm is Attachment directly
+- name: scrub presented form text
+  match: "*.presentedForm.data"
+  action: nlp_detect_act
+  params:
+    base64_encoded: true
+    entities: healthcare
+    threshold: 0.4
+
+- name: redact presented form url
+  match: "*.presentedForm.url"
+  action: redact
+
+- name: redact presented form title
+  match: "*.presentedForm.title"
+  action: redact
+
+# Observation, Task — valueAttachment
+- name: scrub value attachment text
+  match: "*.valueAttachment.data"
+  action: nlp_detect_act
+  params:
+    base64_encoded: true
+    entities: healthcare
+    threshold: 0.4
+
+- name: redact value attachment url
+  match: "*.valueAttachment.url"
+  action: redact
+
+# Photos — biometric identifiers (never NLP-scrubable)
+- name: redact photo data
+  match: "*.photo.data"
+  action: redact
+
+- name: scrub binary resource data
+  match: Binary.data
+  action: nlp_detect_act
+  params:
+    base64_encoded: true
+    entities: healthcare
+    threshold: 0.4
+
+# ==========================================================
+# 10. SDOH / PRAPARE QUASI-IDENTIFIERS
+# PRAPARE (LOINC panel 93025-5) Observation components carry social-
+# determinant data that function as quasi-identifiers: income, household
+# size, education, language, and employment status combined enable
+# re-identification. Street address (LOINC 56799-0) is caught by the
+# scrub_text street_address rule below; numeric and coded components require
+# explicit targeting.
+# ==========================================================
+
+- name: redact PRAPARE annual income
+  match: "Observation.component.where(code.coding.where(code='63586-2').exists())"
+  action: redact
+
+- name: redact PRAPARE household size
+  match: "Observation.component.where(code.coding.where(code='63512-8').exists())"
+  action: redact
+
+- name: redact PRAPARE education level
+  match: "Observation.component.where(code.coding.where(code='82589-3').exists())"
+  action: redact
+
+- name: redact PRAPARE preferred language
+  match: "Observation.component.where(code.coding.where(code='54899-0').exists())"
+  action: redact
+
+- name: redact PRAPARE employment status
+  match: "Observation.component.where(code.coding.where(code='67875-5').exists())"
   action: redact
 
 # ==========================================================
-# 10. TEXT SCRUBBING
+# 11. TEXT SCRUBBING
 # ==========================================================
+
+# FHIR Narrative div is an XHTML summary derived from the resource data.
+# NLP scrubbing alone is insufficient — the div re-derives names, addresses,
+# and dates from raw fields. Redact it entirely; downstream rendering
+# systems should regenerate narrative from the de-identified fields.
+- name: "redact narrative div"
+  match: "*.text.div"
+  action: redact
+
+- name: "redact narrative status"
+  match: "*.text.status"
+  action: redact
 
 - match: "*.text"
   action: scrub_text
@@ -255,12 +457,6 @@ rules:
     mode: tokenize
     html: true
     threshold: 0.4
-
-- match: "*.note.text"
-  action: scrub_text
-  params:
-    mode: text
-    patterns: all
 
 - match: "*.note.text"
   action: nlp_scrub
@@ -286,35 +482,69 @@ rules:
     mode: tokenize
     threshold: 0.4
 
+- name: "nlp scrub component valueCodeableConcept text"
+  match: "*.component.valueCodeableConcept.text"
+  action: nlp_scrub
+  params:
+    mode: tokenize
+    threshold: 0.4
+
+- name: "nlp scrub component valueCodeableConcept coding display"
+  match: "*.component.valueCodeableConcept.coding.display"
+  action: nlp_scrub
+  params:
+    mode: tokenize
+    threshold: 0.4
+
 - match: "*.medicationCodeableConcept.text"
   action: nlp_scrub
   params:
     mode: tokenize
     threshold: 0.4
 
-- match: "*.dosage.text"
+# Street address pattern — fires on any valueString containing a recognizable
+# address regardless of LOINC code or resource structure (covers PRAPARE 56799-0,
+# custom SDOH panels, and any other free-text fields with address content).
+# Two rules: one for top-level valueString, one for component.valueString
+# (e.g. Observation.component in PRAPARE / SDOH panels).
+- name: "scrub street addresses in valueString"
+  match: "*.valueString"
   action: scrub_text
   params:
     mode: text
-    patterns: all
+    patterns: street_address
+
+- name: "scrub street addresses in component valueString"
+  match: "*.component.valueString"
+  action: scrub_text
+  params:
+    mode: text
+    patterns: street_address
+
+- match: "*.valueString"
+  action: nlp_detect_act
+  params:
+    threshold: 0.4
+
+- match: "*.dosage.text"
+  action: nlp_detect_act
+  params:
+    threshold: 0.4
 
 - match: "*.dosage.patientInstruction"
-  action: scrub_text
+  action: nlp_detect_act
   params:
-    mode: text
-    patterns: all
+    threshold: 0.4
 
 - match: "*.reaction.description"
-  action: scrub_text
+  action: nlp_detect_act
   params:
-    mode: text
-    patterns: all
+    threshold: 0.4
 
 - match: "*.comment"
-  action: scrub_text
+  action: nlp_detect_act
   params:
-    mode: text
-    patterns: all
+    threshold: 0.4
 
 # ==========================================================
 # 11. COMMUNICATION / MESSAGES
@@ -327,10 +557,9 @@ rules:
   action: redact
 
 - match: Communication.payload.contentString
-  action: scrub_text
+  action: nlp_detect_act
   params:
-    mode: text
-    patterns: all
+    threshold: 0.4
 
 # ==========================================================
 # 12. TASK / REQUEST WORKFLOW
@@ -369,6 +598,17 @@ rules:
 # ==========================================================
 # 15. GLOBAL CATCH-ALL RULES
 # ==========================================================
+
+# Identifier type labels (e.g. "Social Security Number", "Passport Number",
+# "Driver's license number") disclose which PHI categories exist for the
+# patient even when the identifier value itself is pseudonymized.
+- name: "redact identifier type text labels"
+  match: "*.identifier.type.text"
+  action: redact
+
+- name: "redact identifier type coding display labels"
+  match: "*.identifier.type.coding.display"
+  action: redact
 
 - match: "*.identifier.value"
   action: gpas_pseudonymize

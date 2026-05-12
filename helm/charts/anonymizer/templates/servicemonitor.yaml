@@ -1,0 +1,28 @@
+{{- if .Values.monitoring.serviceMonitor.enabled }}
+# ServiceMonitor — scraped by kube-prometheus-stack / Prometheus Operator.
+# CRD (monitoring.coreos.com/v1) is provided by the operator; this template is
+# rendered only when monitoring.serviceMonitor.enabled=true so clusters without
+# the operator are unaffected.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "anonymizer.fullname" . }}
+  labels:
+    {{- include "anonymizer.labels" . | nindent 4 }}
+    app.kubernetes.io/component: anonymizer
+    {{- with .Values.monitoring.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "anonymizer.selectorLabels" (dict "Release" .Release "component" "anonymizer") | nindent 6 }}
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.monitoring.serviceMonitor.interval | default "30s" }}
+      scrapeTimeout: {{ .Values.monitoring.serviceMonitor.scrapeTimeout | default "10s" }}
+{{- end }}

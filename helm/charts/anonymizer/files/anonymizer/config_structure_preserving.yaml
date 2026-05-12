@@ -15,7 +15,7 @@
 #   - Server metadata (lastUpdated, versionId, source): redacted
 #   - Device identifiers (UDI, serial, lot): redacted/substituted
 #   - Clinical data (codes, values, measurements): unchanged
-#   - Binary blobs (photo, attachment): redacted (no meaningful text substitute)
+#   - Binary blobs (photo, attachment): NLP-scrubbed if text/*, redacted if binary
 #
 # Required env vars:
 #   GPAS_URL        — gPAS server base URL (e.g. http://gpas:8080/ttp-fhir/fhir)
@@ -32,6 +32,8 @@ general:
   appname: SPE-FHIR-BlackBox
   rewrite_references: true
   rewrite_text_ids: true
+  # domain_map omitted — inherits _DEFAULT_DOMAIN_MAP from loader.py
+  # Add domain_map: here to override specific resource types for this profile.
 
 rules:
 
@@ -125,6 +127,11 @@ rules:
   action: substitute
   params: *redacted
 
+# Geolocation (lat/lon) nested inside Patient.address.extension — re-identification PHI
+- name: redact patient address geolocation
+  match: Patient.address.extension
+  action: redact
+
 - name: pseudonymize patient identifier value
   match: Patient.identifier.value
   action: gpas_pseudonymize
@@ -191,8 +198,11 @@ rules:
 # ==========================================================
 
 # US Core Race Extension - contains demographic information (PHI)
+# Redact the whole ombCategory inner extension (not just its valueCoding) so the
+# remaining Extension object always has value[x] — prevents FHIR R4 violation
+# "missing required element: value" (LenientErrorHandler warning on HAPI).
 - name: redact race omb category coding
-  match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-race').extension.where(url='ombCategory').valueCoding
+  match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-race').extension.where(url='ombCategory')
   action: redact
 
 - name: redact race text value
@@ -202,7 +212,7 @@ rules:
 
 # US Core Ethnicity Extension - contains demographic information (PHI)
 - name: redact ethnicity omb category coding
-  match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-ethnicity').extension.where(url='ombCategory').valueCoding
+  match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-ethnicity').extension.where(url='ombCategory')
   action: redact
 
 - name: redact ethnicity text value
@@ -216,9 +226,10 @@ rules:
   action: substitute
   params: *redacted
 
-# Birth Sex Extension - may be kept for medical purposes or redacted depending on policy
+# Birth Sex Extension - redact the whole extension (not just valueCode) so no
+# orphaned Extension with only url remains (FHIR R4 requires value[x] or sub-extensions).
 - name: redact birth sex
-  match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-birthsex').valueCode
+  match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-birthsex')
   action: redact
 
 # Birth Place Extension - contains geographic identifiers (PHI)
@@ -237,13 +248,15 @@ rules:
   action: substitute
   params: *redacted
 
-# Synthea-specific extensions - may contain identifiable data
+# Synthea-specific extensions - redact the whole extension so no orphaned
+# Extension with only url remains (valueDecimal removal would trigger HAPI
+# LenientErrorHandler "missing required element: value" warning).
 - name: redact synthea disability adjusted life years
-  match: Patient.extension.where(url='http://synthetichealth.github.io/synthea/disability-adjusted-life-years').valueDecimal
+  match: Patient.extension.where(url='http://synthetichealth.github.io/synthea/disability-adjusted-life-years')
   action: redact
 
 - name: redact synthea quality adjusted life years
-  match: Patient.extension.where(url='http://synthetichealth.github.io/synthea/quality-adjusted-life-years').valueDecimal
+  match: Patient.extension.where(url='http://synthetichealth.github.io/synthea/quality-adjusted-life-years')
   action: redact
 
 # Patient record links — cross-patient associations can re-identify
@@ -657,23 +670,106 @@ rules:
 
 # ==========================================================
 # 11. BINARY / DOCUMENT BLOBS
-#    No meaningful text substitute — removed entirely
+#    text/* payloads: Base64-decoded → NLP-scrubbed → re-encoded.
+#    Non-text MIME types (image/*, application/pdf …): data field redacted.
 # ==========================================================
 
-- name: redact attachments
-  match: "*.attachment"
+# DocumentReference — clinical notes (content[*].attachment, nested one level)
+- name: scrub document reference attachment text
+  match: DocumentReference.content.attachment.data
+  action: nlp_detect_act
+  params:
+    base64_encoded: true
+    entities: healthcare
+    threshold: 0.4
+
+- name: redact document reference attachment url
+  match: DocumentReference.content.attachment.url
   action: redact
 
-- name: redact document reference content
-  match: DocumentReference.content
+- name: redact document reference attachment title
+  match: DocumentReference.content.attachment.title
   action: redact
 
-- name: redact binary data
+- name: redact document reference attachment hash
+  match: DocumentReference.content.attachment.hash
+  action: redact
+
+# DiagnosticReport, QuestionnaireResponse — presentedForm is Attachment directly
+- name: scrub presented form text
+  match: "*.presentedForm.data"
+  action: nlp_detect_act
+  params:
+    base64_encoded: true
+    entities: healthcare
+    threshold: 0.4
+
+- name: redact presented form url
+  match: "*.presentedForm.url"
+  action: redact
+
+- name: redact presented form title
+  match: "*.presentedForm.title"
+  action: redact
+
+# Observation, Task — valueAttachment
+- name: scrub value attachment text
+  match: "*.valueAttachment.data"
+  action: nlp_detect_act
+  params:
+    base64_encoded: true
+    entities: healthcare
+    threshold: 0.4
+
+- name: redact value attachment url
+  match: "*.valueAttachment.url"
+  action: redact
+
+# Photos — biometric identifiers, never NLP-scrubable
+- name: redact photo data
+  match: "*.photo.data"
+  action: redact
+
+- name: scrub binary resource data
   match: Binary.data
+  action: nlp_detect_act
+  params:
+    base64_encoded: true
+    entities: healthcare
+    threshold: 0.4
+
+# ==========================================================
+# 12. SDOH / PRAPARE QUASI-IDENTIFIERS
+# PRAPARE (LOINC panel 93025-5) Observation components carry social-
+# determinant data that function as quasi-identifiers: income, household
+# size, education, language, and employment status combined enable
+# re-identification. Street address (LOINC 56799-0) is caught by the
+# scrub_text street_address rule below; numeric and coded components require
+# explicit targeting.
+# ==========================================================
+
+- name: redact PRAPARE annual income
+  match: "Observation.component.where(code.coding.where(code='63586-2').exists())"
+  action: redact
+
+- name: redact PRAPARE household size
+  match: "Observation.component.where(code.coding.where(code='63512-8').exists())"
+  action: redact
+
+- name: redact PRAPARE education level
+  match: "Observation.component.where(code.coding.where(code='82589-3').exists())"
+  action: redact
+
+- name: redact PRAPARE preferred language
+  match: "Observation.component.where(code.coding.where(code='54899-0').exists())"
+  action: redact
+
+- name: redact PRAPARE employment status
+  match: "Observation.component.where(code.coding.where(code='67875-5').exists())"
   action: redact
 
 # ==========================================================
-# 12. FREE-TEXT NARRATIVE — scrub PII tokens in place
+# 13. FREE-TEXT NARRATIVE — scrub PII tokens in place
 #     scrub_text/nlp_scrub replace PII inline; field stays present
 # ==========================================================
 
@@ -693,13 +789,6 @@ rules:
     html: true
     threshold: 0.4
 
-- name: scrub note text
-  match: "*.note.text"
-  action: scrub_text
-  params:
-    mode: text
-    patterns: all
-
 - name: nlp scrub note text
   match: "*.note.text"
   action: nlp_scrub
@@ -707,12 +796,11 @@ rules:
     mode: tokenize
     threshold: 0.4
 
-- name: scrub comment fields
+- name: nlp detect act comment fields
   match: "*.comment"
-  action: scrub_text
+  action: nlp_detect_act
   params:
-    mode: text
-    patterns: all
+    threshold: 0.4
 
 - name: nlp scrub code text
   match: "*.code.text"
@@ -742,26 +830,48 @@ rules:
     mode: tokenize
     threshold: 0.4
 
-- name: scrub dosage text
+# Street address pattern — fires on any valueString containing a recognizable
+# address regardless of LOINC code or resource structure (covers PRAPARE 56799-0,
+# custom SDOH panels, and any other free-text fields with address content).
+# Two rules: one for top-level valueString, one for component.valueString
+# (e.g. Observation.component in PRAPARE / SDOH panels).
+- name: scrub street addresses in valueString
+  match: "*.valueString"
+  action: scrub_text
+  params:
+    mode: text
+    patterns: street_address
+
+- name: scrub street addresses in component valueString
+  match: "*.component.valueString"
+  action: scrub_text
+  params:
+    mode: text
+    patterns: street_address
+
+- name: nlp detect act valueString
+  match: "*.valueString"
+  action: nlp_detect_act
+  params:
+    threshold: 0.4
+
+- name: nlp detect act dosage text
   match: "*.dosage.text"
-  action: scrub_text
+  action: nlp_detect_act
   params:
-    mode: text
-    patterns: all
+    threshold: 0.4
 
-- name: scrub dosage patient instruction
+- name: nlp detect act dosage patient instruction
   match: "*.dosage.patientInstruction"
-  action: scrub_text
+  action: nlp_detect_act
   params:
-    mode: text
-    patterns: all
+    threshold: 0.4
 
-- name: scrub reaction description
+- name: nlp detect act reaction description
   match: "*.reaction.description"
-  action: scrub_text
+  action: nlp_detect_act
   params:
-    mode: text
-    patterns: all
+    threshold: 0.4
 
 # ==========================================================
 # 13. COMMUNICATION / MESSAGES
@@ -777,12 +887,11 @@ rules:
   action: substitute
   params: *redacted
 
-- name: scrub communication payload
+- name: nlp detect act communication payload
   match: Communication.payload.contentString
-  action: scrub_text
+  action: nlp_detect_act
   params:
-    mode: text
-    patterns: all
+    threshold: 0.4
 
 # ==========================================================
 # 14. TASK / REQUEST WORKFLOW
@@ -864,6 +973,15 @@ rules:
 #     These fire last, catching any resource type not explicitly
 #     listed above (e.g. Coverage, Claim, ExplanationOfBenefit).
 # ==========================================================
+
+# Identifier type labels disclose PHI categories even when values are pseudonymized
+- name: redact identifier type text labels
+  match: "*.identifier.type.text"
+  action: redact
+
+- name: redact identifier type coding display labels
+  match: "*.identifier.type.coding.display"
+  action: redact
 
 - name: pseudonymize all identifier values
   match: "*.identifier.value"

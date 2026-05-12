@@ -24,6 +24,13 @@
 # Covered resource types:
 #   Patient, Practitioner, PractitionerRole, RelatedPerson, Organization,
 #   Person, Group (with wildcards for common cross-resource identifiers)
+#
+# Implementation note — HumanName / Identifier complex types:
+#   cryptohash targets scalar leaf fields only.  Applying cryptohash to the
+#   parent complex object (e.g. Patient.name, Patient.identifier) replaces
+#   the entire struct with a hex string, breaking FHIR R4 schema validity.
+#   Identifiers are pseudonymized at the .value leaf; all other Identifier
+#   sub-fields (.system, .type, .use) are preserved for structural fidelity.
 # =============================================================================
 
 general:
@@ -42,16 +49,38 @@ rules:
   # PATIENT  (most common PHI carrier in FHIR)
   # ---------------------------------------------------------------------------
 
-  # Direct identifier: legal name(s)
-  - match: Patient.name
+  # Direct identifier: legal name(s) — target HumanName leaf scalars only
+  # (hashing the parent HumanName object would replace it with a hex string,
+  #  breaking FHIR R4 schema)
+  - name: patient name family
+    match: Patient.name.family
+    action: cryptohash
+
+  - name: patient name given
+    match: Patient.name.given
+    action: cryptohash
+
+  - name: patient name text
+    match: Patient.name.text
     action: cryptohash
 
   # Contact names (guarantors, next-of-kin)
-  - match: Patient.contact.name
+  - name: patient contact name family
+    match: Patient.contact.name.family
+    action: cryptohash
+
+  - name: patient contact name given
+    match: Patient.contact.name.given
+    action: cryptohash
+
+  - name: patient contact name text
+    match: Patient.contact.name.text
     action: cryptohash
 
   # Administrative identifiers: MRN, SSN, health card, insurance number, etc.
-  - match: Patient.identifier
+  # Target .value only — preserves .system, .type, .use for structural fidelity
+  - name: patient identifier value
+    match: Patient.identifier.value
     action: cryptohash
 
   # Date of birth — high re-identification risk (quasi-identifier)
@@ -73,6 +102,11 @@ rules:
   - match: Patient.address
     action: redact
 
+  # Geolocation (lat/lon) nested inside Patient.address.extension — re-identification PHI
+  - name: redact patient address geolocation
+    match: Patient.address.extension
+    action: redact
+
   - match: Patient.contact.address
     action: redact
 
@@ -84,14 +118,32 @@ rules:
   - match: Patient.link
     action: redact
 
+  # Quasi-identifiers — GDPR Art. 4(1): marital status and language are personal
+  # data that enable re-identification when combined with other attributes.
+  - match: Patient.maritalStatus
+    action: redact
+
+  - match: Patient.communication
+    action: redact
+
   # ---------------------------------------------------------------------------
   # PRACTITIONER  (indirect identifier when combined with clinical data)
   # ---------------------------------------------------------------------------
 
-  - match: Practitioner.name
+  - name: practitioner name family
+    match: Practitioner.name.family
     action: cryptohash
 
-  - match: Practitioner.identifier
+  - name: practitioner name given
+    match: Practitioner.name.given
+    action: cryptohash
+
+  - name: practitioner name text
+    match: Practitioner.name.text
+    action: cryptohash
+
+  - name: practitioner identifier value
+    match: Practitioner.identifier.value
     action: cryptohash
 
   - match: Practitioner.birthDate
@@ -110,10 +162,20 @@ rules:
   # RELATED PERSON  (family member / designee data)
   # ---------------------------------------------------------------------------
 
-  - match: RelatedPerson.name
+  - name: relatedperson name family
+    match: RelatedPerson.name.family
     action: cryptohash
 
-  - match: RelatedPerson.identifier
+  - name: relatedperson name given
+    match: RelatedPerson.name.given
+    action: cryptohash
+
+  - name: relatedperson name text
+    match: RelatedPerson.name.text
+    action: cryptohash
+
+  - name: relatedperson identifier value
+    match: RelatedPerson.identifier.value
     action: cryptohash
 
   - match: RelatedPerson.birthDate
@@ -131,12 +193,16 @@ rules:
   # ---------------------------------------------------------------------------
   # ORGANIZATION  (named entity that may identify a patient indirectly by
   #                association, e.g. specialist clinic)
+  # Organization.name is a plain string in FHIR R4 — cryptohash applies
+  # directly without breaking schema.
   # ---------------------------------------------------------------------------
 
-  - match: Organization.name
+  - name: organization name
+    match: Organization.name
     action: cryptohash
 
-  - match: Organization.identifier
+  - name: organization identifier value
+    match: Organization.identifier.value
     action: cryptohash
 
   - match: Organization.telecom
@@ -149,10 +215,20 @@ rules:
   # PERSON  (base demographic record)
   # ---------------------------------------------------------------------------
 
-  - match: Person.name
+  - name: person name family
+    match: Person.name.family
     action: cryptohash
 
-  - match: Person.identifier
+  - name: person name given
+    match: Person.name.given
+    action: cryptohash
+
+  - name: person name text
+    match: Person.name.text
+    action: cryptohash
+
+  - name: person identifier value
+    match: Person.identifier.value
     action: cryptohash
 
   - match: Person.birthDate
@@ -177,11 +253,6 @@ rules:
   - match: "*.id"
     action: cryptohash
 
-  # Pseudonymize human names wherever they appear (e.g. in extensions or
-  # custom profiles derived from HumanName)
-  - match: "*.name"
-    action: cryptohash
-
   # Subject/patient reference strings link clinical resources back to the patient
   # — must be redacted to break re-identification via reference strings.
   - match: "*.subject.reference"
@@ -194,13 +265,45 @@ rules:
     action: redact
 
   - match: "*.display"
-    action: redact
+    action: nlp_detect_act
+    params:
+      entities: healthcare
 
   # Actor references (performer, recorder, etc.) identify treating clinicians
   - match: "*.performer.reference"
     action: redact
 
   - match: "*.recorder.reference"
+    action: redact
+
+  # ---------------------------------------------------------------------------
+  # SDOH / PRAPARE QUASI-IDENTIFIERS
+  # PRAPARE (LOINC panel 93025-5) components carry social-determinant data
+  # that qualify as personal data under GDPR Art. 4(1): income, household
+  # size, education, language, and employment status combined enable
+  # re-identification. Street address (LOINC 56799-0) is caught by the
+  # scrub_text street_address rule below; numeric and coded components require
+  # explicit targeting.
+  # ---------------------------------------------------------------------------
+
+  - name: redact PRAPARE annual income
+    match: "Observation.component.where(code.coding.where(code='63586-2').exists())"
+    action: redact
+
+  - name: redact PRAPARE household size
+    match: "Observation.component.where(code.coding.where(code='63512-8').exists())"
+    action: redact
+
+  - name: redact PRAPARE education level
+    match: "Observation.component.where(code.coding.where(code='82589-3').exists())"
+    action: redact
+
+  - name: redact PRAPARE preferred language
+    match: "Observation.component.where(code.coding.where(code='54899-0').exists())"
+    action: redact
+
+  - name: redact PRAPARE employment status
+    match: "Observation.component.where(code.coding.where(code='67875-5').exists())"
     action: redact
 
   # ---------------------------------------------------------------------------
@@ -224,12 +327,6 @@ rules:
       threshold: 0.4
 
   # Clinical notes — plain text
-  - match: "*.note.text"
-    action: scrub_text
-    params:
-      mode: text
-      patterns: all
-
   - match: "*.note.text"
     action: nlp_scrub
     params:
@@ -262,27 +359,129 @@ rules:
       mode: tokenize
       threshold: 0.4
 
-  # Dosage and reaction free-text — regex scrub for dates/numbers
-  - match: "*.dosage.text"
+  # Street address pattern — fires on any valueString containing a recognizable
+  # address regardless of LOINC code or resource structure (covers PRAPARE 56799-0,
+  # custom SDOH panels, and any other free-text fields with address content).
+  # Two rules: one for top-level valueString, one for component.valueString
+  # (e.g. Observation.component in PRAPARE / SDOH panels).
+  - name: scrub street addresses in valueString
+    match: "*.valueString"
     action: scrub_text
     params:
       mode: text
-      patterns: all
+      patterns: street_address
+
+  - name: scrub street addresses in component valueString
+    match: "*.component.valueString"
+    action: scrub_text
+    params:
+      mode: text
+      patterns: street_address
+
+  - match: "*.valueString"
+    action: nlp_detect_act
+    params:
+      threshold: 0.4
+
+  # Identifier type labels disclose PHI categories even when values are pseudonymized
+  - name: redact identifier type text labels
+    match: "*.identifier.type.text"
+    action: redact
+
+  - name: redact identifier type coding display labels
+    match: "*.identifier.type.coding.display"
+    action: redact
+
+  # Dosage and reaction free-text
+  - match: "*.dosage.text"
+    action: nlp_detect_act
+    params:
+      threshold: 0.4
 
   - match: "*.dosage.patientInstruction"
-    action: scrub_text
+    action: nlp_detect_act
     params:
-      mode: text
-      patterns: all
+      threshold: 0.4
 
   - match: "*.reaction.description"
-    action: scrub_text
+    action: nlp_detect_act
     params:
-      mode: text
-      patterns: all
+      threshold: 0.4
 
   - match: "*.comment"
-    action: scrub_text
+    action: nlp_detect_act
     params:
-      mode: text
-      patterns: all
+      threshold: 0.4
+
+  # ===========================================================================
+  # DOCUMENTS / ATTACHMENTS (GDPR Art. 4(1) — personal data in any format)
+  # text/* payloads: Base64-decoded → NLP-scrubbed → re-encoded.
+  # Non-text MIME types (image/*, application/pdf …): data field redacted.
+  # Attachment URL/title/hash always redacted.
+  # NOTE: *.attachment.data does NOT match DocumentReference — the attachment is
+  # nested under content[*].attachment, so specific paths are required per resource.
+  # ===========================================================================
+
+  # DocumentReference — clinical notes (content[*].attachment, nested one level)
+  - name: scrub document reference attachment text
+    match: DocumentReference.content.attachment.data
+    action: nlp_detect_act
+    params:
+      base64_encoded: true
+      entities: healthcare
+      threshold: 0.4
+
+  - name: redact document reference attachment url
+    match: DocumentReference.content.attachment.url
+    action: redact
+
+  - name: redact document reference attachment title
+    match: DocumentReference.content.attachment.title
+    action: redact
+
+  - name: redact document reference attachment hash
+    match: DocumentReference.content.attachment.hash
+    action: redact
+
+  # DiagnosticReport, QuestionnaireResponse — presentedForm is Attachment directly
+  - name: scrub presented form text
+    match: "*.presentedForm.data"
+    action: nlp_detect_act
+    params:
+      base64_encoded: true
+      entities: healthcare
+      threshold: 0.4
+
+  - name: redact presented form url
+    match: "*.presentedForm.url"
+    action: redact
+
+  - name: redact presented form title
+    match: "*.presentedForm.title"
+    action: redact
+
+  # Observation, Task — valueAttachment
+  - name: scrub value attachment text
+    match: "*.valueAttachment.data"
+    action: nlp_detect_act
+    params:
+      base64_encoded: true
+      entities: healthcare
+      threshold: 0.4
+
+  - name: redact value attachment url
+    match: "*.valueAttachment.url"
+    action: redact
+
+  # Photos — biometric identifiers, never NLP-scrubable
+  - name: redact photo data
+    match: "*.photo.data"
+    action: redact
+
+  - name: scrub binary resource data
+    match: Binary.data
+    action: nlp_detect_act
+    params:
+      base64_encoded: true
+      entities: healthcare
+      threshold: 0.4

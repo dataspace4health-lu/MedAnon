@@ -21,3 +21,5 @@ data:
 {{ .Files.Get "files/anonymizer/config_research_pseudonymous.yaml" | indent 4 }}
   config_structure_preserving.yaml: |-
 {{ .Files.Get "files/anonymizer/config_structure_preserving.yaml" | indent 4 }}
+  config_value_masking.yaml: |-
+{{ .Files.Get "files/anonymizer/config_value_masking.yaml" | indent 4 }}

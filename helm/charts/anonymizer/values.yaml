@@ -26,9 +26,9 @@ imagePullPolicy: IfNotPresent
 imagePullSecrets: []
 
 image: medanon
-# Pin to a specific release tag in production — never use "latest" in production.
-# Example: tag: "2.0.0"
-tag: latest
+# Pinned to chart appVersion. Override at install time with `--set tag=<version>`
+# to deploy a different release. Never use "latest" in production.
+tag: "2025.2.0"
 replicas: 1
 port: 8000
 
@@ -115,6 +115,26 @@ podDisruptionBudget:
   enabled: false
   minAvailable: 1
 
+# ─── Observability (Prometheus Operator) ───────────────────────────────────
+# Render ServiceMonitor + PrometheusRule CRDs (kube-prometheus-stack).
+# Leave disabled if the Prometheus Operator CRDs are NOT installed in the
+# cluster, otherwise `helm install` will fail with "no matches for kind".
+monitoring:
+  serviceMonitor:
+    enabled: false
+    interval: "30s"
+    scrapeTimeout: "10s"
+    # Extra labels (e.g. release: prometheus) so the operator picks the SM up.
+    labels: {}
+  prometheusRule:
+    enabled: false
+    labels: {}
+    # Override alert thresholds without touching the template.
+    thresholds:
+      errorRate: "0.05"            # 5xx fraction triggering warning
+      p95LatencySeconds: "2"        # request p95 ceiling
+      gpasCacheHitRate: "0.5"       # below this triggers info alert
+
 # ─── Redis sidecar (opt-in — shared cache + job queue) ────────────────────────
 # When enabled, a Redis sidecar is added to the anonymizer Pod and
 # MEDANON_REDIS_URL is injected pointing to localhost:6379. This activates:
@@ -134,3 +154,15 @@ redis:
     limits:
       memory: "128Mi"
       cpu: "200m"
+
+# ─── Shared output PVC (job results) ─────────────────────────────────────────
+# Name of an existing PVC to mount at /output (shared with worker pod).
+# Both anonymizer and worker must reference the same PVC so results written
+# by the worker are readable by the API. Leave empty to use emptyDir (not
+# suitable for multi-pod deployments — worker results won't be visible to API).
+sharedOutputPVC: ""
+
+# Network policy configuration
+networkPolicy:
+  # Additional namespaces allowed to send ingress traffic (e.g. ingress controller namespace)
+  additionalIngressNamespaces: []

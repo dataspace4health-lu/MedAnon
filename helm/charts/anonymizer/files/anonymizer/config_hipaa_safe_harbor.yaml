@@ -86,6 +86,11 @@ rules:
       strategy: zip_prefix
       prefix_length: 3
 
+  # Geolocation (lat/lon) nested inside Patient.address.extension — re-identification PHI
+  - name: redact patient address geolocation
+    match: Patient.address.extension
+    action: redact
+
   # Identifier 3: Dates — generalize to year only
   # Ages 90+ are at higher re-identification risk; this profile truncates to year
   # for all ages. Organisations with patients ≥ 90 should additionally redact
@@ -139,6 +144,14 @@ rules:
 
   # Remove patient merge/link records (prevents re-identification via linkage)
   - match: Patient.link
+    action: redact
+
+  # Quasi-identifiers — demographic combinations aid re-identification (HIPAA
+  # identifier 18: "any other unique identifying number, characteristic, or code")
+  - match: Patient.maritalStatus
+    action: redact
+
+  - match: Patient.communication
     action: redact
 
   # Patient notes — dual-pass scrub for PHI in free text
@@ -269,7 +282,22 @@ rules:
     params:
       strategy: date_year
 
-  - match: "*.onset[x]"
+  - match: "*.onsetDateTime"
+    action: generalize
+    params:
+      strategy: date_year
+
+  - match: "*.onsetPeriod.start"
+    action: generalize
+    params:
+      strategy: date_year
+
+  - match: "*.onsetPeriod.end"
+    action: generalize
+    params:
+      strategy: date_year
+
+  - match: "*.onsetString"
     action: generalize
     params:
       strategy: date_year
@@ -282,10 +310,42 @@ rules:
     action: redact
 
   - match: "*.display"
+    action: nlp_detect_act
+    params:
+      entities: healthcare
+
+  # ===========================================================================
+  # 6. SDOH / PRAPARE QUASI-IDENTIFIERS
+  # PRAPARE (LOINC panel 93025-5) Observation components carry social-
+  # determinant data that qualify as HIPAA identifier 18 ("any other unique
+  # identifying number, characteristic, or code"): income, household size,
+  # education, language, and employment status combined enable re-identification.
+  # Street address (LOINC 56799-0) is caught by the scrub_text street_address
+  # rule below; numeric and coded components require explicit targeting.
+  # ===========================================================================
+
+  - name: redact PRAPARE annual income
+    match: "Observation.component.where(code.coding.where(code='63586-2').exists())"
+    action: redact
+
+  - name: redact PRAPARE household size
+    match: "Observation.component.where(code.coding.where(code='63512-8').exists())"
+    action: redact
+
+  - name: redact PRAPARE education level
+    match: "Observation.component.where(code.coding.where(code='82589-3').exists())"
+    action: redact
+
+  - name: redact PRAPARE preferred language
+    match: "Observation.component.where(code.coding.where(code='54899-0').exists())"
+    action: redact
+
+  - name: redact PRAPARE employment status
+    match: "Observation.component.where(code.coding.where(code='67875-5').exists())"
     action: redact
 
   # ===========================================================================
-  # 6. TEXT SCRUBBING (HIPAA Identifier 18 — any unique identifying content)
+  # 7. TEXT SCRUBBING (HIPAA Identifier 18 — any unique identifying content)
   # Dual-pass: regex catches structured PHI (dates, phones, SSN patterns);
   # NLP catches unstructured names and locations in clinical notes.
   # ===========================================================================
@@ -304,25 +364,125 @@ rules:
       threshold: 0.4
 
   - match: "*.note.text"
-    action: scrub_text
-    params:
-      mode: text
-      patterns: all
-
-  - match: "*.note.text"
     action: nlp_scrub
     params:
       mode: tokenize
       threshold: 0.4
 
-  - match: "*.comment"
+  # Street address pattern — fires on any valueString containing a recognizable
+  # address regardless of LOINC code or resource structure (covers PRAPARE 56799-0,
+  # custom SDOH panels, and any other free-text fields with address content).
+  # Two rules: one for top-level valueString, one for component.valueString
+  # (e.g. Observation.component in PRAPARE / SDOH panels).
+  - name: scrub street addresses in valueString
+    match: "*.valueString"
     action: scrub_text
     params:
       mode: text
-      patterns: all
+      patterns: street_address
+
+  - name: scrub street addresses in component valueString
+    match: "*.component.valueString"
+    action: scrub_text
+    params:
+      mode: text
+      patterns: street_address
+
+  - match: "*.valueString"
+    action: nlp_detect_act
+    params:
+      threshold: 0.4
+
+  - match: "*.comment"
+    action: nlp_detect_act
+    params:
+      threshold: 0.4
 
   - match: "*.description"
-    action: scrub_text
+    action: nlp_detect_act
     params:
-      mode: text
-      patterns: all
+      threshold: 0.4
+
+  # Identifier type labels disclose PHI categories even when values are pseudonymized
+  - name: redact identifier type text labels
+    match: "*.identifier.type.text"
+    action: redact
+
+  - name: redact identifier type coding display labels
+    match: "*.identifier.type.coding.display"
+    action: redact
+
+  # ===========================================================================
+  # 7. DOCUMENTS / ATTACHMENTS (HIPAA identifiers 14, 16, 17, 18)
+  # text/* payloads: Base64-decoded → NLP-scrubbed → re-encoded.
+  #   Catches names, dates, MRNs in clinical notes (identifier 18 catch-all).
+  # Non-text MIME types (image/*, application/pdf …): data field redacted
+  #   (biometric identifiers — HIPAA identifier 16/17).
+  # Attachment URL/title/hash always redacted (URL = identifier 14).
+  # NOTE: *.attachment.data does NOT match DocumentReference — the attachment is
+  # nested under content[*].attachment, so specific paths are required per resource.
+  # ===========================================================================
+
+  # DocumentReference — clinical notes (content[*].attachment, nested one level)
+  - name: scrub document reference attachment text
+    match: DocumentReference.content.attachment.data
+    action: nlp_detect_act
+    params:
+      base64_encoded: true
+      entities: healthcare
+      threshold: 0.4
+
+  - name: redact document reference attachment url
+    match: DocumentReference.content.attachment.url
+    action: redact
+
+  - name: redact document reference attachment title
+    match: DocumentReference.content.attachment.title
+    action: redact
+
+  - name: redact document reference attachment hash
+    match: DocumentReference.content.attachment.hash
+    action: redact
+
+  # DiagnosticReport, QuestionnaireResponse — presentedForm is Attachment directly
+  - name: scrub presented form text
+    match: "*.presentedForm.data"
+    action: nlp_detect_act
+    params:
+      base64_encoded: true
+      entities: healthcare
+      threshold: 0.4
+
+  - name: redact presented form url
+    match: "*.presentedForm.url"
+    action: redact
+
+  - name: redact presented form title
+    match: "*.presentedForm.title"
+    action: redact
+
+  # Observation, Task — valueAttachment
+  - name: scrub value attachment text
+    match: "*.valueAttachment.data"
+    action: nlp_detect_act
+    params:
+      base64_encoded: true
+      entities: healthcare
+      threshold: 0.4
+
+  - name: redact value attachment url
+    match: "*.valueAttachment.url"
+    action: redact
+
+  # Photos — biometric identifiers (HIPAA #16/17), never NLP-scrubable
+  - name: redact photo data
+    match: "*.photo.data"
+    action: redact
+
+  - name: scrub binary resource data
+    match: Binary.data
+    action: nlp_detect_act
+    params:
+      base64_encoded: true
+      entities: healthcare
+      threshold: 0.4
