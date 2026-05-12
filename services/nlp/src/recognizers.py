@@ -78,6 +78,7 @@ HEALTHCARE_ENTITIES = [
     # Synthetic data artifacts
     "SYNTHEA_SEED",
     # Clinical note PHI — inline demographic / administrative
+    "GENDER",              # inline patient gender (male/female/non-binary etc.)
     "RACE_ETHNICITY",      # bare inline race/ethnicity (not label-prefixed)
     "INSURANCE_STATUS",    # coverage status, named payers
     "GEO_COORDINATES",     # decimal/DMS lat-long pairs
@@ -447,6 +448,32 @@ def _build_custom_recognizers():
             r")\s+\d{4}\b"
         ), 0.85),
     ])
+
+    # --- Gender (bare inline, no label prefix) ---
+    # "male", "female", "non-binary" etc. as they appear in clinical note
+    # demographics — consistent with structured Patient.gender redaction.
+    #
+    # The bare "male"/"female" pattern uses a base score (0.35) BELOW the
+    # default detection threshold (0.4) on purpose: it only fires when
+    # Presidio applies the +0.4 context-word boost from the surrounding
+    # narrative.  This keeps SNOMED/LOINC display labels such as
+    # "Female sterilization procedure" or "Male reproductive system" from
+    # being mis-tagged when no demographic context is present, while still
+    # catching "the patient is a 45 year old male" in clinical notes.
+    # Extended terms (non-binary, transgender, intersex, …) are unambiguous
+    # and use a high base score regardless of context.
+    _add("GENDER", "gender_recognizer", [
+        ("gender_binary", r"\b(?:male|female)\b", 0.35),
+        ("gender_extended", (
+            r"\b(?:non[\s\-]?binary|nonbinary|"
+            r"trans(?:gender)?(?:\s+(?:male|female|man|woman))?|"
+            r"trans(?:man|woman|masc|femme)|"
+            r"gender[\s\-](?:non[\s\-]?conforming|fluid|queer)|"
+            r"intersex|genderqueer|agender|bigender)\b"
+        ), 0.85),
+    ], context=["patient", "year", "old", "sex", "gender", "history",
+                "race", "ethnicity", "complaint", "demographics",
+                "presents", "presented", "admitted"])
 
     # --- Race / Ethnicity (bare inline, no label prefix) ---
     # "nonhispanic white female", "African American", "Hispanic" etc. as they

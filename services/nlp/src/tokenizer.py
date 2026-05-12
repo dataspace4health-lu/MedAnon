@@ -24,6 +24,7 @@ from recognizers import _get_analyzer
 _GLOBAL_TOKEN_STATE: dict = {"next": {}, "map": {}, "reverse": {}}
 _GLOBAL_TOKEN_LOCK = threading.Lock()
 _TOKEN_STATE_MAX_ENTRIES = 100_000
+_token_state_overflow_warned = False
 
 # ---------------------------------------------------------------------------
 # Entity detection cache
@@ -47,16 +48,25 @@ _DATE_FP_RE = re.compile(
     re.IGNORECASE,
 )
 
+# ---------------------------------------------------------------------------
+# L2 cache (Redis) — optional, set by main.py at startup via set_l2_cache().
+# ``None`` disables L2 (L1 lru_cache still applies). All access is best-effort:
+# Redis errors are logged inside cache.py and degrade silently to L1-only.
+# ---------------------------------------------------------------------------
 
-@functools.lru_cache(maxsize=_DETECTION_CACHE_MAX)
-def _detect_entities_cached(
+_l2_cache = None  # type: ignore[var-annotated]
+
+
+def set_l2_cache(cache) -> None:
+    """Install or remove the optional Redis L2 cache backend."""
+    global _l2_cache
+    _l2_cache = cache
+
+
+def _detect_entities_uncached(
     text: str, entities: tuple, threshold: float, language: str
 ) -> tuple:
-    """Run Presidio entity detection, caching results by text content.
-
-    Returns a tuple of ``(start, end, entity_type)`` tuples sorted descending
-    by start position, ready for right-to-left span replacement.
-    """
+    """Run Presidio detection without any caching layer (compute path)."""
     analyzer = _get_analyzer()
     presidio_results = analyzer.analyze(
         text=text, entities=list(entities), language=language
@@ -73,42 +83,95 @@ def _detect_entities_cached(
     ))
 
 
+@functools.lru_cache(maxsize=_DETECTION_CACHE_MAX)
+def _detect_entities_cached(
+    text: str, entities: tuple, threshold: float, language: str
+) -> tuple:
+    """L1+L2 cached entity detection.
+
+    Lookup order:
+      1. functools.lru_cache (this decorator)              — RAM, ~µs
+      2. Redis L2 cache (optional, set via set_l2_cache)   — network, ~ms
+      3. Presidio + spaCy compute path                     — CPU, ~10-100 ms
+
+    On L2 hit we still populate L1 implicitly via the lru_cache return path.
+    On compute, both layers are written.
+
+    Returns a tuple of ``(start, end, entity_type)`` tuples sorted descending
+    by start position, ready for right-to-left span replacement.
+    """
+    # L2 lookup before paying the Presidio cost
+    if _l2_cache is not None:
+        l2_value = _l2_cache.get(text, entities, threshold, language)
+        if l2_value is not None:
+            return l2_value
+
+    # Compute and write-through to L2
+    result = _detect_entities_uncached(text, entities, threshold, language)
+    if _l2_cache is not None:
+        _l2_cache.set(text, entities, threshold, language, result)
+    return result
+
+
 def reset_detection_cache() -> None:
-    """Clear the detection cache. Useful between test runs."""
+    """Clear the L1 detection cache. Useful between test runs.
+
+    Does NOT clear the Redis L2 cache — call ``redis-cli FLUSHDB`` or wait
+    for TTL expiry if a full reset is required.
+    """
     _detect_entities_cached.cache_clear()
 
 
 def _detect_entities(text: str, entities: tuple, threshold: float, language: str) -> tuple:
-    """Run entity detection, bypassing the cache for very long texts.
+    """Run entity detection, bypassing the L1 LRU for very long texts.
 
     Long texts (e.g. FHIR Narrative divs) would each occupy a cache slot that
     could otherwise hold thousands of short strings, degrading cache hit-rate
     and inflating memory usage. Texts exceeding ``_DETECTION_CACHE_MAX_TEXT_LEN``
-    are detected directly without caching.
+    skip L1 but still consult the L2 cache (if enabled), since long narratives
+    repeat exactly across patients in many real-world datasets.
     """
     if len(text) > _DETECTION_CACHE_MAX_TEXT_LEN:
-        return _detect_entities_cached.__wrapped__(text, entities, threshold, language)
+        if _l2_cache is not None:
+            l2_value = _l2_cache.get(text, entities, threshold, language)
+            if l2_value is not None:
+                return l2_value
+        result = _detect_entities_uncached(text, entities, threshold, language)
+        if _l2_cache is not None:
+            _l2_cache.set(text, entities, threshold, language, result)
+        return result
     return _detect_entities_cached(text, entities, threshold, language)
 
 
 def reset_global_token_state() -> None:
     """Clear the global NLP token state. Call between batch runs to prevent unbounded growth."""
+    global _token_state_overflow_warned
     with _GLOBAL_TOKEN_LOCK:
         _GLOBAL_TOKEN_STATE["next"].clear()
         _GLOBAL_TOKEN_STATE["map"].clear()
         _GLOBAL_TOKEN_STATE["reverse"].clear()
+        _token_state_overflow_warned = False
 
 
 def _evict_if_needed(token_state: dict, limit: int = _TOKEN_STATE_MAX_ENTRIES) -> None:
-    """Drop the oldest 25% of entries when the map exceeds *limit*."""
+    """Log a one-time warning when the token map exceeds *limit*; never evict.
+
+    Evicting mid-job corrupts the reverse mapping for evicted values —
+    de-tokenization breaks and re-encountered values get new token numbers,
+    violating surrogate consistency.  Callers should reset token state
+    between jobs with reset_global_token_state() instead.
+    """
     if len(token_state["map"]) <= limit:
         return
-    evict_count = len(token_state["map"]) // 4
-    keys_to_drop = list(token_state["map"].keys())[:evict_count]
-    for key in keys_to_drop:
-        token = token_state["map"].pop(key, None)
-        if token:
-            token_state["reverse"].pop(token, None)
+    global _token_state_overflow_warned
+    if not _token_state_overflow_warned:
+        _token_state_overflow_warned = True
+        import logging as _logging
+        _logging.getLogger("nlp.tokenizer").warning(
+            "token_state map exceeded limit=%d entries — no mid-run eviction "
+            "to preserve surrogate consistency. Call reset_global_token_state() "
+            "between jobs to reclaim memory.", limit,
+        )
 
 
 def _tokenize(value: str, entity_type: str, token_state: dict, lock=None) -> str:

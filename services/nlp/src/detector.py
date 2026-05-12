@@ -18,6 +18,7 @@ from tokenizer import (
     _tokenize,
     reset_detection_cache,
     reset_global_token_state,
+    set_l2_cache,
 )
 
 

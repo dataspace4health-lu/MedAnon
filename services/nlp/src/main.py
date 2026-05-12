@@ -127,9 +127,18 @@ def _verify_detector_import():
     A successful import alone does not confirm the spaCy model is loaded and
     functional.  Running a real detection call here surfaces broken model files
     before the service starts accepting traffic, so health checks are reliable.
+
+    Also installs the optional Redis L2 cache (``NLP_REDIS_URL`` /
+    ``MEDANON_REDIS_URL``). When enabled, detection results survive restarts
+    and are shared across replicas, eliminating the cold-cache cost on deploy.
     """
     try:
-        from detector import _detect_entities_cached, _resolve_entities
+        from cache import init_l2_cache
+        from detector import _detect_entities_cached, _resolve_entities, set_l2_cache
+
+        # Wire L2 cache before warm-up so the first detect call also populates Redis.
+        set_l2_cache(init_l2_cache())
+
         entities = tuple(_resolve_entities("healthcare"))
         # Minimal real detection — exercises the full Presidio + spaCy stack.
         _detect_entities_cached("John Smith DOB 1980-01-01", entities, 0.4, "en")
@@ -145,6 +154,21 @@ def _verify_detector_import():
 def health():
     if not getattr(app.state, "detector_ok", False):
         return JSONResponse({"status": "error", "detail": "detector import failed"}, status_code=503)
+    return {"status": "ok"}
+
+
+@app.get("/ready")
+def ready():
+    """Readiness probe — 503 until Presidio/spaCy warm-up has completed.
+
+    Distinct from /health (process liveness) so a slow first-load (~30 s) does
+    not cause Kubernetes to kill the pod via a too-aggressive livenessProbe.
+    """
+    if not getattr(app.state, "detector_ok", False):
+        return JSONResponse(
+            {"status": "not_ready", "detail": "detector warm-up incomplete"},
+            status_code=503,
+        )
     return {"status": "ok"}
 
 
@@ -247,43 +271,79 @@ def detect_batch(req: BatchDetectRequest):
         _observe_latency("/v1/detect/batch", time.monotonic() - _t0)
         return {"results": results, "token_state": token_state, "detections": hits_list}
 
-    # Slow path: mix of detect_only and analyze_and_replace — token_state must
-    # flow sequentially to keep surrogate tokens consistent within the resource.
-    results: list[str] = []
-    for item in req.items:
+    # Slow path: mix of detect_only and analyze_and_replace.  Replacement
+    # items mutate ``token_state`` and therefore must run sequentially, but
+    # detect_only items have no shared mutable state and can be issued in
+    # parallel alongside the sequential pass.  We split, run them
+    # concurrently, then re-merge by original index.
+    results: list[str | None] = [None] * len(req.items)
+    if all_detections is not None:
+        det_results: list[list | None] = [None] * len(req.items)
+    detect_idx = [i for i, it in enumerate(req.items) if it.detect_only]
+    replace_idx = [i for i, it in enumerate(req.items) if not it.detect_only]
+
+    def _run_detect_only(i: int) -> tuple[int, list]:
+        item = req.items[i]
         entities = _resolve_entities(item.entities)
-        try:
-            if item.detect_only:
-                hits = _detect_entities(
-                    item.text, tuple(entities), item.threshold, item.language
-                )
-                results.append(item.text)
-                if all_detections is not None:
-                    all_detections.append(hits)
+        hits = _detect_entities(
+            item.text, tuple(entities), item.threshold, item.language
+        )
+        return i, list(hits) if not isinstance(hits, list) else hits
+
+    def _run_replace(i: int) -> tuple[int, str]:
+        item = req.items[i]
+        entities = _resolve_entities(item.entities)
+        scrubbed = _analyze_and_replace(
+            item.text,
+            entities=entities,
+            threshold=item.threshold,
+            language=item.language,
+            mode=item.mode,
+            token_state=token_state,
+            token_lock=None,
+        )
+        return i, scrubbed
+
+    try:
+        # Detect-only items in a thread pool — Presidio releases the GIL.
+        if detect_idx:
+            from concurrent.futures import ThreadPoolExecutor
+
+            workers = min(
+                len(detect_idx), int(os.environ.get("NLP_BATCH_THREADS", "4"))
+            )
+            if workers > 1:
+                with ThreadPoolExecutor(max_workers=workers) as pool:
+                    for i, hits in pool.map(_run_detect_only, detect_idx):
+                        results[i] = req.items[i].text
+                        if all_detections is not None:
+                            det_results[i] = hits
             else:
-                scrubbed = _analyze_and_replace(
-                    item.text,
-                    entities=entities,
-                    threshold=item.threshold,
-                    language=item.language,
-                    mode=item.mode,
-                    token_state=token_state,
-                    token_lock=None,
-                )
-                results.append(scrubbed)
-                if all_detections is not None:
-                    all_detections.append([])
-        except RuntimeError as exc:
-            logger.error("presidio_not_ready: %s", exc, exc_info=False)
-            app.state.detector_ok = False  # reflect degraded state in /health
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
-        except Exception as exc:
-            logger.error("detect_batch_error: %s", type(exc).__name__, exc_info=False)
-            raise HTTPException(status_code=500, detail="NLP detection error") from exc
+                for i in detect_idx:
+                    _, hits = _run_detect_only(i)
+                    results[i] = req.items[i].text
+                    if all_detections is not None:
+                        det_results[i] = hits
+
+        # Replacement items sequentially — token_state is shared mutable state.
+        for i in replace_idx:
+            _, scrubbed = _run_replace(i)
+            results[i] = scrubbed
+            if all_detections is not None:
+                det_results[i] = []
+    except RuntimeError as exc:
+        logger.error("presidio_not_ready: %s", exc, exc_info=False)
+        app.state.detector_ok = False  # reflect degraded state in /health
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("detect_batch_error: %s", type(exc).__name__, exc_info=False)
+        raise HTTPException(status_code=500, detail="NLP detection error") from exc
 
     _inc_request("/v1/detect/batch", 200)
     _observe_latency("/v1/detect/batch", time.monotonic() - _t0)
     response = {"results": results, "token_state": token_state}
     if all_detections is not None:
-        response["detections"] = all_detections
+        response["detections"] = det_results
     return response
