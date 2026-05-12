@@ -12,11 +12,18 @@ spec:
     - Ingress
     - Egress
   ingress:
-    # Allow traffic from within the same namespace (ingress controller + other pods)
+    # Allow traffic from within the same namespace (other pods)
     - from:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: {{ .Release.Namespace }}
+    {{- range .Values.networkPolicy.additionalIngressNamespaces }}
+    # Allow traffic from additional namespaces (e.g. ingress controller in kube-system)
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ . }}
+    {{- end }}
   egress:
     # Allow DNS resolution (required for proxy_pass to resolve service names)
     - ports:

@@ -23,9 +23,18 @@ data:
             proxy_set_header Host $host;
             proxy_set_header X-Real-IP $remote_addr;
             proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            {{- if .Values.injectApiKey }}
+            proxy_set_header X-API-Key {{ .Values.injectApiKey | quote }};
+            {{- end }}
             proxy_buffering off;
             proxy_cache off;
             proxy_read_timeout 120s;
+            # Tolerate transient pod restarts/rollouts — retry on connect refused
+            # so a single anonymizer pod cycling does not surface as 502.
+            proxy_connect_timeout 5s;
+            proxy_next_upstream error timeout http_502 http_503 http_504;
+            proxy_next_upstream_tries 3;
+            proxy_next_upstream_timeout 15s;
         }
 
         # Proxy FHIR calls to HAPI server (identified data source)

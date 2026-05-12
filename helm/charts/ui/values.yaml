@@ -24,9 +24,15 @@ imagePullPolicy: IfNotPresent
 imagePullSecrets: []
 
 image: medanon-ui
-# Pin to a specific release tag in production — never use "latest" in production.
-tag: latest
+# Pinned to chart appVersion. Override at install time with `--set tag=<version>`.
+# Never use "latest" in production.
+tag: "2025.2.0"
 replicas: 1
+
+# When set, nginx injects this value as X-API-Key on every /api/ proxy request.
+# Removes the need for users to configure the key in the browser Settings.
+# Leave empty to require the browser to supply the key (default).
+injectApiKey: ""
 port: 8501
 
 # ─── Backend service names (for nginx proxy_pass) ──────────────────────────
@@ -50,3 +56,8 @@ resources:
   limits:
     memory: "128Mi"
     cpu: "200m"
+
+# Network policy configuration
+networkPolicy:
+  # Additional namespaces allowed to send ingress traffic (e.g. ingress controller namespace)
+  additionalIngressNamespaces: []
