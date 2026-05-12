@@ -15,8 +15,8 @@ import {
   TableRow,
   TableCell,
 } from '@/components/ui/table';
-import { Plus, Trash2 } from 'lucide-react';
-import { type Action, type LocalRule, VALID_ACTIONS, newRule } from './configConstants';
+import { Plus, Trash2, Lock, Shuffle } from 'lucide-react';
+import { type Action, type LocalRule, VALID_ACTIONS, DETERMINISTIC_ACTIONS, newRule } from './configConstants';
 import { ParamsEditor } from './ParamsEditor';
 
 // ---------------------------------------------------------------------------
@@ -78,23 +78,47 @@ export function RulesTable({
                     />
                   </TableCell>
                   <TableCell className="py-1.5">
-                    <Select
-                      value={rule.action}
-                      onValueChange={(v) =>
-                        update(rule._id, { action: v as Action, params: {} })
-                      }
-                    >
-                      <SelectTrigger className="h-7 text-xs">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {VALID_ACTIONS.map((a) => (
-                          <SelectItem key={a} value={a} className="text-xs">
-                            {a}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    <div className="flex items-center gap-1">
+                      <Select
+                        value={rule.action}
+                        onValueChange={(v) =>
+                          update(rule._id, { action: v as Action, params: {} })
+                        }
+                      >
+                        <SelectTrigger className="h-7 text-xs flex-1">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <div className="px-2 py-1 text-[10px] text-muted-foreground border-b mb-1">
+                            <Lock className="size-2.5 inline mr-1 text-emerald-500" />
+                            deterministic &nbsp;·&nbsp;
+                            <Shuffle className="size-2.5 inline mr-1 text-amber-500" />
+                            non-deterministic
+                          </div>
+                          {VALID_ACTIONS.map((a) => (
+                            <SelectItem key={a} value={a} className="text-xs">
+                              <span className="flex items-center gap-1.5">
+                                {DETERMINISTIC_ACTIONS.has(a) ? (
+                                  <Lock className="size-2.5 shrink-0 text-emerald-500" />
+                                ) : (
+                                  <Shuffle className="size-2.5 shrink-0 text-amber-500" />
+                                )}
+                                {a}
+                              </span>
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      {!DETERMINISTIC_ACTIONS.has(rule.action) && (
+                        <span
+                          title={`"${rule.action}" produces different output each run — referential integrity across resources may be broken`}
+                          className="shrink-0 flex items-center gap-0.5 rounded border border-amber-300 bg-amber-50 dark:bg-amber-900/20 dark:border-amber-700 px-1 py-px text-[10px] font-medium text-amber-700 dark:text-amber-400"
+                        >
+                          <Shuffle className="size-2.5" />
+                          non-det
+                        </span>
+                      )}
+                    </div>
                   </TableCell>
                   <TableCell className="py-1.5">
                     <ParamsEditor

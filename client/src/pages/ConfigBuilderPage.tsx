@@ -43,6 +43,7 @@ import {
 import { RulesTable } from './config-builder/RulesTable';
 import { ImportPanel } from './config-builder/ImportPanel';
 import { AiGeneratePanel } from './config-builder/AiGeneratePanel';
+import { ResourceExplorerPanel } from './config-builder/ResourceExplorerPanel';
 
 // ---------------------------------------------------------------------------
 // ConfigBuilderPage
@@ -256,6 +257,10 @@ export default function ConfigBuilderPage() {
           </p>
           <ImportPanel onImport={(imported) => setRules((prev) => [...prev, ...imported])} />
           <AiGeneratePanel onImport={(imported) => setRules((prev) => [...prev, ...imported])} />
+          <ResourceExplorerPanel
+            onAddRule={(rule) => setRules((prev) => [...prev, rule])}
+            rules={rules}
+          />
         </div>
         <RulesTable rules={rules} onChange={setRules} />
       </div>

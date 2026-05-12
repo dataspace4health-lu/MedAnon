@@ -14,6 +14,7 @@ export const VALID_ACTIONS = [
   'generalize',
   'scrub_text',
   'nlp_scrub',
+  'nlp_detect_act',
   'gpas_pseudonymize',
 ] as const;
 
@@ -30,6 +31,20 @@ export const SCRUB_MODES = ['text', 'html_tokenize'] as const;
 export const SCRUB_PATTERNS = ['all', 'phone', 'email', 'date'] as const;
 export const NLP_MODES = ['tokenize', 'redact'] as const;
 
+// Actions that always produce the same output for the same input.
+// Non-deterministic actions (perturb, substitute, encrypt) break referential
+// integrity across FHIR resources — the same Patient.id would hash differently
+// each run, making cross-resource de-identification inconsistent.
+export const DETERMINISTIC_ACTIONS = new Set<Action>([
+  'redact',
+  'cryptohash',
+  'gpas_pseudonymize',
+  'generalize',
+  'scrub_text',
+  'nlp_scrub',
+  'nlp_detect_act',
+]);
+
 export const ACTION_DESCRIPTIONS: Record<Action, string> = {
   redact: 'Replace the matched value with a fixed placeholder (e.g. [REDACTED]).',
   cryptohash: 'One-way HMAC-SHA3-256 hash \u2014 irreversible but deterministic for linkage.',
@@ -40,6 +55,7 @@ export const ACTION_DESCRIPTIONS: Record<Action, string> = {
   generalize: 'Reduce precision (e.g. date to year-only, zip to 3-digit prefix).',
   scrub_text: 'Regex-based text scrubbing for phones, emails, dates, and other patterns.',
   nlp_scrub: 'NLP-based PHI scrubbing (Presidio) — replaces names, locations, etc. with tokens.',
+  nlp_detect_act: 'Entity-specific conditional NLP — detects PHI entities and applies targeted per-entity actions.',
   gpas_pseudonymize: 'Replace the value with a gPAS-generated pseudonym (requires gPAS server).',
 };
 

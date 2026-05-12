@@ -16,6 +16,7 @@ const ConfigBuilderPage = lazy(() => import('@/pages/ConfigBuilderPage'));
 const BulkDeidentifyPage = lazy(() => import('@/pages/BulkDeidentifyPage'));
 const TargetBrowserPage = lazy(() => import('@/pages/TargetBrowserPage'));
 const ProcessingHistoryPage = lazy(() => import('@/pages/ProcessingHistoryPage'));
+const MonitoringPage = lazy(() => import('@/pages/MonitoringPage'));
 
 function PageLoader() {
   return (
@@ -45,6 +46,7 @@ export default function App() {
           <Route path="bulk-deidentify" element={<BulkDeidentifyPage />} />
           <Route path="target-browser" element={<TargetBrowserPage />} />
           <Route path="history" element={<ProcessingHistoryPage />} />
+          <Route path="monitoring" element={<MonitoringPage />} />
         </Route>
       </Routes>
     </Suspense>

@@ -105,6 +105,22 @@ export interface ResourceTypeCount {
   count: number;
 }
 
+// Module-level cache for the type list (separate from counts cache).
+let _typesCache: string[] | null = null;
+
+/**
+ * Return all clinical resource types supported by the FHIR server.
+ *
+ * Reads the CapabilityStatement once (cached for the browser session) —
+ * a single request instead of one probe per type.
+ */
+export async function listResourceTypes(): Promise<string[]> {
+  if (_typesCache) return _typesCache;
+  const types = await discoverResourceTypes();
+  _typesCache = types;
+  return types;
+}
+
 // Module-level cache — survives SPA navigation, lives for the browser session.
 // Re-fetches after TTL_MS so counts stay reasonably fresh without hammering HAPI.
 const _COUNTS_TTL_MS = 5 * 60 * 1000; // 5 minutes
