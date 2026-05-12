@@ -25,7 +25,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel
 
-from api.deps import _get_url_from_request_or_env, _validate_server_url
+from api.deps import _get_url_from_request_or_env, _validate_server_url, limiter
 from api.schemas.jobs import (
     BatchPatientExportRequest,
     BulkExportJobRequest,
@@ -48,6 +48,10 @@ router = APIRouter()
 logger = logging.getLogger("medanon")
 
 _service = JobService()
+
+# Rate limits — overridable via env. Defaults are intentionally conservative
+# because each submission can spawn a long-running, resource-heavy job.
+_RATE_JOBS_SUBMIT = os.environ.get("MEDANON_RATE_JOBS_SUBMIT", "30/minute")
 
 
 async def _resolve_optional_target_url(user_url: str | None) -> str | None:
@@ -112,6 +116,7 @@ def _check_idempotency(request: Request, scope: str, body_model: BaseModel):
 
 
 @router.post("/jobs/bulk-export", status_code=202)
+@limiter.limit(_RATE_JOBS_SUBMIT)
 async def submit_bulk_export(req: BulkExportJobRequest, request: Request):
     """Queue a bulk-export + de-identify job. Returns 202 immediately.
 
@@ -156,6 +161,7 @@ async def submit_bulk_export(req: BulkExportJobRequest, request: Request):
 
 
 @router.post("/jobs/cohort", status_code=202)
+@limiter.limit(_RATE_JOBS_SUBMIT)
 async def submit_cohort(req: CohortJobRequest, request: Request):
     """Queue a cohort export + de-identify job. Returns 202 immediately."""
     idem_key, body_hash, cached = _check_idempotency(request, "/v1/jobs/cohort", req)
@@ -193,6 +199,7 @@ async def submit_cohort(req: CohortJobRequest, request: Request):
 
 
 @router.post("/jobs/patient-export", status_code=202)
+@limiter.limit(_RATE_JOBS_SUBMIT)
 async def submit_patient_export(req: PatientExportJobRequest, request: Request):
     """Queue a patient $everything export + de-identify job. Returns 202 immediately."""
     idem_key, body_hash, cached = _check_idempotency(request, "/v1/jobs/patient-export", req)
@@ -229,6 +236,7 @@ async def submit_patient_export(req: PatientExportJobRequest, request: Request):
 
 
 @router.post("/jobs/batch-patient-export", status_code=202)
+@limiter.limit(_RATE_JOBS_SUBMIT)
 async def submit_batch_patient_export(req: BatchPatientExportRequest, request: Request):
     """Queue a batch patient $everything export + de-identify job. Returns 202 immediately.
 
@@ -269,6 +277,7 @@ async def submit_batch_patient_export(req: BatchPatientExportRequest, request: R
 
 
 @router.post("/jobs/bulk-import", status_code=202)
+@limiter.limit(_RATE_JOBS_SUBMIT)
 async def submit_bulk_import(req: BulkImportJobRequest, request: Request):
     """Queue a bulk-import job that uploads a completed NDJSON to a target FHIR server.
 

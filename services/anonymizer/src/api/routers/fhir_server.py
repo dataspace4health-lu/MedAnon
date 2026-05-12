@@ -9,6 +9,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 import pipeline.config as config
+from utils.tasks import retain_task
 
 from api.deps import (
     get_settings_dep,
@@ -121,7 +122,7 @@ async def process_from_server(
         if not disconnected:
             yield stream_trailer(count, score) + "\n"
         if score is not None:
-            asyncio.create_task(persist_run(
+            retain_task(persist_run(
                 endpoint="/v1/process/from-server",
                 config_profile=profile,
                 resource_count=count,
@@ -191,7 +192,7 @@ async def process_everything(
         if not disconnected:
             yield stream_trailer(count, score) + "\n"
         if score is not None:
-            asyncio.create_task(persist_run(
+            retain_task(persist_run(
                 endpoint="/v1/process/everything",
                 config_profile=profile,
                 resource_count=count,
@@ -258,7 +259,7 @@ async def process_and_upload(
         logger.error("process_and_upload error: %s", type(exc).__name__, exc_info=False)
         raise HTTPException(status_code=500, detail="De-identification error") from exc
     if _is_scoring_enabled():
-        asyncio.create_task(persist_run(
+        retain_task(persist_run(
             endpoint="/v1/process/and-upload",
             config_profile=profile,
             resource_count=result.get("uploaded", 0) + result.get("errors", 0),
@@ -353,7 +354,7 @@ async def process_round_trip(
         if not disconnected:
             yield stream_trailer(count, score) + "\n"
         if score is not None:
-            asyncio.create_task(persist_run(
+            retain_task(persist_run(
                 endpoint="/v1/process/round-trip",
                 config_profile=profile,
                 resource_count=count,
@@ -427,7 +428,7 @@ async def process_bulk_export(
         if not disconnected:
             yield stream_trailer(count, score) + "\n"
         if score is not None:
-            asyncio.create_task(persist_run(
+            retain_task(persist_run(
                 endpoint="/v1/process/bulk-export",
                 config_profile=profile,
                 resource_count=count,
@@ -498,7 +499,7 @@ async def process_cohort(
         if not disconnected:
             yield stream_trailer(count, score) + "\n"
         if score is not None:
-            asyncio.create_task(persist_run(
+            retain_task(persist_run(
                 endpoint="/v1/process/cohort",
                 config_profile=profile,
                 resource_count=count,

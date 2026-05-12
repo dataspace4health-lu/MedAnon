@@ -62,3 +62,18 @@ class JobNotComplete(Exception):
 
 class JobResultMissing(Exception):
     """Raised when the result file has been cleaned up."""
+
+
+class JobQueueFull(Exception):
+    """Raised when the pending-job queue exceeds its configured cap.
+
+    Carries the observed pending count and the configured cap so the API
+    layer can include them in the 503 response body and ``Retry-After`` hint.
+    """
+
+    def __init__(self, pending: int, cap: int):
+        super().__init__(
+            f"Job queue full: {pending} pending jobs (cap {cap})."
+        )
+        self.pending = pending
+        self.cap = cap

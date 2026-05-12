@@ -48,8 +48,6 @@ def cache_canary_status(request: Request):
         return {"checked": False, "reason": "Redis not configured"}
 
     try:
-        import redis as _redis
-
         from integrations.gpas.canary import CANARY_ORIGINAL, CANARY_KEY_PREFIX
         from integrations.gpas.transport import _resolve_gpas_base, _call_gpas_operation
         from integrations.gpas.protocol import (
@@ -73,9 +71,11 @@ def cache_canary_status(request: Request):
         mapping = _parse_pseudonymize_response(resp_json)
         current = mapping.get(CANARY_ORIGINAL)
 
-        client = _redis.StrictRedis.from_url(
-            redis_url, decode_responses=True, socket_timeout=5,
-        )
+        from utils.redis_pool import get_redis
+
+        client = get_redis(redis_url, decode_responses=True)
+        if client is None:
+            return {"checked": False, "reason": "Redis client unavailable"}
         stored = client.get(CANARY_KEY_PREFIX + domain)
 
         coherent = stored is not None and stored == current

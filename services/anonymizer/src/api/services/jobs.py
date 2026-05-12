@@ -2,10 +2,12 @@
 
 import json
 import logging
+import os
 
 from domain.jobs import (  # noqa: F401 — re-exported for routers
     JobNotComplete,
     JobNotFound,
+    JobQueueFull,
     JobResultMissing,
     JobStoreUnavailable,
 )
@@ -22,6 +24,44 @@ class JobService:
         if _store_mod._job_store is None:
             raise JobStoreUnavailable("Job store not initialised")
         return _store_mod._job_store
+
+    # ------------------------------------------------------------------
+    # Backpressure (PR #3)
+    # ------------------------------------------------------------------
+
+    def _max_pending(self) -> int:
+        """Read MEDANON_MAX_PENDING_JOBS at call time.
+
+        Read on every call (not cached) so operators can change the cap
+        live via env-var update + SIGHUP-style restart without redeploy.
+        ``<= 0`` disables the cap entirely (useful for load tests).
+        """
+        try:
+            return int(os.environ.get("MEDANON_MAX_PENDING_JOBS", "200"))
+        except ValueError:
+            return 200
+
+    def _assert_capacity(self, store) -> None:
+        """Raise ``JobQueueFull`` when the pending-job count exceeds the cap.
+
+        We probe with ``limit=cap+1`` so the underlying store only fetches at
+        most one row beyond the threshold — avoids the O(n) scan that a full
+        list would cause when the queue is large.
+        """
+        cap = self._max_pending()
+        if cap <= 0:
+            return
+        # All three job stores expose the same ``list_jobs`` signature.
+        # Status filter uses the canonical lowercase string value.
+        try:
+            pending = store.list_jobs(status="pending", limit=cap + 1)
+        except Exception as exc:
+            # Fail open: never block submissions because the count probe
+            # itself failed. Log so the operator can investigate.
+            logger.warning("queue_capacity_probe_failed: %s", exc)
+            return
+        if len(pending) > cap:
+            raise JobQueueFull(pending=len(pending), cap=cap)
 
     def _job_to_dict(self, job) -> dict:
         checkpoint = job.checkpoint_data or {}
@@ -52,6 +92,7 @@ class JobService:
     def submit_bulk_export(self, server_url: str, params: dict) -> dict:
         """Create a bulk-export job. Returns the job dict."""
         store = self._get_store()
+        self._assert_capacity(store)
         job = store.create("bulk-export", {"server_url": server_url, **params})
         store.notify_new_job(job.id)
         return self._job_to_dict(job)
@@ -59,6 +100,7 @@ class JobService:
     def submit_cohort(self, server_url: str, params: dict) -> dict:
         """Create a cohort job. Returns the job dict."""
         store = self._get_store()
+        self._assert_capacity(store)
         job = store.create("cohort", {"server_url": server_url, **params})
         store.notify_new_job(job.id)
         return self._job_to_dict(job)
@@ -66,6 +108,7 @@ class JobService:
     def submit_patient_export(self, server_url: str, params: dict) -> dict:
         """Create a patient $everything export job. Returns the job dict."""
         store = self._get_store()
+        self._assert_capacity(store)
         job = store.create("patient-export", {"server_url": server_url, **params})
         store.notify_new_job(job.id)
         return self._job_to_dict(job)
@@ -73,6 +116,7 @@ class JobService:
     def submit_batch_patient_export(self, server_url: str, params: dict) -> dict:
         """Create a batch patient $everything export job. Returns the job dict."""
         store = self._get_store()
+        self._assert_capacity(store)
         job = store.create("batch-patient-export", {"server_url": server_url, **params})
         store.notify_new_job(job.id)
         return self._job_to_dict(job)
@@ -217,6 +261,7 @@ class JobService:
         Raises JobStoreUnavailable if the job store is not initialised.
         """
         store = self._get_store()
+        self._assert_capacity(store)
         job = store.create("bulk-import", params)
         store.notify_new_job(job.id)
         return self._job_to_dict(job)

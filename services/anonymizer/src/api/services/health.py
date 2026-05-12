@@ -103,11 +103,13 @@ class HealthCheckService:
 
     def _probe_redis(self, url: str, timeout: float) -> str:
         try:
-            import redis as _redis
+            from utils.redis_pool import get_redis
 
-            client = _redis.StrictRedis.from_url(
-                url, socket_connect_timeout=timeout, socket_timeout=timeout
-            )
+            # Reuse the process-wide pool instead of constructing a new client
+            # on every /health probe (k8s hits this every 10 s).
+            client = get_redis(url, decode_responses=True)
+            if client is None:
+                return "error"
             client.ping()
             return "ok"
         except Exception as exc:

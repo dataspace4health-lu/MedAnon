@@ -43,13 +43,20 @@ def init_api_key_store(store) -> None:
     """Wire in the PostgresApiKeyStore.  Called once from _startup()."""
     global _api_key_store
     _api_key_store = store
+    log.info(
+        "api_key_store wired \u2014 X-API-Key required on protected endpoints "
+        "(per-client keys looked up from medanon.api_keys)."
+    )
 
 
 if not _API_KEY:
     log.warning(
-        "MEDANON_API_KEY is not set — running in open mode. "
-        "All callers are granted admin privileges. "
-        "This is only safe for local development. Set MEDANON_API_KEY in production."
+        "MEDANON_API_KEY env-var is not set. "
+        "If MEDANON_APP_DB_URL is configured, per-client X-API-Key auth via the "
+        "medanon.api_keys table is still required \u2014 callers without a valid "
+        "key will receive 401 Unauthorized. "
+        "With neither MEDANON_API_KEY nor a DB-backed key store the service "
+        "runs in OPEN MODE (all callers granted admin) \u2014 only safe for local dev."
     )
 
 OPEN_PATHS = frozenset(
@@ -329,12 +336,21 @@ def log_audit(request: Request, status_code: int, auth: Optional[AuthContext] = 
     al = _get_audit_logger()
     if al is None:
         return
+    # Resolve client IP for HIPAA/GDPR audit requirements.
+    # Prefer X-Real-IP set by the trusted UI nginx (cannot be spoofed by client).
+    # Fall back to the ASGI direct-connection IP. X-Forwarded-For is intentionally
+    # ignored because its first element is forgeable by the client.
+    client_ip = request.headers.get("x-real-ip", "").strip()
+    if not client_ip:
+        client = getattr(request, "client", None)
+        client_ip = client.host if client and client.host else "-"
     entry = {
         "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "method": request.method,
         "path": request.url.path,
         "status": status_code,
         "request_id": request.headers.get("X-Request-ID", "-"),
+        "client_ip": client_ip,
         "subject": auth.subject if auth else "anonymous",
         "auth_method": auth.auth_method if auth else "none",
     }

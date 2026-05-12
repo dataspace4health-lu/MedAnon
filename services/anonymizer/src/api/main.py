@@ -73,7 +73,31 @@ _ALLOWED_ORIGINS = [
 # App setup
 # ---------------------------------------------------------------------------
 
-app = FastAPI(title="MedAnon", version="2.0.0")
+from contextlib import asynccontextmanager  # noqa: E402
+
+
+@asynccontextmanager
+async def lifespan(app: "FastAPI"):
+    """Replaces deprecated @app.on_event("startup"|"shutdown") (F.17).
+
+    The pre-yield block performs all startup work (formerly ``_startup``);
+    the post-yield block performs cleanup (formerly ``_shutdown``).
+    """
+    await _startup()
+    try:
+        yield
+    finally:
+        await _shutdown()
+
+
+app = FastAPI(title="MedAnon", version="2.0.0", lifespan=lifespan)
+
+# Optional OpenTelemetry tracing (no-op unless MEDANON_OTEL_ENABLED=true).
+# Must run after `app` is created and before any route is registered so
+# FastAPIInstrumentor can wrap the underlying ASGI app.
+from utils.tracing import setup_tracing  # noqa: E402
+
+setup_tracing(app)
 
 # Whether the worker loop is healthy; checked by /ready.
 _worker_healthy = True
@@ -115,7 +139,6 @@ async def _supervised_worker_loop(worker_module) -> None:
             backoff = min(backoff * 2, max_backoff)
 
 
-@app.on_event("startup")
 async def _startup() -> None:
     # Publish build metadata so dashboards can correlate behaviour with
     # deployments.  Labels are never high-cardinality (one tuple per process).
@@ -160,6 +183,31 @@ async def _startup() -> None:
     await setup_redis_cache(redis_url)
     await check_gpas_canary(redis_url)
 
+    # Validate Redis durability config — AOF must be enabled in production
+    # so that an unexpected restart does not lose queued jobs (RDB snapshots
+    # alone may be up to 60 s stale).  Soft warning by default; set
+    # MEDANON_REQUIRE_REDIS_AOF=true to fail startup when AOF is off.
+    if redis_url:
+        try:
+            from utils.redis_pool import get_redis
+
+            _r = get_redis(redis_url, decode_responses=True)
+            cfg = _r.config_get("appendonly") or {}
+            if str(cfg.get("appendonly", "")).lower() != "yes":
+                msg = (
+                    "redis_aof_disabled — durability at risk; set "
+                    "appendonly=yes in redis.conf or MEDANON_REQUIRE_REDIS_AOF=false to silence"
+                )
+                if os.environ.get("MEDANON_REQUIRE_REDIS_AOF", "false").lower() == "true":
+                    raise RuntimeError(msg)
+                logger.warning(msg)
+            else:
+                logger.info("redis_aof_enabled")
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            logger.warning("redis_aof_check_skipped: %s", exc)
+
     # Idempotency-Key store: Redis when available (cross-replica), in-memory
     # fallback otherwise (single-replica deployments only).
     try:
@@ -172,8 +220,8 @@ async def _startup() -> None:
         idem_client = None
         if redis_url:
             try:
-                import redis as _redis
-                idem_client = _redis.from_url(redis_url, decode_responses=True)
+                from utils.redis_pool import get_redis
+                idem_client = get_redis(redis_url, decode_responses=True)
                 idem_client.ping()
             except Exception:
                 logger.warning("idempotency_redis_unavailable_falling_back_to_local")
@@ -196,6 +244,9 @@ async def _startup() -> None:
         from pipeline.jobs import worker as _worker
 
         job_store, pg_pool = await select_job_store(redis_url, app_db_url)
+        # C11 guard: refuse SQLite when MEDANON_REQUIRE_DURABLE_STORE=true.
+        from pipeline.jobs.store_factory import assert_durable_store_or_exit
+        assert_durable_store_or_exit(job_store, role="api")
         if pg_pool is not None:
             app.state.pg_pool = pg_pool
 
@@ -213,7 +264,8 @@ async def _startup() -> None:
             "MEDANON_WORKER_ENABLED", "false"
         ).strip().lower() in ("true", "1", "yes")
         if worker_enabled:
-            asyncio.create_task(_supervised_worker_loop(_worker))
+            from utils.tasks import retain_task
+            retain_task(_supervised_worker_loop(_worker), name="worker_loop")
             logger.info("job_worker started max_concurrent=%d", max_concurrent)
         else:
             logger.info("job_worker disabled (MEDANON_WORKER_ENABLED=false)")
@@ -324,10 +376,10 @@ async def _startup() -> None:
             except Exception as exc:
                 logger.debug("nlp_prewarm skipped: %s", exc)
 
-        asyncio.create_task(_prewarm_nlp())
+        from utils.tasks import retain_task
+        retain_task(_prewarm_nlp(), name="nlp_prewarm")
 
 
-@app.on_event("shutdown")
 async def _shutdown() -> None:
     staging_store = getattr(app.state, "staging_store", None)
     if staging_store is not None:
@@ -351,6 +403,27 @@ async def _shutdown() -> None:
 app.state.limiter = limiter
 if RateLimitExceeded is not None:
     app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+
+# ---------------------------------------------------------------------------
+# Backpressure: 503 + Retry-After when the job queue is saturated.
+# Keeps the routers free of try/except boilerplate around every submit call.
+# ---------------------------------------------------------------------------
+from domain.jobs import JobQueueFull as _JobQueueFull  # noqa: E402
+
+
+@app.exception_handler(_JobQueueFull)
+async def _job_queue_full_handler(request: Request, exc: _JobQueueFull):
+    retry_after = os.environ.get("MEDANON_QUEUE_FULL_RETRY_AFTER", "60")
+    return JSONResponse(
+        status_code=503,
+        content={
+            "detail": str(exc),
+            "pending": exc.pending,
+            "cap": exc.cap,
+        },
+        headers={"Retry-After": retry_after},
+    )
 
 app.add_middleware(
     CORSMiddleware,
@@ -531,6 +604,12 @@ def readiness(request: Request):
 @app.get("/metrics")
 def metrics():
     """Prometheus metrics endpoint."""
+    try:
+        from pipeline.rule_matcher import sample_cache_metrics
+
+        sample_cache_metrics()
+    except Exception:
+        pass  # never fail a metrics scrape on observability code
     return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 

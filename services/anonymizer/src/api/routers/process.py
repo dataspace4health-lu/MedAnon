@@ -1,6 +1,5 @@
 """Core processing endpoints: /process, /process/ndjson, /process/raw, /process/batch."""
 
-import asyncio
 import logging
 import os
 import time
@@ -10,6 +9,7 @@ from fastapi.responses import Response, StreamingResponse
 
 import pipeline.config as config
 from pipeline.io_formats import parse_payload_bytes, serialize_payload
+from utils.tasks import retain_task
 
 from api.deps import (
     MAX_BODY_BYTES,
@@ -91,7 +91,7 @@ async def process(
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
 
     if _is_scoring_enabled():
-        asyncio.create_task(
+        retain_task(
             score_and_persist(result, "/v1/process", runtime_settings, t0)
         )
     if idem_key:
@@ -140,7 +140,7 @@ async def process_ndjson(
         if not disconnected:
             yield stream_trailer(count, score) + "\n"
         if score is not None:
-            asyncio.create_task(persist_run(
+            retain_task(persist_run(
                 endpoint="/v1/process/ndjson",
                 config_profile=profile,
                 resource_count=count,
@@ -198,7 +198,7 @@ async def process_raw(
         result = await _service.process_resource(payload, runtime_settings)
 
         if _is_scoring_enabled():
-            asyncio.create_task(
+            retain_task(
                 score_and_persist(result, "/v1/process/raw", runtime_settings, t0)
             )
 
@@ -289,7 +289,7 @@ async def process_batch(
         if not disconnected:
             yield stream_trailer(count, score) + "\n"
         if score is not None:
-            asyncio.create_task(persist_run(
+            retain_task(persist_run(
                 endpoint="/v1/process/batch",
                 config_profile=profile,
                 resource_count=count,
