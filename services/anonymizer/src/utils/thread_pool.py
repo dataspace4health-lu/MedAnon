@@ -31,15 +31,21 @@ from concurrent.futures import ThreadPoolExecutor
 _MAX_THREADS: int = int(os.environ.get("MEDANON_GLOBAL_MAX_THREADS", "64"))
 
 # Maximum pending tasks beyond the active workers before submit() blocks.
-# Default: 2× max_workers.  Under gPAS degradation, this caps how many chunk
-# payloads can accumulate in memory (each holds ~100–500 KB of FHIR data).
-_QUEUE_DEPTH: int = int(os.environ.get("MEDANON_POOL_QUEUE_DEPTH", str(_MAX_THREADS * 2)))
+# Default: 1× max_workers (was 2× — a deeper queue absorbed bursts but also
+# stockpiled requests during upstream degradation, then released them all
+# at once on recovery, causing thundering-herd spikes against gPAS/NLP).
+# A 1× queue keeps the in-flight + pending budget at 2× workers, which is
+# enough to smooth normal scheduling jitter without amplifying cascades.
+# Override via MEDANON_POOL_QUEUE_DEPTH if a deeper queue is desired.
+_QUEUE_DEPTH: int = int(os.environ.get("MEDANON_POOL_QUEUE_DEPTH", str(_MAX_THREADS)))
 
 # How long submit() waits for a semaphore slot before raising TimeoutError.
-# 60 s covers normal gPAS latency spikes; if the pool is still saturated after
-# that long an upstream service is effectively down and failing fast is safer
-# than holding the caller thread indefinitely.
-_SUBMIT_TIMEOUT_SEC: float = float(os.environ.get("MEDANON_POOL_SUBMIT_TIMEOUT", "60"))
+# Default 5 s gives upstream services a chance to drain a brief spike but
+# fails fast under sustained saturation — holding the caller for longer
+# (the previous 60 s default) just causes HTTP clients to time out and
+# retry, amplifying the load on a degraded upstream.  Override via
+# MEDANON_POOL_SUBMIT_TIMEOUT (legacy installs may want the older 60 s).
+_SUBMIT_TIMEOUT_SEC: float = float(os.environ.get("MEDANON_POOL_SUBMIT_TIMEOUT", "5"))
 
 _executor: "_BoundedExecutor | None" = None
 _executor_lock = threading.Lock()

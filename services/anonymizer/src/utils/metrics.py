@@ -114,6 +114,55 @@ CIRCUIT_BREAKER_TRIPS = Counter(
     ["name"],
 )
 
+# ── FHIRPath cache observability ─────────────────────────────────────────────
+
+# Compile / classification / where-plan / candidate-expansion caches in
+# ``pipeline/rule_matcher``.  Sampled on demand from ``cache_info()`` rather
+# than instrumented per-call (zero hot-path overhead).
+FHIRPATH_CACHE_HITS = Gauge(
+    "medanon_fhirpath_cache_hits",
+    "FHIRPath LRU cache hit count (sampled from functools.lru_cache.cache_info).",
+    ["cache"],
+)
+FHIRPATH_CACHE_MISSES = Gauge(
+    "medanon_fhirpath_cache_misses",
+    "FHIRPath LRU cache miss count.",
+    ["cache"],
+)
+FHIRPATH_CACHE_SIZE = Gauge(
+    "medanon_fhirpath_cache_size",
+    "FHIRPath LRU cache current entry count.",
+    ["cache"],
+)
+FHIRPATH_CACHE_MAXSIZE = Gauge(
+    "medanon_fhirpath_cache_maxsize",
+    "FHIRPath LRU cache configured maxsize.",
+    ["cache"],
+)
+
+# ── Outbound HTTP retries (proxy_request) ────────────────────────────────────
+
+# Counts retry attempts grouped by upstream service and outcome so dashboards
+# can flag flapping integrations long before the circuit breaker trips.
+PROXY_RETRIES = Counter(
+    "medanon_proxy_retries_total",
+    "Total HTTP retry attempts emitted by integrations/http_client.",
+    ["upstream", "reason"],  # reason: "http_5xx" | "http_429" | "connection"
+)
+
+# ── Per-upstream bulkheads (utils/bulkhead) ──────────────────────────────────
+
+BULKHEAD_ACQUIRED = Counter(
+    "medanon_bulkhead_acquired_total",
+    "Bulkhead slots successfully acquired per upstream.",
+    ["upstream"],
+)
+BULKHEAD_REJECTED = Counter(
+    "medanon_bulkhead_rejected_total",
+    "Bulkhead acquisition rejections (saturation) per upstream.",
+    ["upstream"],
+)
+
 # ── Build / version info ──────────────────────────────────────────────────────
 
 # Set once at startup with version + git_sha labels; value is always 1.

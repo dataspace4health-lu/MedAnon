@@ -128,11 +128,13 @@ def _get_redis():
     if not url:
         return None
     try:
-        import redis as _redis_mod
+        # Reuse the shared connection pool (utils.redis_pool) so the audit
+        # writer doesn't open its own pool of 50 sockets.
+        from utils.redis_pool import get_redis as _shared_get_redis
 
-        _redis_client = _redis_mod.Redis.from_url(
-            url, socket_timeout=2, decode_responses=True
-        )
+        _redis_client = _shared_get_redis(url, decode_responses=True)
+        if _redis_client is None:
+            return None
         _redis_client.ping()
         _log.info(
             "audit_redis_connected stream=%s maxlen=%d", _REDIS_STREAM, _STREAM_MAXLEN

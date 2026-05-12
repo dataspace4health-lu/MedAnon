@@ -171,15 +171,16 @@ class RedisCache:
         ttl: int | None = None,
         key_prefix: str = "medanon:gpas:",
     ) -> None:
-        import redis as _redis  # lazy import — redis package is optional
+        # Use the process-wide shared pool so the gPAS cache, idempotency
+        # store, audit writer, and health probe share a single set of
+        # connections instead of each opening their own pool of 50.
+        from utils.redis_pool import get_redis
 
-        self._client = _redis.StrictRedis.from_url(
-            redis_url,
-            decode_responses=True,
-            socket_timeout=5,
-            socket_connect_timeout=2,
-            retry_on_timeout=True,
-        )
+        client = get_redis(redis_url, decode_responses=True)
+        if client is None:
+            # redis package missing — caller must handle by falling back to L1
+            raise RuntimeError("redis package not installed; cannot create RedisCache")
+        self._client = client
         self._ttl = ttl
         self._prefix = key_prefix
 
