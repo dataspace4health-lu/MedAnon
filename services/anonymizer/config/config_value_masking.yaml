@@ -22,15 +22,7 @@
 #   - Clinical codes, values, measurements: unchanged
 #   - Free text (narrative, notes, comments, valueString): NLP entity detection
 #
-# Required env vars:
-#   GPAS_URL        — gPAS server base URL
-#   GPAS_DOMAIN     — pseudonym domain name configured in gPAS
-#   GPAS_BASIC_USER — HTTP Basic Auth username
-#   GPAS_BASIC_PASS — HTTP Basic Auth password
 #
-# Usage:
-#   POST /process?config_profile=value-masking
-#   POST /process/raw?config_profile=value-masking
 # =============================================================================
 
 general:
@@ -150,55 +142,94 @@ rules:
 
 
 # ==============================================================
-# 6. REFERENCE DISPLAY NAMES — cryptohash across all types
+# 6. REFERENCE DISPLAY NAMES
+#    Person-type references (patient, participant) carry a person name —
+#    substitute with [REDACTED] to keep the field present but mask the value.
+#    Org/facility/mixed references (performer, author, location …) may carry
+#    either a person name or an institutional label — NLP-scrub so only
+#    detected entities are replaced; non-PHI labels are preserved intact.
 # ==============================================================
 
+# Always a patient name
 - name: mask subject display
   match: "*.subject.display"
-  action: cryptohash
+  action: substitute
+  params: *redacted
 
+# Performer can be Practitioner, Organization, or Device
 - name: mask performer display
   match: "*.performer.display"
-  action: cryptohash
+  action: nlp_detect_act
+  params:
+    entities: healthcare
 
+# Author can be Practitioner, Organization, Patient, Device
 - name: mask author display
   match: "*.author.display"
-  action: cryptohash
+  action: nlp_detect_act
+  params:
+    entities: healthcare
 
+# Requester can be Practitioner, Organization, Patient
 - name: mask requester display
   match: "*.requester.display"
-  action: cryptohash
+  action: nlp_detect_act
+  params:
+    entities: healthcare
 
+# Recorder can be Practitioner or Patient
 - name: mask recorder display
   match: "*.recorder.display"
-  action: cryptohash
+  action: nlp_detect_act
+  params:
+    entities: healthcare
 
+# Participant — always an individual (Practitioner / Patient / RelatedPerson)
 - name: mask participant display
   match: "*.participant.individual.display"
-  action: cryptohash
+  action: substitute
+  params: *redacted
 
+# Asserter can be Practitioner, Patient, RelatedPerson
 - name: mask asserter display
   match: "*.asserter.display"
-  action: cryptohash
+  action: nlp_detect_act
+  params:
+    entities: healthcare
 
-# Service provider / facility — hospital / clinic name leaks identifying
-# institutional context.  Cryptohash to preserve referential consistency
-# across resources from the same encounter.
+# Service provider / facility — Organization; always substitute so hospital/
+# facility names do not appear in de-identified output.
 - name: mask service provider display
   match: "*.serviceProvider.display"
-  action: cryptohash
+  action: substitute
+  params: *redacted
 
+# Location reference display — facility name; always substitute so hospital/
+# facility names do not appear in de-identified output.
 - name: mask location display
   match: "*.location.display"
-  action: cryptohash
+  action: substitute
+  params: *redacted
+
+# Encounter.location is a BackboneElement array where each element has a
+# nested `.location` Reference field. The wildcard above only matches
+# single-depth `.location.display`; this rule covers the double-nested path.
+- name: mask encounter location reference display
+  match: "Encounter.location.location.display"
+  action: substitute
+  params: *redacted
 
 - name: mask managing organization display
   match: "*.managingOrganization.display"
-  action: cryptohash
+  action: nlp_detect_act
+  params:
+    entities: healthcare
 
 - name: mask encounter location display
   match: "*.encounter.display"
-  action: cryptohash
+  action: nlp_detect_act
+  params:
+    entities: healthcare
 
 # ==============================================================
 # 7. CLINICAL DATES — generalise to year
@@ -319,6 +350,14 @@ rules:
 # ==============================================================
 
 # DocumentReference — clinical notes (content[*].attachment, nested one level)
+# DocumentReference.custodian is the Organisation responsible for the document—
+# its display may contain an organisation name (potential PHI); NLP-scrub only.
+- name: mask document reference custodian display
+  match: DocumentReference.custodian.display
+  action: nlp_detect_act
+  params:
+    entities: healthcare
+
 - name: mask document reference attachment text
   match: DocumentReference.content.attachment.data
   action: nlp_detect_act
@@ -562,7 +601,8 @@ rules:
 
 - name: mask patient marital status coding display
   match: Patient.maritalStatus.coding.display
-  action: cryptohash
+  action: substitute
+  params: *redacted
 
 - name: mask patient communication language text
   match: Patient.communication.language.text
@@ -571,7 +611,13 @@ rules:
 
 - name: mask patient communication language coding display
   match: Patient.communication.language.coding.display
-  action: cryptohash
+  action: substitute
+  params: *redacted
+
+- name: mask patient communication language coding code
+  match: Patient.communication.language.coding.code
+  action: substitute
+  params: *redacted
 
 - name: mask patient contact name family
   match: Patient.contact.name.family
@@ -595,15 +641,20 @@ rules:
 
 - name: mask patient general practitioner display
   match: Patient.generalPractitioner.display
-  action: cryptohash
+  action: nlp_detect_act
+  params:
+    entities: healthcare
 
 - name: mask patient managing organization display
   match: Patient.managingOrganization.display
-  action: cryptohash
+  action: nlp_detect_act
+  params:
+    entities: healthcare
 
 - name: mask patient link other display
   match: Patient.link.other.display
-  action: cryptohash
+  action: substitute
+  params: *redacted
 
 # ==============================================================
 # 13. PATIENT EXTENSIONS — mask values, keep extension objects
@@ -612,7 +663,8 @@ rules:
 # US Core Race
 - name: mask race omb category coding display
   match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-race').extension.where(url='ombCategory').valueCoding.display
-  action: cryptohash
+  action: substitute
+  params: *redacted
 
 - name: mask race omb category coding code
   match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-race').extension.where(url='ombCategory').valueCoding.code
@@ -629,7 +681,8 @@ rules:
 
 - name: mask ethnicity omb category coding display
   match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-ethnicity').extension.where(url='ombCategory').valueCoding.display
-  action: cryptohash
+  action: substitute
+  params: *redacted
 
 - name: mask ethnicity omb category coding code
   match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-ethnicity').extension.where(url='ombCategory').valueCoding.code
@@ -766,7 +819,9 @@ rules:
 
 - name: mask location managing org display
   match: Location.managingOrganization.display
-  action: cryptohash
+  action: nlp_detect_act
+  params:
+    entities: healthcare
 
 # ==============================================================
 # 16. ENCOUNTER HOSPITALIZATION
@@ -885,12 +940,16 @@ rules:
 
 - name: mask coverage subscriber display
   match: Coverage.subscriber.display
-  action: cryptohash
+  action: substitute
+  params: *redacted
 
 - name: mask coverage beneficiary display
   match: Coverage.beneficiary.display
-  action: cryptohash
+  action: substitute
+  params: *redacted
 
 - name: mask coverage payor display
   match: Coverage.payor.display
-  action: cryptohash
+  action: nlp_detect_act
+  params:
+    entities: healthcare

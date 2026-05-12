@@ -310,7 +310,9 @@ rules:
     action: redact
 
   - match: "*.display"
-    action: redact
+    action: nlp_detect_act
+    params:
+      entities: healthcare
 
   # ===========================================================================
   # 6. SDOH / PRAPARE QUASI-IDENTIFIERS

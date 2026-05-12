@@ -68,6 +68,9 @@ CREATE TABLE IF NOT EXISTS medanon.staged_resources (
     fetched_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     processed_at  TIMESTAMPTZ,
     expires_at    TIMESTAMPTZ,
+    partition_id     INT,
+    partition_status TEXT DEFAULT 'unclaimed'
+        CHECK (partition_status IN ('unclaimed', 'claimed', 'done', 'error')),
     CONSTRAINT uq_job_resource UNIQUE (job_id, resource_id)
 );
 
@@ -77,6 +80,30 @@ CREATE INDEX IF NOT EXISTS idx_staged_job_status
 CREATE INDEX IF NOT EXISTS idx_staged_expires
     ON medanon.staged_resources (expires_at)
     WHERE expires_at IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_staged_partition_id
+    ON medanon.staged_resources (job_id, partition_id)
+    WHERE partition_id IS NOT NULL;
+
+-- Partition-level lock table for the partition-claim API (Phase 1 / Argo fan-out).
+-- One row per (job_id, partition_id); workers claim via FOR UPDATE SKIP LOCKED.
+CREATE TABLE IF NOT EXISTS medanon.staged_partitions (
+    job_id       TEXT NOT NULL,
+    partition_id INT  NOT NULL,
+    status       TEXT NOT NULL DEFAULT 'unclaimed'
+        CHECK (status IN ('unclaimed', 'claimed', 'done', 'error')),
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (job_id, partition_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_staged_partitions_unclaimed
+    ON medanon.staged_partitions (job_id, partition_id)
+    WHERE status = 'unclaimed';
+
+-- Backfill: add partition columns on existing deployments.
+ALTER TABLE medanon.staged_resources
+    ADD COLUMN IF NOT EXISTS partition_id     INT,
+    ADD COLUMN IF NOT EXISTS partition_status TEXT DEFAULT 'unclaimed';
 
 -- -------------------------------------------------------------------
 -- Processing runs (scoring persistence for all processing paths)

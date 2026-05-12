@@ -265,7 +265,9 @@ rules:
     action: redact
 
   - match: "*.display"
-    action: redact
+    action: nlp_detect_act
+    params:
+      entities: healthcare
 
   # Actor references (performer, recorder, etc.) identify treating clinicians
   - match: "*.performer.reference"

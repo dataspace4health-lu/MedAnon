@@ -242,7 +242,9 @@ rules:
   # ===========================================================================
 
   - match: "*.display"
-    action: redact
+    action: nlp_detect_act
+    params:
+      entities: healthcare
 
   - match: "*.subject.display"
     action: redact

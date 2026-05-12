@@ -302,11 +302,19 @@ rules:
 # 8. DISPLAY FIELDS AND SUBJECT/PATIENT REFERENCES
 # ==========================================================
 
-#- match: "*.display"
-# action: redact
+# Person-type references always contain a name — redact unconditionally.
+- match: "*.subject.display"
+  action: redact
 
-#- match: "*.subject.display"
-#  action: redact
+- match: "*.patient.display"
+  action: redact
+
+# All other display fields: NLP-scrub to replace PII tokens while preserving
+# clinical labels (e.g. "Leukocytes [#/volume] in Blood by Automated count").
+- match: "*.display"
+  action: nlp_detect_act
+  params:
+    entities: healthcare
 
 # Cross-resource references (subject, patient, etc.) are handled by rewrite_references: true
 # via _deep_rewrite_references_gpas, which strips the "ResourceType/" prefix, pseudonymizes

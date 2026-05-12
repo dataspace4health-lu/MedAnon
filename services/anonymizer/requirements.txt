@@ -22,6 +22,10 @@ redis==5.2.1
 # MinIO S3-compatible object storage client (opt-in: MEDANON_RESULT_STORAGE=s3)
 minio==7.2.15
 
+# Aho-Corasick multi-pattern string matching — O(N) text-ID rewriting in post_processor.py
+# Falls back to regex when absent; presence reduces post stage time ~10× for large batches.
+pyahocorasick>=2.1
+
 # PostgreSQL — staging table for large-scale bulk export/cohort processing
 psycopg2-binary>=2.9
 
@@ -31,3 +35,12 @@ hl7==0.4.5
 # AI agent integration — unified LLM client (Ollama, OpenAI, Anthropic)
 # Exact pin per security policy. Bump deliberately after CVE/release-note review.
 litellm==1.63.0
+
+# OpenTelemetry — opt-in distributed tracing (enabled when MEDANON_OTEL_ENABLED=true).
+# Imports are guarded; absence of these packages disables tracing without crashing.
+opentelemetry-api==1.29.0
+opentelemetry-sdk==1.29.0
+opentelemetry-exporter-otlp-proto-http==1.29.0
+opentelemetry-instrumentation-fastapi==0.50b0
+opentelemetry-instrumentation-urllib3==0.50b0
+opentelemetry-instrumentation-logging==0.50b0
