@@ -72,19 +72,32 @@ spec:
           volumeMounts:
             - name: output
               mountPath: /output
+            - name: user-configs
+              mountPath: /output/user-configs
+              readOnly: true
             - name: tmp
               mountPath: /tmp
           # ── Health checks ─────────────────────────────────────────────────────
+          # startupProbe lets the worker take up to 5 minutes to perform its
+          # initial Redis/Postgres connection + queue claim before liveness
+          # restarts kick in.  Required because the upstream gPAS WildFly
+          # container can block worker startup for ~90 s during cold boot.
+          startupProbe:
+            exec:
+              command: ["test", "-f", "/output/worker_healthy"]
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 60
           livenessProbe:
             exec:
-              command: ["test", "-f", "/tmp/worker_healthy"]
+              command: ["test", "-f", "/output/worker_healthy"]
             initialDelaySeconds: 30
             periodSeconds: 30
             timeoutSeconds: 5
             failureThreshold: 3
           readinessProbe:
             exec:
-              command: ["test", "-f", "/tmp/worker_healthy"]
+              command: ["test", "-f", "/output/worker_healthy"]
             initialDelaySeconds: 10
             periodSeconds: 15
             timeoutSeconds: 5
@@ -93,6 +106,15 @@ spec:
             {{- toYaml .Values.resources | nindent 12 }}
       volumes:
         - name: output
+          {{- if .Values.sharedOutputPVC }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.sharedOutputPVC }}
+          {{- else }}
           emptyDir: {}
+          {{- end }}
+        - name: user-configs
+          configMap:
+            name: {{ .Values.userConfigsConfigMap | default "medanon-anonymizer-user-configs" }}
+            optional: true
         - name: tmp
           emptyDir: {}

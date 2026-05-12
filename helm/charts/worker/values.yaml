@@ -9,7 +9,8 @@ imagePullSecrets: []
 
 # Same image as anonymizer — different entrypoint
 image: medanon
-tag: latest
+# Pinned to chart appVersion. Override at install time with `--set tag=<version>`.
+tag: "2025.2.0"
 replicas: 1
 metricsPort: 9091
 
@@ -50,3 +51,20 @@ autoscaling:
 podDisruptionBudget:
   enabled: false
   minAvailable: 1
+
+# ─── Shared output PVC (job results) ─────────────────────────────────────────
+# Same value as anonymizer.sharedOutputPVC — must reference the same PVC.
+sharedOutputPVC: ""
+
+# ─── Observability (Prometheus Operator) ───────────────────────────────────
+monitoring:
+  serviceMonitor:
+    enabled: false
+    interval: "30s"
+    scrapeTimeout: "10s"
+    labels: {}
+  prometheusRule:
+    enabled: false
+    labels: {}
+    thresholds:
+      queueDepth: "100"            # alert when job queue depth exceeds this
