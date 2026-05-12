@@ -1,9 +1,9 @@
 # SPE FHIR BlackBox — Comprehensive Technical Documentation
 
 **Audience:** Architects, developers, and operations teams  
-**Last updated:** 2026-04-21  
-**Current phase:** Phase 4 (AI agents + Kubernetes)  
-**Branch:** `Ph4_UseCase_AI_KUB`
+**Last updated:** 2026-04-30  
+**Current phase:** Phase 5 (use-case validation, AI + Kubernetes)  
+**Branch:** `Ph5_UseCase_AI_KUB`
 
 ---
 
@@ -103,12 +103,15 @@ The system isolates identified and de-identified data at the network and databas
               │         Python 3.12 · uvicorn                   │
               └───┬──────────┬──────────┬───────────┬───────────┘
                   │          │          │           │
-          ┌───────▼──┐ ┌────▼────┐ ┌───▼───┐ ┌────▼────────┐
-          │ gpas-lb  │ │ nlp-lb  │ │ Redis │ │   app-db    │
-          │ :8080    │ │ :8200   │ │ :6379 │ │ PostgreSQL  │
-          └─────┬────┘ └────┬────┘ └───────┘ └─────────────┘
-                │           │
-         ┌──────▼──┐  ┌─────▼─────┐
+          ┌───────▼─────────────┐ ┌───────┐ ┌─────────────┐
+          │  gateway (Traefik)  │ │ Redis │ │   app-db    │
+          │  :8080 (gpas)       │ │ :6379 │ │ PostgreSQL  │
+          │  :8200 (nlp)        │ └───────┘ └─────────────┘
+          │  aliases: gpas-lb,  │
+          │           nlp-lb    │
+          └──┬──────────────┬───┘
+             │              │
+         ┌───▼─────┐  ┌─────▼─────┐
          │ gPAS ×N │  │  NLP ×N   │
          │ WildFly │  │ Presidio  │
          └────┬────┘  └───────────┘
@@ -137,7 +140,7 @@ The system isolates identified and de-identified data at the network and databas
 
 ### Service Inventory
 
-**Always-on services (17 total in production):**
+**Always-on services (14 total):**
 
 | Container | Image | Host Port | Role |
 |---|---|---|---|
@@ -148,14 +151,13 @@ The system isolates identified and de-identified data at the network and databas
 | `hapi-db` | `postgres:16-alpine` | internal | PostgreSQL for source HAPI |
 | `fhir-target` | `hapiproject/hapi:v7.6.0` | `8082` | Target FHIR R4 (de-identified data) |
 | `hapi-target-db` | `postgres:16-alpine` | internal | PostgreSQL for target HAPI |
-| `gpas` | WildFly 38 + gPAS | via gpas-lb | Reversible pseudonymization (TTP) |
-| `gpas-lb` | `nginx:1.27-alpine` | `8080` | Round-robin LB for gPAS replicas |
+| `gateway` | `traefik:v3` | `8080` (gPAS), `8200` (NLP) | API gateway — Docker-provider service discovery; carries `gpas-lb` / `nlp-lb` network aliases (P2.1, replaces nginx LBs) |
+| `gpas` | WildFly 38 + gPAS | via gateway | Reversible pseudonymization (TTP); scaled with `--scale gpas=N` |
 | `gpas-db` | `postgres:16-alpine` | internal | gPAS pseudonym store |
 | `app-db` | `postgres:16-alpine` | internal | Jobs, configs, subscriptions, staging |
-| `redis` | `redis:7-alpine` | internal | Job queue (BLPOP) + gPAS L2 cache |
+| `redis` | `redis:7-alpine` | internal | Job queue (Redis Streams) + gPAS L2 cache |
 | `analytics` | `medanon-analytics:latest` | `8100` | Risk analysis + synthetic data |
-| `nlp` | `medanon-nlp:latest` | via nlp-lb | Presidio NLP microservice |
-| `nlp-lb` | `nginx:1.27-alpine` | `8200` | Least-conn LB for NLP replicas |
+| `nlp` | `medanon-nlp:latest` | via gateway | Presidio NLP microservice; scaled with `--scale nlp=N` |
 
 **Opt-in profiles (started with `--profile <name>`):**
 
@@ -260,7 +262,7 @@ The anonymizer communicates with downstream services using:
 - **gPAS**: FHIR R4 `Parameters` over HTTP (TTP-FHIR protocol)
 - **NLP microservice**: REST JSON batch API
 - **FHIR servers**: Standard FHIR R4 REST
-- **Redis**: Redis protocol (BLPOP, HSET, ZADD)
+- **Redis**: Redis protocol (XADD, XREADGROUP, XACK, HSET, ZADD)
 - **PostgreSQL**: `psycopg2` with `ThreadedConnectionPool`
 
 ### REST API reference
@@ -424,7 +426,7 @@ Response: `{"profile": "...", "yaml": "rules:\n  - name: ...", "warning": null}`
 | **HAPI FHIR** | Spring Boot, PostgreSQL 16 | FHIR R4 reference server. Used as both source (identified) and target (de-identified). |
 | **NLP microservice** | Python + Presidio + spaCy `en_core_web_lg` | Named-entity recognition for free-text PHI. Isolated to avoid loading an 800 MB spaCy model into the anonymizer process. |
 | **Analytics microservice** | Python + pandas + scipy | k-anonymity, l-diversity, and synthetic data generation. Isolated because SDV (synthetic data vault) adds ~2 GB of dependencies. |
-| **Redis 7** | redis:7-alpine | Job queue (BLPOP event-driven) + gPAS L2 cross-replica cache. Password-protected. |
+| **Redis 7** | redis:7-alpine | Job queue (Redis Streams + consumer groups, at-least-once delivery) + gPAS L2 cross-replica cache. Password-protected. |
 | **PostgreSQL 16** (app-db) | postgres:16-alpine | Application state: jobs, config profiles, subscriptions, two-phase staging. |
 | **Ollama** (opt-in) | ollama/ollama | Local LLM inference for AI agents. Activated with `--profile ai`. |
 | **MinIO** (opt-in) | minio/minio | S3-compatible object storage for job result NDJSON files. |
@@ -604,7 +606,7 @@ Clinician / EHR
 │ Source FHIR │      │ POST /v1/jobs/bulk-export                        │
 │ (identified)│      │         │                                         │
 │ source-net  │      │         ▼                                         │
-└──────┬──────┘      │  Worker picks up job (BLPOP)                     │
+└──────┬──────┘      │  Worker picks up job (XREADGROUP)                │
        │             │         │                                         │
        │ GET /fhir/  │         ▼                                         │
        │ Patient?    │  PHASE 1: Fetch resource types from /metadata    │
@@ -1035,11 +1037,11 @@ docker compose ps                   # all containers + health status
 
 ### Scaling strategy
 
-**Anonymizer / worker** — scale horizontally. Redis (BLPOP) acts as the shared job queue across replicas. Each replica polls or receives notifications independently. Set `MEDANON_JOB_WORKERS` to control concurrent jobs per instance.
+**Anonymizer / worker** — scale horizontally. Redis Streams + consumer groups act as the shared job queue across replicas; each replica receives a disjoint slice of new messages and crashed-worker entries are reclaimed via `XAUTOCLAIM`. Set `MEDANON_JOB_WORKERS` to control concurrent jobs per instance.
 
-**gPAS** — scale with `--scale gpas=N`. The `gpas-lb` nginx distributes requests round-robin. Each gPAS instance connects to the same `gpas-db` PostgreSQL.
+**gPAS** — scale with `--scale gpas=N`. The Traefik `gateway` distributes requests round-robin (with sticky cookies for the gPAS web UI). Each gPAS instance connects to the same `gpas-db` PostgreSQL.
 
-**NLP** — scale with `--scale nlp=N`. The `nlp-lb` nginx uses `least_conn` to route to the least busy NLP replica. NLP is CPU-bound; scaling NLP instances directly increases throughput.
+**NLP** — scale with `--scale nlp=N`. The Traefik `gateway` distributes requests round-robin to the least busy NLP replica. NLP is CPU-bound; scaling NLP instances directly increases throughput.
 
 **When NOT to scale FHIR fetch threads:** `MEDANON_FHIR_FETCH_PARALLEL` should stay at `1`. The bottleneck is gPAS, not FHIR reads. Multiple fetch threads compete for the Python GIL and the internal queue lock while waiting for gPAS — observed to be slower than single-threaded at scale.
 

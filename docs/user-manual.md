@@ -33,7 +33,7 @@ open http://localhost:8501
 
 ## Web UI
 
-Open `http://localhost:8501`. The sidebar shows live health status for all services and your current config profile. There are 14 pages accessible from the sidebar navigation.
+Open `http://localhost:8501`. The sidebar shows live health status for all services and your current config profile. There are 13 pages accessible from the sidebar navigation.
 
 ### Home (Dashboard)
 

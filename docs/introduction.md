@@ -101,7 +101,7 @@ Identified FHIR data                       De-identified FHIR data
 | **FHIR** | HAPI FHIR R4 v7.6.0, fhirpathpy | Source + target FHIR servers, FHIRPath evaluation |
 | **AI agents** | litellm (OpenAI / Ollama), Presidio | Config generation, PII detection, compliance analysis |
 | **Frontend** | React 19, TypeScript 5.9, Vite 8, Tailwind CSS 4, Shadcn/ui | 13-page SPA with job management and visual config builder |
-| **Infrastructure** | Docker Compose (15 services + 3 opt-in), Helm (7 sub-charts) | Local + Kubernetes deployment |
+| **Infrastructure** | Docker Compose (14 always-on services + 3 opt-in profiles), Helm (7 sub-charts) | Local + Kubernetes deployment |
 | **Observability** | Prometheus, structured JSON audit log, Prometheus Pushgateway | Metrics, audit trail, alerting |
 
 ---

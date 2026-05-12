@@ -5,10 +5,10 @@
 ```
 ┌──────────────── host network ──────────────────────────────────────────┐
 │                                                                        │
-│  Browser ──► :8501 (UI)  :8000 (API)  :8082 (FHIR-target)  :8080 (gPAS-lb)
+│  Browser ──► :8501 (UI)  :8000 (API)  :8082 (FHIR-target)  :8080 (gateway → gPAS)
 │                                                                        │
 │  (source FHIR: no host port — isolated to source-net)                 │
-│  (NLP-lb: :8200 — processing-net only, not exposed by default)        │
+│  (gateway → NLP: :8200 — host-published for direct access if needed)  │
 └────────────────────────────────────────────────────────────────────────┘
                  │             │
         ┌────────▼─────────────▼──── processing-net ──────────────────────┐
@@ -22,26 +22,26 @@
         │                                                                  │
         │  anonymizer:8000  (FastAPI)                                      │
         │    → hapi-fhir-target:8080  writes de-identified data            │
-        │    → gpas-lb:8080           pseudonymization (gPAS LB)           │
-        │    → nlp-lb:8200            NLP batch detection (NLP LB)         │
+        │    → gpas-lb:8080           pseudonymization (Traefik gateway)   │
+        │    → nlp-lb:8200            NLP batch detection (Traefik gateway)│
         │    → analytics:8100         risk analysis + synthetic data        │
         │    → app-db:5432            jobs, configs, subscriptions, staging │
         │    → redis:6379             job queue + gPAS L2 cache + audit    │
         │                                                                  │
         │  worker:8000/9091  (dedicated job executor)                      │
         │    → hapi-fhir-target:8080  bulk upload                          │
-        │    → gpas-lb:8080           pseudonymization                     │
-        │    → nlp-lb:8200            NLP batch                            │
+        │    → gpas-lb:8080           pseudonymization (Traefik gateway)   │
+        │    → nlp-lb:8200            NLP batch (Traefik gateway)          │
         │    → app-db:5432            job state                            │
-        │    → redis:6379             BLPOP job queue                      │
+        │    → redis:6379             Redis Streams job queue            │
         │    :9091                    Prometheus metrics + health probe     │
         │                                                                  │
-        │  nlp-lb:8200  (nginx round-robin)                                │
-        │    → nlp replicas:8200  (Presidio + spaCy en_core_web_lg)        │
-        │                                                                  │
-        │  gpas-lb:8080  (nginx round-robin)                               │
-        │    → gpas replicas:8080  (WildFly + TTP-FHIR WAR)               │
-        │    → gpas-postgres:5432                                          │
+        │  gateway  (Traefik v3 — joins network as gpas-lb + nlp-lb aliases)│
+        │    :8080  → gpas replicas:8080  (round-robin; sticky for /gpas-web│
+        │             — JSF ViewState binding)                             │
+        │    :8200  → nlp replicas:8200   (round-robin)                    │
+        │    Discovery: Docker provider, read-only socket mount             │
+        │    Replaces legacy gpas-lb / nlp-lb nginx LBs (P2.1, April 2026) │
         │                                                                  │
         │  hapi-fhir-target:8080 → hapi-target-postgres:5432              │
         │  analytics:8100        (risk + synthetic — no external deps)     │
@@ -127,7 +127,7 @@ POST /v1/jobs/bulk-export
       │
       └── RedisJobStore LPUSH job to queue
               │
-              └── worker (BLPOP, wakes immediately)
+              └── worker (XREADGROUP, wakes immediately)
                       │
           ┌───────────▼──────────────────────────────────┐
           │  PHASE 1 — Discovery                          │
@@ -375,7 +375,7 @@ startup (api/main.py or worker_main.py)
     ├── MEDANON_REDIS_URL set?
     │       YES → RedisJobStore
     │               jobs stored as Redis hashes + sorted set by created_at
-    │               queue: BLPOP (worker wakes immediately on new job)
+    │               queue: Redis Streams XREADGROUP (worker wakes immediately on new job)
     │               workers share queue across replicas
     │               secondary indexes: status set, type set (sinter for filtered list)
     │

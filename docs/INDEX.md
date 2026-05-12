@@ -1,8 +1,8 @@
 # Health Data Preparation & Privacy Toolkit — Documentation
 
 **System:** SPE FHIR BlackBox (MedAnon)  
-**Version:** Phase 4 (AI agents + Kubernetes)  
-**Last updated:** 2026-04-21
+**Version:** Phase 5 (use-case validation, AI agents + Kubernetes)  
+**Last updated:** 2026-04-30
 
 This index is the single entry point for all project documentation. Each section links to the relevant file. New team members should read sections 0 → 1 → 2.3 in order.
 

@@ -36,18 +36,20 @@ MedAnon is a FHIR R4 de-identification engine. It accepts FHIR resources (JSON /
        │                   │  Stores DE-IDENTIFIED data only  │
        │                   └──────────────────────────────────┘
        │
-       ├──► gpas-lb:8080 (nginx round-robin → gpas replicas)
-       │     └──► gpas-postgres:5432
-       │
-       ├──► nlp-lb:8200 (nginx least-conn → nlp replicas)
-       │     (Presidio + spaCy en_core_web_lg, ~800 MB image)
+       ├──► gateway (Traefik v3) ──► gpas replicas (sticky for /gpas-web)
+       │     │                  └──► gpas-postgres:5432
+       │     │   network alias: gpas-lb (legacy URL compatibility)
+       │     │
+       │     └──────────────────► nlp replicas (round-robin)
+       │         network alias: nlp-lb (legacy URL compatibility)
+       │         (Presidio + spaCy en_core_web_lg, ~800 MB image)
        │
        ├──► analytics:8100 (risk analysis + synthetic data)
        │
        ├──► app-db:5432 (jobs, configs, subscriptions, staging)
        │
        └──► redis:6379 (password-protected)
-             ├── job queue  (BLPOP event-driven)
+             ├── job queue  (Redis Streams, event-driven)
              └── gPAS cache (L2, cross-replica)
 
 Opt-in profiles:
@@ -60,11 +62,13 @@ Opt-in profiles:
 
 **Why a dedicated NLP microservice?** The Presidio + spaCy `en_core_web_lg` model adds ~800 MB to the Docker image. Running it in the anonymizer process would double memory consumption for every anonymizer replica. The NLP microservice keeps this cost fixed regardless of anonymizer scaling, and its replicas can be independently sized for CPU-intensive NLP workloads.
 
+**NLP cache hierarchy.** Each NLP replica keeps an L1 in-process LRU (~20 k entries) and consults an optional Redis L2 cache on DB 2 (`NLP_REDIS_URL`, default key prefix `medanon:nlp:detect:`, default TTL 7 days). L2 is shared across replicas and survives restarts, eliminating cold-cache penalties on deploy. Redis errors fail-soft: the lookup falls through to compute. Implemented in `services/nlp/src/cache.py`.
+
 ---
 
 ## Services
 
-**Always-on (15 services):**
+**Always-on (14 services):**
 
 | Container | Image | Host Port | Role |
 |---|---|---|---|
@@ -75,14 +79,13 @@ Opt-in profiles:
 | `hapi-db` | `postgres:16-alpine` | internal | PostgreSQL for source HAPI |
 | `fhir-target` | `hapiproject/hapi:v7.6.0` | 8082 | Target FHIR R4 (de-identified data) |
 | `hapi-target-db` | `postgres:16-alpine` | internal | PostgreSQL for target HAPI |
-| `gpas` | WildFly 38 + gPAS | via gpas-lb | Reversible pseudonymization (TTP) |
-| `gpas-lb` | `nginx:1.27-alpine` | 8080 | Round-robin LB for gPAS replicas |
+| `gateway` | `traefik:v3` | 8080 (gPAS), 8200 (NLP) | Traefik v3 API gateway — Docker-provider service discovery; carries `gpas-lb` and `nlp-lb` network aliases for backward compatibility |
+| `gpas` | WildFly 38 + gPAS | via gateway | Reversible pseudonymization (TTP); scaled with `--scale gpas=N` |
 | `gpas-db` | `postgres:16-alpine` | internal | gPAS pseudonym store |
 | `app-db` | `postgres:16-alpine` | internal | Jobs, configs, subscriptions, staging |
 | `redis` | `redis:7-alpine` | internal | Shared job queue + gPAS L2 cache (password-protected) |
 | `analytics` | `medanon-analytics:latest` | 8100 | Risk analysis + synthetic data |
-| `nlp` | `medanon-nlp:latest` | via nlp-lb | Presidio NLP microservice (~800 MB image) |
-| `nlp-lb` | `nginx:1.27-alpine` | 8200 | Least-conn LB for NLP replicas |
+| `nlp` | `medanon-nlp:latest` | via gateway | Presidio NLP microservice (~800 MB image); scaled with `--scale nlp=N` |
 
 **Opt-in profiles (started with `--profile <name>`):**
 
@@ -92,37 +95,34 @@ Opt-in profiles:
 | `minio` | `s3` | 9000, 9001 | S3-compatible object storage for job results |
 | `ollama` | `ai` | internal | Local LLM inference for AI agents |
 
-### Nginx Load Balancers
+### Edge & routing
 
-Three nginx reverse proxies handle routing and horizontal scaling:
+Two edge components handle ingress, routing, and horizontal scaling:
 
-| Config | Container | Balancing Strategy | Purpose |
-|--------|-----------|-------------------|---------|
-| `client/nginx.conf` | `medanon-ui` | least_conn | UI SPA + API proxy + FHIR routing |
-| `services/gpas/lb/nginx.conf` | `gpas-lb` | round-robin | gPAS replica distribution |
-| `services/nlp/nginx.conf` | `nlp-lb` | least_conn | NLP replica distribution (CPU-intensive) |
+| Component | Container | Role |
+|--------|-----------|---------|
+| `client/nginx.conf` | `medanon-ui` | UI reverse proxy: SPA serving + `/api/*`, `/fhir/*`, `/fhir-target/*` routing |
+| Traefik labels on `gpas` / `nlp` | `medanon-gateway` | API gateway: dynamic Docker-provider discovery, round-robin LB, sticky sessions for the gPAS JSF UI |
 
-**UI proxy routes:**
+**Migration note (P2.1, April 2026):** The legacy standalone `gpas-lb` and `nlp-lb` nginx containers were replaced by a single Traefik v3 gateway. The `gateway` service joins `processing-net` under both legacy aliases (`gpas-lb`, `nlp-lb`) so existing `GPAS_URL=http://gpas-lb:80/...` and `NLP_SERVICE_URL=http://nlp-lb:8200` values continue to work without `.env` changes. The standalone `services/gpas/lb/nginx.conf` and `services/nlp/nginx.conf` are no longer mounted by docker-compose and are kept only as reference.
+
+**UI nginx routes (unchanged):**
 - `/` → SPA static files (React app)
 - `/api/*` → `anonymizer:8000` (upstream with keepalive 16)
 - `/fhir/*` → `hapi-fhir:8080` (source FHIR server)
 - `/fhir-target/*` → `hapi-fhir-target:8080` (de-identified data)
 
-**gPAS LB features:**
-- `/ping` health endpoint (responds without touching upstream while WildFly initializes)
-- WildFly-friendly timeouts: connect 10s, read 180s, send 60s
-- Docker DNS re-resolves `gpas` hostname on each connect for `--scale gpas=N`
+**Traefik gateway features:**
+- Docker provider, read-only socket mount, `exposedbydefault=false`
+- gPAS web UI uses sticky cookies (`gpas_session`) so JSF ViewState stays bound to one replica
+- Round-robin for both gPAS REST and NLP traffic
+- Internal Prometheus metrics endpoint on `:8082/metrics` (gateway-internal; not host-published)
 
-**NLP LB features:**
-- `/health` health endpoint (nginx answers directly)
-- `least_conn` balancing optimal for CPU-bound inference
-- 120s read timeout for batch detection requests
-- `client_max_body_size 10m` for large batch payloads
-
-**Scaling:**
+**Scaling (Traefik discovers new replicas via Docker labels — no config reload):**
 ```bash
 docker compose up -d --scale gpas=3              # 3 gPAS replicas
-docker compose --profile nlp up -d --scale nlp=4 # 4 NLP replicas
+docker compose up -d --scale nlp=4               # 4 NLP replicas
+docker compose up -d --scale gpas=3 --scale nlp=4
 ```
 
 ---
@@ -210,7 +210,7 @@ GET /v1/jobs/abc123/result  ◄── download NDJSON when done
 ```
 
 **Backend selection at startup (priority order):**
-- `MEDANON_REDIS_URL` set → `RedisJobStore`: BLPOP event-driven (no polling), cross-replica safe
+- `MEDANON_REDIS_URL` set → `RedisJobStore`: Redis Streams + consumer groups (at-least-once delivery, no polling), cross-replica safe
 - `MEDANON_APP_DB_URL` set → `PostgresJobStore`: LISTEN/NOTIFY event-driven, single-instance
 - Neither set → `SqliteJobStore`: polls every 2 s, single-instance only
 

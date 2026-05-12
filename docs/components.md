@@ -10,7 +10,7 @@ This section covers the container topology, load balancers, databases, caching l
 
 ### Docker services
 
-**Always-on (15 services):**
+**Always-on (14 services):**
 
 | Container | Image | Host Port | Role |
 |---|---|---|---|
@@ -21,14 +21,13 @@ This section covers the container topology, load balancers, databases, caching l
 | `hapi-db` | `postgres:16-alpine` | internal | PostgreSQL backing source HAPI |
 | `fhir-target` | `hapiproject/hapi:v7.6.0` | `8082` | Target HAPI FHIR R4 — de-identified data |
 | `hapi-target-db` | `postgres:16-alpine` | internal | PostgreSQL backing target HAPI |
-| `gpas` | WildFly 38 + gPAS | via gpas-lb | Reversible pseudonymization (TTP) |
-| `gpas-lb` | `nginx:1.27-alpine` | `8080` | Round-robin LB for gPAS replicas |
+| `gateway` | `traefik:v3` | `8080` (gPAS), `8200` (NLP) | API gateway — Docker-provider service discovery; carries `gpas-lb` / `nlp-lb` network aliases |
+| `gpas` | WildFly 38 + gPAS | via gateway | Reversible pseudonymization (TTP); scaled with `--scale gpas=N` |
 | `gpas-db` | `postgres:16-alpine` | internal | gPAS pseudonym store |
 | `app-db` | `postgres:16-alpine` | internal | Jobs, configs, subscriptions, staging |
-| `redis` | `redis:7-alpine` | internal | Job queue (BLPOP) + gPAS L2 cache |
+| `redis` | `redis:7-alpine` | internal | Job queue (Redis Streams) + gPAS L2 cache |
 | `analytics` | `medanon-analytics:latest` | `8100` | Risk analysis + synthetic data |
-| `nlp` | `medanon-nlp:latest` | via nlp-lb | Presidio NLP microservice (~800 MB image) |
-| `nlp-lb` | `nginx:1.27-alpine` | `8200` | Least-conn LB for NLP replicas |
+| `nlp` | `medanon-nlp:latest` | via gateway | Presidio NLP microservice (~800 MB image); scaled with `--scale nlp=N` |
 
 **Opt-in profiles (started with `--profile <name>`):**
 
@@ -38,10 +37,10 @@ This section covers the container topology, load balancers, databases, caching l
 | `minio` | `s3` | `9000`, `9001` | S3-compatible object storage for job results |
 | `ollama` | `ai` | internal | Local LLM inference for AI agents |
 
-**Scaling:**
+**Scaling (Traefik discovers replicas via Docker labels — no config reload):**
 ```bash
-docker compose up -d --scale gpas=3   # 3 gPAS replicas (round-robin via gpas-lb)
-docker compose up -d --scale nlp=4    # 4 NLP replicas (least-conn via nlp-lb)
+docker compose up -d --scale gpas=3   # 3 gPAS replicas (round-robin via gateway)
+docker compose up -d --scale nlp=4    # 4 NLP replicas (round-robin via gateway)
 ```
 
 ### Networks
@@ -55,9 +54,9 @@ Two Docker bridge networks enforce physical isolation between identified and de-
 
 The source FHIR server has no published host port — it is accessible only through anonymizer proxy endpoints. This prevents accidental direct access to identified patient data from the UI, analytics, or any other service.
 
-### Nginx load balancers
+### Edge & routing
 
-Three nginx instances handle routing, load balancing, and horizontal scaling:
+Two edge components handle ingress, routing, and horizontal scaling:
 
 #### UI nginx (`client/nginx.conf`) — port 8501
 
@@ -75,27 +74,20 @@ Security headers added: `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-P
 
 **Why dynamic DNS?** Using a variable `$upstream` with `resolver 127.0.0.11` forces nginx to re-resolve the container hostname on each request. Without this, nginx caches the IP at startup and returns 502 after container restarts (even though the DNS record updates immediately).
 
-#### gPAS LB (`services/gpas/lb/nginx.conf`) — port 8080
+#### Traefik gateway (`gateway` container) — ports 8080 (gPAS), 8200 (NLP)
 
-Round-robin load balancer for gPAS WildFly replicas:
+**Migration note (P2.1, April 2026):** The legacy standalone `gpas-lb` and `nlp-lb` nginx containers were replaced by a single Traefik v3 gateway. The `gateway` service joins `processing-net` under both legacy aliases (`gpas-lb`, `nlp-lb`), so existing `GPAS_URL=http://gpas-lb:80/...` and `NLP_SERVICE_URL=http://nlp-lb:8200` values continue to work without `.env` changes. The standalone `services/gpas/lb/nginx.conf` and `services/nlp/nginx.conf` files are no longer mounted by docker-compose and are kept only as reference.
 
-| Location | Target | Notes |
+| Entry point | Routes to | Strategy |
 |---|---|---|
-| `/ping` | nginx directly | Returns `200 "pong"` — no upstream call. Used by Docker healthcheck during WildFly cold start (~90s). |
-| `/*` | `gpas:8080` replicas | Round-robin; proxy_read_timeout 180s; Docker DNS re-resolves on each connect. |
+| `gpas` (`:80`, host `8080`) — `/gpas-web`, `/gras-web` | `gpas:8080` | Sticky sessions (`gpas_session` cookie) — keeps JSF ViewState bound to one replica |
+| `gpas` (`:80`, host `8080`) — `/` | `gpas:8080` | Round-robin |
+| `nlp` (`:8200`, host `8200`) — `/` | `nlp:8200` | Round-robin |
+| `metrics` (`:8082`, internal) | Traefik Prometheus exporter | Not host-published |
 
-**Why the `/ping` endpoint?** WildFly takes up to 90 seconds to deploy the TTP-FHIR WAR file. Docker's `depends_on: condition: service_healthy` requires a healthy gPAS before starting the anonymizer. Responding to `/ping` directly from nginx (without touching upstream) lets the health check pass while gPAS continues initializing.
+**Discovery:** Docker provider with read-only socket mount, `exposedbydefault=false`. Traefik labels live on `gpas` and `nlp` services; new replicas appear automatically when scaled.
 
-#### NLP LB (`services/nlp/nginx.conf`) — port 8200
-
-Least-connections load balancer for NLP Presidio replicas:
-
-| Location | Target | Notes |
-|---|---|---|
-| `/health` | nginx directly | Returns `200 OK` — no upstream call. |
-| `/*` | `nlp:8200` replicas | `least_conn`; 120s read timeout; `client_max_body_size 10m`. |
-
-**Why `least_conn` for NLP but round-robin for gPAS?** NLP inference is CPU-bound and duration varies significantly (50ms for a short text, 5s for a batch of 1,000 narratives). `least_conn` routes to the replica with fewest active connections, ensuring even load. gPAS is I/O-bound with uniform request durations, so round-robin is sufficient.
+**Why sticky sessions only for gPAS web UI?** The gPAS WildFly application uses JSF, which keeps the ViewState in server-side session memory. Round-robin across replicas would break the UI mid-form. The REST API (`$pseudonymizeAllowCreate`) is stateless and uses round-robin.
 
 ### PostgreSQL databases
 
@@ -120,13 +112,21 @@ medanon.processing_runs     — scoring history
 
 ### Redis
 
-Redis 7 serves two independent roles (both activated by `MEDANON_REDIS_URL`):
+Redis 7 serves three independent roles, isolated on separate logical databases:
 
-**Job queue:** Jobs submitted to `/v1/jobs/*` are pushed to a Redis list. Workers use `BLPOP` — blocking pop that wakes immediately when a job arrives. This eliminates the 2-second polling delay of the SQLite fallback. Multiple anonymizer replicas share the same queue; a job submitted to replica A can be executed by replica B.
+| DB | Role | Activated by |
+|----|------|-------------|
+| `0` | Anonymizer job queue **and** gPAS L2 cache | `MEDANON_REDIS_URL` (anonymizer + worker) |
+| `1` | Reserved for future cross-service queues | — |
+| `2` | NLP L2 detection cache | `NLP_REDIS_URL` (defaulted in compose) |
 
-**gPAS pseudonym cache (L2):** Cross-replica sharing of gPAS results. Key format: `medanon:gpas:["pseudonymize", url, domain, op, original_id]`. TTL: 1 hour. Redis errors are swallowed — the cache falls back to a direct gPAS call gracefully, so a Redis outage degrades performance but does not break de-identification.
+**Job queue (DB 0):** Jobs submitted to `/v1/jobs/*` are pushed to a Redis Stream (`medanon:job_stream`). Workers consume via `XREADGROUP` against the `workers` consumer group — blocking read with at-least-once delivery semantics. If a worker crashes after popping a job but before ACKing, the message stays in the Pending Entry List (PEL) and is reclaimed by `XAUTOCLAIM`. Multiple anonymizer replicas share the same queue; a job submitted to replica A can be executed by replica B.
 
-**Why two levels?** L1 (in-process LRU, 50K entries per replica) is fastest but not shared. If replica A has already pseudonymized patient `123`, replica B would still call gPAS without L2. Redis L2 shares results across all replicas, reducing gPAS load during parallel bulk exports.
+**gPAS pseudonym cache (L2, DB 0):** Cross-replica sharing of gPAS results. Key format: `medanon:gpas:["pseudonymize", url, domain, op, original_id]`. TTL: 1 hour. Redis errors are swallowed — the cache falls back to a direct gPAS call gracefully, so a Redis outage degrades performance but does not break de-identification.
+
+**NLP detection cache (L2, DB 2):** Cross-replica sharing of Presidio detection results. Key format: `medanon:nlp:detect:<lang>:<threshold>:<entities-hash>:<text-sha256>`. Default TTL: 7 days (`NLP_REDIS_TTL_SEC=604800`). Survives NLP container restarts — eliminates the cold-cache penalty after deploys. Implemented in `services/nlp/src/cache.py`. Redis errors are swallowed (soft-fail to L1 + compute path).
+
+**Why three layers?** L1 (in-process LRU per replica) is fastest but not shared. L2 (Redis) shares results across replicas and survives restarts. For a fleet of N anonymizer + M NLP replicas processing parallel bulk exports, L2 collapses N×M cold-start costs into a single warm-up.
 
 ### Shared configuration
 
@@ -138,7 +138,9 @@ All services read configuration from environment variables, set in `.env` (Docke
 |---|---|---|
 | `MEDANON_HASH_KEY` | (required in prod) | HMAC-SHA3-256 key for `cryptohash` action. Without this, plain SHA3-256 is used — reversible via rainbow tables. |
 | `MEDANON_API_KEY` | (blank = open) | API authentication key. Leave blank for local dev only. |
-| `MEDANON_REDIS_URL` | — | Enables Redis job store + L2 cache. Format: `redis://:password@redis:6379/0`. |
+| `MEDANON_REDIS_URL` | — | Enables Redis job store + gPAS L2 cache. Format: `redis://:password@redis:6379/0`. |
+| `NLP_REDIS_URL` | `redis://:…@redis:6379/2` (in compose) | Enables the NLP L2 detection cache on Redis DB 2. Leave empty to disable. |
+| `NLP_REDIS_TTL_SEC` | `604800` (7 days) | TTL for NLP L2 cache entries. |
 | `MEDANON_APP_DB_URL` | — | PostgreSQL URL for app state (auto-constructed in docker-compose). |
 | `GPAS_URL` | — | gPAS server URL. When set, auto-selects `config_gpas.yaml` profile. |
 | `NLP_SERVICE_URL` | `http://nlp-lb:8200` | NLP microservice URL (hardcoded in docker-compose, override for external NLP). |
@@ -172,7 +174,7 @@ anonymizer (Pass 2)
       │ POST $pseudonymizeAllowCreate
       │ Parameters { [id1, id2, id3, ...] }
       ▼
-gpas-lb:8080 (nginx round-robin)
+gateway:8080 (Traefik round-robin, network alias gpas-lb)
       │
       ▼
 gpas:8080 (WildFly 38)
@@ -358,7 +360,7 @@ Pure functions: input value → transformed value. No side effects.
 | Module | Role |
 |---|---|
 | `store.py` | `SqliteJobStore` (WAL mode, thread-safe, 2s polling). Fallback when Redis and PostgreSQL are unavailable. |
-| `worker.py` | Async job executor. `RedisJobStore`: BLPOP. `PostgresJobStore`: LISTEN/NOTIFY. `SqliteJobStore`: polls every 2s. `max_concurrent` semaphore. |
+| `worker.py` | Async job executor. `RedisJobStore`: Redis Streams (XREADGROUP). `PostgresJobStore`: LISTEN/NOTIFY. `SqliteJobStore`: polls every 2s. `max_concurrent` semaphore. Periodic Redis index orphan sweep. |
 | `worker_main.py` | Standalone worker entrypoint. Prometheus metrics on port 9091. PostgresJobStore fallback between Redis and SQLite. |
 | `executors.py` | Bulk-operation executors: `bulk-export`, `cohort`, `patient-export`, `bulk-import`, `reprocess`. Cross-chunk gPAS dedup via `seen_values`. |
 | `checkpoint.py` | Saves processing position to PostgreSQL for crash recovery — a failed job can be resumed from the last successful page. |
@@ -368,7 +370,7 @@ Pure functions: input value → transformed value. No side effects.
 **Job store backend selection at startup:**
 
 ```
-MEDANON_REDIS_URL set    → RedisJobStore   (BLPOP, cross-replica, multi-instance safe)
+MEDANON_REDIS_URL set    → RedisJobStore   (Streams + consumer groups, cross-replica, at-least-once)
 MEDANON_APP_DB_URL set   → PostgresJobStore (LISTEN/NOTIFY, single-instance or multi-worker)
 Neither                  → SqliteJobStore   (polling, local dev only)
 ```
@@ -464,7 +466,7 @@ Always-on (~800 MB Docker image, Presidio + spaCy `en_core_web_lg`).
 | `/v1/detect` | POST | Detect PII entities in a single text |
 | `/v1/detect/batch` | POST | Batch detect PII entities across multiple texts (one HTTP call) |
 | `/metrics` | GET | Prometheus metrics |
-| `/health` | GET | Answered by nlp-lb nginx — no upstream |
+| `/health` | GET | Answered by Traefik gateway — no upstream |
 
 **Why isolated from the anonymizer?** The spaCy model alone is ~800 MB. Running it in-process would double memory consumption per anonymizer replica. The NLP microservice keeps this cost fixed regardless of anonymizer scaling, and can be independently replicated for CPU-intensive NLP workloads.
 

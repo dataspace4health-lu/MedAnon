@@ -39,6 +39,9 @@ openssl rand -base64 24     # → GPAS_BASIC_PASS, GPAS_DB_PASSWORD, HAPI_DB_PAS
 | `HAPI_TARGET_DB_PASSWORD` | PostgreSQL password for target (de-identified) FHIR server. |
 | `EXTERNAL_HOST` | IP or hostname browsers use to reach this server. Used in CORS origins and HAPI server address. |
 | `MEDANON_API_KEY` | Leave blank for dev (open mode). Set for any non-local deployment. |
+| `MEDANON_REQUIRE_DURABLE_STORE` | Set `true` in production. Forces the API to refuse the SQLite job-store fallback when neither Redis nor PostgreSQL is reachable. The dedicated `worker` container always refuses SQLite regardless. |
+| `MEDANON_REQUIRE_REDIS_AOF` | Set `true` in production. Refuses to start when Redis AOF persistence is disabled (RDB snapshots alone may lose up to 60 s of queued jobs). |
+| `MEDANON_RATE_JOBS_SUBMIT` | slowapi rate limit applied to all `POST /v1/jobs/*` submission endpoints. Default `30/minute` \u2014 raise/lower per tenant size. |
 
 ### 2. Build images
 
@@ -60,7 +63,7 @@ The anonymizer Dockerfile uses `services/anonymizer/` as build context. Four bui
 make up
 ```
 
-Starts all 8 services in dependency order. **gPAS (WildFly) takes ~90 seconds on first boot** — it deploys the TTP-FHIR WAR file and initializes the PostgreSQL schema.
+Starts all 14 always-on services in dependency order. **gPAS (WildFly) takes ~90 seconds on first boot** — it deploys the TTP-FHIR WAR file and initializes the PostgreSQL schema.
 
 ```bash
 docker compose ps    # wait until all show "healthy"
@@ -247,9 +250,21 @@ docker compose --profile s3 up    # MinIO S3 object storage for job results
 docker compose --profile ai up    # Ollama local LLM for AI agent endpoints
 ```
 
-The NLP and analytics microservices are now always-on — they start with the main `make up` command. `NLP_SERVICE_URL` is hardcoded to `http://nlp-lb:8200` in docker-compose.yml. Override only to point at an external NLP deployment.
+The NLP and analytics microservices are now always-on — they start with the main `make up` command. `NLP_SERVICE_URL` is hardcoded to `http://nlp-lb:8200` in docker-compose.yml (the `nlp-lb` host name is a Traefik gateway alias). Override only to point at an external NLP deployment.
 
 When `ANALYTICS_SERVICE_URL` is set, `/analyse/risk` and `/generate/synthetic` proxy to the analytics service (default: `http://analytics:8100`).
+
+### NLP L2 Redis cache (cold-start mitigation)
+
+The NLP service maintains an in-process LRU cache (L1, ~20k entries) plus an **optional Redis L2 cache** (key prefix `medanon:nlp:detect:`) shared across NLP replicas. The L2 cache survives container restarts and eliminates the cold-cache penalty observed on deploys (~4× slowdown on the first bulk export until L1 warms).
+
+| Variable | Default (compose) | Purpose |
+|----------|-------------------|---------|
+| `NLP_REDIS_URL` | `redis://:${MEDANON_REDIS_PASSWORD}@redis:6379/2` | Connection URL — DB 2 isolates NLP from anonymizer L2 (DB 0). |
+| `NLP_REDIS_TTL_SEC` | `604800` (7 days) | Entry TTL. |
+| `NLP_REDIS_KEY_PREFIX` | `medanon:nlp:detect:` | Key namespace override. |
+
+Leave `NLP_REDIS_URL` empty to disable L2 and run NLP with L1 only. Redis errors fail-soft: cache misses fall through to the compute path, never block detection.
 
 ---
 

@@ -91,8 +91,78 @@ Key metrics exposed:
 - `medanon_fhir_calls_total{operation,server}` — FHIR client call counts
 - `medanon_nlp_calls_total{cached}` — NLP microservice call count and cache hits
 - `medanon_jobs_total{status}` — job completion counts (worker metrics port 9091)
+- `medanon_circuit_breaker_state{name}` — 0=closed, 1=half_open, 2=open per integration
+- `medanon_circuit_breaker_trips_total{name}` — CLOSED→OPEN transitions
+- `medanon_proxy_retries_total{upstream,reason}` — outbound HTTP retry rate (`reason`: `http_5xx`, `http_429`, `connection`)
+- `medanon_bulkhead_acquired_total{upstream}` / `medanon_bulkhead_rejected_total{upstream}` — per-upstream concurrency saturation; sustained `rejected` rate signals a need to raise `BULKHEAD_<UPSTREAM>_MAX_CONCURRENT` or scale the upstream
+- `medanon_fhirpath_cache_{hits,misses,size,maxsize}{cache}` — sampled at scrape time; cache types: `compile`, `classify`, `where_plan`, `candidates`. A high miss rate at `size == maxsize` means the cache is thrashing — raise `FHIRPATH_CACHE_SIZE`
+
+### SLO targets (default)
+
+| SLO | Target | Metric |
+|---|---|---|
+| anonymizer p95 `/process` latency | < 500 ms | `medanon_request_duration_seconds{path="/v1/process"}` |
+| gPAS p95 round-trip | < 200 ms | `medanon_gpas_latency_seconds` |
+| Bulkhead rejection rate | < 0.1 % of acquired | ratio of `bulkhead_rejected` / `bulkhead_acquired` |
+| Worker job success | > 99 % | `medanon_worker_jobs_total{status="done"}` / total |
 
 All pods have Prometheus scrape annotations (`prometheus.io/scrape: "true"`) in the Helm charts.
+
+### Health vs readiness
+
+- `/health` — process liveness; cheap; always 200 unless the FastAPI app died.
+- `/ready` — dependency check (Redis + Postgres + gPAS canary); 503 until ready.
+- Helm charts use a `startupProbe` against `/ready` with up to 5 minutes (60 × 5 s) before liveness kicks in. This accommodates gPAS WildFly cold-start (~90 s) without restart-looping the pod.
+- For Compose, the `redis` healthcheck must be `healthy` before anonymizer + worker start; gPAS uses a 10-minute `start_period` for the same reason.
+
+### Redis durability
+
+When `MEDANON_REDIS_URL` is set, the anonymizer logs at startup whether AOF (append-only file) persistence is enabled. AOF should be on in production — RDB snapshots alone may be up to 60 s stale, which can lose queued jobs across an unexpected restart.
+
+```bash
+# Verify AOF is enabled in your redis.conf
+docker compose exec redis redis-cli config get appendonly
+# 1) "appendonly"
+# 2) "yes"
+```
+
+Set `MEDANON_REQUIRE_REDIS_AOF=true` to make the anonymizer refuse to start when AOF is disabled — recommended for production.
+
+### Job store durability guard (C11)
+
+The dedicated `worker` container shares `/output` with the API container, so the SQLite job store at `/output/jobs.db` is **never safe** in this configuration — SQLite WAL across container boundaries can corrupt or double-claim jobs.
+
+The runtime enforces this via `pipeline/jobs/store_factory.assert_durable_store_or_exit()`:
+
+- The `worker` container ALWAYS exits with status 2 if neither `MEDANON_REDIS_URL` nor `MEDANON_APP_DB_URL` is reachable.
+- The API container exits with status 2 in the same situation **only when** `MEDANON_REQUIRE_DURABLE_STORE=true`. By default it logs a warning and falls back to SQLite (single-container dev mode).
+- Override the guard for single-container local development with `MEDANON_ALLOW_SQLITE_FALLBACK=true`.
+
+Recommended production posture: set `MEDANON_REDIS_URL` AND `MEDANON_APP_DB_URL` AND `MEDANON_REQUIRE_DURABLE_STORE=true`.
+
+### NLP cache diagnostics
+
+The NLP microservice keeps two cache tiers:
+
+- **L1** — in-process LRU (~20k entries, per replica). Lost on container restart.
+- **L2** — Redis DB 2 (key prefix `medanon:nlp:detect:`, TTL `NLP_REDIS_TTL_SEC`, default 7 days). Shared across NLP replicas, survives restarts.
+
+```bash
+# Confirm L2 is wired (logs at startup)
+docker compose logs nlp 2>&1 | grep -E 'nlp_l2_cache_(initialized|disabled|init_failed)'
+
+# Inspect L2 key count and a sample key
+docker compose exec redis redis-cli -a "$MEDANON_REDIS_PASSWORD" -n 2 \
+  --no-auth-warning DBSIZE
+docker compose exec redis redis-cli -a "$MEDANON_REDIS_PASSWORD" -n 2 \
+  --no-auth-warning --scan --pattern 'medanon:nlp:detect:*' | head
+
+# Force a cold path (clear L2 + restart NLP replicas)
+docker compose exec redis redis-cli -a "$MEDANON_REDIS_PASSWORD" -n 2 FLUSHDB
+docker compose restart nlp
+```
+
+**Cold-cache symptom:** First bulk export after `make up` runs ~4× slower than subsequent runs because both L1 and L2 are empty and every text snippet must hit Presidio + spaCy. Once L2 warms, subsequent NLP container restarts re-hydrate L1 lazily from L2 — restart latency disappears.
 
 ### Audit log
 
@@ -203,10 +273,10 @@ docker compose restart gpas           # restart once gpas-db is healthy
 **Symptom:** Text fields contain `[NLP_UNAVAILABLE]` placeholders; `/ready` reports NLP check failed.
 
 ```bash
-docker compose ps nlp nlp-lb                    # check both are running
-curl -s http://localhost:8200/health            # NLP LB liveness
-docker compose logs nlp --tail 50               # check for startup errors
-docker compose logs nlp-lb --tail 20            # check nginx config errors
+docker compose ps nlp gateway                   # check both are running
+curl -s http://localhost:8200/health            # NLP route via Traefik gateway
+docker compose logs nlp --tail 50               # check NLP for startup errors
+docker compose logs gateway --tail 20           # check Traefik routing errors
 ```
 
 NLP fails closed — PHI is replaced with `[NLP_UNAVAILABLE]` rather than leaking. Scale NLP replicas if latency is high:
@@ -241,11 +311,9 @@ If using an external LLM: verify `MEDANON_AI_API_BASE` and `MEDANON_AI_MODEL` in
 Job store not initialized. Check in priority order:
 1. `MEDANON_REDIS_URL` set and Redis reachable: `docker compose ps redis`
 2. `MEDANON_APP_DB_URL` set and `app-db` reachable: `docker compose ps app-db`
-3. SQLite fallback: `MEDANON_JOB_DB` path is writable inside the container (default `/output/jobs.db`)
+3. SQLite fallback: `MEDANON_JOB_DB` path is writable inside the container (default `/output/jobs.db`) — only safe in single-container dev mode (see "Job store durability guard" above).
 
-Backend selection order at startup: Redis → PostgreSQL (`app-db`) → SQLite.
-
-Root cause of past bug: `from pipeline.jobs.store import _job_store` captured `None` at import time. Fixed by reading directly from the authoritative module (`pipeline.jobs.store._job_store`). Ensure you're on a version after this fix.
+Backend selection order at startup: Redis → PostgreSQL (`app-db`) → SQLite. Centralised in `pipeline/jobs/store_factory.select_job_store()`.
 
 ### Worker not picking up jobs
 

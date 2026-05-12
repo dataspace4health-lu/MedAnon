@@ -81,9 +81,10 @@ Docker Compose uses two isolated bridge networks:
 ┌──────────────────────────────────────────────────────────────┐
 │  processing-net  (all services)                              │
 │                                                              │
-│  anonymizer ── worker ── redis ── app-db ── nlp-lb ──       │
-│  gpas-lb ── fhir-target ── hapi-target-db ── ui ──          │
-│  analytics ── minio (opt-in)                                 │
+│  anonymizer ── worker ── redis ── app-db ── analytics ──    │
+│  gateway (Traefik, aliases: gpas-lb, nlp-lb) ── nlp ──      │
+│  gpas ── gpas-db ── fhir-target ── hapi-target-db ── ui ──  │
+│  ollama (opt-in) ── minio (opt-in)                           │
 └──────────────────────────────────────────────────────────────┘
 
 ┌──────────────────────────────────────────────────────────────┐
