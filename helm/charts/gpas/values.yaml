@@ -30,8 +30,9 @@ imagePullSecrets: []
 # Use the custom image built from services/gpas/Dockerfile
 # (bundles WAR/EAR deployments and WildFly CLI scripts)
 image: medanon-gpas
-# Pin to a specific release tag in production — never use "latest" in production.
-tag: latest
+# Pinned to chart appVersion. Override at install time with `--set tag=<version>`.
+# Never use "latest" in production.
+tag: "2025.2.0"
 
 # Static replica count — ignored when autoscaling.enabled=true (HPA controls replicas).
 replicas: 1
@@ -53,11 +54,27 @@ env:
   # Options: gras | (anything else = no auth)
   TTP_GPAS_WEB_AUTH_MODE: "gras"
 
+  # ── Database driver selection ────────────────────────────────────────────
+  # gPAS WildFly defaults to MySQL when this is unset. The chart-managed DB
+  # is PostgreSQL, so this MUST stay "postgresql".
+  TTP_GPAS_DB_DBMS: "postgresql"
+  TTP_GPAS_DB_PORT: "5432"
+  TTP_GPAS_DB_NAME: "gpas"
+  # gRAS schema lives inside the gpas database (?currentSchema=gras).
+  TTP_GRAS_DB_PORT: "5432"
+  TTP_GRAS_DB_NAME: "gpas"
+  # notification_service schema lives inside the gpas database
+  # (?currentSchema=notification_service).
+  TTP_NOTI_DB_PORT: "5432"
+  TTP_NOTI_DB_NAME: "gpas"
+
   # PostgreSQL hostname — leave empty to use the DB Service name computed from
   # this chart's fullname (recommended). Override only when pointing at an
   # external database.
   TTP_DB_HOST: ""
+  TTP_GPAS_DB_HOST: ""
   TTP_GRAS_DB_HOST: ""
+  TTP_NOTI_DB_HOST: ""
 
   # Wait for PostgreSQL before starting WildFly (host:port:timeout_seconds).
   # Leave empty to use the computed DB service name and db.port.
@@ -88,6 +105,18 @@ resources:
 # PostgreSQL database backend (exclusively for gPAS)
 # ─────────────────────────────────────────────────────────────────────────────
 db:
+  # Pod-level security context for the PostgreSQL StatefulSet.
+  # postgres:16-alpine entrypoint must run as root (UID 0) to chmod/chown the
+  # data directory before dropping privileges — do not set runAsNonRoot here.
+  # fsGroup ensures the mounted PVC is group-readable by the postgres process.
+  podSecurityContext:
+    fsGroup: 70
+  # Container-level security context for the PostgreSQL container.
+  # postgres:16-alpine starts as root and uses gosu to drop to UID 70;
+  # dropping ALL capabilities breaks gosu (needs CAP_SETUID/CAP_SETGID).
+  # For hardened production deployments consider a postgres sidecar pattern.
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
   # PostgreSQL uses the official Docker Hub image; registry is intentionally not
   # prefixed by default so it always pulls from Docker Hub.
   # Set db.registry to override (e.g. for air-gapped clusters with a mirror).
@@ -142,3 +171,8 @@ db:
       limits:
         memory: "1Gi"
         cpu: "500m"
+
+# Network policy configuration
+networkPolicy:
+  # Additional namespaces allowed to send ingress traffic (e.g. ingress controller namespace)
+  additionalIngressNamespaces: []

@@ -16,3 +16,5 @@ data:
 {{ .Files.Get "files/gpas-sqls/01_create_database_noti.sql" | indent 4 }}
   02_init_database_gras_for_gpas.sql: |-
 {{ .Files.Get "files/gpas-sqls/02_init_database_gras_for_gpas.sql" | indent 4 }}
+  03_init_gpas_domain.sql: |-
+{{ .Files.Get "files/gpas-sqls/03_init_gpas_domain.sql" | indent 4 }}

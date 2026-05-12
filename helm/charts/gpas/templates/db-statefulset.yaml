@@ -20,9 +20,7 @@ spec:
         app.kubernetes.io/component: gpas-db
     spec:
       securityContext:
-        runAsNonRoot: true
-        runAsUser: 70    # postgres:16-alpine uses UID 70 (not 999 which is MySQL/Debian)
-        fsGroup: 70
+        {{- toYaml .Values.db.podSecurityContext | nindent 8 }}
       {{- with (coalesce .Values.imagePullSecrets .Values.global.imagePullSecrets) }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -32,9 +30,7 @@ spec:
           image: {{ include "gpas.image" (dict "registry" $dbRegistry "image" .Values.db.image "tag" .Values.db.tag) }}
           imagePullPolicy: {{ coalesce .Values.imagePullPolicy .Values.global.imagePullPolicy "IfNotPresent" }}
           securityContext:
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop: ["ALL"]
+            {{- toYaml .Values.db.containerSecurityContext | nindent 12 }}
           args:
             {{- toYaml .Values.db.args | nindent 12 }}
           ports:

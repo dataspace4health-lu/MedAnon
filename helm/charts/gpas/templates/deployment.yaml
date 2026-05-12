@@ -1,5 +1,8 @@
 {{- $registry := coalesce .Values.registry .Values.global.registry "" -}}
 {{- $dbHost := coalesce .Values.env.TTP_DB_HOST (include "gpas.dbHost" .) -}}
+{{- $gpasDbHost := coalesce .Values.env.TTP_GPAS_DB_HOST $dbHost -}}
+{{- $grasDbHost := coalesce .Values.env.TTP_GRAS_DB_HOST $dbHost -}}
+{{- $notiDbHost := coalesce .Values.env.TTP_NOTI_DB_HOST $dbHost -}}
 {{- $dbPort := .Values.db.port -}}
 {{- $mosWaitFor := coalesce .Values.env.MOS_WAIT_FOR_PORTS (printf "%s:%v:120" $dbHost $dbPort) -}}
 apiVersion: apps/v1
@@ -79,16 +82,22 @@ spec:
               containerPort: {{ .Values.port }}
               protocol: TCP
           env:
-            # DB hostname — computed from chart fullname unless overridden in values
+            # DB hostnames — computed from chart fullname unless overridden in values.
+            # gPAS / gRAS / notification_service all live in the same PostgreSQL
+            # database (schema isolation via ?currentSchema= in the JDBC URL).
             - name: TTP_DB_HOST
               value: {{ $dbHost | quote }}
+            - name: TTP_GPAS_DB_HOST
+              value: {{ $gpasDbHost | quote }}
             - name: TTP_GRAS_DB_HOST
-              value: {{ coalesce .Values.env.TTP_GRAS_DB_HOST $dbHost | quote }}
+              value: {{ $grasDbHost | quote }}
+            - name: TTP_NOTI_DB_HOST
+              value: {{ $notiDbHost | quote }}
             - name: MOS_WAIT_FOR_PORTS
               value: {{ $mosWaitFor | quote }}
             # Remaining env vars from values (DB host vars already set above)
             {{- range $k, $v := .Values.env }}
-            {{- if and (ne $k "TTP_DB_HOST") (ne $k "TTP_GRAS_DB_HOST") (ne $k "MOS_WAIT_FOR_PORTS") }}
+            {{- if and (ne $k "TTP_DB_HOST") (ne $k "TTP_GPAS_DB_HOST") (ne $k "TTP_GRAS_DB_HOST") (ne $k "TTP_NOTI_DB_HOST") (ne $k "MOS_WAIT_FOR_PORTS") }}
             - name: {{ $k }}
               value: {{ $v | quote }}
             {{- end }}

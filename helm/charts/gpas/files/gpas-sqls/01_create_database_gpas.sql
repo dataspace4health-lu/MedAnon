@@ -1,177 +1,205 @@
-DROP SCHEMA IF EXISTS `gpas` ;
-CREATE DATABASE gpas COLLATE utf8mb4_unicode_ci;
+-- =========================================================================
+-- gPAS core schema — PostgreSQL 16
+--
+-- Translated from MySQL 8.0 original (services/gpas/sqls/01_create_database_gpas.sql).
+-- All three databases (gpas, gras, notification_service) live in the same
+-- PostgreSQL cluster, each in its own schema.
+--
+-- IMPORTANT: All column names are lower-case and unquoted so that
+-- PostgreSQL stores them as lowercase identifiers, matching the
+-- unquoted lowercase SQL emitted by Hibernate / JPA on gPAS 2025.2.0.
+-- (MySQL was case-insensitive which masked this requirement.)
+-- =========================================================================
 
-USE gpas;
+-- Enable pgcrypto for SHA-256 hashing (used by gRAS procedures)
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
-CREATE TABLE `domain` (
-    `name` varchar(255) NOT NULL,
-    `label` varchar(255) DEFAULT NULL,
-    `alphabet` varchar(255) DEFAULT NULL,
-    `comment` varchar(255) DEFAULT NULL,
-    `generatorClass` varchar(255) DEFAULT NULL,
-    `properties` varchar(1023) DEFAULT NULL,
-    `create_timestamp` timestamp(3) NOT NULL DEFAULT current_timestamp(3),
-    `update_timestamp` timestamp(3) NOT NULL DEFAULT current_timestamp(3),
-    `expiration_properties` varchar(255) DEFAULT NULL,
-    PRIMARY KEY (`name`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_bin;
+-- The gpas database is created by POSTGRES_DB env var in docker-entrypoint.
+-- Tables go into the default public schema.
 
-CREATE TABLE `domain_parents` (
-    `domain` varchar(255) NOT NULL,
-    `parentDomain` varchar(255) NOT NULL,
-    PRIMARY KEY (`domain`,`parentDomain`),
-    KEY `FK_domain_parents_domain_2` (`parentDomain`),
-    CONSTRAINT `FK_domain_parents_domain` FOREIGN KEY (`domain`) REFERENCES `domain` (`name`),
-    CONSTRAINT `FK_domain_parents_domain_2` FOREIGN KEY (`parentDomain`) REFERENCES `domain` (`name`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_bin;
+-- ── Core tables ────────────────────────────────────────────────────────────
 
-CREATE TABLE `psn` (
-    `originalValue` varchar(255) NOT NULL,
-    `pseudonym` varchar(255) NOT NULL,
-    `domain` varchar(255) NOT NULL,
-    `encoded_expiration_date` smallint DEFAULT NULL,
-    PRIMARY KEY (`domain`,`originalValue`),
-    UNIQUE KEY `domain_pseudonym` (`domain`,`pseudonym`),
-    CONSTRAINT `FK_DOMAIN` FOREIGN KEY (`domain`) REFERENCES `domain` (`name`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_bin;
+CREATE TABLE IF NOT EXISTS domain (
+    name                  VARCHAR(255) NOT NULL,
+    label                 VARCHAR(255) DEFAULT NULL,
+    alphabet              VARCHAR(255) DEFAULT NULL,
+    comment               VARCHAR(255) DEFAULT NULL,
+    generatorclass        VARCHAR(255) DEFAULT NULL,
+    properties            VARCHAR(1023) DEFAULT NULL,
+    create_timestamp      TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    update_timestamp      TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    expiration_properties VARCHAR(255) DEFAULT NULL,
+    PRIMARY KEY (name)
+);
 
-CREATE TABLE `mpsn` (
-    `originalValue` varchar(255) NOT NULL,
-    `pseudonym` varchar(255) NOT NULL,
-    `domain` varchar(255) NOT NULL,
-    `encoded_expiration_date` smallint DEFAULT NULL,
-    PRIMARY KEY (`domain`,`originalValue`,`pseudonym`),
-    UNIQUE KEY `domain_pseudonym` (`domain`,`pseudonym`),
-    INDEX `domain_originalValue` (`domain`,`originalValue`),
-    CONSTRAINT `FK_DOMAIN_MPSN` FOREIGN KEY (`domain`) REFERENCES `domain` (`name`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_bin;
+CREATE TABLE IF NOT EXISTS domain_parents (
+    domain        VARCHAR(255) NOT NULL,
+    parentdomain  VARCHAR(255) NOT NULL,
+    PRIMARY KEY (domain, parentdomain),
+    CONSTRAINT "FK_domain_parents_domain"   FOREIGN KEY (domain)       REFERENCES domain (name),
+    CONSTRAINT "FK_domain_parents_domain_2" FOREIGN KEY (parentdomain) REFERENCES domain (name)
+);
 
-CREATE TABLE IF NOT EXISTS `stat_entry` (
-    `STAT_ENTRY_ID` BIGINT(20) NOT NULL AUTO_INCREMENT,
-    `ENTRYDATE` TIMESTAMP(3) NOT NULL DEFAULT current_timestamp(3),
-    PRIMARY KEY (`STAT_ENTRY_ID`)
-) ENGINE=InnoDB DEFAULT CHARACTER SET=utf8;
+CREATE TABLE IF NOT EXISTS psn (
+    originalvalue           VARCHAR(255) NOT NULL,
+    pseudonym               VARCHAR(255) NOT NULL,
+    domain                  VARCHAR(255) NOT NULL,
+    encoded_expiration_date SMALLINT DEFAULT NULL,
+    PRIMARY KEY (domain, originalvalue),
+    CONSTRAINT domain_pseudonym UNIQUE (domain, pseudonym),
+    CONSTRAINT "FK_DOMAIN" FOREIGN KEY (domain) REFERENCES domain (name)
+);
 
-CREATE TABLE IF NOT EXISTS `stat_value` (
-    `stat_value_id` BIGINT(20) NULL DEFAULT NULL,
-    `stat_value` BIGINT(20) NULL DEFAULT NULL,
-    `stat_attr` VARCHAR(255) NULL DEFAULT NULL,
-    INDEX `FK_stat_value_stat_value_id` (`stat_value_id` ASC),
-    CONSTRAINT `FK_stat_value_stat_value_id`
-    FOREIGN KEY (`stat_value_id` )
-    REFERENCES `stat_entry` (`STAT_ENTRY_ID` )
-) ENGINE=InnoDB DEFAULT CHARACTER SET=utf8;
+CREATE TABLE IF NOT EXISTS mpsn (
+    originalvalue           VARCHAR(255) NOT NULL,
+    pseudonym               VARCHAR(255) NOT NULL,
+    domain                  VARCHAR(255) NOT NULL,
+    encoded_expiration_date SMALLINT DEFAULT NULL,
+    PRIMARY KEY (domain, originalvalue, pseudonym),
+    CONSTRAINT domain_pseudonym_mpsn UNIQUE (domain, pseudonym),
+    CONSTRAINT "FK_DOMAIN_MPSN" FOREIGN KEY (domain) REFERENCES domain (name)
+);
+CREATE INDEX IF NOT EXISTS idx_mpsn_domain_original ON mpsn (domain, originalvalue);
 
-CREATE TABLE sequence (
-    SEQ_NAME varchar(50) PRIMARY KEY NOT NULL,
-    SEQ_COUNT decimal(38,0)
-) ENGINE=InnoDB COLLATE=utf8mb4_unicode_ci;
+CREATE TABLE IF NOT EXISTS stat_entry (
+    stat_entry_id  BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+    entrydate      TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 
-DROP VIEW IF EXISTS `psn_domain_count`;
-CREATE VIEW `psn_domain_count` AS
+CREATE TABLE IF NOT EXISTS stat_value (
+    stat_value_id  BIGINT DEFAULT NULL,
+    stat_value     BIGINT DEFAULT NULL,
+    stat_attr      VARCHAR(255) DEFAULT NULL,
+    CONSTRAINT "FK_stat_value_stat_value_id"
+        FOREIGN KEY (stat_value_id) REFERENCES stat_entry (stat_entry_id)
+);
+CREATE INDEX IF NOT EXISTS idx_stat_value_id ON stat_value (stat_value_id);
+
+-- "sequence" is a PostgreSQL reserved word — table name must be quoted.
+-- Column names are unquoted (lowercase) to match Hibernate-generated SQL.
+CREATE TABLE IF NOT EXISTS "sequence" (
+    seq_name   VARCHAR(50) NOT NULL PRIMARY KEY,
+    seq_count  NUMERIC(38,0)
+);
+
+-- ── View ───────────────────────────────────────────────────────────────────
+
+CREATE OR REPLACE VIEW psn_domain_count AS
     SELECT
-        CONCAT('pseudonyms_per_domain.', `d`.`name`) AS `attribut`,
-        (COUNT(`p`.`pseudonym`) + COUNT(`m`.`pseudonym`)) AS `value`
-    FROM
-        `domain` `d`
-        LEFT JOIN `psn` `p` ON `p`.`domain` = `d`.`name`
-        LEFT JOIN `mpsn` `m` ON `m`.`domain` = `d`.`name`
-    WHERE
-        `d`.`name` != 'internal_anonymisation_domain'
-    GROUP BY `d`.`name`;
+        'pseudonyms_per_domain.' || d.name AS attribut,
+        (COUNT(p.pseudonym) + COUNT(m.pseudonym)) AS value
+    FROM domain d
+    LEFT JOIN psn p ON p.domain = d.name
+    LEFT JOIN mpsn m ON m.domain = d.name
+    WHERE d.name != 'internal_anonymisation_domain'
+    GROUP BY d.name;
 
-DELIMITER $$
-CREATE PROCEDURE `convert_to_multi_psn_domain`(
-    IN in_domain VARCHAR(255)
-)
+-- ── Stored procedures ──────────────────────────────────────────────────────
+
+CREATE OR REPLACE FUNCTION convert_to_multi_psn_domain(in_domain VARCHAR(255))
+RETURNS void AS $$
+DECLARE
+    conflict INT;
+    msg TEXT;
 BEGIN
-    DECLARE conflict INT DEFAULT 0;
-    DECLARE msg VARCHAR(255);
-
-    -- prüfe ob domain existiert
-    SELECT IF(COUNT(*),0,1) INTO conflict FROM domain WHERE name = in_domain;
-    IF conflict THEN
-        SET msg = CONCAT('Domain "', in_domain, '" not exists.');
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = msg;
+    -- check domain exists
+    SELECT CASE WHEN COUNT(*) > 0 THEN 0 ELSE 1 END INTO conflict
+        FROM domain WHERE name = in_domain;
+    IF conflict = 1 THEN
+        msg := format('Domain "%s" not exists.', in_domain);
+        RAISE EXCEPTION '%', msg;
     END IF;
 
-    -- prüfe ob domain bereits in multi-psn vorhanden
+    -- check domain not already in multi-psn
     SELECT COUNT(*) INTO conflict FROM (
-                                           SELECT originalValue FROM mpsn WHERE domain = in_domain LIMIT 1
-                                       ) t;
-    IF conflict THEN
-        SET msg = CONCAT('Domain "', in_domain, '" already exists in mpsn-table.');
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = msg;
+        SELECT originalvalue FROM mpsn WHERE domain = in_domain LIMIT 1
+    ) t;
+    IF conflict > 0 THEN
+        msg := format('Domain "%s" already exists in mpsn-table.', in_domain);
+        RAISE EXCEPTION '%', msg;
     END IF;
 
-    START TRANSACTION;
-
-    REPLACE INTO mpsn (originalValue, pseudonym, domain, encoded_expiration_date)
-    SELECT originalValue, pseudonym, domain, encoded_expiration_date FROM psn WHERE domain = in_domain;
+    -- Migrate psn → mpsn
+    INSERT INTO mpsn (originalvalue, pseudonym, domain, encoded_expiration_date)
+    SELECT originalvalue, pseudonym, domain, encoded_expiration_date
+    FROM psn WHERE domain = in_domain
+    ON CONFLICT DO NOTHING;
 
     DELETE FROM psn WHERE domain = in_domain;
 
     UPDATE domain
     SET properties = CONCAT(
-            REGEXP_REPLACE(REGEXP_REPLACE(
-                                   IFNULL(properties,''), ';?MULTI_PSN_DOMAIN=[^;]+', ''
-                           ), '^;', ''),
-            IF(IFNULL(properties,'')='' OR RIGHT(properties, 1)=';', '', ';'),
+            regexp_replace(regexp_replace(
+                COALESCE(properties, ''), ';?MULTI_PSN_DOMAIN=[^;]+', '', 'g'
+            ), '^;', ''),
+            CASE WHEN COALESCE(properties, '') = '' OR RIGHT(properties, 1) = ';' THEN '' ELSE ';' END,
             'MULTI_PSN_DOMAIN=true;'
-                     )
+        )
     WHERE name = in_domain;
+END;
+$$ LANGUAGE plpgsql;
 
-    COMMIT;
-END$$
 
-CREATE PROCEDURE `convert_to_single_psn_domain`(
-    IN in_domain VARCHAR(255)
-)
+CREATE OR REPLACE FUNCTION convert_to_single_psn_domain(in_domain VARCHAR(255))
+RETURNS void AS $$
+DECLARE
+    conflict INT;
+    msg TEXT;
 BEGIN
-    DECLARE conflict INT DEFAULT 0;
-    DECLARE msg VARCHAR(255);
-
-    -- prüfe ob domain existiert
-    SELECT IF(COUNT(*),0,1) INTO conflict FROM domain WHERE name = in_domain;
-    IF conflict THEN
-        SET msg = CONCAT('Domain "', in_domain, '" not exists.');
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = msg;
+    -- check domain exists
+    SELECT CASE WHEN COUNT(*) > 0 THEN 0 ELSE 1 END INTO conflict
+        FROM domain WHERE name = in_domain;
+    IF conflict = 1 THEN
+        msg := format('Domain "%s" not exists.', in_domain);
+        RAISE EXCEPTION '%', msg;
     END IF;
 
-    -- prüfe ob domain bereits in single-psn vorhanden
+    -- check domain not already in single-psn
     SELECT COUNT(*) INTO conflict FROM (
-                                           SELECT originalValue FROM psn WHERE domain = in_domain LIMIT 1
-                                       ) t;
-    IF conflict THEN
-        SET msg = CONCAT('Domain "', in_domain, '" already exists in psn-table.');
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = msg;
+        SELECT originalvalue FROM psn WHERE domain = in_domain LIMIT 1
+    ) t;
+    IF conflict > 0 THEN
+        msg := format('Domain "%s" already exists in psn-table.', in_domain);
+        RAISE EXCEPTION '%', msg;
     END IF;
 
-    -- prüfe Konflikte mit mehrfachen originalValue
+    -- check no duplicate originalValues in mpsn
     SELECT COUNT(*) INTO conflict FROM (
-                                           SELECT originalValue FROM mpsn WHERE domain = in_domain
-                                           GROUP BY originalValue, domain HAVING COUNT(*) > 1 LIMIT 1
-                                       ) t;
-    IF conflict THEN
-        SET msg = CONCAT('At least one originalValue is not unique in domain "', in_domain, '".');
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = msg;
+        SELECT originalvalue FROM mpsn WHERE domain = in_domain
+        GROUP BY originalvalue, domain HAVING COUNT(*) > 1 LIMIT 1
+    ) t;
+    IF conflict > 0 THEN
+        msg := format('At least one originalValue is not unique in domain "%s".', in_domain);
+        RAISE EXCEPTION '%', msg;
     END IF;
 
-    START TRANSACTION;
-
-    INSERT INTO psn (originalValue, pseudonym, domain, encoded_expiration_date)
-    SELECT originalValue, pseudonym, domain, encoded_expiration_date FROM mpsn WHERE domain = in_domain;
+    -- Migrate mpsn → psn
+    INSERT INTO psn (originalvalue, pseudonym, domain, encoded_expiration_date)
+    SELECT originalvalue, pseudonym, domain, encoded_expiration_date
+    FROM mpsn WHERE domain = in_domain;
 
     DELETE FROM mpsn WHERE domain = in_domain;
 
     UPDATE domain
-    SET properties = REGEXP_REPLACE(properties, 'MULTI_PSN_DOMAIN=[^;]+', 'MULTI_PSN_DOMAIN=false')
+    SET properties = regexp_replace(properties, 'MULTI_PSN_DOMAIN=[^;]+', 'MULTI_PSN_DOMAIN=false')
     WHERE name = in_domain;
-
-    COMMIT;
-END$$
-DELIMITER ;
+END;
+$$ LANGUAGE plpgsql;
 
 
-CREATE USER 'gpas_user'@'%' IDENTIFIED BY 'gpas_password';
-GRANT ALL ON gpas.* TO 'gpas_user'@'%';
+-- ── Database role ──────────────────────────────────────────────────────────
+-- In PostgreSQL, user creation is handled by the POSTGRES_USER env var
+-- or a separate init script. The gpas_user role is created below only if
+-- it does not already exist, to avoid errors on re-runs.
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'gpas_user') THEN
+        CREATE ROLE gpas_user LOGIN PASSWORD 'gpas_password';
+    END IF;
+END
+$$;
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO gpas_user;
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO gpas_user;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO gpas_user;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO gpas_user;
