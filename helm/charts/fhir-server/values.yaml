@@ -25,7 +25,8 @@ imagePullPolicy: IfNotPresent
 imagePullSecrets: []
 
 image: hapiproject/hapi
-tag: latest
+# Pinned to match docker-compose.yml. Override with `--set tag=<version>`.
+tag: "v7.6.0"
 replicas: 1
 port: 8080
 
@@ -36,12 +37,19 @@ fhirVersion: R4
 # Example: "http://fhir.example.com/fhir"
 serverAddress: ""
 
+# JVM heap cap — passed as JAVA_TOOL_OPTIONS. Recommended: -Xms128m -Xmx512m
+# Set to "" to disable (JVM will size heap from container memory limit).
+javaOpts: "-Xms128m -Xmx512m"
+
+# Additional environment variables (list of name/value maps)
+extraEnv: []
+
 resources:
   requests:
-    memory: "512Mi"
-    cpu: "250m"
+    memory: "256Mi"
+    cpu: "100m"
   limits:
-    memory: "2Gi"
+    memory: "768Mi"
     cpu: "1000m"
 
 # Database backend.
@@ -56,3 +64,8 @@ db:
     username: hapi
     password: ""
     # existingSecret: ""   # K8s Secret name with keys "username" and "password"
+
+# Network policy configuration
+networkPolicy:
+  # Additional namespaces allowed to send ingress traffic (e.g. ingress controller namespace)
+  additionalIngressNamespaces: []

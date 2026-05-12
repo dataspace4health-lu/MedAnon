@@ -8,7 +8,7 @@ metadata:
 spec:
   type: ClusterIP
   selector:
-    {{- include "fhir-server.selectorLabels" (dict "Release" .Release "component" "fhir-server") | nindent 4 }}
+    {{- include "fhir-server.selectorLabels" (dict "Release" .Release "component" (include "fhir-server.name" .)) | nindent 4 }}
   ports:
     - name: http
       port: {{ .Values.port }}

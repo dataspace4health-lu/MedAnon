@@ -88,6 +88,13 @@ spec:
               value: {{ .Values.db.postgresql.password | default "" | quote }}
             {{- end }}
             {{- end }}
+            {{- if .Values.javaOpts }}
+            - name: JAVA_TOOL_OPTIONS
+              value: {{ .Values.javaOpts | quote }}
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           volumeMounts:
             - name: config
               mountPath: /app/config/application.yaml
