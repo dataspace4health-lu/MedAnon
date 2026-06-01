@@ -122,32 +122,56 @@ class PostgresProcessingRunStore:
         finally:
             self._put_conn(conn)
 
-    def get_stats(self) -> dict:
-        """Aggregate statistics across all runs."""
+    def get_stats(self, window_days: int = 90) -> dict:
+        """Aggregate statistics across recent runs.
+
+        ``window_days`` limits the look-back window (default 90 days) so the
+        three aggregate queries stay within the ``idx_processing_runs_created``
+        index range and avoid sequential scans as history grows.
+        All-time totals (total_runs, total_resources) include rows outside the
+        window; the composite score average and breakdown tables use the window
+        to reflect recent activity on the dashboard.
+        """
         conn = self._get_conn()
         try:
             with conn:
                 with conn.cursor(
                     cursor_factory=psycopg2.extras.RealDictCursor
                 ) as cur:
+                    # All-time totals — kept cheap via a small covering query.
                     cur.execute(
                         """
                         SELECT
-                            COUNT(*)                                             AS total_runs,
-                            COUNT(*) FILTER (WHERE score IS NOT NULL)            AS scored_runs,
-                            AVG((score->>'avg_composite')::float)                AS avg_composite,
-                            COALESCE(SUM(resource_count), 0)                    AS total_resources
+                            COUNT(*)                        AS total_runs,
+                            COALESCE(SUM(resource_count), 0) AS total_resources
                         FROM medanon.processing_runs
+                        """
+                    )
+                    totals = cur.fetchone()
+
+                    # Recent window — uses idx_processing_runs_created.
+                    window_cutoff = (
+                        f"NOW() - INTERVAL '{window_days} days'"
+                    )
+                    cur.execute(
+                        f"""
+                        SELECT
+                            COUNT(*) FILTER (WHERE score IS NOT NULL)  AS scored_runs,
+                            AVG((score->>'avg_composite')::float)       AS avg_composite
+                        FROM medanon.processing_runs
+                        WHERE created_at >= {window_cutoff}
                         """
                     )
                     agg = cur.fetchone()
 
                     cur.execute(
-                        """
+                        f"""
                         SELECT endpoint, COUNT(*) AS cnt
                         FROM medanon.processing_runs
+                        WHERE created_at >= {window_cutoff}
                         GROUP BY endpoint
                         ORDER BY cnt DESC
+                        LIMIT 20
                         """
                     )
                     by_endpoint = {
@@ -155,11 +179,13 @@ class PostgresProcessingRunStore:
                     }
 
                     cur.execute(
-                        """
+                        f"""
                         SELECT config_profile, COUNT(*) AS cnt
                         FROM medanon.processing_runs
+                        WHERE created_at >= {window_cutoff}
                         GROUP BY config_profile
                         ORDER BY cnt DESC
+                        LIMIT 20
                         """
                     )
                     by_profile = {
@@ -168,10 +194,10 @@ class PostgresProcessingRunStore:
 
             avg = agg["avg_composite"]
             return {
-                "total_runs": agg["total_runs"],
+                "total_runs": totals["total_runs"],
                 "scored_runs": agg["scored_runs"] or 0,
                 "avg_composite": round(float(avg), 1) if avg is not None else None,
-                "total_resources": agg["total_resources"] or 0,
+                "total_resources": totals["total_resources"] or 0,
                 "runs_by_endpoint": by_endpoint,
                 "runs_by_profile": by_profile,
             }
