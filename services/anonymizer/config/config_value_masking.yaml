@@ -84,11 +84,6 @@ rules:
   action: substitute
   params: *redacted
 
-- name: mask all name text
-  match: "*.name.text"
-  action: substitute
-  params: *redacted
-
 # ==============================================================
 # 4. TELECOM — mask across all resource types
 # ==============================================================
@@ -128,17 +123,6 @@ rules:
   action: substitute
   params: *redacted
 
-- name: mask all address district
-  match: "*.address.district"
-  action: substitute
-  params: *redacted
-
-# Address.text — free-text representation of an address (when the structured
-# line/city/postalCode fields aren't populated). Common in inbound bundles.
-- name: mask all address text
-  match: "*.address.text"
-  action: substitute
-  params: *redacted
 
 
 # ==============================================================
@@ -219,17 +203,6 @@ rules:
   action: substitute
   params: *redacted
 
-- name: mask managing organization display
-  match: "*.managingOrganization.display"
-  action: nlp_detect_act
-  params:
-    entities: healthcare
-
-- name: mask encounter location display
-  match: "*.encounter.display"
-  action: nlp_detect_act
-  params:
-    entities: healthcare
 
 # ==============================================================
 # 7. CLINICAL DATES — generalise to year
@@ -366,21 +339,6 @@ rules:
     entities: healthcare
     threshold: 0.4
 
-- name: mask document reference attachment url
-  match: DocumentReference.content.attachment.url
-  action: substitute
-  params: *redacted
-
-- name: mask document reference attachment title
-  match: DocumentReference.content.attachment.title
-  action: substitute
-  params: *redacted
-
-- name: mask document reference attachment hash
-  match: DocumentReference.content.attachment.hash
-  action: substitute
-  params:
-    substitute_with: ""
 
 # DiagnosticReport, QuestionnaireResponse — presentedForm is Attachment directly
 - name: mask presented form text
@@ -391,15 +349,6 @@ rules:
     entities: healthcare
     threshold: 0.4
 
-- name: mask presented form url
-  match: "*.presentedForm.url"
-  action: substitute
-  params: *redacted
-
-- name: mask presented form title
-  match: "*.presentedForm.title"
-  action: substitute
-  params: *redacted
 
 # Observation, Task — valueAttachment
 - name: mask value attachment text
@@ -543,11 +492,6 @@ rules:
   params:
     threshold: 0.4
 
-- name: nlp scrub dosage patient instruction
-  match: "*.dosage.patientInstruction"
-  action: nlp_detect_act
-  params:
-    threshold: 0.4
 
 - name: nlp scrub communication payload
   match: Communication.payload.contentString
@@ -690,10 +634,6 @@ rules:
   params:
     substitute_with: "UNK"
 
-- name: mask ethnicity text value
-  match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-ethnicity').extension.where(url='text').valueString
-  action: substitute
-  params: *redacted
 
 # Geolocation — Patient.address carries a geolocation extension with nested
 # latitude/longitude as valueDecimal; mask to 0.0 to preserve structure.
@@ -703,11 +643,6 @@ rules:
   params:
     substitute_with: 0.0
 
-- name: mask patient address geolocation longitude
-  match: Patient.address.extension.where(url='http://hl7.org/fhir/StructureDefinition/geolocation').extension.where(url='longitude').valueDecimal
-  action: substitute
-  params:
-    substitute_with: 0.0
 
 # Mother's Maiden Name
 - name: mask mothers maiden name
