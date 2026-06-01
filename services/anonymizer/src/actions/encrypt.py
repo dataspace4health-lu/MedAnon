@@ -1,3 +1,9 @@
+"""encrypt — RSA-OAEP field encryption action.
+
+Encrypts matched FHIR field values with the public key at
+``MEDANON_RSA_PUBLIC_KEY``.  The ciphertext is Base64-encoded and written back
+to the field.  Pairs with the ``decrypt`` action for authorised re-identification.
+"""
 from __future__ import annotations
 
 import json

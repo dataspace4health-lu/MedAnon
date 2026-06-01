@@ -1,3 +1,10 @@
+"""substitute — value substitution / generalisation action.
+
+Replaces matched FHIR field values with a static substitute or applies a
+lookup from a configurable mapping table.  Used for generalisation (e.g.
+mapping a specific diagnosis code to a broader category) and for replacing
+identifying values with de-identified equivalents.
+"""
 from __future__ import annotations
 
 from typing import Any

@@ -1,3 +1,9 @@
+"""redact — field redaction action.
+
+Replaces matched FHIR field values with a configurable placeholder string
+(default ``"[REDACTED]"``).  For complex types (HumanName, Address, etc.)
+the entire node is replaced; for primitives the value itself is overwritten.
+"""
 from __future__ import annotations
 
 from typing import Any

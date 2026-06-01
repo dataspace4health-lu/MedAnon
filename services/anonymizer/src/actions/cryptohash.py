@@ -1,3 +1,10 @@
+"""cryptohash — HMAC-SHA3-256 pseudonymisation action.
+
+Replaces matched FHIR field values with a deterministic hex digest so identical
+inputs always map to identical outputs (longitudinal linkage without leaking
+originals).  Production deployments must set ``MEDANON_HASH_KEY``; plain
+SHA3-256 is only permitted when ``MEDANON_HASH_ALLOW_PLAIN=true``.
+"""
 from __future__ import annotations
 
 import hashlib

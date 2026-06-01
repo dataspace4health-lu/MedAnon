@@ -1,3 +1,9 @@
+"""decrypt — RSA-OAEP field decryption action.
+
+Decrypts field values that were previously encrypted by the ``encrypt`` action,
+using the private key at ``MEDANON_RSA_PRIVATE_KEY``.  Intended for
+re-identification workflows where authorised parties need the original value.
+"""
 from __future__ import annotations
 
 import json
