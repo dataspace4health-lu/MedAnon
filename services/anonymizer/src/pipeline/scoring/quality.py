@@ -134,6 +134,18 @@ class QualityEvaluator:
             root_field = parts[1] if len(parts) >= 2 else ""
             if root_field and root_field not in deidentified:
                 continue
+
+            # If the rule path has ≥ 3 segments (e.g. *.name.family) the rule
+            # requires a nested field inside the root value.  When the root
+            # value is a scalar or null it cannot contain sub-fields — the rule
+            # can never fire and should not count as applicable.
+            # Concrete case: Organization.name is a plain string, not a
+            # HumanName object, so *.name.family is not applicable to it.
+            if len(parts) >= 3 and root_field:
+                root_val = deidentified.get(root_field)
+                if not isinstance(root_val, (dict, list)):
+                    continue
+
             applicable.add(name)
 
         if not applicable:

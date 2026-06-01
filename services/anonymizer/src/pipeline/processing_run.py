@@ -141,15 +141,38 @@ class SqliteProcessingRunStore:
 
         return [_row_to_dict(r) for r in rows], total
 
-    def get_stats(self) -> dict:
-        """Aggregate statistics across all runs."""
+    def get_stats(self, window_days: int = 90) -> dict:
+        """Aggregate statistics across recent runs.
+
+        ``window_days`` limits the breakdown queries to the last N days so
+        they stay index-friendly as history grows.  All-time totals
+        (total_runs, total_resources) are still computed across the full table.
+        """
+        from datetime import timedelta
+
+        window_cutoff = (
+            datetime.now(timezone.utc) - timedelta(days=window_days)
+        ).isoformat()
+
         with self._connect() as conn:
             agg = conn.execute(
                 """
                 SELECT
-                    COUNT(*)                                                         AS total_runs,
-                    AVG(CAST(json_extract(score, '$.avg_composite') AS REAL))        AS avg_composite,
-                    COALESCE(SUM(resource_count), 0)                                 AS total_resources
+                    COUNT(*)                                                               AS total_runs,
+                    COUNT(CASE WHEN score IS NOT NULL THEN 1 END)                         AS scored_runs,
+                    AVG(CAST(json_extract(score, '$.avg_composite') AS REAL))              AS avg_composite,
+                    COALESCE(SUM(resource_count), 0)                                       AS total_resources
+                FROM processing_runs
+                WHERE created_at >= ?
+                """,
+                (window_cutoff,),
+            ).fetchone()
+
+            totals = conn.execute(
+                """
+                SELECT
+                    COUNT(*) AS total_runs,
+                    COALESCE(SUM(resource_count), 0) AS total_resources
                 FROM processing_runs
                 """
             ).fetchone()
@@ -158,22 +181,25 @@ class SqliteProcessingRunStore:
                 r["endpoint"]: r["cnt"]
                 for r in conn.execute(
                     "SELECT endpoint, COUNT(*) AS cnt FROM processing_runs"
-                    " GROUP BY endpoint ORDER BY cnt DESC"
+                    " WHERE created_at >= ? GROUP BY endpoint ORDER BY cnt DESC LIMIT 20",
+                    (window_cutoff,),
                 ).fetchall()
             }
             by_profile = {
                 r["config_profile"]: r["cnt"]
                 for r in conn.execute(
                     "SELECT config_profile, COUNT(*) AS cnt FROM processing_runs"
-                    " GROUP BY config_profile ORDER BY cnt DESC"
+                    " WHERE created_at >= ? GROUP BY config_profile ORDER BY cnt DESC LIMIT 20",
+                    (window_cutoff,),
                 ).fetchall()
             }
 
         avg = agg["avg_composite"]
         return {
-            "total_runs": agg["total_runs"],
+            "total_runs": totals["total_runs"],
+            "scored_runs": agg["scored_runs"] or 0,
             "avg_composite": round(float(avg), 1) if avg is not None else None,
-            "total_resources": agg["total_resources"] or 0,
+            "total_resources": totals["total_resources"] or 0,
             "runs_by_endpoint": by_endpoint,
             "runs_by_profile": by_profile,
         }

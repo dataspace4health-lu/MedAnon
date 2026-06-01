@@ -218,6 +218,8 @@ class ScoreCollector:
         "_error_count",
         "_total_count",
         "_config_profile",
+        "_text_risk_hits",
+        "_identifier_risk_hits",
         "_lock",
     )
 
@@ -234,6 +236,13 @@ class ScoreCollector:
         self._error_count: int = 0
         self._total_count: int = 0
         self._config_profile = config_profile
+        # Count of resources where the privacy evaluator detected actual PII
+        # in free text (text_risk > 0) or found HIPAA-sensitive fields that
+        # were not covered by any de-identification rule (identifier_risk > 0).
+        # These are used by the score gate for zero-tolerance PII enforcement
+        # independent of the composite score.
+        self._text_risk_hits: int = 0
+        self._identifier_risk_hits: int = 0
         # Guards all mutable accumulators below.  ``record_resource`` and
         # ``aggregate`` may run concurrently from the parallel finalize stage
         # in the pipeline; without this lock, increments and the reservoir
@@ -289,13 +298,29 @@ class ScoreCollector:
 
         # Heavy scoring is intentionally outside the lock to avoid serialising
         # CPU-bound work; only the accumulation below is critical-section.
-        result = score_resource(
-            original,
-            deidentified,
-            manifest_entries,
-            settings,
-            self._config_profile,
-        )
+        # Use the local engine directly — score_resource() would route each
+        # call to the remote scoring microservice (one HTTP POST per resource),
+        # which multiplies into tens of thousands of round-trips during bulk
+        # export. The remote service runs the identical algorithm; local scoring
+        # is correct and orders of magnitude faster in the hot loop.
+        try:
+            result = _score_resource_local(
+                original,
+                deidentified,
+                manifest_entries,
+                settings,
+                self._config_profile,
+            )
+        except Exception:
+            # Scoring raised unexpectedly — _total_count was already
+            # incremented in the first critical section so we must balance
+            # _fail_count here, otherwise aggregate() computes totals from
+            # pass+fail that are one less than _total_count.
+            with self._lock:
+                self._error_count += 1
+                self._fail_count += 1
+                self._min_composite = min(self._min_composite, 0.0)
+            raise
 
         with self._lock:
             self._composite_sum += result.composite
@@ -308,6 +333,17 @@ class ScoreCollector:
                     self._quality_sum += result.quality.score
             else:
                 self._fail_count += 1
+
+            # Track zero-tolerance PII leakage independently of the composite
+            # score gate.  text_risk > 0 means regex/NER found an actual PII
+            # pattern (SSN, phone, email, etc.) in the de-identified output.
+            # identifier_risk > 0 means a HIPAA-sensitive field existed in the
+            # resource but no de-identification rule touched it.
+            if result.privacy:
+                if result.privacy.text_risk > 0:
+                    self._text_risk_hits += 1
+                if result.privacy.identifier_risk > 0:
+                    self._identifier_risk_hits += 1
 
             # Accumulate Patient QI tuples for batch-level k-anonymity
             # (reservoir sampling).
@@ -366,4 +402,8 @@ class ScoreCollector:
             "avg_quality": round(avg_quality, 4),
             "batch_privacy": batch_privacy.to_dict() if batch_privacy else None,
             "config_profile": self._config_profile,
+            # Zero-tolerance PII leak counters — used by the score gate for a
+            # hard block independent of the composite score.
+            "text_risk_hits": self._text_risk_hits,
+            "identifier_risk_hits": self._identifier_risk_hits,
         }
