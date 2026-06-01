@@ -35,9 +35,10 @@ async def _main() -> None:
 
     # Log the centralized connection pool budget so operators can verify sizing.
     try:
-        from utils.pool_budget import log_pool_budget
+        from utils.pool_budget import check_thread_budget, log_pool_budget
 
         log_pool_budget()
+        check_thread_budget()
     except Exception:
         pass
 
@@ -58,6 +59,13 @@ async def _main() -> None:
                 "worker_health_server_failed port=%d: %s", metrics_port, exc
             )
 
+    # Initialize OTel tracing for the worker process (no FastAPI, no HTTP instrumentation).
+    try:
+        from utils.tracing import setup_tracing_worker
+        setup_tracing_worker()
+    except Exception as _tracing_exc:
+        logger.warning("tracing_init_failed: %s", _tracing_exc)
+
     # Shared setup via store factory (identical to api/main.py)
     await setup_redis_cache(redis_url)
     await check_gpas_canary(redis_url)
@@ -68,6 +76,22 @@ async def _main() -> None:
     assert_durable_store_or_exit(job_store, role="worker")
     store = init_job_store(store=job_store)
     _worker.init_worker(store, max_concurrent=max_concurrent)
+
+    # Initialize processing run store so scored job results are persisted to the
+    # dashboard table.  Uses the same backend-selection logic as api/main.py.
+    try:
+        from pipeline.processing_run import init_processing_run_store
+        if pg_pool is not None:
+            from integrations.postgres.processing_run_store import PostgresProcessingRunStore
+            pr_store = PostgresProcessingRunStore(pg_pool)
+            init_processing_run_store(store=pr_store)
+            logger.info("processing_run_store=postgres")
+        else:
+            pr_db = os.environ.get("MEDANON_PROCESSING_RUN_DB", "/output/processing_runs.db")
+            init_processing_run_store(pr_db)
+            logger.info("processing_run_store=sqlite path=%s", pr_db)
+    except Exception as exc:
+        logger.warning("processing_run_store_start_failed: %s", exc)
 
     staging_url = os.environ.get("MEDANON_STAGING_DB_URL", "").strip()
     staging_store = await setup_staging(staging_url, app_db_url, pg_pool)

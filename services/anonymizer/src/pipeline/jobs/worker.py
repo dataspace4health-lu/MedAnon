@@ -24,6 +24,10 @@ from pathlib import Path
 from domain.jobs import Job, JobStatus
 from pipeline.jobs.checkpoint import save_checkpoint
 from utils import audit
+from utils.tracing import get_tracer as _get_tracer
+
+def _tracer():
+    return _get_tracer("medanon.worker")
 
 _worker_log = logging.getLogger("medanon.worker")
 
@@ -78,7 +82,7 @@ _RESULT_CLEANUP_INTERVAL_SEC: int = int(
 # Public helpers re-exported for callers that import from this module
 # ---------------------------------------------------------------------------
 
-from pipeline.jobs.checkpoint import _truncate_to_lines  # noqa: E402  (re-export)
+from pipeline.jobs.checkpoint import _truncate_to_lines  # noqa: E402,F401  (re-export)
 from pipeline.jobs.executors import (  # noqa: E402
     _execute_batch_patient_export,
     _execute_bulk_export,
@@ -86,6 +90,7 @@ from pipeline.jobs.executors import (  # noqa: E402
     _execute_cohort,
     _execute_patient_export,
     _execute_reprocess,
+    _execute_risk_driven_export,
 )
 
 
@@ -105,6 +110,7 @@ _EXECUTORS = {
     "patient-export": lambda job: _execute_patient_export(job, _store, _staging),
     "bulk-import": lambda job: _execute_bulk_import(job, _store, _staging),
     "batch-patient-export": lambda job: _execute_batch_patient_export(job, _store, _staging),
+    "risk-driven-export": lambda job: _execute_risk_driven_export(job, _store, _staging),
 }
 
 
@@ -335,7 +341,12 @@ async def _run_job(job: Job) -> None:
 
     WORKER_ACTIVE_JOBS.inc()
     _t0 = _time.monotonic()
+    _job_span = _tracer().start_as_current_span("job.execute")
+    _span = _job_span.__enter__()
     try:
+        _span.set_attribute("job.id", job.id)
+        _span.set_attribute("job.type", job.type)
+        _span.set_attribute("job.retry", retry_count)
         await asyncio.to_thread(executor, job)
         # Don't overwrite a CANCELLED status set externally while we were running
         refreshed = _store.get(job.id)
@@ -353,22 +364,41 @@ async def _run_job(job: Job) -> None:
             outcome="success",
         )
     except Exception as exc:
+        from pipeline.scoring.gate import ScoreGateBlocked
+        gate_blocked = isinstance(exc, ScoreGateBlocked)
+
         job.status = JobStatus.ERROR
-        job.error = _sanitize_error(exc)
-        # Increment retry count on failure so crash-recovered jobs are bounded
-        cp = (job.checkpoint_data or {}) if hasattr(job, "checkpoint_data") else {}
-        cp["_retry_count"] = int(cp.get("_retry_count", 0)) + 1
-        save_checkpoint(_store, job, cp)
-        _worker_log.error("job_error id=%s: %s", job.id, exc)
-        WORKER_JOBS_TOTAL.labels(job_type=job.type, status="error").inc()
-        audit.emit(
-            "job.complete",
-            resource_id=job.id,
-            resource_type=job.type,
-            outcome="error",
-            detail={"error": _sanitize_error(exc, max_len=200)},
-        )
+        job.error = str(exc) if gate_blocked else _sanitize_error(exc)
+
+        if gate_blocked:
+            # Quality gate block — output is intentionally deleted.  Do NOT
+            # increment the retry counter: the input data hasn't changed, so
+            # re-running without config changes would produce the same result.
+            _worker_log.warning("job_score_gate_blocked id=%s", job.id)
+            WORKER_JOBS_TOTAL.labels(job_type=job.type, status="blocked").inc()
+            audit.emit(
+                "job.complete",
+                resource_id=job.id,
+                resource_type=job.type,
+                outcome="blocked",
+                detail={"reason": "score_gate"},
+            )
+        else:
+            # Increment retry count on failure so crash-recovered jobs are bounded
+            cp = (job.checkpoint_data or {}) if hasattr(job, "checkpoint_data") else {}
+            cp["_retry_count"] = int(cp.get("_retry_count", 0)) + 1
+            save_checkpoint(_store, job, cp)
+            _worker_log.error("job_error id=%s: %s", job.id, exc)
+            WORKER_JOBS_TOTAL.labels(job_type=job.type, status="error").inc()
+            audit.emit(
+                "job.complete",
+                resource_id=job.id,
+                resource_type=job.type,
+                outcome="error",
+                detail={"error": _sanitize_error(exc, max_len=200)},
+            )
     finally:
+        _job_span.__exit__(None, None, None)
         WORKER_JOB_DURATION.labels(job_type=job.type).observe(_time.monotonic() - _t0)
         WORKER_ACTIVE_JOBS.dec()
         # Always persist terminal status — even if the success/error handler above
@@ -493,10 +523,29 @@ def _recover_running_jobs() -> int:
     # This reclaims work from any previous worker that crashed without ACKing.
     if hasattr(_store, "claim_stale_jobs"):
         try:
-            stale_ids = _store.claim_stale_jobs(min_idle_ms=0)
-            for job_id in stale_ids:
+            stale_pairs = _store.claim_stale_jobs(min_idle_ms=0)
+            _TERMINAL = frozenset({
+                JobStatus.DONE, JobStatus.ERROR, JobStatus.CANCELLED, JobStatus.DEAD,
+            })
+            for job_id, message_id in stale_pairs:
                 job = _store.get(job_id)
-                if job and job.status == JobStatus.RUNNING:
+                if job is None or job.status in _TERMINAL:
+                    # Already finished — the previous worker ACK'd the job record
+                    # but crashed before ACKing the stream message. ACK now so this
+                    # entry doesn't accumulate in the PEL across every restart.
+                    try:
+                        _store.ack_job(message_id)
+                        _worker_log.debug(
+                            "recovery_ack_terminal job=%s msg=%s status=%s",
+                            job_id, message_id, job.status if job else "missing",
+                        )
+                    except Exception as ack_exc:
+                        _worker_log.warning(
+                            "recovery_ack_terminal_failed job=%s msg=%s: %s",
+                            job_id, message_id, ack_exc,
+                        )
+                    continue
+                if job.status == JobStatus.RUNNING:
                     if _check_retry_limit(job):
                         continue
                     job.status = JobStatus.PENDING
@@ -504,6 +553,7 @@ def _recover_running_jobs() -> int:
                     _store.update(job)
                     _store.notify_new_job(job.id)
                     recovered += 1
+                # PENDING jobs are handled by notify_new_job below; no ACK here.
         except Exception as exc:
             _worker_log.warning("recovery_claim_failed: %s", type(exc).__name__)
     # Also scan for RUNNING jobs in the status index — covers jobs queued via BLPOP
@@ -658,14 +708,18 @@ async def worker_loop() -> None:
         while not _shutdown_event.is_set():
             try:
                 Path(_HEARTBEAT_PATH).touch()
-            except OSError:
-                pass
+            except OSError as exc:
+                # Log degraded state so operators can diagnose failed liveness
+                # probes (e.g. /output mounted read-only).  Do not break the
+                # loop — heartbeat file staleness already signals the problem.
+                _worker_log.warning("heartbeat_touch_failed path=%s: %s", _HEARTBEAT_PATH, exc)
             try:
                 await asyncio.wait_for(_shutdown_event.wait(), timeout=15)
             except asyncio.TimeoutError:
                 pass
 
-    _heartbeat_task = asyncio.create_task(_heartbeat_loop())
+    from utils.tasks import retain_task as _retain_task
+    _heartbeat_task = _retain_task(_heartbeat_loop(), name="worker_heartbeat")
 
     while not _shutdown_event.is_set():
         await _semaphore.acquire()

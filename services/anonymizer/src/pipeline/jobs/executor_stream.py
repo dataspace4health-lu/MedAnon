@@ -10,11 +10,12 @@ import logging
 import os
 import queue
 import threading
+import time
 from pathlib import Path
 
 from domain.jobs import JobStatus
 from pipeline.jobs.checkpoint import save_checkpoint
-from pipeline.processor import _BATCH_SIZE, _CappedSet, process_data_batch
+from pipeline.processor import _BATCH_SIZE, process_data_batch
 from utils.json_fast import dumps as _json_dumps, loads as _json_loads
 
 _worker_log = logging.getLogger("medanon.worker")
@@ -22,6 +23,12 @@ _OUTPUT_DIR = os.environ.get("MEDANON_OUTPUT_DIR", "/output")
 _PROGRESS_INTERVAL: int = int(os.environ.get("MEDANON_PROGRESS_INTERVAL", "500"))
 
 _PIPELINE_QUEUE_SIZE: int = int(os.environ.get("MEDANON_PIPELINE_QUEUE_SIZE", "4"))
+# Number of concurrent de-identification consumer threads per job.
+# Default 1: optimal for single gPAS/NLP instances — additional consumers add
+# thread overhead without faster service responses. Raise only when scaling
+# gPAS/NLP horizontally (set to replica count). Keep width × MEDANON_PARALLEL_WORKERS
+# within MEDANON_GLOBAL_MAX_THREADS (default 64).
+_PIPELINE_WIDTH: int = int(os.environ.get("MEDANON_PIPELINE_WIDTH", "1"))
 _PIPELINE_ENABLED: bool = os.environ.get(
     "MEDANON_PIPELINE_ENABLED", "true"
 ).strip().lower() in ("1", "true", "yes")
@@ -61,7 +68,7 @@ def compress_ndjson(path: str) -> str:
     return gz_path
 
 
-def batch_or_bisect(
+def process_with_bisect_fallback(
     chunk: list[dict],
     settings,
     pseudonymizer,
@@ -126,9 +133,9 @@ def batch_or_bisect(
             "batch_process_failed chunk_size=%d — bisecting: %s", len(chunk), exc
         )
         mid = len(chunk) // 2
-        return batch_or_bisect(
+        return process_with_bisect_fallback(
             chunk[:mid], settings, pseudonymizer, want_manifest
-        ) + batch_or_bisect(
+        ) + process_with_bisect_fallback(
             chunk[mid:], settings, pseudonymizer, want_manifest
         )
 
@@ -167,7 +174,7 @@ def cursor_tracking_gen(cursor_aware_gen, cursor_out: dict):
         yield resource
 
 
-class AsyncCheckpointWriter:
+class CheckpointWriter:
     """Background thread that batches and writes checkpoints.
 
     Checkpoint writes are queued and flushed periodically, so the main
@@ -222,12 +229,128 @@ class AsyncCheckpointWriter:
                 )
 
 
-class PipelinedProcessor:
-    """Overlaps FHIR fetch with de-identification processing.
+class _PipelineProgressDisplay:
+    """Live terminal display of de-identification pipeline progress using Rich.
 
-    The fetcher thread fills a bounded queue with chunks of resources.
-    The main thread consumes chunks and processes them, hiding fetch
-    latency behind processing time.
+    Shows per-chunk stage timing and overall throughput in the worker terminal.
+    Silently disabled when Rich is unavailable or when stdout is not a TTY
+    (e.g. in CI / log-only environments).
+    """
+
+    _MAX_ROWS = 8  # keep the last N chunks in the display table
+
+    def __init__(self, job_id: str, label: str) -> None:
+        self._job_id = job_id
+        self._label = label
+        self._rows: list[dict] = []  # {"chunk": int, "count": int, "duration": float, "status": str}
+        self._total_resources = 0
+        self._job_start = time.monotonic()
+        self._live = None
+        self._table = None
+        self._lock = threading.Lock()
+
+        try:
+            from rich.live import Live
+            from rich.table import Table
+            from rich.console import Console
+            import sys
+            if not sys.stderr.isatty():
+                return  # not a terminal — skip live display
+            self._Console = Console
+            self._Table = Table
+            self._Live = Live
+            self._enabled = True
+        except ImportError:
+            self._enabled = False
+
+    def start(self) -> None:
+        if not getattr(self, "_enabled", False):
+            return
+        self._table = self._build_table()
+        self._live = self._Live(
+            self._table,
+            console=self._Console(stderr=True),
+            refresh_per_second=2,
+            transient=False,
+        )
+        self._live.start()
+
+    def stop(self) -> None:
+        if self._live is not None:
+            try:
+                self._live.stop()
+            except Exception:
+                pass
+
+    def record_chunk(self, chunk_idx: int, resource_count: int, duration: float, ok: bool) -> None:
+        if not getattr(self, "_enabled", False):
+            return
+        with self._lock:
+            self._total_resources += resource_count
+            self._rows.append({
+                "chunk": chunk_idx + 1,
+                "count": resource_count,
+                "duration": duration,
+                "status": "✓" if ok else "⚠ fallback",
+            })
+            if len(self._rows) > self._MAX_ROWS:
+                self._rows = self._rows[-self._MAX_ROWS:]
+            elapsed = time.monotonic() - self._job_start
+            throughput = self._total_resources / elapsed if elapsed > 0 else 0
+            self._table = self._build_table(elapsed=elapsed, throughput=throughput)
+            if self._live is not None:
+                self._live.update(self._table)
+
+    def _build_table(self, elapsed: float = 0.0, throughput: float = 0.0):
+        from rich.table import Table
+        from rich import box
+
+        tbl = Table(
+            title=f"[bold]MedAnon[/bold] De-identification Pipeline  "
+                  f"[dim]job={self._job_id[:16]}  label={self._label}[/dim]",
+            box=box.SIMPLE_HEAD,
+            show_footer=bool(self._rows),
+            expand=False,
+        )
+        tbl.add_column("Chunk", justify="right", style="dim")
+        tbl.add_column("Resources", justify="right")
+        tbl.add_column("Duration", justify="right")
+        tbl.add_column("Throughput", justify="right")
+        tbl.add_column("", justify="center")
+
+        for row in self._rows:
+            tp = row["count"] / row["duration"] if row["duration"] > 0 else 0
+            tbl.add_row(
+                str(row["chunk"]),
+                f"{row['count']:,}",
+                f"{row['duration']:.1f}s",
+                f"{tp:,.0f}/s",
+                f"[green]{row['status']}[/green]" if row["status"] == "✓"
+                else f"[yellow]{row['status']}[/yellow]",
+            )
+
+        if elapsed > 0:
+            tbl.columns[0].footer = f"Total {int(elapsed)}s"
+            tbl.columns[1].footer = f"{self._total_resources:,}"
+            tbl.columns[3].footer = f"{throughput:,.0f}/s avg"
+
+        return tbl
+
+
+class DeidentificationPipeline:
+    """FHIR fetch overlapped with concurrent de-identification processing.
+
+    A single fetcher thread fills a bounded queue with resource chunks.
+    MEDANON_PIPELINE_WIDTH consumer threads independently process chunks,
+    each issuing its own NLP + gPAS HTTP calls — fanning out across all
+    available replicas so a single job uses the full cluster capacity.
+
+    Thread safety:
+    - De-identification compute (NLP/gPAS HTTP) runs outside the output lock.
+    - File writes, counters, and summary recording are serialized under
+      self._output_lock so result ordering is deterministic within each write.
+    - self._cancelled is a plain bool — GIL-protected reads/writes are safe in
+      CPython without an explicit lock.
     """
 
     def __init__(
@@ -256,8 +379,14 @@ class PipelinedProcessor:
         self._cancelled = False
         self._chunk_queue: queue.Queue = queue.Queue(maxsize=_PIPELINE_QUEUE_SIZE)
         self._fetch_error: Exception | None = None
-        self._seen_values = _CappedSet()
+        self._consumer_errors: list[Exception] = []
+        self._consumer_error_lock = threading.Lock()
         self._chunk_count: int = 0
+        self._output_lock = threading.Lock()
+        # Set by the fetcher when it has enqueued its last chunk (or failed).
+        # Consumers use this to detect end-of-input without sentinel values.
+        self._fetch_done = threading.Event()
+        self._progress = _PipelineProgressDisplay(job.id, label)
 
     def run(self) -> tuple[int, bool]:
         """Run the pipeline and return ``(count, was_cancelled)``."""
@@ -267,122 +396,173 @@ class PipelinedProcessor:
         # and NLP caches are stable and don't benefit from frequent collection.
         gc.set_threshold(700, 50, 100)
 
-        checkpoint_writer = AsyncCheckpointWriter(self._store, self._job)
+        checkpoint_writer = CheckpointWriter(self._store, self._job)
         checkpoint_writer.start()
+        self._progress.start()
 
-        fetcher = threading.Thread(target=self._fetcher_loop, daemon=True)
+        fetcher = threading.Thread(
+            target=self._fetch_resources, daemon=True, name="medanon-fetcher"
+        )
         fetcher.start()
 
+        consumers = [
+            threading.Thread(
+                target=self._deidentification_worker,
+                args=(checkpoint_writer,),
+                daemon=True,
+                name=f"medanon-consumer-{i}",
+            )
+            for i in range(_PIPELINE_WIDTH)
+        ]
+        for t in consumers:
+            t.start()
+
         try:
-            while True:
-                try:
-                    item = self._chunk_queue.get(timeout=2.0)
-                except queue.Empty:
-                    if not fetcher.is_alive():
-                        break
-                    continue
-
-                if item is None:  # sentinel: fetcher done
-                    break
-
-                cancelled = self._process_chunk(item, checkpoint_writer)
-                if cancelled:
-                    self._cancelled = True
-                    break
+            for t in consumers:
+                t.join()
         finally:
+            self._progress.stop()
             checkpoint_writer.stop()
             fetcher.join(timeout=5.0)
             gc.set_threshold(*_gc_orig)
 
         if self._fetch_error is not None:
             raise self._fetch_error
+        if self._consumer_errors:
+            raise self._consumer_errors[0]
 
         return self._count, self._cancelled
 
-    def _fetcher_loop(self) -> None:
+    def _fetch_resources(self) -> None:
         chunk: list[dict] = []
         try:
             for resource in self._gen:
+                if self._cancelled:
+                    break
                 chunk.append(resource)
                 if len(chunk) >= _BATCH_SIZE:
-                    self._chunk_queue.put(chunk)
+                    # Use a non-blocking put loop so a dead consumer (which stops
+                    # draining the queue) doesn't block the fetcher thread forever.
+                    while not self._cancelled:
+                        try:
+                            self._chunk_queue.put(chunk, timeout=1.0)
+                            break
+                        except queue.Full:
+                            continue
                     chunk = []
-                    if self._cancelled:
-                        break
             if chunk and not self._cancelled:
-                self._chunk_queue.put(chunk)
+                while not self._cancelled:
+                    try:
+                        self._chunk_queue.put(chunk, timeout=1.0)
+                        break
+                    except queue.Full:
+                        continue
         except Exception as exc:
             self._fetch_error = exc
         finally:
-            self._chunk_queue.put(None)  # sentinel
+            # Signal consumers that no more chunks will be enqueued.
+            # Consumers drain the queue after this event is set.
+            self._fetch_done.set()
 
-    def _process_chunk(self, chunk: list[dict], checkpoint_writer: AsyncCheckpointWriter) -> bool:
-        """Process one chunk.  Returns True if the job was cancelled."""
+    def _deidentification_worker(self, checkpoint_writer: CheckpointWriter) -> None:
+        while not self._cancelled:
+            try:
+                chunk = self._chunk_queue.get(timeout=1.0)
+            except queue.Empty:
+                # Exit once the fetcher is done AND the queue is drained.
+                if self._fetch_done.is_set() and self._chunk_queue.empty():
+                    break
+                continue
+            try:
+                self._deidentify_chunk(chunk, checkpoint_writer)
+            except Exception as exc:
+                # Record the first consumer error and stop the pipeline.  The
+                # fetcher will see _cancelled=True on its next iteration and stop
+                # blocking on queue.put(), so the pipeline shuts down cleanly.
+                _worker_log.error(
+                    "consumer_crashed job=%s label=%s: %s",
+                    self._job.id,
+                    self._label,
+                    exc,
+                    exc_info=True,
+                )
+                with self._consumer_error_lock:
+                    self._consumer_errors.append(exc)
+                self._cancelled = True
+                break
+
+    def _deidentify_chunk(self, chunk: list[dict], checkpoint_writer: CheckpointWriter) -> None:
+        """Process one chunk: de-identify (no lock) then write results (locked)."""
         _want_manifest = self._summary is not None
-        # Snapshot resources before processing: process_data_batch mutates dicts
-        # in-place during _finalize_resource. If it raises after partially finalizing
-        # some resources, batch_or_bisect would re-process already-pseudonymized values
-        # (the pseudonym itself would be sent to gPAS again, producing a second entry).
+        _chunk_start = time.monotonic()
+        # Snapshot before processing: process_data_batch mutates dicts in-place
+        # during finalize. If it raises mid-batch, process_with_bisect_fallback restores from
+        # these snapshots to avoid re-sending already-pseudonymized values to gPAS.
         _snapshots = [_json_dumps(r) for r in chunk]
+
+        # --- Compute phase: NLP + gPAS HTTP calls (runs outside output lock) ---
+        _from_bisect = False
         try:
             batch_out = process_data_batch(
                 chunk,
                 self._settings,
                 self._pseudonymizer,
                 attach_manifest=True,
-                _exclude_cached=self._seen_values,
-                _seen_accumulator=self._seen_values,
                 _return_manifest=_want_manifest,
             )
             if _want_manifest:
-                results, manifest_list = batch_out
+                _results, _manifests = batch_out
             else:
-                results = batch_out
-                manifest_list = None
-            for idx, result in enumerate(results):
-                self._fh.write(_json_dumps(result) + "\n")
-                self._count += 1
-                if self._summary is not None:
-                    entries = manifest_list[idx] if manifest_list else None
-                    self._summary.record_resource(result, manifest_entries=entries)
+                _results, _manifests = batch_out, None
         except Exception:
-            # Restore originals from snapshots so batch_or_bisect works on
-            # unmodified resources, not partially pseudonymized ones.
-            fresh_chunk = [_json_loads(s) for s in _snapshots]
             # Binary-search fallback: isolates bad resources in log₂(N) depth;
             # good sub-chunks still benefit from batch gPAS de-duplication.
-            pairs = batch_or_bisect(
+            fresh_chunk = [_json_loads(s) for s in _snapshots]
+            pairs = process_with_bisect_fallback(
                 fresh_chunk, self._settings, self._pseudonymizer, _want_manifest
             )
-            for result, fb_entries in pairs:
+            _results = [r for r, _ in pairs]
+            _manifests = [e for _, e in pairs]
+            _from_bisect = True
+
+        # --- Write phase: serialized under output lock across consumer threads ---
+        with self._output_lock:
+            chunk_idx = self._chunk_count
+            self._chunk_count += 1
+            for idx, result in enumerate(_results):
                 self._fh.write(_json_dumps(result) + "\n")
+                self._count += 1
                 if self._summary is not None:
-                    if result.get("error"):
+                    if _from_bisect and result.get("error"):
                         self._summary.record_error(result.get("resourceType", "Unknown"))
                     else:
-                        self._summary.record_resource(result, manifest_entries=fb_entries)
-                self._count += 1
+                        entries = _manifests[idx] if _manifests else None
+                        self._summary.record_resource(result, manifest_entries=entries)
+            self._fh.flush()
+            count_now = self._count
 
-        self._fh.flush()
-
-        # Emit a processing checkpoint on the very first chunk so the UI transitions
-        # from "fetching" to "processing" immediately, then every _PROGRESS_INTERVAL
-        # resources thereafter.
-        if self._chunk_count == 0 or self._count % _PROGRESS_INTERVAL < len(chunk):
-            chk = {"phase": "processing", "lines_written": self._count}
+        # Checkpoint + cancellation check (outside lock — enqueue is thread-safe)
+        if chunk_idx == 0 or count_now % _PROGRESS_INTERVAL < len(chunk):
+            chk = {"phase": "processing", "lines_written": count_now}
             if self._cursor_state:
                 chk["fhir_cursor"] = dict(self._cursor_state)
             checkpoint_writer.enqueue(chk)
 
-        self._chunk_count += 1
-        if self._chunk_count % 5 == 0:
+        # Record chunk duration for the live progress display.
+        self._progress.record_chunk(
+            chunk_idx=chunk_idx,
+            resource_count=len(chunk),
+            duration=time.monotonic() - _chunk_start,
+            ok=not _from_bisect,
+        )
+
+        if (chunk_idx + 1) % 5 == 0:
             fresh = self._store.get(self._job.id)
             if fresh and fresh.status == JobStatus.CANCELLED:
-                return True
-        return False
+                self._cancelled = True  # GIL-protected bool write; visible to all threads
 
 
-def process_stream_chunked(
+def stream_and_deidentify(
     gen,
     settings,
     pseudonymizer,
@@ -410,7 +590,7 @@ def process_stream_chunked(
     so that on crash recovery the FHIR pagination position is restored.
     """
     if _PIPELINE_ENABLED:
-        return PipelinedProcessor(
+        return DeidentificationPipeline(
             gen, settings, pseudonymizer, fh, start_count, store, job, label, summary,
             cursor_state=cursor_state,
         ).run()
@@ -418,7 +598,6 @@ def process_stream_chunked(
     # Sequential fallback path (used when MEDANON_PIPELINE_ENABLED=false).
     count = start_count
     chunk: list[dict] = []
-    seen_values = _CappedSet()
     _first_chunk = True
 
     def _flush() -> bool:
@@ -427,8 +606,6 @@ def process_stream_chunked(
         try:
             results = process_data_batch(
                 chunk, settings, pseudonymizer, attach_manifest=True,
-                _exclude_cached=seen_values,
-                _seen_accumulator=seen_values,
             )
             for result in results:
                 fh.write(_json_dumps(result) + "\n")
@@ -438,7 +615,7 @@ def process_stream_chunked(
         except Exception:
             fresh_chunk = [_json_loads(s) for s in _snapshots]
             # Binary-search fallback: isolates bad resources in log₂(N) depth.
-            pairs = batch_or_bisect(fresh_chunk, settings, pseudonymizer, want_manifest=False)
+            pairs = process_with_bisect_fallback(fresh_chunk, settings, pseudonymizer, want_manifest=False)
             for result, _ in pairs:
                 fh.write(_json_dumps(result) + "\n")
                 if summary is not None:
@@ -474,3 +651,10 @@ def process_stream_chunked(
         return count, True
 
     return count, False
+
+
+# Backward-compatible aliases.
+process_stream_chunked = stream_and_deidentify
+batch_or_bisect = process_with_bisect_fallback
+AsyncCheckpointWriter = CheckpointWriter
+PipelinedProcessor = DeidentificationPipeline

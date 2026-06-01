@@ -18,7 +18,7 @@ from pipeline.jobs.executor_stream import (
     INFRA_RESOURCE_TYPES,
     compress_ndjson,
     cursor_tracking_gen,
-    process_stream_chunked,
+    stream_and_deidentify,
     skip_to,
     _COMPRESS_RESULTS,
 )
@@ -34,6 +34,79 @@ _OUTPUT_DIR = os.environ.get("MEDANON_OUTPUT_DIR", "/output")
 _STAGED_THRESHOLD_ROWS: int = int(
     os.environ.get("MEDANON_STAGED_THRESHOLD_ROWS", "500000")
 )
+
+
+_PREFLIGHT_PARALLEL = int(os.environ.get("MEDANON_FHIR_FETCH_PARALLEL", "4"))
+
+
+def _filter_nonempty_types(
+    candidate_types: list[str],
+    server_url: str,
+    token: str | None,
+    timeout: float,
+) -> list[str]:
+    """Return only resource types that have at least one resource on the server.
+
+    Runs one lightweight ``GET /{type}?_summary=count&_count=0`` request per
+    type in parallel (up to ``MEDANON_FHIR_FETCH_PARALLEL`` threads).  This
+    typically takes 2–5 s regardless of the total type list length and eliminates
+    dozens of wasted paginated fetches for empty resource types.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from integrations.fhir.reader import preflight_resource_count
+
+    nonempty: list[str] = []
+
+    def _check(rt: str) -> tuple[str, int]:
+        try:
+            count = preflight_resource_count(server_url, resource_type=rt, token=token, timeout=5)
+        except Exception:
+            count = -1  # treat unknown as non-empty to be safe
+        return rt, count
+
+    with ThreadPoolExecutor(max_workers=_PREFLIGHT_PARALLEL) as pool:
+        futures = {pool.submit(_check, rt): rt for rt in candidate_types}
+        for fut in as_completed(futures):
+            rt, count = fut.result()
+            if count != 0:  # -1 (unknown) or >0 → include
+                nonempty.append(rt)
+
+    # Preserve original capability-statement order for deterministic checkpoints.
+    order = {rt: i for i, rt in enumerate(candidate_types)}
+    nonempty.sort(key=lambda rt: order.get(rt, 9999))
+    _worker_log.info(
+        "bulk_export_preflight kept=%d / total=%d resource types",
+        len(nonempty), len(candidate_types),
+    )
+    return nonempty
+
+
+def _cleanup_blocked_output(
+    job: Job,
+    output_path: str,
+    audit_path: str | None = None,
+) -> None:
+    """Delete output files and clear job.result_path when the score gate blocks."""
+    from pathlib import Path
+    from integrations.storage import delete_result
+
+    if job.result_path:
+        delete_result(job.result_path)
+        job.result_path = None
+
+    # Remove the local file too (for S3 path, the local copy may still exist)
+    try:
+        Path(output_path).unlink(missing_ok=True)
+    except OSError:
+        pass
+
+    if audit_path:
+        try:
+            Path(audit_path).unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    _worker_log.info("score_gate_cleanup job=%s output_deleted=True", job.id)
 
 
 def _use_staged(staging, estimated_rows: int | None) -> bool:
@@ -165,7 +238,7 @@ def _execute_bulk_export(job: Job, store, staging) -> None:
         )
 
         with _secure_open(output_path, open_mode, encoding="utf-8") as fh:
-            count, cancelled = process_stream_chunked(
+            count, cancelled = stream_and_deidentify(
                 skip_to(raw_gen, already_written),
                 settings, pseudonymizer, fh, already_written,
                 store, job, "bulk_export", summary=collector, cursor_state={},
@@ -196,7 +269,15 @@ def _execute_bulk_export(job: Job, store, staging) -> None:
     else:
         try:
             all_types = get_capability_statement(server_url, token=token, timeout=timeout)
-            resource_types = [t for t in all_types if t not in INFRA_RESOURCE_TYPES]
+            candidate_types = [t for t in all_types if t not in INFRA_RESOURCE_TYPES]
+            # Skip resource types that have no data — avoids paginating through
+            # dozens of empty FHIR R4 types that the capability statement lists
+            # but the server has never received data for.  Runs one lightweight
+            # _summary=count request per type in parallel (same pool size as the
+            # FHIR fetch pool) so the preflight finishes in seconds.
+            resource_types = _filter_nonempty_types(
+                candidate_types, server_url, token, timeout
+            )
         except Exception as exc:
             from integrations.fhir._transport import FhirCircuitBreakerOpen
             if isinstance(exc, FhirCircuitBreakerOpen):
@@ -221,32 +302,55 @@ def _execute_bulk_export(job: Job, store, staging) -> None:
     _t0 = time.monotonic()
     save_checkpoint(store, job, {"phase": "fetching", "lines_written": already_written})
 
-    # Pass cursor params so completed resource types and the current page are
-    # skipped on resume, avoiding re-downloading all prior FHIR pages.
-    cursor_aware_gen = fetch_all_resource_types(
-        server_url,
-        resource_types,
-        params=extra_params if extra_params else None,
-        token=token,
-        timeout=timeout,
-        completed_rts=(fhir_cursor or {}).get("completed_rts"),
-        current_rt=(fhir_cursor or {}).get("current_rt"),
-        current_rt_start_url=(fhir_cursor or {}).get("page_url"),
-        yield_cursors=True,
-    )
+    _fhir_parallel = int(os.environ.get("MEDANON_FHIR_FETCH_PARALLEL", "4"))
     _cursor_state: dict = {}
-    cursor_gen = cursor_tracking_gen(cursor_aware_gen, _cursor_state)
-    # On resume, skip only the resources already consumed within the current
-    # FHIR page (page_offset entries at most).  Prior pages are skipped by
-    # passing completed_rts and current_rt_start_url to the FHIR reader.
-    resume_skip = (fhir_cursor or {}).get("page_offset", already_written)
+
+    if _fhir_parallel > 1:
+        # Parallel mode: all resource types are fetched concurrently.
+        # Empty types (260 of them in a typical FHIR R4 server) return in ~10ms
+        # and release their thread slots immediately.  Heavy types like Observation
+        # (132 pages) run in parallel with Condition, DiagnosticReport, etc. instead
+        # of waiting for them to finish serially.
+        #
+        # Trade-off: no per-type FHIR page cursor.  On crash-resume the completed
+        # resource types (completed_rts from the last checkpoint) are skipped; the
+        # rest are re-fetched from the beginning.  Already-written lines are skipped
+        # by the lines_written counter (no double-processing).
+        _completed_rts = set((fhir_cursor or {}).get("completed_rts") or [])
+        _raw_gen = fetch_all_resource_types(
+            server_url,
+            resource_types,
+            params=extra_params if extra_params else None,
+            token=token,
+            timeout=timeout,
+            completed_rts=_completed_rts,
+            yield_cursors=False,
+        )
+        resource_gen = (resource for _rt, resource in _raw_gen)
+        resume_skip = already_written
+    else:
+        # Serial mode: full FHIR page cursor tracking so a crash mid-type resumes
+        # from the exact page instead of re-fetching the entire type.
+        cursor_aware_gen = fetch_all_resource_types(
+            server_url,
+            resource_types,
+            params=extra_params if extra_params else None,
+            token=token,
+            timeout=timeout,
+            completed_rts=(fhir_cursor or {}).get("completed_rts"),
+            current_rt=(fhir_cursor or {}).get("current_rt"),
+            current_rt_start_url=(fhir_cursor or {}).get("page_url"),
+            yield_cursors=True,
+        )
+        resource_gen = cursor_tracking_gen(cursor_aware_gen, _cursor_state)
+        resume_skip = (fhir_cursor or {}).get("page_offset", already_written)
 
     from pipeline.jobs.summary import JobSummaryCollector
     collector = JobSummaryCollector(config_profile=profile, settings=settings, job_id=job.id)
 
     with _secure_open(output_path, open_mode, encoding="utf-8") as fh:
-        count, cancelled = process_stream_chunked(
-            skip_to(cursor_gen, resume_skip),
+        count, cancelled = stream_and_deidentify(
+            skip_to(resource_gen, resume_skip),
             settings, pseudonymizer, fh, already_written,
             store, job, "bulk_export", summary=collector, cursor_state=_cursor_state,
         )
@@ -268,6 +372,7 @@ def _execute_bulk_export(job: Job, store, staging) -> None:
         audit_report = collector.generate_audit_report(
             export_meta={"fhir_source": params.get("server_url", "")}
         )
+        audit_path: str | None = None
         if audit_report:
             try:
                 audit_path = os.path.join(_OUTPUT_DIR, f"{job.id}_score_audit.md")
@@ -276,6 +381,17 @@ def _execute_bulk_export(job: Job, store, staging) -> None:
                 checkpoint_data["score_audit_path"] = audit_path
             except Exception:
                 _worker_log.debug("bulk_export_audit_write_failed job=%s", job.id, exc_info=True)
+                audit_path = None
+
+        # Score gate: if quality is below threshold, delete output and fail the
+        # job with a plain-language explanation instead of returning bad data.
+        from pipeline.scoring.gate import ScoreGateBlocked, check_score_gate
+        try:
+            check_score_gate(summary_dict.get("score"), profile)
+        except ScoreGateBlocked:
+            _cleanup_blocked_output(job, output_path, audit_path)
+            raise
+
         save_checkpoint(store, job, checkpoint_data)
         try:
             from api.services.scoring_helpers import persist_run_sync
@@ -372,7 +488,7 @@ def _execute_cohort(job: Job, store, staging) -> None:
     collector = JobSummaryCollector(config_profile=profile, settings=settings, job_id=job.id)
 
     with _secure_open(output_path, open_mode, encoding="utf-8") as fh:
-        count, cancelled = process_stream_chunked(
+        count, cancelled = stream_and_deidentify(
             skip_to(gen, already_written),
             settings, pseudonymizer, fh, already_written,
             store, job, "cohort", summary=collector,
@@ -395,14 +511,24 @@ def _execute_cohort(job: Job, store, staging) -> None:
         audit_report = collector.generate_audit_report(
             export_meta={"fhir_source": server_url}
         )
+        cohort_audit_path: str | None = None
         if audit_report:
             try:
-                audit_path = os.path.join(_OUTPUT_DIR, f"{job.id}_score_audit.md")
-                with open(audit_path, "w", encoding="utf-8") as fh:
+                cohort_audit_path = os.path.join(_OUTPUT_DIR, f"{job.id}_score_audit.md")
+                with open(cohort_audit_path, "w", encoding="utf-8") as fh:
                     fh.write(audit_report)
-                checkpoint_data["score_audit_path"] = audit_path
+                checkpoint_data["score_audit_path"] = cohort_audit_path
             except Exception:
                 _worker_log.debug("cohort_audit_write_failed job=%s", job.id, exc_info=True)
+                cohort_audit_path = None
+
+        from pipeline.scoring.gate import ScoreGateBlocked, check_score_gate
+        try:
+            check_score_gate(summary_dict.get("score"), profile)
+        except ScoreGateBlocked:
+            _cleanup_blocked_output(job, output_path, cohort_audit_path)
+            raise
+
         save_checkpoint(store, job, checkpoint_data)
         try:
             from api.services.scoring_helpers import persist_run_sync
@@ -467,7 +593,7 @@ def _execute_patient_export(job: Job, store, staging) -> None:
     collector = JobSummaryCollector(config_profile=profile, settings=settings, job_id=job.id)
 
     with _secure_open(output_path, open_mode, encoding="utf-8") as fh:
-        count, cancelled = process_stream_chunked(
+        count, cancelled = stream_and_deidentify(
             skip_to(gen, already_written),
             settings, pseudonymizer, fh, already_written,
             store, job, "patient_export", summary=collector,
@@ -558,7 +684,7 @@ def _execute_batch_patient_export(job: Job, store, staging) -> None:
     collector = JobSummaryCollector(config_profile=profile, settings=settings, job_id=job.id)
 
     with _secure_open(output_path, open_mode, encoding="utf-8") as fh:
-        count, cancelled = process_stream_chunked(
+        count, cancelled = stream_and_deidentify(
             skip_to(gen, already_written),
             settings, pseudonymizer, fh, already_written,
             store, job, "batch_patient_export", summary=collector,

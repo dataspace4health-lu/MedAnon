@@ -14,12 +14,12 @@ from __future__ import annotations
 # Streaming infrastructure (used by staged_worker and tests)
 from pipeline.jobs.executor_stream import (  # noqa: F401
     INFRA_RESOURCE_TYPES as _INFRA,
-    AsyncCheckpointWriter as _AsyncCheckpointWriter,
-    PipelinedProcessor as _PipelinedProcessor,
-    batch_or_bisect as _batch_or_bisect,
+    CheckpointWriter as _CheckpointWriter,
+    DeidentificationPipeline as _DeidentificationPipeline,
+    process_with_bisect_fallback as _process_with_bisect_fallback,
     compress_ndjson as _compress_ndjson,
     cursor_tracking_gen as _cursor_tracking_gen,
-    process_stream_chunked as _process_stream_chunked,
+    stream_and_deidentify as _stream_and_deidentify,
     skip_to as _skip_to,
 )
 
@@ -34,3 +34,8 @@ from pipeline.jobs.executor_export import (  # noqa: F401
 
 # Import executor
 from pipeline.jobs.executor_import import _execute_bulk_import  # noqa: F401
+
+# Risk-driven adaptive generalization executor
+from pipeline.jobs.staged_worker import (  # noqa: F401
+    execute_risk_driven_export_staged as _execute_risk_driven_export,
+)
