@@ -54,25 +54,32 @@ CREATE TABLE IF NOT EXISTS medanon.configs (
 );
 
 -- -------------------------------------------------------------------
--- Staged resources (already existed in staging store DDL)
+-- Staged resources — references only, NO patient data stored here.
+-- Patient FHIR resources are re-fetched from the source FHIR server
+-- in Phase 2 using fhir_source_url + resource_id.
 -- -------------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS medanon.staged_resources (
-    id            BIGSERIAL PRIMARY KEY,
-    job_id        TEXT NOT NULL,
-    resource_id   TEXT NOT NULL,
-    resource_type TEXT NOT NULL,
-    resource_json JSONB NOT NULL,
-    status        TEXT NOT NULL DEFAULT 'pending',
-    error         TEXT,
-    fetched_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    processed_at  TIMESTAMPTZ,
-    expires_at    TIMESTAMPTZ,
+    id               BIGSERIAL PRIMARY KEY,
+    job_id           TEXT NOT NULL,
+    resource_id      TEXT NOT NULL,
+    resource_type    TEXT NOT NULL,
+    fhir_source_url  TEXT NOT NULL DEFAULT '',
+    status           TEXT NOT NULL DEFAULT 'pending',
+    error            TEXT,
+    fetched_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    processed_at     TIMESTAMPTZ,
+    expires_at       TIMESTAMPTZ,
     partition_id     INT,
     partition_status TEXT DEFAULT 'unclaimed'
         CHECK (partition_status IN ('unclaimed', 'claimed', 'done', 'error')),
     CONSTRAINT uq_job_resource UNIQUE (job_id, resource_id)
 );
+
+-- Migration: drop resource_json on existing deployments.
+ALTER TABLE medanon.staged_resources DROP COLUMN IF EXISTS resource_json;
+-- Migration: add fhir_source_url on existing deployments.
+ALTER TABLE medanon.staged_resources ADD COLUMN IF NOT EXISTS fhir_source_url TEXT NOT NULL DEFAULT '';
 
 CREATE INDEX IF NOT EXISTS idx_staged_job_status
     ON medanon.staged_resources (job_id, status);
@@ -132,6 +139,9 @@ CREATE INDEX IF NOT EXISTS idx_processing_runs_created
 
 CREATE INDEX IF NOT EXISTS idx_processing_runs_endpoint
     ON medanon.processing_runs (endpoint, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_processing_runs_profile
+    ON medanon.processing_runs (config_profile, created_at DESC);
 
 -- -------------------------------------------------------------------
 -- Job details (frontend parse cache — resource counts, field analysis)
