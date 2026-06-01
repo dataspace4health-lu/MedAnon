@@ -1,77 +1,40 @@
 """PostgreSQL staging store for large-scale de-identification jobs.
 
-Provides an intermediate table so that Phase 1 (FHIR fetch) and Phase 2
-(de-identify + write NDJSON) are fully decoupled:
+The staging table stores ONLY resource references — no patient data:
 
-  - A crash after Phase 1 completes → Phase 2 restarts from staging, no FHIR re-fetch.
-  - ON CONFLICT DO NOTHING on (job_id, resource_id) → automatic dedup across pages.
-  - SELECT … FOR UPDATE SKIP LOCKED → safe for future parallel workers.
+  (job_id, resource_id, resource_type, fhir_source_url, status, expires_at)
 
-Field-level encryption
-----------------------
-When ``MEDANON_STAGING_ENCRYPT_KEY`` is set the ``resource_json`` column is
-encrypted with AES-128-CBC (Fernet) before INSERT and decrypted after SELECT.
-The plaintext PHI never touches the Postgres wire or WAL in unencrypted form.
+Patient FHIR resources are re-fetched from the source FHIR server on demand
+during Phase 2.  This design ensures that no PHI ever enters our databases:
+gPAS is the only authorised store for any identifier mapping.
 
-  MEDANON_STAGING_ENCRYPT_KEY — 32-byte URL-safe base64 Fernet key.
-  Generate once: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+Two-phase execution:
 
-Encrypted values are stored as ``{"_fernet": "<token>"}`` JSON, allowing
-gradual migration: rows written before encryption was enabled are read back
-as plain JSON; newly written rows are encrypted.
+  Phase 1 — FHIR Fetch:
+    Stream resources from the source FHIR server.  Record only the resource ID
+    and type in staging (one row per resource, no content).
+
+  Phase 2 — De-identification:
+    Read staged references in batches.  Re-fetch each batch from the source
+    FHIR server via ``fetch_resources_by_ids`` (``_id`` search parameter).
+    De-identify the fetched resources and write to the NDJSON output file.
+
+Crash recovery:
+    A crash after Phase 1 → Phase 2 resumes from the staged references.
+    No FHIR re-fetch for Phase 1; rows already staged are not re-inserted
+    (ON CONFLICT DO NOTHING).
+
+Retention:
+    Rows have an ``expires_at`` column.  The worker runs ``cleanup_expired()``
+    hourly to purge rows past their TTL (default 30 days via
+    ``MEDANON_STAGING_RETENTION_DAYS``).
 """
 
 from __future__ import annotations
 
-import base64
 import os
-from utils.json_fast import dumps as _json_dumps, loads as _json_loads
 import logging
 from typing import Iterable
-
-# ---------------------------------------------------------------------------
-# Optional Fernet field encryption
-# ---------------------------------------------------------------------------
-_STAGING_ENCRYPT_KEY = os.environ.get("MEDANON_STAGING_ENCRYPT_KEY", "").strip().encode()
-_fernet = None
-
-if _STAGING_ENCRYPT_KEY:
-    try:
-        from cryptography.fernet import Fernet as _Fernet
-        _fernet = _Fernet(_STAGING_ENCRYPT_KEY)
-    except Exception as exc:
-        logging.getLogger("medanon.staging").warning(
-            "staging_encrypt_key_invalid: %s — field encryption disabled", exc
-        )
-        _fernet = None
-
-
-def _encrypt_resource(json_str: str) -> str:
-    """Encrypt *json_str* and return a JSON wrapper ``{"_fernet": "<token>"}``.
-
-    Returns *json_str* unchanged when encryption is disabled.
-    """
-    if _fernet is None:
-        return json_str
-    token = _fernet.encrypt(json_str.encode()).decode()
-    return _json_dumps({"_fernet": token})
-
-
-def _decrypt_resource(stored: str) -> str:
-    """Decrypt a Fernet-wrapped resource JSON string.
-
-    Returns *stored* unchanged when encryption is disabled or the value is
-    a plain (legacy) JSON object.
-    """
-    if _fernet is None:
-        return stored
-    try:
-        obj = _json_loads(stored) if isinstance(stored, str) else stored
-        if isinstance(obj, dict) and "_fernet" in obj:
-            return _fernet.decrypt(obj["_fernet"].encode()).decode()
-    except Exception:
-        pass
-    return stored if isinstance(stored, str) else _json_dumps(stored)
 
 import psycopg2
 import psycopg2.extras
@@ -84,19 +47,38 @@ _PARTITION_TARGET_ROWS: int = int(os.environ.get("MEDANON_PARTITION_TARGET_ROWS"
 _DDL = """
 CREATE SCHEMA IF NOT EXISTS medanon;
 
+-- Staging table stores ONLY resource references — no patient data.
+-- Patient FHIR resources are re-fetched from the source FHIR server in Phase 2.
 CREATE TABLE IF NOT EXISTS medanon.staged_resources (
-    id            BIGSERIAL PRIMARY KEY,
-    job_id        TEXT NOT NULL,
-    resource_id   TEXT NOT NULL,
-    resource_type TEXT NOT NULL,
-    resource_json JSONB NOT NULL,
-    status        TEXT NOT NULL DEFAULT 'pending',
-    error         TEXT,
-    fetched_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    processed_at  TIMESTAMPTZ,
-    expires_at    TIMESTAMPTZ,
+    id               BIGSERIAL PRIMARY KEY,
+    job_id           TEXT NOT NULL,
+    resource_id      TEXT NOT NULL,
+    resource_type    TEXT NOT NULL,
+    fhir_source_url  TEXT NOT NULL DEFAULT '',
+    status           TEXT NOT NULL DEFAULT 'pending',
+    error            TEXT,
+    fetched_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    processed_at     TIMESTAMPTZ,
+    expires_at       TIMESTAMPTZ,
     CONSTRAINT uq_job_resource UNIQUE (job_id, resource_id)
 );
+
+-- Migration: drop resource_json if it exists from a prior schema version.
+-- Patient data must not be stored in this table.
+DO $$ BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+         WHERE table_schema = 'medanon'
+           AND table_name   = 'staged_resources'
+           AND column_name  = 'resource_json'
+    ) THEN
+        ALTER TABLE medanon.staged_resources DROP COLUMN resource_json;
+    END IF;
+END $$;
+
+-- Migration: add fhir_source_url if it does not yet exist.
+ALTER TABLE medanon.staged_resources
+    ADD COLUMN IF NOT EXISTS fhir_source_url TEXT NOT NULL DEFAULT '';
 
 CREATE INDEX IF NOT EXISTS idx_staged_job_status
     ON medanon.staged_resources (job_id, status);
@@ -233,11 +215,20 @@ class StagingStore:
     # Write operations
     # ------------------------------------------------------------------
 
-    def stage_batch(self, job_id: str, resources: list[dict]) -> int:
-        """Insert resources into staging, skipping duplicates.
+    def stage_batch(
+        self,
+        job_id: str,
+        resources: list[dict],
+        fhir_source_url: str = "",
+    ) -> int:
+        """Record resource references in staging — stores NO patient data.
 
-        Returns the number of rows actually inserted (may be < len(resources)
-        when duplicates are skipped via ON CONFLICT DO NOTHING).
+        Only the resource ID and type are persisted alongside the source FHIR
+        server URL needed for Phase 2 re-fetch.  The ``resource_json`` column
+        no longer exists; patient data is never written to this table.
+
+        Returns the number of rows inserted (< len(resources) when duplicates
+        are skipped via ON CONFLICT DO NOTHING).
         """
         if not resources:
             return 0
@@ -253,7 +244,7 @@ class StagingStore:
             rtype = resource.get("resourceType", "Unknown")
             rid = resource.get("id")
             resource_id = f"{rtype}/{rid}" if rid else f"{rtype}/auto-{idx}"
-            rows.append((job_id, resource_id, rtype, _encrypt_resource(_json_dumps(resource))))
+            rows.append((job_id, resource_id, rtype, fhir_source_url))
 
         conn = self._get_conn()
         try:
@@ -261,20 +252,14 @@ class StagingStore:
                 with conn.cursor() as cur:
                     psycopg2.extras.execute_values(
                         cur,
-                        """
+                        f"""
                         INSERT INTO medanon.staged_resources
-                            (job_id, resource_id, resource_type, resource_json, expires_at)
+                            (job_id, resource_id, resource_type, fhir_source_url, expires_at)
                         VALUES %s
                         ON CONFLICT (job_id, resource_id) DO NOTHING
                         """,
                         rows,
-                        template=f"(%s, %s, %s, %s::jsonb, {expires_sql})",
-                        # page_size=len(rows) ensures a single INSERT statement so
-                        # cur.rowcount reflects the total inserted count, not just
-                        # the last internal page (the default page_size=100 splits
-                        # large batches into multiple statements and leaves
-                        # cur.rowcount set to only the final page's count — causing
-                        # staged_count to be ~10× too small in the progress display).
+                        template=f"(%s, %s, %s, %s, {expires_sql})",
                         page_size=len(rows),
                     )
                     return cur.rowcount
@@ -353,7 +338,7 @@ class StagingStore:
                            SET status = 'processing'
                           FROM batch
                          WHERE sr.id = batch.id
-                        RETURNING sr.id, sr.resource_id, sr.resource_type, sr.resource_json
+                        RETURNING sr.id, sr.resource_id, sr.resource_type, sr.fhir_source_url
                         """,
                         (job_id, limit),
                     )
@@ -379,7 +364,7 @@ class StagingStore:
                 ) as cur:
                     cur.execute(
                         """
-                        SELECT id, resource_id, resource_type, resource_json
+                        SELECT id, resource_id, resource_type, fhir_source_url
                           FROM medanon.staged_resources
                          WHERE job_id = %s AND id > %s
                          ORDER BY id
@@ -645,7 +630,7 @@ class StagingStore:
                 ) as cur:
                     cur.execute(
                         """
-                        SELECT id, resource_id, resource_type, resource_json
+                        SELECT id, resource_id, resource_type, fhir_source_url
                           FROM medanon.staged_resources
                          WHERE job_id = %s
                            AND partition_id = %s
