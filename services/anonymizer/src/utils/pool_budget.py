@@ -71,3 +71,53 @@ def log_pool_budget() -> None:
         pg_pool_budget(),
         pg_staging_budget(),
     )
+
+
+def check_thread_budget() -> None:
+    """Warn when the effective pipeline concurrency exceeds the thread cap.
+
+    ``MEDANON_PIPELINE_WIDTH`` concurrent consumers each spawn up to
+    ``MEDANON_PARALLEL_WORKERS`` threads.  Their product must not exceed
+    ``MEDANON_GLOBAL_MAX_THREADS`` or the thread pool will stall and
+    throughput will degrade under load.
+
+    Emits a WARNING (not an error) so the process can still start — operators
+    may have deliberately configured a larger thread pool on their host.
+    """
+    from utils.thread_pool import _MAX_THREADS
+
+    pipeline_width = int(os.environ.get("MEDANON_PIPELINE_WIDTH", "1"))
+    parallel_workers = int(os.environ.get("MEDANON_PARALLEL_WORKERS", "8"))
+    product = pipeline_width * parallel_workers
+
+    if product > _MAX_THREADS:
+        _log.warning(
+            "thread_budget_exceeded MEDANON_PIPELINE_WIDTH=%d × "
+            "MEDANON_PARALLEL_WORKERS=%d = %d > MEDANON_GLOBAL_MAX_THREADS=%d — "
+            "reduce MEDANON_PIPELINE_WIDTH or MEDANON_PARALLEL_WORKERS to avoid "
+            "thread-pool starvation and deadlocks under load",
+            pipeline_width,
+            parallel_workers,
+            product,
+            _MAX_THREADS,
+        )
+    elif product > int(_MAX_THREADS * 0.75):
+        _log.warning(
+            "thread_budget_high MEDANON_PIPELINE_WIDTH=%d × "
+            "MEDANON_PARALLEL_WORKERS=%d = %d (%.0f%% of %d-thread cap) — "
+            "consider lowering concurrency or raising MEDANON_GLOBAL_MAX_THREADS",
+            pipeline_width,
+            parallel_workers,
+            product,
+            100.0 * product / _MAX_THREADS,
+            _MAX_THREADS,
+        )
+    else:
+        _log.info(
+            "thread_budget_ok pipeline_width=%d parallel_workers=%d "
+            "effective=%d / %d threads",
+            pipeline_width,
+            parallel_workers,
+            product,
+            _MAX_THREADS,
+        )

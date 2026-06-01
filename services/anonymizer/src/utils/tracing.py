@@ -87,3 +87,69 @@ def setup_tracing(app) -> bool:
     except Exception as exc:  # noqa: BLE001 — tracing must never crash the app
         logger.warning("OpenTelemetry setup failed; tracing disabled: %s", exc)
         return False
+
+
+def get_tracer(name: str = "medanon.pipeline"):
+    """Return an OTel tracer if tracing is active, otherwise a no-op tracer.
+
+    Safe to call at import time — returns a no-op when tracing is not configured.
+    """
+    try:
+        from opentelemetry import trace
+        return trace.get_tracer(name)
+    except ImportError:
+        return _NoopTracer()
+
+
+class _NoopSpan:
+    """Minimal no-op span so callers don't need to guard with 'if tracer'."""
+    def __enter__(self): return self
+    def __exit__(self, *_): pass
+    def set_attribute(self, *_): pass
+    def record_exception(self, *_): pass
+    def set_status(self, *_): pass
+
+
+class _NoopTracer:
+    def start_as_current_span(self, *_, **__):
+        return _NoopSpan()
+
+
+def setup_tracing_worker() -> bool:
+    """Initialize OTel tracing for the standalone worker process (no FastAPI).
+
+    Only initialises the TracerProvider + OTLP exporter.  No HTTP instrumentation
+    is added (the worker uses asyncio.to_thread, not FastAPI request handlers).
+    """
+    if os.environ.get("MEDANON_OTEL_ENABLED", "").lower() != "true":
+        return False
+
+    try:
+        from opentelemetry import trace
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+        from opentelemetry.instrumentation.logging import LoggingInstrumentor
+        from opentelemetry.sdk.resources import Resource
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+    except ImportError as exc:
+        logger.warning("MEDANON_OTEL_ENABLED=true but packages missing: %s", exc)
+        return False
+
+    try:
+        service_name = os.environ.get("OTEL_SERVICE_NAME", "medanon-worker")
+        endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "http://jaeger:4318")
+        traces_endpoint = (
+            endpoint if endpoint.endswith("/v1/traces")
+            else endpoint.rstrip("/") + "/v1/traces"
+        )
+        resource = Resource.create({"service.name": service_name})
+        provider = TracerProvider(resource=resource)
+        provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=traces_endpoint)))
+        trace.set_tracer_provider(provider)
+        LoggingInstrumentor().instrument(set_logging_format=False)
+        logger.info("OTel tracing enabled (worker, service=%s, endpoint=%s)", service_name, traces_endpoint)
+        return True
+    except Exception as exc:
+        logger.warning("OTel worker setup failed: %s", exc)
+        return False
+

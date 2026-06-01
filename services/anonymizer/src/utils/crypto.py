@@ -1,3 +1,14 @@
+"""utils.crypto — RSA encryption helpers and CSPRNG utilities.
+
+Provides RSA-OAEP encrypt/decrypt for the ``encrypt``/``decrypt`` actions,
+and ``bounded_random()`` which uses ``secrets.randbelow()`` (CSPRNG) for
+all random offsets.  Includes a path-traversal guard on key file paths.
+
+Public API:
+    rsa_encrypt(plaintext, key_path)  — encrypt bytes with a PEM public key
+    rsa_decrypt(ciphertext, key_path) — decrypt bytes with a PEM private key
+    bounded_random(low, high)         — CSPRNG integer in [low, high)
+"""
 import os
 import secrets
 import threading

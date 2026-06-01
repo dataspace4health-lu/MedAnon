@@ -48,12 +48,12 @@ GPAS_CACHE_MISSES = Counter(
     "gPAS pseudonym cache misses",
 )
 
-# Cross-chunk in-process dedup capacity exhausted.  When this counter is
-# non-zero the pipeline fell back to relying on L1/L2 cache only for dedup,
-# which still preserves correctness but increases gPAS round-trips.
+# Retained for Grafana dashboard compatibility. No longer incremented — the
+# pipeline relies on the gPAS client's deterministic L1/L2 cache for
+# cross-chunk dedup instead of an in-process seen-values set.
 SEEN_VALUES_CAP_REACHED = Counter(
     "medanon_seen_values_cap_reached_total",
-    "Times the in-process seen-values dedup set has reached its cap",
+    "Times the in-process seen-values dedup set reached its cap (deprecated — always 0)",
 )
 
 # ── NLP detection cache ──────────────────────────────────────────────────────
@@ -68,12 +68,19 @@ NLP_CACHE_MISSES = Counter(
     "NLP detection cache misses (forwarded to NLP service)",
 )
 
-# ── Per-stage pipeline latency (separates fetch / nlp / gpas / write) ────────
+# ── Per-stage pipeline latency ───────────────────────────────────────────────
+# Stage labels:
+#   "rule_evaluation"  — FHIRPath evaluation + de-identification rule dispatch (parallel per resource)
+#   "phi_detection"    — NLP batch PHI detection + text replacement
+#   "pseudonymization" — gPAS batch identifier pseudonymization (HTTP lookup)
+#   "resource_assembly"— pseudonym write-back + reference rewriting (parallel per resource)
+# Note: phi_detection and pseudonymization run concurrently — their wall-clock
+# durations overlap; summing them does not yield the critical path.
 
 PIPELINE_STAGE_LATENCY = Histogram(
     "medanon_pipeline_stage_duration_seconds",
     "Wall-clock seconds spent in each pipeline stage per chunk",
-    ["stage"],  # stage: "fetch" | "actions" | "nlp" | "gpas" | "post" | "write"
+    ["stage"],
     buckets=(0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0),
 )
 

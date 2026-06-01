@@ -1,3 +1,15 @@
+"""utils.fhirpath — FHIRPath traversal helpers.
+
+Lightweight, pure-Python FHIRPath evaluation used by the pipeline's
+``rule_matcher`` and action implementations.  Only the subset of FHIRPath
+needed for the rule engine is implemented — complex predicates and axis
+navigation beyond simple dot-notation and ``where()`` are not supported.
+
+Public API:
+    find_nodes(resource, path)    — return list of (parent_dict, key) pairs
+    error(msg, *args)             — raise FHIRPathError
+    not_implemented(feature)      — raise NotImplementedError with context
+"""
 from datetime import datetime
 import re
 
