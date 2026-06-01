@@ -138,6 +138,50 @@ class BulkImportJobRequest(BaseModel):
         return self
 
 
+class RiskDrivenExportJobRequest(BaseModel):
+    """Request body for POST /v1/jobs/risk-driven-export.
+
+    Fetches FHIR resources, builds a dataset-wide QI distribution, searches
+    the generalization lattice for the minimal generalization that achieves
+    the target k-anonymity guarantee, and outputs de-identified NDJSON with
+    suppressed patients removed.
+
+    Requires ``MEDANON_STAGING_DB_URL`` to be configured.
+
+    The ``config_profile`` must reference a profile with a ``privacy_model``
+    block, or ``privacy_model`` must be supplied inline here to override.
+    """
+
+    server_url: str | None = None
+    resource_type: str | None = Field(
+        default=None,
+        description="Single FHIR resource type to export (e.g. 'Patient'). "
+        "Omit to export all types from the server's CapabilityStatement.",
+    )
+    type_filter: str | None = Field(
+        default=None,
+        description="Comma-separated resource types to export. "
+        "Mutually exclusive with resource_type.",
+    )
+    since: str | None = Field(
+        default=None,
+        description="ISO-8601 timestamp; only resources updated after this date are fetched.",
+    )
+    token: str | None = None
+    timeout: float = Field(default=30.0, ge=1.0, le=300.0)
+    config_profile: str = Field(
+        default="config_k_anonymity",
+        description="Config profile name.  Must include a privacy_model block, "
+        "or supply privacy_model inline.",
+    )
+    privacy_model: dict | None = Field(
+        default=None,
+        description="Inline privacy_model override.  Merged over the profile's block. "
+        "Useful for overriding target_k, max_suppression, or quasi_identifiers "
+        "without creating a new profile.",
+    )
+
+
 class UploadToTargetRequest(BaseModel):
     """Request body for POST /jobs/{job_id}/upload-to-target.
 

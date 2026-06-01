@@ -15,6 +15,30 @@ from domain.jobs import (  # noqa: F401 — re-exported for routers
 logger = logging.getLogger("medanon")
 
 
+def _build_achieved_privacy(checkpoint: dict) -> dict | None:
+    """Extract the achieved privacy metrics from a job checkpoint.
+
+    Returns a dict for risk-driven-export jobs, None otherwise.
+    The dict includes achieved_k, achieved_l, suppressed_count,
+    suppression_rate, information_loss, feasible, and the per-QI
+    generalization levels chosen by the solver.
+    """
+    plan = checkpoint.get("generalization_plan")
+    if not isinstance(plan, dict):
+        return None
+    return {
+        "achieved_k": plan.get("achieved_k"),
+        "achieved_l": plan.get("achieved_l"),
+        "suppressed_count": plan.get("suppressed_count"),
+        "suppression_rate": plan.get("suppression_rate"),
+        "information_loss": plan.get("information_loss"),
+        "feasible": plan.get("feasible"),
+        "generalization_levels": plan.get("levels"),
+        "total_nodes_evaluated": plan.get("total_nodes_evaluated"),
+        "solve_time_sec": plan.get("solve_time_sec"),
+    }
+
+
 class JobService:
     """Manages async job creation, status queries, and result retrieval."""
 
@@ -87,6 +111,9 @@ class JobService:
             "config_profile": params.get("config_profile", "auto"),
             "upload_errors": checkpoint.get("errors", 0),
             "upload_error_details": checkpoint.get("error_details", []),
+            # Risk-driven export: generalization plan and achieved privacy metrics.
+            # Present only for risk-driven-export jobs; None for all other types.
+            "achieved_privacy": _build_achieved_privacy(checkpoint),
         }
 
     def submit_bulk_export(self, server_url: str, params: dict) -> dict:
@@ -118,6 +145,22 @@ class JobService:
         store = self._get_store()
         self._assert_capacity(store)
         job = store.create("batch-patient-export", {"server_url": server_url, **params})
+        store.notify_new_job(job.id)
+        return self._job_to_dict(job)
+
+    def submit_risk_driven_export(self, server_url: str, params: dict) -> dict:
+        """Create a risk-driven-export job. Returns the job dict."""
+        import os
+        if not os.environ.get("MEDANON_STAGING_DB_URL"):
+            from fastapi import HTTPException
+            raise HTTPException(
+                status_code=400,
+                detail="risk-driven-export requires the PostgreSQL staging layer. "
+                "Set MEDANON_STAGING_DB_URL to enable it.",
+            )
+        store = self._get_store()
+        self._assert_capacity(store)
+        job = store.create("risk-driven-export", {"server_url": server_url, **params})
         store.notify_new_job(job.id)
         return self._job_to_dict(job)
 

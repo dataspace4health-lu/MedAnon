@@ -215,6 +215,7 @@ class ScoringService:
 
         return {
             "job_id": job_id,
+            "computed": True,
             "audit_report_path": audit_path,
             **score_summary,
         }
@@ -245,7 +246,7 @@ class ScoringService:
                 "reason": "scoring not yet triggered for this job — use POST /v1/jobs/{id}/score",
             }
 
-        result = {"job_id": job_id, **score}
+        result = {"job_id": job_id, "computed": True, **score}
         audit_path = checkpoint.get("score_audit_path")
         if audit_path:
             result["audit_report_path"] = audit_path

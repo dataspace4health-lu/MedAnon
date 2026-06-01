@@ -5,6 +5,7 @@ POST   /jobs/cohort               — queue a cohort export job, returns 202
 POST   /jobs/patient-export       — queue a patient $everything export job, returns 202
 POST   /jobs/batch-patient-export — queue a multi-patient $everything export job, returns 202
 POST   /jobs/bulk-import          — upload a completed NDJSON to a target FHIR server (parallel), returns 202
+POST   /jobs/risk-driven-export   — k-anonymity guaranteed export (lattice search + suppression), returns 202
 GET    /jobs                      — list jobs with optional filtering
 GET    /jobs/{job_id}             — poll job status
 DELETE /jobs/{job_id}             — cancel a pending or running job
@@ -32,6 +33,7 @@ from api.schemas.jobs import (
     BulkImportJobRequest,
     CohortJobRequest,
     PatientExportJobRequest,
+    RiskDrivenExportJobRequest,
     UploadToTargetRequest,
 )
 from utils import audit
@@ -326,6 +328,66 @@ async def submit_bulk_import(req: BulkImportJobRequest, request: Request):
     )
     if idem_key:
         _idem.remember("/v1/jobs/bulk-import", idem_key, body_hash, 202, job_dict)
+    return JSONResponse(status_code=202, content=job_dict)
+
+
+@router.post("/jobs/risk-driven-export", status_code=202)
+@limiter.limit(_RATE_JOBS_SUBMIT)
+async def submit_risk_driven_export(req: RiskDrivenExportJobRequest, request: Request):
+    """Queue a risk-driven k-anonymity export job. Returns 202 immediately.
+
+    Three-phase job:
+    1. Fetch FHIR resources → PostgreSQL staging table.
+    2. Scan the full QI distribution → lattice search → optimal GeneralizationPlan.
+    3. Apply the plan (QI overwrite + Patient suppression) → NDJSON.
+
+    The ``GET /v1/jobs/{job_id}`` response includes an ``achieved_privacy`` block
+    with the achieved k, suppression count, generalization levels per QI, and
+    whether the target guarantee was met within the suppression cap.
+
+    **Requires** ``MEDANON_STAGING_DB_URL`` to be configured (returns 400 otherwise).
+    """
+    idem_key, body_hash, cached = _check_idempotency(
+        request, "/v1/jobs/risk-driven-export", req
+    )
+    if cached is not None:
+        return JSONResponse(status_code=cached["status"], content=cached["body"])
+
+    server_url = await _get_url_from_request_or_env(req.server_url, "FHIR_SOURCE_URL", request)
+    if not server_url:
+        raise HTTPException(
+            status_code=400,
+            detail="No server_url provided and FHIR_SOURCE_URL env var is not set",
+        )
+    await _validate_server_url(server_url)
+
+    token = req.token or os.environ.get("FHIR_SOURCE_TOKEN") or None
+    try:
+        job_dict = await asyncio.to_thread(
+            _service.submit_risk_driven_export,
+            server_url,
+            {
+                "resource_type": req.resource_type,
+                "type_filter": req.type_filter,
+                "since": req.since,
+                "token": token,
+                "timeout": req.timeout,
+                "config_profile": req.config_profile,
+                "privacy_model": req.privacy_model,
+            },
+        )
+    except JobStoreUnavailable:
+        raise HTTPException(status_code=503, detail="Job store not initialised")
+    audit.emit(
+        "job.create",
+        resource_type="risk-driven-export",
+        resource_id=job_dict.get("job_id", ""),
+        action="submit",
+    )
+    if idem_key:
+        _idem.remember(
+            "/v1/jobs/risk-driven-export", idem_key, body_hash, 202, job_dict
+        )
     return JSONResponse(status_code=202, content=job_dict)
 
 

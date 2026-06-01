@@ -161,11 +161,12 @@ async def _startup() -> None:
             "Plain SHA3 hashing is not safe in production — set MEDANON_HASH_KEY instead."
         )
 
-    # Log the centralized connection pool budget so operators can verify sizing.
+    # Log the centralized connection pool budget and check thread concurrency.
     try:
-        from utils.pool_budget import log_pool_budget
+        from utils.pool_budget import check_thread_budget, log_pool_budget
 
         log_pool_budget()
+        check_thread_budget()
     except Exception:
         pass
 
