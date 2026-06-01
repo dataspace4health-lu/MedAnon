@@ -10,12 +10,10 @@ TEST_DIR    := $(ANONYMIZER)/tests
 COMPOSE     := docker compose
 DEV_COMPOSE := $(COMPOSE) -f docker-compose.yml -f docker-compose.dev.yml
 
-# Replica counts — read from .env (default to 1 if not set or .env absent).
-GPAS_REPLICAS  := $(shell grep -s '^GPAS_REPLICAS=' .env | cut -d= -f2 | tr -d '[:space:]')
-NLP_REPLICAS   := $(shell grep -s '^NLP_REPLICAS='  .env | cut -d= -f2 | tr -d '[:space:]')
+# Worker replica count — read from .env (default 2 if not set or .env absent).
+# gPAS and NLP always run as a single instance (scaling them does not improve
+# single-job latency; see MEDANON_BATCH_SIZE and sub-batch parallelism instead).
 WORKER_REPLICAS := $(shell grep -s '^WORKER_REPLICAS=' .env | cut -d= -f2 | tr -d '[:space:]')
-GPAS_REPLICAS  := $(if $(GPAS_REPLICAS),$(GPAS_REPLICAS),1)
-NLP_REPLICAS   := $(if $(NLP_REPLICAS),$(NLP_REPLICAS),2)
 WORKER_REPLICAS := $(if $(WORKER_REPLICAS),$(WORKER_REPLICAS),2)
 
 # HAPI FHIR image — update both together when bumping the HAPI version.
@@ -42,7 +40,7 @@ help:
 	@echo "  make batch              Run batch processing + analytics"
 	@echo "  make fetch              Pull resources from HAPI FHIR, anonymize, write NDJSON"
 	@echo ""
-	@echo "  make up                 Start full stack (preflight + docker compose + verify) — scales gPAS and NLP from .env"
+	@echo "  make up                 Start full stack (preflight + docker compose + verify)"
 	@echo "  make dev                Start stack with hot-reload (dev overrides)"
 	@echo "  make down               Stop and remove containers (data volumes are preserved)"
 	@echo "  make down-wipe          Stop + remove containers AND all volumes (full reset)"
@@ -164,23 +162,23 @@ build-sdv:
 
 up-sdv: _dirs preflight build-sdv
 	ANONYMIZER_IMAGE=medanon-sdv:latest $(COMPOSE) --profile nlp up -d \
-		--scale gpas=$(GPAS_REPLICAS) \
-		--scale nlp=$(NLP_REPLICAS) \
 		--scale worker=$(WORKER_REPLICAS)
 	@echo ""
 	@echo "SDV stack running — /generate/synthetic will use GaussianCopula engine"
-	@echo "gPAS replicas: $(GPAS_REPLICAS)  |  NLP replicas: $(NLP_REPLICAS)  |  Worker replicas: $(WORKER_REPLICAS)"
+	@echo "Worker replicas: $(WORKER_REPLICAS)"
 
 _dirs:
 	mkdir -p data output
 
 up: _dirs preflight
-	$(COMPOSE) --profile nlp up -d \
-		--scale gpas=$(GPAS_REPLICAS) \
-		--scale nlp=$(NLP_REPLICAS) \
+	$(COMPOSE) --profile nlp --profile monitoring up -d \
 		--scale worker=$(WORKER_REPLICAS)
 	@echo ""
-	@echo "gPAS replicas: $(GPAS_REPLICAS)  |  NLP replicas: $(NLP_REPLICAS)  |  Worker replicas: $(WORKER_REPLICAS)"
+	@echo "Worker replicas: $(WORKER_REPLICAS)"
+	@echo ""
+	@echo "  Grafana dashboards : http://localhost:$${GRAFANA_PORT:-3000}"
+	@echo "  Prometheus metrics : http://localhost:$${PROMETHEUS_PORT:-9090}"
+	@echo ""
 	@echo "Waiting for services to become healthy..."
 	@bash scripts/verify_deployment.sh || true
 
@@ -188,11 +186,11 @@ dev: build-healthcheck
 	$(DEV_COMPOSE) up
 
 down:
-	$(COMPOSE) --profile analytics --profile nlp --profile ha --profile s3 down --remove-orphans
+	$(COMPOSE) --profile analytics --profile nlp --profile monitoring --profile ha --profile s3 down --remove-orphans
 
 # Wipes ALL volumes including HAPI source DB — only for a full reset.
 down-wipe:
-	$(COMPOSE) --profile analytics --profile nlp --profile ha --profile s3 down --remove-orphans -v
+	$(COMPOSE) --profile analytics --profile nlp --profile monitoring --profile ha --profile s3 down --remove-orphans -v
 
 logs:
 	$(COMPOSE) logs -f

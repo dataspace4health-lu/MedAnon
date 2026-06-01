@@ -24,6 +24,7 @@ networks:
     driver: bridge
 
 # ── Named volumes ─────────────────────────────────────────────────────────────
+
 volumes:
   gpas-db-data:
   gpas-db-replica-data:
@@ -89,11 +90,13 @@ x-worker-env: &worker-env
   MEDANON_PARALLEL_WORKERS: ${MEDANON_PARALLEL_WORKERS:-4}
   # Headroom for 4 processes × 32 threads + integration sub-pools.
   MEDANON_GLOBAL_MAX_THREADS: ${MEDANON_GLOBAL_MAX_THREADS:-128}
-  # gPAS sub-batch executor (independent from the global pool).
-  GPAS_SUBBATCH_PARALLEL: ${GPAS_SUBBATCH_PARALLEL:-16}
-  # NLP client — parallel sub-batches when a single chunk exceeds
-  # NLP_MAX_BATCH_ITEMS. Match this to the NLP service's NLP_BATCH_THREADS.
-  NLP_CLIENT_SUBBATCH_PARALLEL: ${NLP_CLIENT_SUBBATCH_PARALLEL:-8}
+  # gPAS sub-batch executor.  ceil(MEDANON_BATCH_SIZE / GPAS_MAX_BATCH_SIZE) sub-batches
+  # fire per chunk.  At default batch=1000 = gPAS max=1000: exactly 1 sub-batch → only
+  # 1 worker ever used.  Set to 4 so a larger batch size doesn't need a config change.
+  GPAS_SUBBATCH_PARALLEL: ${GPAS_SUBBATCH_PARALLEL:-4}
+  # NLP client — parallel sub-batches when a single chunk exceeds NLP_MAX_BATCH_ITEMS.
+  # At batch=1000 = NLP limit=1000: 1 sub-batch.  4 handles up to 4× batch size growth.
+  NLP_CLIENT_SUBBATCH_PARALLEL: ${NLP_CLIENT_SUBBATCH_PARALLEL:-4}
   # Bigger anonymizer-side L1 cache => fewer NLP RPCs across batches.
   MEDANON_NLP_CACHE_MAX_ENTRIES: ${MEDANON_NLP_CACHE_MAX_ENTRIES:-500000}
   MEDANON_SEEN_VALUES_CAP: ${MEDANON_SEEN_VALUES_CAP:-1000000}
@@ -285,6 +288,7 @@ services:
       # Shards mode: each worker claims partitions independently via
       # FOR UPDATE SKIP LOCKED.  The last replica to finish calls _merge_shards.
       MEDANON_OUTPUT_MODE: ${MEDANON_OUTPUT_MODE:-shards}
+      OTEL_SERVICE_NAME: medanon-worker
     expose:
       - "9091"
     volumes:
@@ -1020,3 +1024,23 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.57
+    container_name: medanon-jaeger
+    profiles: [monitoring]
+    restart: unless-stopped
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "${JAEGER_UI_PORT:-16686}:16686"
+      - "4318:4318"
+    networks:
+      - processing-net
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:16686/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    security_opt:
+      - no-new-privileges:true
