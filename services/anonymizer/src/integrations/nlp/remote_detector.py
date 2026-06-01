@@ -34,8 +34,11 @@ _NLP_BATCH_TIMEOUT: float = float(os.environ.get("NLP_BATCH_TIMEOUT_SEC", "120")
 
 # When detect_batch_remote sub-batches a large request, sub-batches are
 # independent HTTP calls (no shared mutable state) and can be issued in
-# parallel.  Default 4 concurrent sub-batches matches the NLP service's
-# NLP_BATCH_THREADS=4.  Set to 1 to fall back to fully sequential behaviour.
+# parallel.  Default 4: at the default batch size of 1000 there is at most
+# 1 NLP sub-batch (ceil(1000/1000)), so 4 workers is already adequate.
+# Raise to 8 only when MEDANON_BATCH_SIZE ≥ 5000 and NLP service capacity
+# allows (NLP_BATCH_THREADS on the NLP pod must be ≥ this value).
+# Set to 1 to fall back to fully sequential behaviour.
 _NLP_CLIENT_SUBBATCH_PARALLEL: int = max(
     1, int(os.environ.get("NLP_CLIENT_SUBBATCH_PARALLEL", "4"))
 )

@@ -1,6 +1,6 @@
 """Pass 1.5: batch NLP detection and replacement.
 
-Collects texts from all deferred NlpWork items, runs entity detection
+Collects texts from all deferred PHIDetectionTask items, runs entity detection
 in a single batch (one HTTP call for remote, or cache-prewarming for local),
 then applies replacements per-resource with proper token_state isolation.
 
@@ -16,7 +16,7 @@ from typing import Any
 
 from utils.fhirpath import find_nodes
 from pipeline.manifest import _MANIFEST_ENABLED
-from pipeline.action_dispatcher import NlpWork
+from pipeline.action_dispatcher import PHIDetectionTask
 
 _log = logging.getLogger("medanon.nlp_batch")
 
@@ -34,11 +34,11 @@ _TEXT_MIME_TYPES = frozenset({
 # ``mimeType`` appears in some HL7v2-mapped extensions.
 _MIME_INDICATOR_FIELDS: tuple[str, ...] = ("contentType", "sigFormat", "mimeType")
 
-# Sentinel NlpWork shared by all heuristically discovered attachment fields.
+# Sentinel PHIDetectionTask shared by all heuristically discovered attachment fields.
 # Using a single object means Phase B dedup groups them together and
 # _resolve_nlp_params() is called once regardless of how many attachments
 # are found across the batch.
-_HEURISTIC_SENTINEL = NlpWork(
+_HEURISTIC_SENTINEL = PHIDetectionTask(
     rule={"name": "auto:attachment_scan", "match": "**"},
     element={"path": "**"},
     params={"entities": "healthcare", "threshold": 0.4, "language": "en"},
@@ -52,14 +52,14 @@ _HEURISTIC_SENTINEL = NlpWork(
 
 
 @dataclass
-class _TextField:
+class _FieldText:
     """One text field extracted for NLP processing."""
 
     text: str
     owner: Any  # containing dict or list (for write-back)
     key: str | int  # dict key or list index
     is_xhtml: bool
-    work_item: NlpWork  # back-reference for params/action_type
+    work_item: PHIDetectionTask  # back-reference for params/action_type
     resource_idx: int  # index into the parsed resources list
     nlp_params: tuple = ()  # (entities, threshold, language) — populated post-extraction
     base64_encoded: bool = False  # True when text is Base64-decoded; write-back re-encodes
@@ -72,7 +72,7 @@ class _TextField:
 # ---------------------------------------------------------------------------
 
 
-def _extract_fields(resource: dict, work_item: NlpWork, resource_idx: int) -> list[_TextField]:
+def _extract_fields(resource: dict, work_item: PHIDetectionTask, resource_idx: int) -> list[_FieldText]:
     """Navigate to the matched element and collect all text values for NLP."""
     path = work_item.element.get("path", "")
     parts = path.split(".")
@@ -90,7 +90,7 @@ def _extract_fields(resource: dict, work_item: NlpWork, resource_idx: int) -> li
         _log.error("nlp_batch_find_nodes_failed path=%s — will redact", path)
         return []
 
-    fields: list[_TextField] = []
+    fields: list[_FieldText] = []
 
     def _collect(node, field_key):
         if isinstance(node, list):
@@ -102,12 +102,12 @@ def _extract_fields(resource: dict, work_item: NlpWork, resource_idx: int) -> li
         current = node[field_key]
         if use_html:
             if isinstance(current, dict) and isinstance(current.get("div"), str):
-                fields.append(_TextField(
+                fields.append(_FieldText(
                     text=current["div"], owner=current, key="div",
                     is_xhtml=True, work_item=work_item, resource_idx=resource_idx,
                 ))
             elif isinstance(current, str):
-                fields.append(_TextField(
+                fields.append(_FieldText(
                     text=current, owner=node, key=field_key,
                     is_xhtml=True, work_item=work_item, resource_idx=resource_idx,
                 ))
@@ -160,20 +160,20 @@ def _extract_fields(resource: dict, work_item: NlpWork, resource_idx: int) -> li
                     node[field_key] = ""
                     return
             is_xhtml = mime in ("text/html", "application/xml", "application/fhir+xml")
-            fields.append(_TextField(
+            fields.append(_FieldText(
                 text=decoded, owner=node, key=field_key,
                 is_xhtml=is_xhtml, work_item=work_item, resource_idx=resource_idx,
                 base64_encoded=is_b64,
             ))
         elif isinstance(current, str):
-            fields.append(_TextField(
+            fields.append(_FieldText(
                 text=current, owner=node, key=field_key,
                 is_xhtml=False, work_item=work_item, resource_idx=resource_idx,
             ))
         elif isinstance(current, list):
             for i, v in enumerate(current):
                 if isinstance(v, str):
-                    fields.append(_TextField(
+                    fields.append(_FieldText(
                         text=v, owner=current, key=i,
                         is_xhtml=False, work_item=work_item, resource_idx=resource_idx,
                     ))
@@ -186,7 +186,7 @@ def _discover_text_attachments(
     obj: Any,
     resource_idx: int,
     claimed: set[tuple],
-    results: list[_TextField],
+    results: list[_FieldText],
     path: str = "",
 ) -> None:
     """Recursively scan a resource for Base64-encoded text and enqueue for NLP.
@@ -235,7 +235,7 @@ def _discover_text_attachments(
                         obj["data"] = ""
                     else:
                         is_xhtml = mime in ("text/html", "application/xml", "application/fhir+xml")
-                        results.append(_TextField(
+                        results.append(_FieldText(
                             text=decoded, owner=obj, key="data", is_xhtml=is_xhtml,
                             work_item=_HEURISTIC_SENTINEL, resource_idx=resource_idx,
                             base64_encoded=True, path_hint=field_path,
@@ -263,7 +263,7 @@ def _discover_text_attachments(
                         decoded = base64.b64decode(b64_content).decode("utf-8", errors="replace")
                         is_xhtml = uri_mime in ("text/html", "application/xml", "application/fhir+xml")
                         field_path = f"{path}.url" if path else "url"
-                        results.append(_TextField(
+                        results.append(_FieldText(
                             text=decoded, owner=obj, key="url", is_xhtml=is_xhtml,
                             work_item=_HEURISTIC_SENTINEL, resource_idx=resource_idx,
                             base64_encoded=True,
@@ -285,7 +285,7 @@ def _discover_text_attachments(
                 except (ValueError, UnicodeDecodeError):
                     pass  # binary payload — skip silently
                 else:
-                    results.append(_TextField(
+                    results.append(_FieldText(
                         text=decoded, owner=obj, key=k, is_xhtml=False,
                         work_item=_HEURISTIC_SENTINEL, resource_idx=resource_idx,
                         base64_encoded=True, path_hint=child_path,
@@ -299,7 +299,7 @@ def _discover_text_attachments(
 # ---------------------------------------------------------------------------
 
 
-def _resolve_nlp_params(work_item: NlpWork):
+def _resolve_nlp_params(work_item: PHIDetectionTask):
     """Extract NLP parameters from a work item."""
     from integrations.nlp.utils import _resolve_entities
 
@@ -352,7 +352,7 @@ def _apply_nlp_detect_act(text: str, adapter, entities, threshold, language, par
     return text, True
 
 
-def _apply_replacement(field: _TextField, adapter, token_state):
+def _apply_replacement(field: _FieldText, adapter, token_state):
     """Apply NLP replacement to a single text field. Returns (result_text, changed)."""
     entities, threshold, language = field.nlp_params
     text = field.text
@@ -370,7 +370,7 @@ def _apply_replacement(field: _TextField, adapter, token_state):
         return result, result != text
 
 
-def _apply_replacement_xhtml(field: _TextField, adapter, token_state):
+def _apply_replacement_xhtml(field: _FieldText, adapter, token_state):
     """Apply NLP replacement to an XHTML text field. Returns (result_text, changed)."""
     from integrations.nlp.utils import _scrub_xhtml_text_nodes
 
@@ -447,9 +447,9 @@ def _batch_detect_prewarm(adapter, unique_texts: list[str], entities, threshold,
         )
 
 
-def run_nlp_batch_for_batch(
+def detect_phi_batch(
     resources: list[dict | None],
-    all_nlp_works: list[list[NlpWork]],
+    all_nlp_works: list[list[PHIDetectionTask]],
     all_manifest_entries: list[list[dict]],
     processing_mode: str,
 ) -> None:
@@ -482,8 +482,8 @@ def run_nlp_batch_for_batch(
                     })
         return
 
-    # Phase A: Extract all text fields from config-rule NlpWork items.
-    all_fields: list[_TextField] = []
+    # Phase A: Extract all text fields from config-rule PHIDetectionTask items.
+    all_fields: list[_FieldText] = []
     for i, (resource, nlp_works) in enumerate(zip(resources, all_nlp_works)):
         if resource is None or not nlp_works:
             continue
@@ -505,7 +505,7 @@ def run_nlp_batch_for_batch(
     # Runs after Phase A so that config-rule fields are already in the claimed set;
     # this prevents double-processing nodes that are covered by explicit rules.
     claimed: set[tuple] = {(id(f.owner), f.key) for f in all_fields}
-    heuristic_fields: list[_TextField] = []
+    heuristic_fields: list[_FieldText] = []
     for i, resource in enumerate(resources):
         if resource is None:
             continue
@@ -517,7 +517,7 @@ def run_nlp_batch_for_batch(
     if not all_fields:
         return
 
-    # Pre-compute NLP params once per unique NlpWork instance.
+    # Pre-compute NLP params once per unique PHIDetectionTask instance.
     # _resolve_entities() creates a fresh list copy each call; doing it once
     # per work_item (vs once per field) avoids O(fields) list allocations.
     wi_params: dict[int, tuple] = {}
@@ -543,9 +543,43 @@ def run_nlp_batch_for_batch(
     for (entities_tuple, threshold, language), texts in param_groups.items():
         _batch_detect_prewarm(adapter, list(texts), list(entities_tuple), threshold, language)
 
-    # Phase C: Per-resource replacement with token_state isolation
-    # Group fields by resource index for per-resource token_state
-    fields_by_resource: dict[int, list[_TextField]] = {}
+    # Phase C: Per-resource replacement with token_state scoping.
+    #
+    # mapping_scope controls token consistency across resources:
+    #   resource   (default) — fresh token_state per resource; tokens are
+    #                          independent (e.g. [[PERSON_1]] in one resource
+    #                          has no relationship to [[PERSON_1]] in another).
+    #   bundle               — one shared token_state for the entire batch so
+    #                          the same surface form maps to the same surrogate
+    #                          across all resources (e.g. a patient name in
+    #                          Patient and in DocumentReference share [[PERSON_1]]).
+    #                          Forces sequential Phase-C execution because the
+    #                          token map is shared mutable state.
+    #   global_run           — uses the module-level singleton from scrub_text.py;
+    #                          tokens are stable across all batches in a CLI run.
+    #
+    # Read scope from any NLP work-item params (all items in one batch must use
+    # the same scope; first non-heuristic item wins, default 'resource').
+    _mapping_scope = "resource"
+    for _f in all_fields:
+        if _f.work_item is not _HEURISTIC_SENTINEL:
+            _mapping_scope = str(_f.work_item.params.get("mapping_scope", "resource"))
+            break
+
+    # Build the shared token_state for non-resource scopes.
+    if _mapping_scope == "global_run":
+        from actions.scrub_text import _GLOBAL_TOKEN_STATE, _GLOBAL_TOKEN_LOCK as _G_LOCK
+        _shared_token_state: dict | None = _GLOBAL_TOKEN_STATE
+        _shared_token_lock = _G_LOCK
+    elif _mapping_scope == "bundle":
+        _shared_token_state = {"next": {}, "map": {}, "reverse": {}}
+        _shared_token_lock = None  # only one thread will use it (sequential phase-C)
+    else:
+        _shared_token_state = None  # per-resource fresh state
+        _shared_token_lock = None
+
+    # Group fields by resource index for per-resource token_state.
+    fields_by_resource: dict[int, list[_FieldText]] = {}
     for f in all_fields:
         fields_by_resource.setdefault(f.resource_idx, []).append(f)
 
@@ -556,14 +590,26 @@ def run_nlp_batch_for_batch(
     heuristic_changed: dict[int, list[str]] = {}        # resource_idx -> [path_hints that changed]
 
     def _run_resource(
-        res_idx: int, fields: list[_TextField]
+        res_idx: int,
+        fields: list[_FieldText],
+        token_state: dict | None = None,
+        token_lock=None,
     ) -> tuple[int, dict[int, bool], list[str]]:
         """Apply NLP replacements for one resource.
 
-        Thread-safe: each resource owns its token_state and writes only to
-        its own resource dict entries — no shared mutable state across calls.
+        Thread-safe for ``resource`` scope (each call gets its own ``token_state``
+        and writes only to its own resource dict entries).
+
+        For ``bundle`` / ``global_run`` scopes the caller passes a shared
+        ``token_state``; Phase-C is run sequentially so the lock is None.
+        For ``global_run`` the lock is non-None and held around each
+        ``_tokenize`` call (delegated through ``_apply_replacement*``).
         """
-        token_state: dict = {"next": {}, "map": {}, "reverse": {}}
+        import threading as _threading
+
+        if token_state is None:
+            token_state = {"next": {}, "map": {}, "reverse": {}}
+
         resource_changed: dict[int, bool] = {}
         heuristic_paths: list[str] = []
 
@@ -580,7 +626,11 @@ def run_nlp_batch_for_batch(
                         result = base64.b64encode(result.encode("utf-8")).decode("ascii")
                     if field.data_uri_prefix:
                         result = field.data_uri_prefix + result
-                    field.owner[field.key] = result
+                    if token_lock is not None:
+                        with token_lock:
+                            field.owner[field.key] = result
+                    else:
+                        field.owner[field.key] = result
                     if field.work_item is _HEURISTIC_SENTINEL:
                         heuristic_paths.append(field.path_hint)
                     else:
@@ -597,7 +647,12 @@ def run_nlp_batch_for_batch(
 
         return res_idx, resource_changed, heuristic_paths
 
-    if len(fields_by_resource) > 1:
+    # bundle / global_run scopes require sequential execution because the token
+    # map is shared mutable state.  Only the default ``resource`` scope uses
+    # the thread pool.
+    _use_parallel = (_shared_token_state is None) and len(fields_by_resource) > 1
+
+    if _use_parallel:
         # Parallel path: each resource is independent (separate token_state +
         # writes to its own dict entries).  Mirrors the parallel finalization
         # pattern in pipeline/processor.py.
@@ -606,7 +661,7 @@ def run_nlp_batch_for_batch(
 
         pool = get_executor()
         futures: dict = {}
-        sequential_fallback: list[tuple[int, list[_TextField]]] = []
+        sequential_fallback: list[tuple[int, list[_FieldText]]] = []
 
         for res_idx, fields in fields_by_resource.items():
             try:
@@ -634,9 +689,13 @@ def run_nlp_batch_for_batch(
             if hp:
                 heuristic_changed[idx] = hp
     else:
-        # Single resource — skip thread pool overhead
+        # Sequential path: single resource, or shared token scope (bundle/global_run).
+        # For global_run, _shared_token_lock guards the token map during tokenize calls;
+        # for bundle, the map is already exclusive to this batch (no lock needed).
         for res_idx, fields in fields_by_resource.items():
-            idx, rc, hp = _run_resource(res_idx, fields)
+            idx, rc, hp = _run_resource(
+                res_idx, fields, token_state=_shared_token_state, token_lock=_shared_token_lock
+            )
             work_item_changed[idx] = rc
             if hp:
                 heuristic_changed[idx] = hp
@@ -677,13 +736,18 @@ def run_nlp_batch_for_batch(
                 })
 
 
-def run_nlp_batch_single(
+def detect_phi_single(
     resource: dict,
-    nlp_work: list[NlpWork],
+    nlp_work: list[PHIDetectionTask],
     manifest_entries: list[dict],
     processing_mode: str,
 ) -> None:
     """Run NLP batch for a single resource (N=1 fast path)."""
-    run_nlp_batch_for_batch(
+    detect_phi_batch(
         [resource], [nlp_work], [manifest_entries], processing_mode
     )
+
+
+# Backward-compatible aliases.
+run_nlp_batch_for_batch = detect_phi_batch
+run_nlp_batch_single = detect_phi_single
