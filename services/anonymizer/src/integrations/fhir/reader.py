@@ -22,6 +22,7 @@ __all__ = [
     "get_capability_statement",
     "preflight_resource_count",
     "fetch_resource_type",
+    "fetch_resources_by_ids",
     "fetch_everything",
     "fetch_all_resource_types",
     "fetch_cohort",
@@ -164,6 +165,63 @@ def fetch_resource_type(
                 page_offset += 1
 
         url = next_url
+
+
+def fetch_resources_by_ids(
+    base_url: str,
+    resource_type: str,
+    ids: list[str],
+    token=None,
+    timeout: float = 30,
+) -> list[dict]:
+    """Fetch a set of FHIR resources by their logical IDs in one or more HTTP calls.
+
+    Issues ``GET /{resource_type}?_id=id1,id2,...&_count=N`` and follows
+    pagination.  Returns a flat list of FHIR resource dicts.
+
+    Used by the staged executor to re-fetch resources from the source FHIR server
+    in Phase 2 — this keeps patient data out of our databases by re-fetching on
+    demand rather than caching raw FHIR resources in PostgreSQL.
+
+    Args:
+        base_url: FHIR base URL, e.g. ``http://hapi-fhir:8080/fhir``
+        resource_type: e.g. ``"Patient"``
+        ids: logical resource IDs (without resource type prefix)
+        token: optional Bearer token
+        timeout: HTTP timeout in seconds
+    """
+    if not ids:
+        return []
+
+    _validate_resource_type(resource_type)
+    # Chunk into groups of 100 to avoid oversized query strings.
+    _CHUNK_SIZE = 100
+    resources: list[dict] = []
+    _pinned_origin: list = [None]
+
+    for i in range(0, len(ids), _CHUNK_SIZE):
+        chunk = ids[i : i + _CHUNK_SIZE]
+        query = {"_id": ",".join(chunk), "_count": str(len(chunk))}
+        url: str | None = (
+            base_url.rstrip("/") + "/" + resource_type + "?" + urlencode(query)
+        )
+
+        while url:
+            bundle = _get_json(url, token=token, timeout=timeout, operation="fetch_by_ids")
+            for entry in bundle.get("entry", []):
+                res = entry.get("resource")
+                if isinstance(res, dict):
+                    resources.append(res)
+            # Follow next-page link (rare but possible for large chunks)
+            next_url = None
+            for link in bundle.get("link", []):
+                if link.get("relation") == "next":
+                    raw = link.get("url", "")
+                    if raw:
+                        next_url = _safe_next_url(raw, url, _pinned_origin)
+            url = next_url
+
+    return resources
 
 
 def fetch_everything(
@@ -318,32 +376,47 @@ def fetch_all_resource_types(
         finally:
             result_q.put(_SENTINEL)
 
-    pool = get_executor()
+    # Use a DEDICATED thread pool capped at _FHIR_FETCH_PARALLEL threads.
+    # Critical: do NOT use get_executor() here — that is the global pipeline pool
+    # shared with rule-evaluation threads.  Submitting 268 FHIR-fetch tasks to the
+    # global pool starves rule evaluation and makes de-identification slower, not
+    # faster.  A private pool with _FHIR_FETCH_PARALLEL threads saturates the FHIR
+    # HTTP connection pool (FHIR_POOL_SIZE) without starving any other subsystem.
+    from concurrent.futures import ThreadPoolExecutor as _TPE
+    _fetch_pool = _TPE(
+        max_workers=_FHIR_FETCH_PARALLEL,
+        thread_name_prefix="medanon-fhir-parallel",
+    )
     for rt in pending_rts:
-        pool.submit(_fetch_one, rt)
+        _fetch_pool.submit(_fetch_one, rt)
+    # Do not call _fetch_pool.shutdown() here — the pool must remain alive until
+    # all _fetch_one workers finish, which we detect via the sentinel counter below.
     finished = 0
-    while finished < total:
-        try:
-            item = result_q.get(timeout=_QUEUE_GET_TIMEOUT_SEC)
-        except _queue.Empty:
-            raise ValueError(
-                f"FHIR fetch stalled: no data received for "
-                f"{_QUEUE_GET_TIMEOUT_SEC}s — possible thread crash"
-            )
-        if item is _SENTINEL:
-            finished += 1
-            continue
-        # Error sentinel: (SENTINEL, rt, exc) tuple — log and skip this type.
-        if isinstance(item, tuple) and len(item) == 3 and item[0] is _SENTINEL:
-            _, failed_rt, exc = item
-            failed_rts.append(failed_rt)
-            _log.error(
-                "fhir_fetch_type_failed rt=%s error=%s — %d resource(s) from "
-                "this type may be missing from the output",
-                failed_rt, exc, 0,
-            )
-            continue
-        yield item
+    try:
+        while finished < total:
+            try:
+                item = result_q.get(timeout=_QUEUE_GET_TIMEOUT_SEC)
+            except _queue.Empty:
+                raise ValueError(
+                    f"FHIR fetch stalled: no data received for "
+                    f"{_QUEUE_GET_TIMEOUT_SEC}s — possible thread crash"
+                )
+            if item is _SENTINEL:
+                finished += 1
+                continue
+            # Error sentinel: (SENTINEL, rt, exc) tuple — log and skip this type.
+            if isinstance(item, tuple) and len(item) == 3 and item[0] is _SENTINEL:
+                _, failed_rt, exc = item
+                failed_rts.append(failed_rt)
+                _log.error(
+                    "fhir_fetch_type_failed rt=%s error=%s — resources from "
+                    "this type will be missing from the output",
+                    failed_rt, exc,
+                )
+                continue
+            yield item
+    finally:
+        _fetch_pool.shutdown(wait=False, cancel_futures=True)
 
     if failed_rts:
         _log.error(
@@ -448,23 +521,27 @@ def fetch_cohort(
             finally:
                 result_q.put(_SENTINEL)
 
-        pool = get_executor()
+        from concurrent.futures import ThreadPoolExecutor as _TPE
+        _cohort_pool = _TPE(max_workers=_COHORT_PARALLEL, thread_name_prefix="medanon-cohort")
         for pid in sorted_pids:
-            pool.submit(_fetch_patient, pid)
+            _cohort_pool.submit(_fetch_patient, pid)
         finished = 0
-        while finished < n_patients:
-            try:
-                item = result_q.get(timeout=_QUEUE_GET_TIMEOUT_SEC)
-            except _queue.Empty:
-                raise ValueError(
-                    f"Cohort fetch stalled: no data received for "
-                    f"{_QUEUE_GET_TIMEOUT_SEC}s — possible thread crash"
-                )
-            if item is _SENTINEL:
-                finished += 1
-                continue
-            if _dedup(item):
-                yield item
+        try:
+            while finished < n_patients:
+                try:
+                    item = result_q.get(timeout=_QUEUE_GET_TIMEOUT_SEC)
+                except _queue.Empty:
+                    raise ValueError(
+                        f"Cohort fetch stalled: no data received for "
+                        f"{_QUEUE_GET_TIMEOUT_SEC}s — possible thread crash"
+                    )
+                if item is _SENTINEL:
+                    finished += 1
+                    continue
+                if _dedup(item):
+                    yield item
+        finally:
+            _cohort_pool.shutdown(wait=False, cancel_futures=True)
 
         if not error_q.empty():
             raise error_q.get_nowait()
@@ -542,23 +619,27 @@ def fetch_patients_everything(
             finally:
                 result_q.put(_SENTINEL)
 
-        pool = get_executor()
+        from concurrent.futures import ThreadPoolExecutor as _TPE
+        _batch_pool = _TPE(max_workers=_COHORT_PARALLEL, thread_name_prefix="medanon-batch-patient")
         for pid in pid_list:
-            pool.submit(_fetch_patient, pid)
+            _batch_pool.submit(_fetch_patient, pid)
         finished = 0
-        while finished < len(pid_list):
-            try:
-                item = result_q.get(timeout=_QUEUE_GET_TIMEOUT_SEC)
-            except _queue.Empty:
-                raise ValueError(
-                    f"Batch patient fetch stalled: no data received for "
-                    f"{_QUEUE_GET_TIMEOUT_SEC}s — possible thread crash"
-                )
-            if item is _SENTINEL:
-                finished += 1
-                continue
-            if _dedup(item):
-                yield item
+        try:
+            while finished < len(pid_list):
+                try:
+                    item = result_q.get(timeout=_QUEUE_GET_TIMEOUT_SEC)
+                except _queue.Empty:
+                    raise ValueError(
+                        f"Batch patient fetch stalled: no data received for "
+                        f"{_QUEUE_GET_TIMEOUT_SEC}s — possible thread crash"
+                    )
+                if item is _SENTINEL:
+                    finished += 1
+                    continue
+                if _dedup(item):
+                    yield item
+        finally:
+            _batch_pool.shutdown(wait=False, cancel_futures=True)
 
         if not error_q.empty():
             raise error_q.get_nowait()
