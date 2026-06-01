@@ -137,6 +137,37 @@ def _resolve_gpas_headers(params):
 # Cache helpers
 # ---------------------------------------------------------------------------
 
+import hashlib
+import hmac as _hmac_mod
+
+# HMAC-SHA256 key used to blind original identifiers in cache keys.
+# If MEDANON_HASH_KEY is not set we fall back to plain SHA256 (still one-way,
+# but without the secrecy guarantee — set the key in production).
+_HASH_KEY_BYTES: bytes = os.environ.get("MEDANON_HASH_KEY", "").strip().encode()
+
+
+def _blind_identifier(value: str) -> str:
+    """Replace a raw patient identifier with a one-way keyed hash.
+
+    Used as the final component of gPAS pseudonymize cache keys so that
+    original identifiers (patient IDs, names, DOBs) never appear in Redis
+    or the in-process LRU cache.
+
+    The hash is HMAC-SHA256 keyed with ``MEDANON_HASH_KEY`` — deterministic
+    (same input always maps to the same key) but not reversible without the
+    secret.  This preserves cache hit rates while ensuring no PHI is stored
+    in any cache backend.
+
+    De-pseudonymize results are **never** cached because the cache value
+    would be the original PHI value — see ``_cache_set`` usage.
+    """
+    raw = value.encode("utf-8")
+    if _HASH_KEY_BYTES:
+        digest = _hmac_mod.new(_HASH_KEY_BYTES, raw, hashlib.sha256).hexdigest()
+    else:
+        digest = hashlib.sha256(raw).hexdigest()
+    return digest
+
 
 def _is_cache_enabled(params):
     raw = params.get("gpas_cache_enabled", os.environ.get("GPAS_CACHE_ENABLED", "true"))
@@ -323,7 +354,14 @@ def _call_gpas_operation_impl(base_url, operation, fhir_params, params):
                 )
                 GPAS_CALL_COUNT.labels(operation=operation, status="error").inc()
                 if should_retry:
+                    # Retryable server error (5xx/429) with retries exhausted —
+                    # raise GpasUnavailableError so callers' circuit-breaker
+                    # handlers catch this the same way as network failures.
                     _gpas_circuit_breaker.record_failure()
+                    raise GpasUnavailableError(
+                        f"gPAS HTTP {resp.status} on ${operation}"
+                        + (f": {safe_message}" if safe_message else "")
+                    )
                 raise ValueError(
                     f"gPAS HTTP {resp.status} on ${operation}"
                     + (f": {safe_message}" if safe_message else "")

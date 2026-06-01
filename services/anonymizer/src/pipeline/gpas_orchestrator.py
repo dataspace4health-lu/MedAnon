@@ -1,6 +1,6 @@
 """Pass 2: batch gPAS pseudonymization.
 
-Collects the original values from all deferred BatchWork items, calls
+Collects the original values from all deferred PseudonymizationTask items, calls
 the pseudonymizer in a single batch, then writes pseudonyms back into
 the resource via the same node-substitution path used by the non-batch
 actions.
@@ -15,7 +15,7 @@ from concurrent.futures import as_completed
 from utils.fhirpath import find_nodes
 from utils.thread_pool import get_executor
 from actions.substitute import _substitute_nodes
-from pipeline.action_dispatcher import BatchWork
+from pipeline.action_dispatcher import PseudonymizationTask
 from pipeline.manifest import _MANIFEST_ENABLED
 from pipeline.rule_matcher import _resolve_rule_params
 from pipeline.deidentify import perform_deidentification
@@ -59,9 +59,9 @@ def _extract_gpas_params(settings) -> dict | None:
 # ---------------------------------------------------------------------------
 
 
-def run_gpas_batch(
+def pseudonymize_resource_identifiers(
     resource: dict,
-    gpas_work: list[BatchWork],
+    gpas_work: list[PseudonymizationTask],
     processing_mode: str,
     pseudonymizer,
     manifest_entries: list | None = None,
@@ -213,7 +213,7 @@ def run_gpas_batch(
             )
             if processing_mode != "skip":
                 raise ValueError(
-                    f"Empty path after removing resource type root in run_gpas_batch "
+                    f"Empty path after removing resource type root in pseudonymize_resource_identifiers "
                     f"— refusing to clear entire resource (original path: {item.element['path']!r})"
                 )
             continue
@@ -239,9 +239,9 @@ def run_gpas_batch(
     return batch_mapping
 
 
-def run_gpas_depseudo_batch(
+def depseudonymize_resource_identifiers(
     resource: dict,
-    depseudo_work: list[BatchWork],
+    depseudo_work: list[PseudonymizationTask],
     processing_mode: str,
 ) -> None:
     """Batch-de-pseudonymize all deferred gPAS depseudo work items.
@@ -316,21 +316,21 @@ def run_gpas_depseudo_batch(
         _substitute_nodes(ret, path[-1], item.element["value"], original)
 
 
-def write_back_gpas_batch(
+def apply_pseudonym_mapping(
     resource: dict,
-    gpas_work: list[BatchWork],
+    gpas_work: list[PseudonymizationTask],
     batch_mapping: dict,
     processing_mode: str,
     manifest_entries: list | None = None,
 ) -> dict:
     """Apply a pre-computed gPAS mapping to *resource* without making HTTP calls.
 
-    Used in the N>1 batch path where :func:`run_gpas_batch_for_batch` has
+    Used in the N>1 batch path where :func:`pseudonymize_identifier_batch` has
     already fetched the shared mapping.  This function does only the
     write-back step — no pseudonymizer call is made.
 
     Returns the same *batch_mapping* passed in (for text-ID rewriting parity
-    with :func:`run_gpas_batch`).
+    with :func:`pseudonymize_resource_identifiers`).
     """
     if not gpas_work or not batch_mapping:
         return batch_mapping
@@ -372,7 +372,7 @@ def write_back_gpas_batch(
             )
             if processing_mode != "skip":
                 raise ValueError(
-                    f"Empty path after removing resource type root in write_back_gpas_batch "
+                    f"Empty path after removing resource type root in apply_pseudonym_mapping "
                     f"— refusing to clear entire resource (original path: {item.element['path']!r})"
                 )
             continue
@@ -394,8 +394,8 @@ def write_back_gpas_batch(
     return batch_mapping
 
 
-def run_gpas_batch_for_batch(
-    gpas_works: list[list[BatchWork]],
+def pseudonymize_identifier_batch(
+    gpas_works: list[list[PseudonymizationTask]],
     processing_mode: str,
     pseudonymizer,
     gpas_params: dict | None,
@@ -406,11 +406,11 @@ def run_gpas_batch_for_batch(
     """Pre-fetch pseudonyms for all resources in a staged batch with ONE gPAS call.
 
     After this function returns, the pseudonymizer's internal cache is warm.
-    Subsequent ``run_gpas_batch`` calls for each individual resource will find
+    Subsequent ``pseudonymize_resource_identifiers`` calls for each individual resource will find
     their values already cached — zero additional gPAS HTTP round-trips.
 
     Args:
-        gpas_works:      One list of :class:`BatchWork` items per resource.
+        gpas_works:      One list of :class:`PseudonymizationTask` items per resource.
         processing_mode: ``'raise'`` or ``'skip'``.
         pseudonymizer:   :class:`~pipeline.ports.PseudonymizerPort` implementation.
         gpas_params:     gPAS call parameters (domain, operation, etc.).
@@ -458,7 +458,7 @@ def run_gpas_batch_for_batch(
             domain_to_values[domain].append(item.serialized_value)
 
     # Reference IDs are stored under sentinel keys (prefixed "\x00extra") so they
-    # are processed LAST — BatchWork results (per-type domain_map routing) take
+    # are processed LAST — PseudonymizationTask results (per-type domain_map routing) take
     # precedence over the default domain when both cover the same original value.
     # extra_values_by_domain uses per-domain sentinels "\x00extra\x00{domain}" for
     # typed routing; extra_values (legacy) uses the single "\x00extra" sentinel.
@@ -590,3 +590,10 @@ def run_gpas_batch_for_batch(
         len(gpas_works),
     )
     return combined_mapping
+
+
+# Backward-compatible aliases.
+run_gpas_batch = pseudonymize_resource_identifiers
+run_gpas_depseudo_batch = depseudonymize_resource_identifiers
+write_back_gpas_batch = apply_pseudonym_mapping
+run_gpas_batch_for_batch = pseudonymize_identifier_batch

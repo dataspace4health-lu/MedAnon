@@ -21,6 +21,7 @@ from .circuit_breaker import GpasUnavailableError  # noqa: F401 — re-exported 
 from .transport import (
     _resolve_gpas_base,
     _is_cache_enabled,
+    _blind_identifier,
     _cache_get,
     _cache_set,
     _cache_get_many,
@@ -48,9 +49,11 @@ _log = logging.getLogger("medanon.gpas")
 # so sub-batches always run in parallel regardless of where the call
 # originated.
 #
-# Sized small (8) because each sub-batch is HTTP-bound — gPAS itself is
-# the bottleneck, not the client thread count.  Override via
-# GPAS_SUBBATCH_PARALLEL.
+# Default 8: at the default batch size of 1000 there are at most 2 gPAS
+# sub-batches (ceil(1000/500)), so 8 workers is already surplus — it covers
+# future batch-size increases without wasting thread budget now.  Raise to 16
+# only when MEDANON_BATCH_SIZE ≥ 5000 and gPAS can absorb the load.
+# Override via GPAS_SUBBATCH_PARALLEL.
 _GPAS_SUBBATCH_PARALLEL = max(
     1, int(os.environ.get("GPAS_SUBBATCH_PARALLEL", "8"))
 )
@@ -103,7 +106,8 @@ def gpas_pseudonymize_batch(values, params):
     uncached = []
     if use_cache:
         cache_keys = [
-            ("pseudonymize", base_url, domain, operation, str(val)) for val in values
+            ("pseudonymize", base_url, domain, operation, _blind_identifier(str(val)))
+            for val in values
         ]
         cached_results = _cache_get_many(cache_keys)
         for val, key in zip(values, cache_keys):
@@ -147,7 +151,7 @@ def gpas_pseudonymize_batch(values, params):
                     mapping.update(partial)
                     if use_cache:
                         _cache_set_many({
-                            ("pseudonymize", base_url, domain, operation, orig): psn
+                            ("pseudonymize", base_url, domain, operation, _blind_identifier(orig)): psn
                             for orig, psn in partial.items()
                         })
                 except GpasUnavailableError:
@@ -168,7 +172,7 @@ def gpas_pseudonymize_batch(values, params):
                     mapping.update(partial)
                     if use_cache:
                         _cache_set_many({
-                            ("pseudonymize", base_url, domain, operation, orig): psn
+                            ("pseudonymize", base_url, domain, operation, _blind_identifier(orig)): psn
                             for orig, psn in partial.items()
                         })
                 except GpasUnavailableError:
@@ -185,7 +189,7 @@ def gpas_pseudonymize_batch(values, params):
         # are already cached immediately per-chunk inside the parallel loop).
         if use_cache and len(unique_uncached) <= _GPAS_MAX_BATCH:
             _cache_set_many({
-                ("pseudonymize", base_url, domain, operation, orig): psn
+                ("pseudonymize", base_url, domain, operation, _blind_identifier(orig)): psn
                 for orig, psn in mapping.items()
             })
 
@@ -214,28 +218,15 @@ def gpas_depseudonymize_by_path(resource, el, params):
 
     pseudonym_value = str(el["value"])
 
-    # Include base_url in the cache key so different gPAS instances don't collide.
-    cache_key = ("depseudonymize", base_url, domain, pseudonym_value)
-    if _is_cache_enabled(params):
-        cached = _cache_get(cache_key)
-        if cached is not None:
-            original = cached
-        else:
-            fhir_request = _build_depseudonymize_params(domain, [pseudonym_value])
-            resp_json = _call_gpas_operation(
-                base_url, "dePseudonymize", fhir_request, params
-            )
-            mapping = _parse_depseudonymize_response(resp_json)
-            original = mapping.get(pseudonym_value)
-            if original is not None:
-                _cache_set(cache_key, original)
-    else:
-        fhir_request = _build_depseudonymize_params(domain, [pseudonym_value])
-        resp_json = _call_gpas_operation(
-            base_url, "dePseudonymize", fhir_request, params
-        )
-        mapping = _parse_depseudonymize_response(resp_json)
-        original = mapping.get(pseudonym_value)
+    # De-pseudonymize is NEVER cached: the cache value would be the original
+    # patient identifier (PHI).  Original values must only be stored in gPAS
+    # (the authorised TTP), not in Redis or any other backing store we control.
+    fhir_request = _build_depseudonymize_params(domain, [pseudonym_value])
+    resp_json = _call_gpas_operation(
+        base_url, "dePseudonymize", fhir_request, params
+    )
+    mapping = _parse_depseudonymize_response(resp_json)
+    original = mapping.get(pseudonym_value)
 
     if original is None:
         raise ValueError(
@@ -277,24 +268,11 @@ def gpas_depseudonymize_batch(values, params):
             "gPAS domain is required (params.gpas_domain or env GPAS_DOMAIN)"
         )
 
-    use_cache = _is_cache_enabled(params)
+    # De-pseudonymize results are NEVER cached — the cache value would be the
+    # original patient identifier (PHI).  Always fetch directly from gPAS.
+    uncached = [str(val) for val in values]
 
     result = {}
-    uncached = []
-    if use_cache:
-        cache_keys = [
-            ("depseudonymize", base_url, domain, str(val)) for val in values
-        ]
-        cached_results = _cache_get_many(cache_keys)
-        for val, key in zip(values, cache_keys):
-            s = str(val)
-            if key in cached_results:
-                result[s] = cached_results[key]
-            else:
-                uncached.append(s)
-    else:
-        uncached = [str(val) for val in values]
-
     if uncached:
         unique_uncached = list(dict.fromkeys(uncached))
 
@@ -335,12 +313,6 @@ def gpas_depseudonymize_batch(values, params):
                     f"gpas_depseudonymize_batch: {total_failed} values failed across "
                     f"{len(failed_chunks)} chunk(s)"
                 )
-
-        if use_cache and mapping:
-            _cache_set_many({
-                ("depseudonymize", base_url, domain, psn): orig
-                for psn, orig in mapping.items()
-            })
 
         result.update(mapping)
 
