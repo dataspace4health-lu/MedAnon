@@ -63,6 +63,18 @@ def _init_from_env():
     return LocalResultStorage()
 
 
+def delete_result(result_key: str) -> bool:
+    """Delete a stored result by key (local path or s3:// key).
+
+    Returns True if the delete succeeded, False on error (best-effort).
+    """
+    try:
+        return get_result_storage().delete(result_key)
+    except Exception as exc:
+        _log.warning("delete_result_failed key=%s: %s", result_key, exc)
+        return False
+
+
 def store_result(job_id: str, local_path: str) -> str:
     """Upload *local_path* to the configured result storage and return the result key.
 

@@ -427,12 +427,13 @@ class RedisJobStore:
         except Exception as exc:
             _log.warning("xack_error message_id=%s: %s", message_id, exc)
 
-    def claim_stale_jobs(self, min_idle_ms: int = 90_000) -> list[str]:
+    def claim_stale_jobs(self, min_idle_ms: int = 90_000) -> list[tuple[str, str]]:
         """Claim stream messages idle for more than *min_idle_ms* milliseconds.
 
-        Returns the job_ids that were claimed.  The worker resets their status
-        from RUNNING to PENDING so they are retried.  Replaces the fragile
-        RUNNING-job scan used with BLPOP.
+        Returns ``[(job_id, message_id), ...]`` for every message claimed.
+        The caller uses the message_id to ACK entries whose jobs are already
+        terminal (done/error/cancelled/dead) — those must be ACK'd so they
+        don't accumulate in the PEL across restarts.
         """
         try:
             # XAUTOCLAIM returns (next_start_id, [(msg_id, {fields})], deleted_ids)
@@ -445,14 +446,14 @@ class RedisJobStore:
                 count=10,
             )
             _, claimed_messages, _ = result
-            job_ids = []
+            pairs: list[tuple[str, str]] = []
             for message_id, fields in claimed_messages:
                 job_id = fields.get("job_id", "")
                 if job_id:
-                    job_ids.append(job_id)
-            if job_ids:
-                _log.info("stream_claimed_stale count=%d", len(job_ids))
-            return job_ids
+                    pairs.append((job_id, message_id))
+            if pairs:
+                _log.info("stream_claimed_stale count=%d", len(pairs))
+            return pairs
         except Exception as exc:
             _log.warning("claim_stale_jobs_error: %s", type(exc).__name__)
             return []
