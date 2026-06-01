@@ -51,8 +51,8 @@ NLP_BATCH_ACTIONS = frozenset({"nlp_scrub", "nlp_detect", "nlp_detect_act"})
 
 
 @dataclass
-class BatchWork:
-    """A single element deferred to the gPAS batch pass."""
+class PseudonymizationTask:
+    """A single FHIR element deferred for batch gPAS identifier pseudonymization."""
 
     rule: dict
     element: dict  # FHIRPath node with ``path`` and ``value`` keys
@@ -61,8 +61,8 @@ class BatchWork:
 
 
 @dataclass
-class NlpWork:
-    """A single element deferred to the NLP batch pass."""
+class PHIDetectionTask:
+    """A single FHIR text field deferred for batch NLP PHI detection."""
 
     rule: dict
     element: dict  # FHIRPath node with ``path`` and ``value`` keys
@@ -70,29 +70,35 @@ class NlpWork:
     action_type: str  # 'nlp_scrub', 'nlp_detect', or 'nlp_detect_act'
 
 
+# Backward-compatible aliases — remove after all callers are updated.
+BatchWork = PseudonymizationTask
+NlpWork = PHIDetectionTask
+
+
 # ---------------------------------------------------------------------------
-# Pass 1: evaluate rules, dispatch non-gPAS actions, collect gPAS work
+# Rule evaluation: evaluate de-identification rules, dispatch immediate actions,
+# collect deferred pseudonymization and PHI-detection tasks.
 # ---------------------------------------------------------------------------
 
 
-def dispatch_pass1(
+def evaluate_and_dispatch(
     resource: dict,
     applicable_rules: list,
     settings,
     manifest_entries: list,
     processing_mode: str,
-) -> tuple[list[BatchWork], list[NlpWork]]:
-    """Evaluate all rules against *resource*, applying non-gPAS/NLP actions immediately.
+) -> tuple[list[PseudonymizationTask], list[PHIDetectionTask]]:
+    """Evaluate all de-identification rules against *resource*.
 
-    Modifies *resource* in place.  Appends fired-rule metadata to
-    *manifest_entries* when the manifest is enabled.
+    Applies non-gPAS/NLP actions immediately (in place). Defers identifier
+    pseudonymization and PHI detection to their respective batch passes.
 
     Returns:
-        Tuple of (gPAS :class:`BatchWork` items, NLP :class:`NlpWork` items)
-        for the respective batch passes.
+        ``(pseudonymization_tasks, phi_detection_tasks)`` — work items for
+        the pseudonymization and PHI-detection stages respectively.
     """
-    gpas_work: list[BatchWork] = []
-    nlp_work: list[NlpWork] = []
+    gpas_work: list[PseudonymizationTask] = []
+    nlp_work: list[PHIDetectionTask] = []
     # Dedup key: (path, action, stable_value_key) — see _stable_value_key below.
     processed_paths: set[tuple] = set()
 
@@ -173,12 +179,25 @@ def dispatch_pass1(
                 # which never come from FHIR resources in practice.
                 return f"unhashable:{id(v)}"
 
+        # Include a param fingerprint in the dedup key so two rules with the
+        # same action but different params on the same path/value are both
+        # applied.  Without this, a stricter follow-on rule (e.g. a second
+        # generalize with a different strategy) is silently dropped, which is
+        # a quiet privacy regression.
+        # Use _stable_value_key on sorted params items for a cheap stable digest.
+        try:
+            params_key = _stable_value_key(
+                {k: params[k] for k in sorted(params) if not k.startswith("_")}
+            )
+        except Exception:
+            params_key = repr(sorted(params.items()))
+
         elements_to_process = []
         for el in matched_elements:
             el_path = el.get("path", "?")
             el_val = el.get("value")
             val_key = _stable_value_key(el_val)
-            path_key = (el_path, action, val_key)
+            path_key = (el_path, action, val_key, params_key)
             if path_key in processed_paths:
                 audit_log.debug(
                     "rule_skipped_duplicate action=%s path=%s",
@@ -191,7 +210,7 @@ def dispatch_pass1(
         for el in elements_to_process:
             el_val = el.get("value")
             val_key = _stable_value_key(el_val)
-            processed_paths.add((el.get("path", "?"), action, val_key))
+            processed_paths.add((el.get("path", "?"), action, val_key, params_key))
 
         for el in elements_to_process:
             el_path = el.get("path", "?")
@@ -219,7 +238,7 @@ def dispatch_pass1(
                 if isinstance(val, str) and val.startswith("urn:uuid:"):
                     serialized = val[len("urn:uuid:"):]
                 gpas_work.append(
-                    BatchWork(
+                    PseudonymizationTask(
                         rule=rule,
                         element=el,
                         params=el_params,
@@ -227,14 +246,14 @@ def dispatch_pass1(
                     )
                 )
                 # Manifest is recorded at write-back time (run_gpas_batch /
-                # write_back_gpas_batch) so the logged action reflects the actual
+                # apply_pseudonym_mapping) so the logged action reflects the actual
                 # outcome — pseudonymization or fallback-redact if gPAS failed.
                 continue
 
             # Defer NLP actions for batch processing (Pass 1.5)
             if action in NLP_BATCH_ACTIONS:
                 nlp_work.append(
-                    NlpWork(
+                    PHIDetectionTask(
                         rule=rule,
                         element=el,
                         params=el_params,
@@ -302,3 +321,7 @@ def dispatch_pass1(
                 )
 
     return gpas_work, nlp_work
+
+
+# Backward-compatible alias for evaluate_and_dispatch.
+dispatch_pass1 = evaluate_and_dispatch

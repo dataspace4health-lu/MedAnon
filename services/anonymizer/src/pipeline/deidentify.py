@@ -406,9 +406,12 @@ def _replace_span(
             replacement = m.group(1) if m else "[DATE]"
             # Date detectors often over-extend the span into the next word
             # (e.g. "12 April 1974, residin" or "18 April 2026. Follow").
-            # If the span ends mid-word, walk left so we don't leave the
-            # tail (e.g. "g" or "up") glued to the year.
-            while end < len(text) and text[end].isalnum():
+            # If the span ends mid-word, walk forward to consume the trailing
+            # fragment so it isn't left glued to the replacement year.
+            # Guard: stop before the next replacement bracket (e.g. "[PERSON]")
+            # so we don't chew into a token that was already substituted in an
+            # earlier right-to-left pass.
+            while end < len(text) and text[end].isalnum() and text[end] != "[":
                 end += 1
         elif entity_type == "AGE":
             m = _AGE_RE.search(span_text)

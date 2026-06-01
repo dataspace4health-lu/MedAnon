@@ -1,3 +1,14 @@
+"""pipeline.config.loader — YAML config loading and validation.
+
+Loads de-identification rule profiles from YAML files.  Supports
+``${VAR:-default}`` environment variable interpolation in values.
+Validates rule shapes and raises ``ValueError`` (never ``sys.exit``) on
+invalid config so callers can handle errors gracefully.
+
+Public API:
+    load_config(path)         — parse and validate a YAML config file
+    load_config_str(yaml_str) — parse from an in-memory YAML string
+"""
 import logging
 import os
 import re
@@ -122,6 +133,7 @@ class Settings:
                     "domain_map",
                     "general",
                     "config_hash",
+                    "privacy_model",
                 })
 
                 # Set values of the dictionary as class attributes
@@ -170,10 +182,20 @@ class Settings:
                     self.domain_map = {}
 
                 self._validate_rules()
+
+                # Optional risk-driven generalization block.
+                # Absent → privacy_model is None → engine behaves as today.
+                raw_pm = cfg.get("privacy_model")
+                if raw_pm is not None and isinstance(raw_pm, dict):
+                    self.privacy_model: dict | None = self._validate_privacy_model(raw_pm)
+                else:
+                    self.privacy_model = None
+
                 _config_log.info(
-                    "Settings loaded: %d rules from %s",
+                    "Settings loaded: %d rules from %s%s",
                     len(getattr(self, "rules", [])),
                     filename,
+                    " [privacy_model enabled]" if self.privacy_model else "",
                 )
         except IOError as e:
             _config_log.error("Settings file %s does not exist.", filename)
@@ -296,3 +318,143 @@ class Settings:
                         break
             else:
                 seen[match_expr] = (action, name, idx)
+
+    @staticmethod
+    def _validate_privacy_model(pm: dict) -> dict:
+        """Validate and normalise a ``privacy_model`` config block.
+
+        Returns the validated dict (suitable for setting on ``self.privacy_model``).
+        Raises ``ValueError`` on any invalid field.
+
+        Expected shape::
+
+            privacy_model:
+              enabled: true                  # default true when block present
+              target_k: 5                    # required; int >= 2
+              target_l: 2                    # optional; int >= 2
+              max_suppression: 0.05          # float in [0, 1]; default 0.05
+              max_qi_count: 5                # max quasi-identifiers; default 5
+              quasi_identifiers:
+                - path: "Patient.birthDate"  kind: date
+                - path: "Patient.address.postalCode"  kind: zip
+              sensitive_attribute:           # optional; for l-diversity
+                path: "Condition.code"
+              on_unsatisfiable: "max_generalize"  # or "fail"
+              suppress_linked: true          # suppress linked resources too
+        """
+        from pipeline.privacy.hierarchies import KNOWN_KINDS
+
+        enabled = pm.get("enabled", True)
+        if not isinstance(enabled, bool):
+            raise ValueError("privacy_model.enabled must be a boolean")
+        if not enabled:
+            return None  # type: ignore[return-value]  # caller checks None
+
+        # target_k
+        target_k = pm.get("target_k")
+        if target_k is None:
+            raise ValueError("privacy_model.target_k is required when privacy_model is enabled")
+        try:
+            target_k = int(target_k)
+        except (TypeError, ValueError):
+            raise ValueError("privacy_model.target_k must be an integer")
+        if target_k < 2:
+            raise ValueError(f"privacy_model.target_k must be >= 2 (got {target_k})")
+
+        # target_l (optional)
+        target_l = pm.get("target_l")
+        if target_l is not None:
+            try:
+                target_l = int(target_l)
+            except (TypeError, ValueError):
+                raise ValueError("privacy_model.target_l must be an integer")
+            if target_l < 2:
+                raise ValueError(f"privacy_model.target_l must be >= 2 (got {target_l})")
+
+        # max_suppression
+        max_suppression = pm.get("max_suppression", 0.05)
+        try:
+            max_suppression = float(max_suppression)
+        except (TypeError, ValueError):
+            raise ValueError("privacy_model.max_suppression must be a float")
+        if not (0.0 <= max_suppression <= 1.0):
+            raise ValueError(
+                f"privacy_model.max_suppression must be in [0, 1] (got {max_suppression})"
+            )
+
+        # max_qi_count
+        max_qi_count = pm.get("max_qi_count", 5)
+        try:
+            max_qi_count = int(max_qi_count)
+        except (TypeError, ValueError):
+            raise ValueError("privacy_model.max_qi_count must be an integer")
+        if max_qi_count < 1 or max_qi_count > 10:
+            raise ValueError(
+                f"privacy_model.max_qi_count must be in [1, 10] (got {max_qi_count})"
+            )
+
+        # quasi_identifiers
+        qis_raw = pm.get("quasi_identifiers")
+        if not isinstance(qis_raw, list) or len(qis_raw) == 0:
+            raise ValueError(
+                "privacy_model.quasi_identifiers must be a non-empty list"
+            )
+        if len(qis_raw) > max_qi_count:
+            raise ValueError(
+                f"privacy_model.quasi_identifiers has {len(qis_raw)} entries but "
+                f"max_qi_count={max_qi_count}. Raise max_qi_count or reduce QIs."
+            )
+        quasi_identifiers = []
+        for i, qi in enumerate(qis_raw, start=1):
+            if not isinstance(qi, dict):
+                raise ValueError(f"privacy_model.quasi_identifiers[{i}] must be a mapping")
+            path = qi.get("path", "")
+            if not isinstance(path, str) or not path.strip():
+                raise ValueError(
+                    f"privacy_model.quasi_identifiers[{i}].path must be a non-empty string"
+                )
+            kind = qi.get("kind", "")
+            if kind not in KNOWN_KINDS:
+                raise ValueError(
+                    f"privacy_model.quasi_identifiers[{i}].kind={kind!r} is unknown. "
+                    f"Supported: {', '.join(sorted(KNOWN_KINDS))}"
+                )
+            quasi_identifiers.append({"path": path.strip(), "kind": kind})
+
+        # sensitive_attribute (optional, for l-diversity)
+        sensitive_attribute = None
+        sa_raw = pm.get("sensitive_attribute")
+        if sa_raw is not None:
+            if not isinstance(sa_raw, dict):
+                raise ValueError("privacy_model.sensitive_attribute must be a mapping")
+            sa_path = sa_raw.get("path", "")
+            if not isinstance(sa_path, str) or not sa_path.strip():
+                raise ValueError(
+                    "privacy_model.sensitive_attribute.path must be a non-empty string"
+                )
+            sensitive_attribute = {"path": sa_path.strip()}
+
+        # on_unsatisfiable
+        on_unsatisfiable = pm.get("on_unsatisfiable", "max_generalize")
+        if on_unsatisfiable not in ("max_generalize", "fail"):
+            raise ValueError(
+                f"privacy_model.on_unsatisfiable must be 'max_generalize' or 'fail' "
+                f"(got {on_unsatisfiable!r})"
+            )
+
+        # suppress_linked
+        suppress_linked = pm.get("suppress_linked", True)
+        if not isinstance(suppress_linked, bool):
+            raise ValueError("privacy_model.suppress_linked must be a boolean")
+
+        return {
+            "enabled": True,
+            "target_k": target_k,
+            "target_l": target_l,
+            "max_suppression": max_suppression,
+            "max_qi_count": max_qi_count,
+            "quasi_identifiers": quasi_identifiers,
+            "sensitive_attribute": sensitive_attribute,
+            "on_unsatisfiable": on_unsatisfiable,
+            "suppress_linked": suppress_linked,
+        }
