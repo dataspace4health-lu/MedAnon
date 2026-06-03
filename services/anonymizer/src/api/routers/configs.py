@@ -50,6 +50,7 @@ _VALID_ACTIONS = frozenset(
         "scrub_text",
         "nlp_scrub",
         "nlp_detect",
+        "nlp_detect_act",
         "gpas_pseudonymize",
     }
 )

@@ -31,7 +31,7 @@ _PROFILE_FILES = [
 VALID_ACTIONS = frozenset({
     "redact", "cryptohash", "encrypt", "decrypt", "perturb",
     "substitute", "generalize", "scrub_text", "nlp_scrub",
-    "nlp_detect", "gpas_pseudonymize",
+    "nlp_detect", "nlp_detect_act", "gpas_pseudonymize",
 })
 
 _SYSTEM_PROMPT = """\
