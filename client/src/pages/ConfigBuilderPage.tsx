@@ -290,7 +290,7 @@ export default function ConfigBuilderPage() {
       </div>
 
       {/* -- Footer actions -- */}
-      <div className="flex gap-3">
+      <div className="sticky bottom-0 z-10 -mx-4 flex gap-3 border-t bg-background px-4 py-4 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
         <Button
           onClick={handleSave}
           disabled={saving}
