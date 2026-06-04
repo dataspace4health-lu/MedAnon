@@ -33,7 +33,7 @@ export interface ConfigUpdateBody {
 
 /** GET /api/v1/configs — list all config profiles. */
 export async function listConfigs(): Promise<ConfigMeta[]> {
-  const data = await fetchApi<{ configs: ConfigMeta[] }>("/v1/configs");
+  const data = await fetchApi<{ configs: ConfigMeta[] }>("/v1/configs", { cache: "no-store" });
   return data.configs;
 }
 

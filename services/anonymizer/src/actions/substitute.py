@@ -9,7 +9,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from utils.fhirpath import error, find_nodes
+import logging
+
+from utils.fhirpath import find_nodes
+
+_log = logging.getLogger(__name__)
+_DEFAULT_SUBSTITUTE = "[REDACTED]"
 
 expected_params = ["substitute_with"]
 
@@ -29,8 +34,9 @@ def _substitute_nodes(node: Any, key: str, value: Any, new_value: Any) -> None:
 
 
 def substitute_by_path(resource: dict, el: dict, params: dict) -> None:
-    if not all(param in params for param in expected_params):
-        error(f"Missing params (expected {expected_params})")
+    if "substitute_with" not in params:
+        _log.warning("substitute rule missing substitute_with param — defaulting to %r", _DEFAULT_SUBSTITUTE)
+    substitute_value = params.get("substitute_with", _DEFAULT_SUBSTITUTE)
     ret = resource
     path = el["path"]  # "Patient.name"
     path = path.split(".")[1:]  # Remove root
@@ -40,4 +46,4 @@ def substitute_by_path(resource: dict, el: dict, params: dict) -> None:
             f"refusing to clear entire resource (original path: {el['path']!r})"
         )
     ret = find_nodes(ret, path[:-1], [])
-    _substitute_nodes(ret, path[-1], el["value"], params[expected_params[0]])
+    _substitute_nodes(ret, path[-1], el["value"], substitute_value)

@@ -61,7 +61,7 @@ Each rule has:
 key)
 - encrypt: RSA-encrypt (reversible with private key)
 - perturb: Random offset for numeric/date values
-- substitute: Replace with synthetic value
+- substitute: Replace with static value (REQUIRED param: substitute_with: "<value>")
 - generalize: Reduce precision (date_year, date_year_month, zip_prefix, \
 age_bracket)
 - scrub_text: Regex-based PII scrubbing (params: mode, patterns)

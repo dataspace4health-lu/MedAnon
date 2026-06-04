@@ -194,6 +194,13 @@ def _validate_and_write(
                 status_code=422,
                 detail=f"rules[{idx}].match must be a non-empty string.",
             )
+        if rule.action == "substitute" and (
+            not rule.params or "substitute_with" not in rule.params
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail=f"rules[{idx}]: action 'substitute' requires params.substitute_with.",
+            )
 
     yaml_text = _rules_to_yaml(name, description, rules, general)
 

@@ -91,8 +91,12 @@ export function newRule(): LocalRule {
 
 export function toApiRules(rules: LocalRule[]): ConfigRule[] {
   return rules.map(({ match, action, params, name }) => {
+    const resolvedParams = { ...params };
+    if (action === 'substitute' && !resolvedParams.substitute_with) {
+      resolvedParams.substitute_with = '[REDACTED]';
+    }
     const r: ConfigRule = { match, action };
-    if (Object.keys(params).length > 0) r.params = params;
+    if (Object.keys(resolvedParams).length > 0) r.params = resolvedParams;
     if (name.trim()) r.name = name.trim();
     return r;
   });
@@ -131,7 +135,14 @@ export function parseYamlIntoRules(yaml: string): { rules: LocalRule[]; error: s
     const actionRaw = clean.match(/action:\s*(\S+)/)?.[1]?.trim() ?? '';
     const actionVal = actionRaw.replace(/[&*]\w+/, '').trim() as Action;
     const nameVal = clean.match(/name:\s*["']?([^"'\n#]+?)["']?\s*$/m)?.[1]?.trim() ?? '';
-    return { _id: uid(), match: matchVal, action: actionVal || 'redact', params: {}, name: nameVal };
+    // Parse simple key: value entries from the params: block
+    const params: Record<string, unknown> = {};
+    const paramsSection = clean.match(/\bparams:\s*\n((?:[ \t]+\S[^\n]*\n?)*)/)?.[1] ?? '';
+    for (const line of paramsSection.split('\n')) {
+      const kv = line.match(/^\s+(\w+):\s*["']?([^"'\n#]+?)["']?\s*$/);
+      if (kv) params[kv[1]] = isNaN(Number(kv[2])) ? kv[2] : Number(kv[2]);
+    }
+    return { _id: uid(), match: matchVal, action: actionVal || 'redact', params, name: nameVal };
   }).filter((r) => r.match && VALID_ACTIONS.includes(r.action));
 
   if (rules.length === 0) {

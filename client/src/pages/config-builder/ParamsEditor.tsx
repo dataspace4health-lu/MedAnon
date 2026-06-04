@@ -176,6 +176,19 @@ export function ParamsEditor({
     );
   }
 
-  // cryptohash, substitute, gpas_pseudonymize -- no params needed
+  if (action === 'substitute') {
+    return (
+      <Input
+        placeholder="substitute_with (required)"
+        className="h-7 text-xs"
+        value={String(params.substitute_with ?? '')}
+        onChange={(e) =>
+          e.target.value ? set('substitute_with', e.target.value) : unset('substitute_with')
+        }
+      />
+    );
+  }
+
+  // cryptohash, gpas_pseudonymize -- no params needed
   return <span className="text-xs text-muted-foreground">\u2014</span>;
 }
