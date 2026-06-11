@@ -54,6 +54,10 @@ coverage.xml
 .pytest_cache/
 cover/
 
+# ── Trivy ─────────────────────────────────────────────────────────────────────
+# cache is written to /tmp/trivy-cache (no local cache dir)
+trivy-*.sarif
+
 # ── Jupyter / IPython ─────────────────────────────────────────────────────────
 .ipynb_checkpoints
 profile_default/
@@ -139,6 +143,12 @@ services/gpas/
 # ── Claude Code session memory ────────────────────────────────────────────────
 CLAUDE.md
 .claude/
+
+# ── GitHub Agents (AI workflow definitions — local only) ──────────────────────
+.github/agents/
+
+# ── SQL schema migration files ────────────────────────────────────────────────
+services/anonymizer/sql/
 
 # ── Internal documentation ────────────────────────────────────────────────────
 # Architecture reviews, security audits, competitive analysis, planning docs.
