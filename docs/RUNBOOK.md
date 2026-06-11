@@ -22,7 +22,7 @@ docker compose --profile s3 up    # MinIO S3 object storage for job results
 docker compose --profile ai up    # Ollama local LLM for AI agent endpoints
 ```
 
-The NLP microservice (`nlp`, `nlp-lb`) and analytics service (`analytics`) are **always-on** — they start with `make up`. They are no longer opt-in profiles.
+The NLP microservice (`nlp`) and analytics service (`analytics`) are **always-on** — they start with `make up`. `nlp-lb` is a Traefik gateway network alias, not a separate container.
 
 ### Check health
 
@@ -68,7 +68,7 @@ docker compose exec anonymizer tail -f /output/audit.log  # structured JSON audi
 
 Auto-selection: `GPAS_URL` set → `config_gpas.yaml`; otherwise → `config.yaml`.
 
-Override per-request: `?config_profile=<name>` — values: `auto`, `minimal`, `gpas`, `gdpr`, `hipaa`, `research`, `structural`.
+Override per-request: `?config_profile=<name>` — values: `auto`, `minimal`, `gpas`, `gdpr`, `hipaa`, `research`, `structural`, `value-masking`.
 
 See [policies.md](policies.md) for full compliance details per profile.
 
@@ -334,7 +334,7 @@ curl -s http://localhost:8000/v1/jobs?status=pending -H "X-API-Key: $MEDANON_API
 Tune these variables in `.env`:
 
 ```bash
-MEDANON_BATCH_SIZE=300          # resources per gPAS batch (smaller = more frequent gPAS calls)
+MEDANON_BATCH_SIZE=1000         # resources per gPAS batch (default; raise only if gPAS is fast and memory allows)
 FHIR_PAGE_SIZE=500              # resources per FHIR paginated fetch
 MEDANON_FHIR_FETCH_PARALLEL=1   # keep at 1 — more threads compete for GIL without benefit
 MEDANON_COHORT_PARALLEL=2       # parallel $everything calls (safe, I/O-bound)

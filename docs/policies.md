@@ -2,14 +2,15 @@
 
 ## Profile comparison
 
-| Profile | File | ID handling | Dates | Geographic | Text scrubbing | Requires gPAS | Legal basis |
+| Profile name | File | ID handling | Dates | Geographic | Text scrubbing | Requires gPAS | Legal basis |
 |---|---|---|---|---|---|---|---|
-| **Default** | `config.yaml` | SHA3-256 hash | Year only | Zip prefix (3-digit) | Regex + NLP | No | Testing only |
-| **gPAS Production** | `config_gpas.yaml` | gPAS pseudonym (reversible) | Year only | Zip prefix (3-digit) | Regex + NLP | Yes | Jurisdiction-specific |
-| **GDPR** | `config_gdpr_eu.yaml` | HMAC SHA3-256 | Redacted | Redacted | Regex + NLP | No | GDPR Art. 4(5), 25, 89 |
-| **HIPAA Safe Harbor** | `config_hipaa_safe_harbor.yaml` | Redacted | Year only | State + 3-digit zip | Regex + NLP | No | 45 CFR § 164.514(b) |
-| **Research** | `config_research_pseudonymous.yaml` | SHA3-256 hash | Year-month | 3-digit zip prefix | Regex + NLP | No | IRB / GDPR Art. 89 |
-| **Structure Preserving** | `config_structure_preserving.yaml` | gPAS pseudonym (reversible) | Year (birthDate only) | Preserved | Regex + NLP | Yes | Structure-first |
+| `minimal` | `config.yaml` | SHA3-256 hash | Year only | Zip prefix (3-digit) | Regex + NLP | No | Testing only |
+| `gpas` | `config_gpas.yaml` | gPAS pseudonym (reversible) | Year only | Zip prefix (3-digit) | Regex + NLP | Yes | Jurisdiction-specific |
+| `gdpr` | `config_gdpr_eu.yaml` | HMAC SHA3-256 | Redacted | Redacted | Regex + NLP | No | GDPR Art. 4(5), 25, 89 |
+| `hipaa` | `config_hipaa_safe_harbor.yaml` | Redacted | Year only | State + 3-digit zip | Regex + NLP | No | 45 CFR § 164.514(b) |
+| `research` | `config_research_pseudonymous.yaml` | SHA3-256 hash | Year-month | 3-digit zip prefix | Regex + NLP | No | IRB / GDPR Art. 89 |
+| `structural` | `config_structure_preserving.yaml` | gPAS pseudonym (reversible) | Year (birthDate only) | Preserved | Regex + NLP | Yes | Structure-first |
+| `value-masking` | `config_value_masking.yaml` | gPAS pseudonym (reversible) | Decade (birth), year (clinical) | Masked to `[REDACTED]` | `nlp_detect_act` (entity-specific) | Yes | Field-complete de-identification |
 
 ---
 
@@ -66,6 +67,19 @@ Key behaviour:
 **Gender fields:** `Patient.gender` and `Practitioner.gender` use `substitute_with: "unknown"` — NOT `[REDACTED]`. This is because FHIR R4 binds these fields to the `AdministrativeGender` value set (`male | female | other | unknown`). Any other value causes HAPI to reject the resource with HAPI-1821. `unknown` is the correct FHIR-compliant substitute.
 
 **Requires gPAS.** Use `config_research_pseudonymous.yaml` if gPAS is unavailable.
+
+### `config_value_masking.yaml` — Value Masking
+
+Use when you need **fine-grained, entity-specific de-identification** — for example, generalizing dates rather than redacting them, and selectively encrypting certain field types while keeping clinical codes intact.
+
+Key behaviour:
+- Uses `nlp_detect_act` — NLP detects entity type first, then dispatches a per-entity action (e.g. `PERSON` → `redact`, `DATE` → `generalize`)
+- IDs pseudonymized via gPAS with `rewrite_references: true`
+- Birth dates generalized to decade; clinical dates to year
+- Geographic data replaced with `[REDACTED]`
+- `encrypt` + `generalize` combinations on specific field groups
+
+**Requires gPAS.**
 
 ---
 

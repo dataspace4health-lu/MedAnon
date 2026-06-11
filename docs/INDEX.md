@@ -2,7 +2,7 @@
 
 **System:** SPE FHIR BlackBox (MedAnon)  
 **Version:** Phase 5 (use-case validation, AI agents + Kubernetes)  
-**Last updated:** 2026-04-30
+**Last updated:** 2026-06-05
 
 This index is the single entry point for all project documentation. Each section links to the relevant file. New team members should read sections 0 → 1 → 2.3 in order.
 
@@ -25,9 +25,9 @@ This index is the single entry point for all project documentation. Each section
 
 | Document | What it covers |
 |---|---|
-| [architecture.md](architecture.md) | System topology, 4-pass pipeline, async job queue, gPAS, config profiles, auth |
+| [architecture.md](architecture.md) | System topology, 4-stage pipeline, async job queue, gPAS, config profiles, auth |
 | [data-flow.md](data-flow.md) | Network layout, single-resource flow trace, bulk export flow, NLP batch flow, gPAS cache detail |
-| [architecture-overview.md](architecture-overview.md) | 5-layer architecture diagram, service layer, pipeline internals, NLP microservice, scoring |
+| [components.md](components.md) | Component catalog: services, modules, integrations, API endpoints |
 
 ---
 
@@ -49,7 +49,7 @@ gPAS TTP service, circuit breaker, pseudonym cache (L1 LRU + L2 Redis), domain l
 
 ### 2.3 De-identification Engine
 
-The anonymizer: FastAPI entry point, 4-pass pipeline modules, all actions, NLP integration, scoring system, AI agents, async job system.  
+The anonymizer: FastAPI entry point, 4-stage pipeline modules, all actions, NLP integration, scoring system, AI agents, async job system.  
 → See [components.md § De-identification Engine](components.md#23-de-identification-engine)
 
 ### 2.4 Data Consumers
@@ -106,7 +106,7 @@ How to connect SPE FHIR BlackBox to IDSA / FIWARE dataspace connectors and EDC.
 
 **File:** [policies.md](policies.md)
 
-- Profile comparison table (all 7 profiles)
+- Profile comparison table (all 7 selectable built-in profiles)
 - When to use each profile: GDPR, HIPAA Safe Harbor, IRB Research, Structure Preserving, Value Masking
 - Compliance mapping: what each profile satisfies and what it does not
 - Custom profile authoring guide
@@ -136,15 +136,15 @@ How to connect SPE FHIR BlackBox to IDSA / FIWARE dataspace connectors and EDC.
 
 ### 3.8 Solution Overview
 
-**File:** [internal/architecture-presentation.md](internal/architecture-presentation.md) *(internal — not tracked by git)*
+**File:** [introduction.md](introduction.md)
 
-Executive-level overview: problem statement, solution summary, competitive positioning, phased roadmap.
+Problem statement, solution summary, and capability overview.
 
 ### 3.9 User Manual
 
 **File:** [user-manual.md](user-manual.md)
 
-- Web UI walkthrough (all 13 pages)
+- Web UI walkthrough (all 16 pages)
 - REST API quick-start: de-identify a patient, run a bulk export, check risk score
 - CLI batch processing
 - Troubleshooting common errors
@@ -166,19 +166,12 @@ Side-by-side examples of identified FHIR input vs de-identified output for each 
 
 ## Internal references *(docs/internal/ — not tracked by git)*
 
-These files exist locally but are excluded from the repository via `.gitignore`. They contain security audits, competitive analysis, planning documents, and detailed architecture reviews that are not intended for public distribution.
+These files exist locally but are excluded from the repository via `.gitignore`. They contain planning documents and architecture reviews not intended for public distribution. See [internal/INDEX.md](internal/INDEX.md) for the full index; superseded snapshots are under `internal/_archive/`.
 
 | Document | Description |
 |---|---|
-| [internal/architecture-overview.md](internal/architecture-overview.md) | 5-layer architecture diagram with service layer, pipeline internals, NLP microservice detail |
-| [internal/architecture-presentation.md](internal/architecture-presentation.md) | Executive-level overview: problem statement, competitive positioning, phased roadmap |
-| [internal/auth-security-roadmap.md](internal/auth-security-roadmap.md) | Security audit findings and phased remediation plan |
-| [internal/backend-technology-reference.md](internal/backend-technology-reference.md) | Technology stack quick reference: all libraries, versions, and rationale |
-| [internal/BACKEND_REVIEW_2026_04_20.md](internal/BACKEND_REVIEW_2026_04_20.md) | Full backend code review: 8 critical, 18 high, 32 medium findings |
-| [internal/ARCHITECTURE_REVIEW_2026_04_21.md](internal/ARCHITECTURE_REVIEW_2026_04_21.md) | Deep microservice architecture review: 12 critical, 31 high findings |
-| [internal/COMPETITIVE_ANALYSIS.md](internal/COMPETITIVE_ANALYSIS.md) | Competitive analysis vs 7 market solutions |
-| [internal/PERFORMANCE_ANALYSIS.md](internal/PERFORMANCE_ANALYSIS.md) | Performance benchmarks and tuning analysis |
-| [internal/PRODUCT_BACKLOG.md](internal/PRODUCT_BACKLOG.md) | Product backlog and feature roadmap |
-| [internal/PlanF.MD](internal/PlanF.MD) | Architecture evolution plan (database migration, AI integration) |
-| [internal/AI.md](internal/AI.md) | AI agent architecture evolution notes |
-| [internal/EVIDENCE_REPORT_TEMPLATE.md](internal/EVIDENCE_REPORT_TEMPLATE.md) | Fillable audit evidence report template |
+| [internal/CURRENT_STATE.md](internal/CURRENT_STATE.md) | 1-page orientation: what works in production today |
+| [internal/BACKEND_FILE_MAP_2026_06_04.md](internal/BACKEND_FILE_MAP_2026_06_04.md) | Authoritative file-by-file module map + 4-stage pipeline |
+| [internal/REVIEW_STATUS.md](internal/REVIEW_STATUS.md) | Single-source-of-truth ledger for every review finding |
+| [internal/MASTER_TASK_PLAN_2026_06_08.md](internal/MASTER_TASK_PLAN_2026_06_08.md) | Consolidated forward roadmap (platform + engine-quality tracks) |
+| [internal/keycloak-auth-plan.md](internal/keycloak-auth-plan.md) | Keycloak/OIDC integration design (auth — NOT STARTED) |

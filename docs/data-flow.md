@@ -41,12 +41,12 @@
         │             — JSF ViewState binding)                             │
         │    :8200  → nlp replicas:8200   (round-robin)                    │
         │    Discovery: Docker provider, read-only socket mount             │
-        │    Replaces legacy gpas-lb / nlp-lb nginx LBs (P2.1, April 2026) │
+        │    Joins network as gpas-lb + nlp-lb aliases (backward compat)    │
         │                                                                  │
         │  hapi-fhir-target:8080 → hapi-target-postgres:5432              │
         │  analytics:8100        (risk + synthetic — no external deps)     │
         │  app-db:5432           (jobs, configs, subscriptions, runs)      │
-        │  redis:6379            (cache DB0, rate-limits DB2, audit stream)│
+        │  redis:6379            (gPAS cache + job queue DB0, NLP cache DB2, audit stream)│
         │                                                                  │
         └──────────────────────────────────────────────────────────────────┘
         │
@@ -82,26 +82,30 @@ POST /process  {"resourceType":"Patient","id":"123","name":[{"family":"Smith"}],
     │                        Patient.birthDate matches → action=generalize
     │                        Patient.id matches → action=gpas_pseudonymize
     │
-    ├─ action_dispatcher.py  Pass 1
+    ├─ action_dispatcher.py  STAGE 1: match
     │                        redact:    resource["name"] = []
     │                        generalize: resource["birthDate"] = "1985"
     │                        gpas_pseudonymize: collect("123") → BatchWork
     │                        nlp_scrub/nlp_detect_act: defer → NlpWork
     │                        (neither NLP nor gPAS called yet)
     │
-    ├─ nlp_orchestrator.py   Pass 1.5 (only if NlpWork is non-empty)
-    │                        Phase A: extract text fields from all NlpWork items
-    │                        Phase B: deduplicate, batch-detect (1 HTTP call)
-    │                        Phase C: per-resource token replacement
+    │   ┌────────────── STAGES 2 & 3 RUN CONCURRENTLY ──────────────┐
+    │   │ NLP scrubs free text while gPAS fetches pseudonyms;       │
+    │   │ they write disjoint resource paths, so this is safe.      │
+    ├───┤
+    │   ├─ nlp_orchestrator.py  STAGE 2: phi_detection (if NlpWork non-empty)
+    │   │                       Phase A: extract text from all NlpWork items
+    │   │                       Phase B: deduplicate, batch-detect (1 HTTP call)
+    │   │                       Phase C: per-resource token replacement
+    │   │
+    │   └─ gpas_orchestrator.py STAGE 3: pseudonymize (if BatchWork non-empty)
+    │                           cache_get("123") → miss
+    │                           POST gpas:8080/$pseudonymizeAllowCreate [123]
+    │                           ← psn-abc456 ; cache_set ; resource["id"]="psn-abc456"
+    │   └──────────────────────────────────────────────────────────┘
     │
-    ├─ gpas_orchestrator.py  Pass 2 (only if BatchWork is non-empty)
-    │                        cache_get("123") → miss
-    │                        POST gpas:8080/$pseudonymizeAllowCreate [123]
-    │                        ← psn-abc456
-    │                        cache_set("123" → "psn-abc456")
-    │                        resource["id"] = "psn-abc456"
-    │
-    ├─ post_processor.py     rewrite references: any {"reference":"Patient/123"}
+    ├─ post_processor.py     STAGE 4: finalize
+    │                        rewrite references: any {"reference":"Patient/123"}
     │                        in OTHER resources → {"reference":"Patient/psn-abc456"}
     │                        replace IDs that appear in text fields
     │
@@ -249,7 +253,7 @@ action_dispatcher.py collects:
     {rule="scrub note", path=resource["note"][0]["text"], text="Dr. Jane Doe prescribed..."},
   ]
 
-nlp_orchestrator.py (Pass 1.5):
+nlp_orchestrator.py (phi_detection stage):
 
   Phase A — Extract unique texts from all NlpWork items across all resources:
     texts = deduplicate([nw.text for nw in all_nlp_work])  # 1000 texts → 150 unique
@@ -291,9 +295,7 @@ anonymizer                   nlp-lb (:8200)                NLP replicas
 
 ---
 
-## Nginx load balancer routing
-
-Three nginx instances handle different routing concerns:
+## Routing layer
 
 ### UI nginx (`client/nginx.conf`)
 
@@ -302,10 +304,8 @@ Browser (:8501)
     │
     ├─ /                    → SPA static files (try_files → index.html)
     ├─ /api/*               → upstream anonymizer (:8000)
-    │                         - least_conn balancing
-    │                         - keepalive 16 connections
+    │                         - least_conn, keepalive 16, 120s timeout
     │                         - client_max_body_size 20m
-    │                         - proxy_read_timeout 120s
     ├─ /fhir/*              → hapi-fhir:8080 (source FHIR)
     │                         - proxy_read_timeout 300s
     │                         - dynamic DNS (resolver 127.0.0.11)
@@ -313,32 +313,20 @@ Browser (:8501)
     └─ /healthz             → 200 OK (Docker healthcheck)
 ```
 
-### gPAS LB (`services/gpas/lb/nginx.conf`)
+### Traefik gateway (`medanon-gateway`)
+
+gPAS and NLP routing is handled by the Traefik v3 gateway. `services/gpas/lb/nginx.conf` and `services/nlp/nginx.conf` are kept as reference only — they are not mounted by docker-compose.
 
 ```
-anonymizer → gpas-lb (:8080)
-                │
-                ├─ /ping        → 200 "pong" (nginx answers, no upstream)
-                │                 Used during WildFly cold start (~90s)
-                └─ /*           → round-robin to gpas:8080 replicas
-                                  - proxy_connect_timeout 10s
-                                  - proxy_read_timeout 180s
-                                  - Docker DNS re-resolves on each connect
+anonymizer → gpas-lb:8080 (Traefik gateway alias)
+    ├─ /gpas-web, /gras-web → gpas:8080 (sticky — JSF ViewState)
+    └─ /*                   → gpas:8080 (round-robin)
+
+anonymizer → nlp-lb:8200 (Traefik gateway alias)
+    └─ /*                   → nlp:8200 (round-robin)
 ```
 
-### NLP LB (`services/nlp/nginx.conf`)
-
-```
-anonymizer → nlp-lb (:8200)
-                │
-                ├─ /health      → 200 OK (nginx answers, no upstream)
-                └─ /*           → DNS round-robin to nlp:8200 replicas
-                                  - proxy_read_timeout 120s
-                                  - client_max_body_size 10m
-                                  - resolver 127.0.0.11 for dynamic scaling
-```
-
-**NLP load balancing note:** The NLP LB uses DNS-based round-robin (standard nginx OSS). `least_conn` for DNS-resolved upstreams requires nginx Plus (`server nlp:8200 resolve`). For CPU-bound NLP inference, DNS round-robin is the practical choice. If `least_conn` is critical, use nginx Plus or replace the NLP LB with HAProxy.
+The gateway joins `processing-net` under `gpas-lb` and `nlp-lb` aliases so existing URL values in `.env` work without changes. New replicas are discovered automatically via Docker labels — no config reload needed.
 
 ---
 
@@ -453,7 +441,7 @@ POST /v1/ai/generate-config
     │          MEDANON_AI_API_BASE=https://api.openai.com  (external)
     │
     ├─ integrations/ai/agents/config_generator.py
-    │      RAG context: 7 bundled YAML profiles embedded as few-shot examples
+    │      all 8 bundled YAML profiles injected as few-shot prompt context
     │      prompt: user description → LLM → YAML config
     │      validation: load_config() — rejects syntactically invalid YAML
     │      keyword fallback: if LLM unavailable, select closest bundled profile

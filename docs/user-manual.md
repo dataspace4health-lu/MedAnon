@@ -33,7 +33,7 @@ open http://localhost:8501
 
 ## Web UI
 
-Open `http://localhost:8501`. The sidebar shows live health status for all services and your current config profile. There are 13 pages accessible from the sidebar navigation.
+Open `http://localhost:8501`. The sidebar shows live health status for all services and your current config profile. There are 16 pages accessible from the sidebar navigation.
 
 ### Home (Dashboard)
 
@@ -147,6 +147,31 @@ View a running log of all de-identification processing runs (requires `MEDANON_S
 3. Runs are grouped by endpoint — filter by `/v1/process`, `/v1/jobs/bulk-export`, etc.
 4. Aggregate statistics at the top: total runs, average composite score, runs by profile
 5. Use **Purge** to delete all run history (analyst role — admin enforcement pending)
+
+### Jobs Monitor
+
+Fleet view of all server-side async jobs.
+
+1. Browse all jobs with status pills and live progress bars
+2. Filter by status and job type
+3. Click a job row to open the detail drawer (progress, resource breakdown, error, cancel/reprocess actions)
+4. Dead-letter panel shows jobs with `status=dead` — requeue via the action menu
+
+### Analytics Dashboard
+
+Scoring analytics for all processing runs (requires `MEDANON_SCORING_ENABLED=true`).
+
+1. KPI strip: total runs, scored runs, resources processed, average composite score
+2. Score trend chart (area), score histogram (distribution), threshold alert panel (configurable slider)
+3. Filter by config profile
+4. Sortable, paginated runs table with score breakdown per row
+
+### Audit Report
+
+Per-run audit trail.
+
+1. View privacy gate status, score bars, and expandable Markdown audit report for each run
+2. Drill into individual runs for per-resource-type breakdowns and remediation recommendations
 
 ### Target FHIR Browser
 
@@ -400,8 +425,11 @@ rules:
 | `redact` | Remove field value | `replacement` (default `""`) |
 | `cryptohash` | HMAC-SHA3-256 when `MEDANON_HASH_KEY` set; plain SHA3-256 otherwise | `hash_type`, `secret_key_env` |
 | `generalize` | Coarsen the value | `strategy`: `date_year`, `date_year_month`, `zip_prefix`, `age_bracket`, `number_round` |
-| `substitute` | Replace with a fixed value | `substitute_with` |
-| `perturb` | Add random noise to numeric values | `range`, `distribution` |
+| `substitute` | Replace with a fixed value | `substitute_with` (required) |
+| `perturb` | Add random noise to numeric values | `min`, `max`, `distribution` |
+| `mask` | Partial masking, keeping shape | `strategy`: `keep_prefix`, `keep_suffix`, `keep_domain`, `keep_country_code`, `full`; `keep_chars`, `mask_char` |
+| `date_shift` | Deterministic per-subject date offset (preserves ordering/intervals) | `max_days`, `direction` (`past`/`future`/`both`), `anchor_path`, `preserve_age_bracket` |
+| `tokenize` | Format-preserving deterministic pseudonym | `format` (`#`=digit, `@`=alpha, `*`=alnum), `namespace`, `preserve_length` |
 | `scrub_text` | Regex-based PHI removal in free text | `mode`, `patterns` |
 | `nlp_detect` | NLP entity detection via NLP microservice (Presidio + spaCy) — PERSON, GPE, DATE, etc. | `mode`, `threshold` |
 | `nlp_detect_act` | Entity-specific conditional NLP: detect first, then apply a per-entity action (e.g. dates->generalize, names->redact). No-op when nothing detected. | `threshold`, `html`, `entity_actions`, `entities` |

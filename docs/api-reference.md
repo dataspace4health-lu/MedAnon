@@ -819,7 +819,7 @@ Check AI agent availability.
 
 **Role:** `admin`
 
-Generate a YAML config profile using the AI agent. Uses 7 bundled profiles as RAG context.
+Generate a YAML config profile from a natural-language description. All 8 bundled profiles are injected as few-shot prompt context (not vector retrieval).
 
 **Request:**
 ```json

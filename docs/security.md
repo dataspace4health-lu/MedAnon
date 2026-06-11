@@ -391,7 +391,7 @@ Postal codes: generalized to 3-digit prefix (`generalize(zip_prefix 3)`).
 
 ## 10. Known Open Security Issues
 
-The following issues are tracked in the architecture review ([docs/internal/ARCHITECTURE_REVIEW_2026_04_21.md](internal/ARCHITECTURE_REVIEW_2026_04_21.md)) and pending remediation:
+The following issues are tracked in the review ledger ([docs/internal/REVIEW_STATUS.md](internal/REVIEW_STATUS.md)) and pending remediation:
 
 | Issue | Severity | Description |
 |---|---|---|

@@ -104,7 +104,7 @@ Two edge components handle ingress, routing, and horizontal scaling:
 | `client/nginx.conf` | `medanon-ui` | UI reverse proxy: SPA serving + `/api/*`, `/fhir/*`, `/fhir-target/*` routing |
 | Traefik labels on `gpas` / `nlp` | `medanon-gateway` | API gateway: dynamic Docker-provider discovery, round-robin LB, sticky sessions for the gPAS JSF UI |
 
-**Migration note (P2.1, April 2026):** The legacy standalone `gpas-lb` and `nlp-lb` nginx containers were replaced by a single Traefik v3 gateway. The `gateway` service joins `processing-net` under both legacy aliases (`gpas-lb`, `nlp-lb`) so existing `GPAS_URL=http://gpas-lb:80/...` and `NLP_SERVICE_URL=http://nlp-lb:8200` values continue to work without `.env` changes. The standalone `services/gpas/lb/nginx.conf` and `services/nlp/nginx.conf` are no longer mounted by docker-compose and are kept only as reference.
+The `gateway` service joins `processing-net` under the `gpas-lb` and `nlp-lb` aliases so existing env-var values work without changes. `services/gpas/lb/nginx.conf` and `services/nlp/nginx.conf` are kept as reference only.
 
 **UI nginx routes (unchanged):**
 - `/` → SPA static files (React app)
@@ -147,30 +147,29 @@ rule_matcher.py        Build per-resource-type rule index using FHIRPath express
                        FHIRPath evaluation on identical inputs.
     │
     ▼
-action_dispatcher.py   Pass 1: Iterate matched rules. Apply stateless actions immediately
-                       (redact, cryptohash, generalize, substitute, perturb, scrub_text,
-                       encrypt). Defer NLP actions (nlp_scrub, nlp_detect_act) into
-                       NlpWork items. Collect gPAS-bound values into BatchWork.
+action_dispatcher.py   STAGE 1 — match: Iterate matched rules. Apply stateless actions
+                       immediately (redact, cryptohash, generalize, substitute, perturb,
+                       scrub_text, encrypt). Defer NLP actions (nlp_scrub, nlp_detect_act)
+                       into NlpWork items. Collect gPAS-bound values into BatchWork.
                        Neither NLP nor gPAS is called yet — batching is critical
                        for throughput.
     │
-    ▼
-nlp_orchestrator.py    Pass 1.5: Batch NLP detection across all resources.
+    ▼  ┌─────────── STAGES 2 & 3 RUN CONCURRENTLY ───────────┐
+       │  (disjoint resource paths, so it is safe to overlap) │
+nlp_orchestrator.py    STAGE 2 — phi_detection: Batch NLP detection across all resources.
                        Phase A — extract text fields from all deferred NlpWork items.
                        Phase B — deduplicate and batch-detect unique texts (one HTTP
-                       call for remote NLP service, or cache-prewarming for local
-                       Presidio). Phase C — per-resource replacement with isolated
-                       token_state so surrogate tokens are deterministic within a
-                       resource but unique across resources.
-    │
+                       call to the NLP service). Phase C — per-resource replacement with
+                       isolated token_state so surrogate tokens are deterministic within
+                       a resource but unique across resources.
+                                          ‖  (concurrent with)
+gpas_orchestrator.py   STAGE 3 — pseudonymize: Send one HTTP request to gPAS for all
+                       collected values. Checks cache first (local LRU → Redis L2 → live
+                       call). Results written back into the resource tree.
+    │  └──────────────────────────────────────────────────────┘
     ▼
-gpas_orchestrator.py   Pass 2: Send one HTTP request to gPAS for all collected values.
-                       Checks cache first (local LRU → Redis L2 → live call).
-                       Results written back into the resource tree.
-    │
-    ▼
-post_processor.py      Rewrite FHIR references (Patient/123 → Patient/p-123) and
-                       replace pseudonym-changed IDs that appear in text fields.
+post_processor.py      STAGE 4 — finalize: Rewrite FHIR references (Patient/123 →
+                       Patient/p-123) and replace pseudonym-changed IDs in text fields.
     │
     ▼
 manifest.py            Tag meta.tag with a per-rule transformation summary if
@@ -182,7 +181,7 @@ manifest.py            Tag meta.tag with a per-rule transformation summary if
 io_formats.py          Serialize. Output format matches input or as requested.
 ```
 
-**Why three passes?** Both NLP and gPAS have non-trivial per-call overhead. Processing 300 resources with individual calls would be ~300 HTTP round-trips for each. Pass 1 collects deferred work (NlpWork for NLP, BatchWork for gPAS) without making any external calls. Pass 1.5 deduplicates texts across all resources and sends a single batch to the NLP service (or pre-warms the local Presidio cache), then applies replacements per-resource. Pass 2 does the same for gPAS pseudonymization. This reduces hundreds of HTTP calls to 2-3 regardless of resource count.
+**Why staged + concurrent?** Both NLP and gPAS have non-trivial per-call overhead. Processing 300 resources with individual calls would be ~300 HTTP round-trips for each. The **match** stage collects deferred work (NlpWork for NLP, BatchWork for gPAS) without making any external calls. The **phi_detection** and **pseudonymize** stages then run **concurrently**: NLP deduplicates texts across all resources and sends a single batch, while gPAS does the same for pseudonymization — they touch disjoint resource paths, so overlapping them hides one upstream's latency behind the other. This reduces hundreds of HTTP calls to 2-3 regardless of resource count, and the two batch calls overlap rather than running back-to-back. Per-stage latency is exported as `medanon_pipeline_stage_latency{stage=...}`.
 
 ---
 
@@ -279,7 +278,7 @@ MedAnon                          gPAS
 
 ## Config profiles
 
-Six bundled profiles plus one specialist profile. Auto-selected based on environment; overridable per-request via `?config_profile=<name>`.
+Eight bundled profiles. Auto-selected based on environment; overridable per-request via `?config_profile=<name>`.
 
 | Profile | ID handling | Dates | Geographic | Requires gPAS | Use case |
 |---|---|---|---|---|---|
@@ -289,9 +288,10 @@ Six bundled profiles plus one specialist profile. Auto-selected based on environ
 | `config_hipaa_safe_harbor.yaml` | Redacted | Year only | State + 3-digit zip | No | US HIPAA Safe Harbor |
 | `config_research_pseudonymous.yaml` | SHA3-256 hash | Year-month | 3-digit zip | No | IRB research |
 | `config_structure_preserving.yaml` | gPAS pseudonym (reversible) | Year (birthDate only) | Preserved | Yes | Full FHIR structure downstream |
-| `config_value_masking.yaml` | gPAS pseudonym (reversible) | Decade (birth), year (clinical) | Masked to `[REDACTED]` | Yes | Field-complete de-identification with `nlp_detect_act` for entity-specific conditional NLP |
+| `config_value_masking.yaml` | gPAS pseudonym (reversible) | Decade (birth), year (clinical) | Masked to `[REDACTED]` | Yes | Field-complete with `nlp_detect_act` |
+| `config_k_anonymity.yaml` | gPAS pseudonym (reversible) | Year-month | 3-digit zip | Yes | OLA-style k-anon lattice solver; requires staging layer |
 
-Auto-selection logic: `GPAS_URL` set → `config_gpas.yaml`; otherwise → `config.yaml`.
+Auto-selection: `GPAS_URL` set → `config_gpas.yaml`; otherwise → `config.yaml`.
 
 ---
 
@@ -301,7 +301,7 @@ Four AI-powered agents are exposed via `/v1/ai/*` when `MEDANON_AI_ENABLED=true`
 
 | Agent | Endpoint | Description |
 |---|---|---|
-| **Config generator** | `POST /v1/ai/generate-config` | RAG-based YAML profile generation from natural language. Uses the 7 bundled profiles as few-shot examples. Validates output through the Settings loader before returning. Falls back to keyword matching when AI is disabled. |
+| **Config generator** | `POST /v1/ai/generate-config` | YAML profile generation from natural language. All 8 bundled profiles injected as few-shot examples (prompt context, not vector retrieval). Validates output through the Settings loader before returning. Falls back to keyword matching when AI is disabled. |
 | **PII detector** | `POST /v1/ai/detect-pii` | 3-layer PII scan on de-identified output: regex → NER → LLM. PHI safety boundary: the LLM used for PII detection must be local/self-hosted (`MEDANON_AI_PII_PROVIDER`). |
 | **Rule explainer** | `POST /v1/ai/explain` | Plain-language explanation of config rules via SSE streaming. Falls back to static descriptions when AI is unavailable. |
 | **Compliance advisor** | `POST /v1/ai/compliance` | Regulatory gap analysis vs HIPAA, GDPR, and other frameworks. Static HIPAA fallback when AI is unavailable. |
@@ -349,11 +349,11 @@ RBAC roles: `admin` (all), `analyst` (processing + jobs + scoring + AI), `viewer
 | Variable | Default | Effect |
 |---|---|---|
 | `MEDANON_JOB_WORKERS` | 3 | Concurrent background jobs per anonymizer instance |
-| `MEDANON_BATCH_SIZE` | 300 | Resources per gPAS batch (1 gPAS HTTP call per batch) |
+| `MEDANON_BATCH_SIZE` | 1000 | Resources per gPAS batch (1 gPAS HTTP call per batch) |
 | `FHIR_PAGE_SIZE` | 500 | Resources per FHIR paginated fetch |
 | `MEDANON_FHIR_FETCH_PARALLEL` | 1 | Parallel FHIR resource-type fetch threads |
 | `MEDANON_COHORT_PARALLEL` | 2 | Parallel `$everything` threads for cohort export |
 
 **Why `FHIR_FETCH_PARALLEL=1`?** The pipeline bottleneck is gPAS (sequential HTTP calls per batch). Adding parallel FHIR fetch threads makes them compete for the GIL and the internal queue lock while gPAS is processing — this adds overhead without reducing total processing time. Sequential fetching avoids this contention. `COHORT_PARALLEL=2` is safe because cohort is I/O-bound (waiting on FHIR server), not CPU-bound.
 
-**Memory:** Anonymizer container is allocated 6 GB / 2 CPU. A bulk export of ~20,000 resources uses ~5.7 GB peak (gPAS pseudonym cache + in-flight resource batches + NDJSON write buffer).
+**Memory:** See [DEPLOYMENT.md § Resource limits](DEPLOYMENT.md) for container memory allocations. NLP inference runs in the separate NLP microservice, not in the anonymizer process.

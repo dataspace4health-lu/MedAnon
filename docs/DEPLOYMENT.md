@@ -6,7 +6,7 @@
 |---|---|---|
 | Docker Engine | 24.x | `docker --version` |
 | Docker Compose plugin | v2.x | `docker compose version` (not `docker-compose`) |
-| RAM | 8 GB | 12 GB+ comfortable; 6 GB for anonymizer alone at peak bulk export |
+| RAM | 8 GB | 12 GB+ comfortable; anonymizer 3 GB + NLP 1.5 GB + gPAS 2.5 GB + HAPI 3 GB + buffers |
 | Disk | 10 GB | Images ~4 GB + PostgreSQL data volumes |
 | CPU | 2 cores | 4+ recommended for concurrent jobs |
 

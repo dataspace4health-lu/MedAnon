@@ -1,7 +1,7 @@
 # SPE FHIR BlackBox — Comprehensive Technical Documentation
 
 **Audience:** Architects, developers, and operations teams  
-**Last updated:** 2026-04-30  
+**Last updated:** 2026-06-05  
 **Current phase:** Phase 5 (use-case validation, AI + Kubernetes)  
 **Branch:** `Ph5_UseCase_AI_KUB`
 
@@ -151,7 +151,7 @@ The system isolates identified and de-identified data at the network and databas
 | `hapi-db` | `postgres:16-alpine` | internal | PostgreSQL for source HAPI |
 | `fhir-target` | `hapiproject/hapi:v7.6.0` | `8082` | Target FHIR R4 (de-identified data) |
 | `hapi-target-db` | `postgres:16-alpine` | internal | PostgreSQL for target HAPI |
-| `gateway` | `traefik:v3` | `8080` (gPAS), `8200` (NLP) | API gateway — Docker-provider service discovery; carries `gpas-lb` / `nlp-lb` network aliases (P2.1, replaces nginx LBs) |
+| `gateway` | `traefik:v3` | `8080` (gPAS), `8200` (NLP) | API gateway — Docker-provider service discovery; carries `gpas-lb` / `nlp-lb` network aliases for backward-compatible URLs |
 | `gpas` | WildFly 38 + gPAS | via gateway | Reversible pseudonymization (TTP); scaled with `--scale gpas=N` |
 | `gpas-db` | `postgres:16-alpine` | internal | gPAS pseudonym store |
 | `app-db` | `postgres:16-alpine` | internal | Jobs, configs, subscriptions, staging |
@@ -248,7 +248,7 @@ Input FHIR (JSON / NDJSON / XML)
 Output de-identified FHIR
 ```
 
-**Why four passes?** Each external service (gPAS, NLP) has per-call HTTP overhead. Processing 300 resources individually would require 300 round-trips to each service. The deferred-work pattern accumulates all calls during Pass 1, then makes one batch request per service. This reduces hundreds of HTTP calls to 2–3 regardless of batch size.
+**Why staged + concurrent?** Each external service (gPAS, NLP) has per-call HTTP overhead. The match stage accumulates deferred work across all resources. The phi_detection and pseudonymize stages then each make one batch request to their respective services — concurrently, since they touch disjoint resource paths. This reduces hundreds of HTTP calls to 2–3 and overlaps the two batch calls instead of running them sequentially.
 
 ---
 
@@ -571,7 +571,7 @@ medanon.processing_runs (id, endpoint, config_profile, resource_count, composite
    Accessed only by anonymizer/worker — no other service has network access.
 
 2. DE-IDENTIFY
-   Anonymizer applies YAML rules via the 4-pass pipeline.
+   Anonymizer applies YAML rules via the 4-stage pipeline.
    Each resource is transformed in memory; original data is never modified.
    For bulk operations, de-identified resources are staged in PostgreSQL (app-db).
 
@@ -613,7 +613,7 @@ Clinician / EHR
        │ _count=500  │         │                                         │
        │◄────────────│         ▼                                         │
        │             │  PHASE 2: For each type, fetch pages             │
-       │ 500 Patients│   → Run 4-pass de-identification pipeline        │
+       │ 500 Patients│   → Run 4-stage de-identification pipeline       │
        │────────────►│   → Stage de-identified resources in app-db     │
        │             │         │                                         │
        │             │         ▼                                         │
@@ -657,7 +657,7 @@ Clinician / EHR
 
 ### Config profiles
 
-Seven built-in profiles cover the main regulatory scenarios:
+Seven selectable built-in profiles cover the main regulatory scenarios:
 
 | Profile | ID handling | Dates | Free text | gPAS required | Regulation |
 |---|---|---|---|---|---|
@@ -965,7 +965,7 @@ Note: K3s uses Flannel by default, which does not enforce `NetworkPolicy`. For r
 
 | Service | RAM limit | CPU limit | Peak usage notes |
 |---|---|---|---|
-| `anonymizer` | 3 GB | 2.0 | ~5.7 GB peak during large bulk export; adjust if needed |
+| `anonymizer` | 3 GB | 2.0 | NLP runs in separate microservice; adjust if OOM during bulk export |
 | `worker` | 2 GB | 1.0 | Lower than anonymizer — single job at a time |
 | `gpas` | 2.5 GB | 1.0 | WildFly JVM: Xms128M Xmx1536M, G1GC |
 | `gpas-db` | 2 GB | 1.0 | PostgreSQL shared_buffers 512 MB |
@@ -1115,13 +1115,13 @@ A resource was uploaded before one it references. The topological sort missed a 
 Job store not initialized. Check Redis connectivity (`docker compose ps redis`) or SQLite path writability (`MEDANON_JOB_DB`).
 
 **NLP returning `[NLP_UNAVAILABLE]`:**
-NLP microservice is down or unreachable. Check: `docker compose ps nlp nlp-lb`. The system fails-closed by design — no PHI leaks, but NLP scrubbing is not applied. Restart: `docker compose restart nlp`.
+NLP microservice is down or unreachable. Check: `docker compose ps nlp gateway`. The system fails-closed by design — no PHI leaks, but NLP scrubbing is not applied. Restart: `docker compose restart nlp`.
 
 **OOM killed container:**
 ```bash
 docker inspect --format='{{.State.OOMKilled}}' <container>
 ```
-Increase `mem_limit` in `docker-compose.yml`. For bulk export: anonymizer needs up to 5.7 GB peak.
+Increase `mem_limit` in `docker-compose.yml` for the affected container. See resource limits table above.
 
 ### Go-live checklist
 
@@ -1167,7 +1167,7 @@ Increase `mem_limit` in `docker-compose.yml`. For bulk export: anonymizer needs 
 |---|---|---|
 | `MEDANON_BATCH_SIZE` | 1000 | Resources per gPAS batch (one HTTP call per batch) |
 | `MEDANON_JOB_WORKERS` | 3 | Concurrent background jobs per anonymizer instance |
-| `MEDANON_PARALLEL_WORKERS` | 8 | Thread pool size for Pass 1 parallelism |
+| `MEDANON_PARALLEL_WORKERS` | 8 | Thread pool size for pipeline stage parallelism |
 | `FHIR_PAGE_SIZE` | 500 | Resources per FHIR paginated fetch |
 | `MEDANON_FHIR_FETCH_PARALLEL` | 1 | Parallel FHIR resource-type fetch threads (keep at 1) |
 | `MEDANON_COHORT_PARALLEL` | 2 | Parallel `$everything` threads for cohort export |

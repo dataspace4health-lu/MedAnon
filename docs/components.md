@@ -6,8 +6,6 @@ Technical reference for all services and modules. For architecture diagrams and 
 
 ## 2.1 Infrastructure & Shared Configuration
 
-This section covers the container topology, load balancers, databases, caching layer, and shared environment configuration. These components are the foundation that all other sections depend on.
-
 ### Docker services
 
 **Always-on (14 services):**
@@ -76,7 +74,7 @@ Security headers added: `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-P
 
 #### Traefik gateway (`gateway` container) — ports 8080 (gPAS), 8200 (NLP)
 
-**Migration note (P2.1, April 2026):** The legacy standalone `gpas-lb` and `nlp-lb` nginx containers were replaced by a single Traefik v3 gateway. The `gateway` service joins `processing-net` under both legacy aliases (`gpas-lb`, `nlp-lb`), so existing `GPAS_URL=http://gpas-lb:80/...` and `NLP_SERVICE_URL=http://nlp-lb:8200` values continue to work without `.env` changes. The standalone `services/gpas/lb/nginx.conf` and `services/nlp/nginx.conf` files are no longer mounted by docker-compose and are kept only as reference.
+The `gateway` service joins `processing-net` under the `gpas-lb` and `nlp-lb` aliases so existing `GPAS_URL=http://gpas-lb:80/...` and `NLP_SERVICE_URL=http://nlp-lb:8200` values work without `.env` changes. `services/gpas/lb/nginx.conf` and `services/nlp/nginx.conf` are kept as reference only.
 
 | Entry point | Routes to | Strategy |
 |---|---|---|
@@ -169,7 +167,7 @@ The TTP model provides organizational separation: the clinical team does not hav
 ### How pseudonymization works
 
 ```
-anonymizer (Pass 2)
+anonymizer (pseudonymize stage)
       │
       │ POST $pseudonymizeAllowCreate
       │ Parameters { [id1, id2, id3, ...] }
@@ -248,7 +246,7 @@ rules:
 
 ## 2.3 De-identification Engine
 
-The anonymizer is the core service. It exposes a FastAPI REST API, runs the 4-pass de-identification pipeline, manages the async job system, scores outputs, and hosts the AI agents.
+The anonymizer is the core service. It exposes a FastAPI REST API, runs the 4-stage de-identification pipeline, manages the async job system, scores outputs, and hosts the AI agents.
 
 ### REST API endpoints
 
@@ -323,16 +321,16 @@ Override config per-request: `?config_profile=<name>`.
 | `schemas/` | Pydantic models: `fhir_ops.py`, `fhir_bulk.py`, `jobs.py`, `processing.py`, `scoring.py`, `agents.py`, `processing_runs.py` |
 | `services/` | Business logic: `jobs.py`, `processing.py`, `analytics.py`, `fhir_server.py`, `synthetic.py`, `health.py`, `scoring.py`, `dicom.py`, `hl7v2.py`, `subscriptions.py`, `agents.py` |
 
-### 4-pass pipeline (`src/pipeline/`)
+### Pipeline (`src/pipeline/`)
 
-| Module | Pass | Role |
+| Module | Stage | Role |
 |---|---|---|
-| `processor.py` | Orchestrator | Composes all pipeline sub-modules. ~150 lines. Entry points: `process_data`, `process_data_batch`, `process_data_stream`. |
-| `rule_matcher.py` | Pre-pass | Builds per-resource rule index from FHIRPath expressions. Cached per `(resource_type, rules_hash)`. |
-| `action_dispatcher.py` | **Pass 1** | Executes stateless actions immediately (redact, hash, encrypt, generalize…). Defers NLP → `NlpWork`, gPAS → `BatchWork`. |
-| `nlp_orchestrator.py` | **Pass 1.5** | Extracts all deferred NLP texts, deduplicates, sends one batch HTTP call to `nlp-lb`, applies replacements per-resource with isolated token state. |
-| `gpas_orchestrator.py` | **Pass 2** | Deduplicates all gPAS values across resources, sends one batch HTTP call to gPAS, writes pseudonyms back. Cross-chunk dedup via `seen_values`. |
-| `post_processor.py` | **Pass 3+4** | Rewrites FHIR bundle references after ID changes. Replaces pseudonym-changed IDs in free-text fields. Aho-Corasick automaton for O(N+M) text scan. |
+| `processor.py` | Orchestrator | Composes all pipeline sub-modules. Entry points: `process_data`, `process_data_batch`, `process_data_stream`. |
+| `rule_matcher.py` | Pre | Builds per-resource rule index from FHIRPath expressions. Cached per `(resource_type, rules_hash)`. |
+| `action_dispatcher.py` | **match** | Executes stateless actions immediately (redact, hash, encrypt, generalize…). Defers NLP → `NlpWork`, gPAS → `BatchWork`. |
+| `nlp_orchestrator.py` | **phi_detection** (concurrent with pseudonymize) | Extracts all deferred NLP texts, deduplicates, sends one batch HTTP call to `nlp-lb`, applies replacements per-resource with isolated token state. |
+| `gpas_orchestrator.py` | **pseudonymize** (concurrent with phi_detection) | Deduplicates all gPAS values across resources, sends one batch HTTP call to gPAS, writes pseudonyms back. |
+| `post_processor.py` | **finalize** | Rewrites FHIR bundle references after ID changes. Replaces pseudonym-changed IDs in free-text fields. Aho-Corasick automaton for O(N+M) text scan. |
 | `manifest.py` | Post | Attaches per-rule transformation summary to `meta.tag` when `MEDANON_MANIFEST_ENABLED=true`. |
 | `config.py` | Config | Parses YAML profile. `${VAR:-default}` env interpolation. Raises `ValueError` on invalid config. |
 | `config/service.py` | Config | `get_settings(profile)` with `@lru_cache(maxsize=8)`. Single entry point; profile loaded once per process. |
@@ -364,7 +362,7 @@ Pure functions: input value → transformed value. No side effects.
 | `worker_main.py` | Standalone worker entrypoint. Prometheus metrics on port 9091. PostgresJobStore fallback between Redis and SQLite. |
 | `executors.py` | Bulk-operation executors: `bulk-export`, `cohort`, `patient-export`, `bulk-import`, `reprocess`. Cross-chunk gPAS dedup via `seen_values`. |
 | `checkpoint.py` | Saves processing position to PostgreSQL for crash recovery — a failed job can be resumed from the last successful page. |
-| `staged_worker.py` | Two-phase staged bulk-export. Phase 1: fetch + stage to `medanon.staged_resources`. Phase 2: de-identify + write NDJSON. Decouples slow FHIR fetch from processing. |
+| `staged_worker/` | Two-phase staged bulk-export (`_core.py` + `_executors.py`). Phase 1: fetch + stage to `medanon.staged_resources`. Phase 2: claim partitions (`FOR UPDATE SKIP LOCKED`), de-identify, write NDJSON. Decouples slow FHIR fetch from processing. |
 | `summary.py` | Job progress summary: resource counts, bytes processed, error rate. |
 
 **Job store backend selection at startup:**
@@ -396,7 +394,7 @@ Phase 4 feature. Activated with `MEDANON_AI_ENABLED=true`. All agents degrade gr
 | Module | Role |
 |---|---|
 | `provider.py` | `LLMProvider` singleton. `litellm` wrapper with circuit breaker, TTL response cache, SSE streaming. |
-| `agents/config_generator.py` | RAG config generation. 7 bundled profiles as few-shot context. Validates output through `Settings` loader. Falls back to keyword matching. |
+| `agents/config_generator.py` | Few-shot config generation: all 8 bundled YAML profiles injected directly into the prompt. Validates output through `Settings` loader. Falls back to keyword matching. |
 | `agents/pii_detector.py` | 3-layer PII detection: regex → NER (Presidio) → LLM. **LLM layer must use a local provider** (`MEDANON_AI_PII_PROVIDER`) — PHI must not be sent to external APIs. |
 | `agents/rule_explainer.py` | Plain-language rule explanation via SSE streaming. Static descriptions as fallback. |
 | `agents/compliance.py` | Regulatory gap analysis vs HIPAA, GDPR, and other frameworks. Static HIPAA fallback. |
@@ -405,7 +403,7 @@ Phase 4 feature. Activated with `MEDANON_AI_ENABLED=true`. All agents degrade gr
 
 | Module | Role |
 |---|---|
-| `adapter.py` | `RemoteNlpAdapter` — delegates all NLP inference to the NLP microservice. Supports `detect_batch()` for Pass 1.5. |
+| `adapter.py` | `RemoteNlpAdapter` — delegates all NLP inference to the NLP microservice. Supports `detect_batch()` for the phi_detection stage. |
 | `remote_detector.py` | HTTP client for the NLP microservice. `detect_batch_remote()` for batch requests. **Fail-closed:** returns `[NLP_UNAVAILABLE]` on any failure — no PHI leaks via unscrubbed text. |
 | `utils.py` | Pure-Python NLP utilities: `HEALTHCARE_ENTITIES`, `_tokenize`, `_scrub_xhtml_text_nodes`. No Presidio dependency — safe to import in any context. |
 
@@ -419,13 +417,11 @@ Phase 4 feature. Activated with `MEDANON_AI_ENABLED=true`. All agents degrade gr
 | `crypto.py` | RSA encrypt/decrypt. `bounded_random` uses `secrets.randbelow()` (CSPRNG). Path-traversal guard on key file paths. |
 | `metrics.py` | Prometheus counters + histograms: `medanon_requests_total`, `medanon_gpas_*`, `medanon_fhir_*`. |
 | `audit.py` | Centralized audit logging. Structured JSON to file + optional Redis Stream (`medanon:audit`). `query()` reads back events. PHI is never logged. |
-| `thread_pool.py` | Process-wide bounded `ThreadPoolExecutor`. Shared by Pass 1 parallelism and finalization. Prevents thread explosion from nested pools. |
+| `thread_pool.py` | Process-wide bounded `ThreadPoolExecutor`. Shared by pipeline stage parallelism. Prevents thread explosion from nested pools. |
 
 ---
 
 ## 2.4 Data Consumers
-
-Data consumers are the downstream integration points: the FHIR client that reads from and writes to FHIR servers, the analytics microservice, the subscription system, and SMART on FHIR.
 
 ### FHIR client (`src/integrations/fhir/`)
 
@@ -530,11 +526,11 @@ Core domain types inlined into the anonymizer service (previously a shared `pack
 
 ## Architecture Overview
 
-For a visual end-to-end architecture see [architecture-overview.md](architecture-overview.md), which covers:
+For the end-to-end architecture see [architecture.md](architecture.md) and
+[data-flow.md](data-flow.md), which cover:
 
 - Entry points: REST API, CLI, async worker
 - Service layer: ProcessingService, JobService, FhirServerService, ScoringService, AgentService
-- Processing pipeline internals (4-pass diagram)
+- Processing pipeline internals (4-stage diagram)
 - NLP microservice integration
 - Scoring system flow
-- 5-layer system diagram

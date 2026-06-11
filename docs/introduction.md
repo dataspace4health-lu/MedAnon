@@ -69,7 +69,7 @@ Identified FHIR data                       De-identified FHIR data
 │                  SPE FHIR BlackBox (MedAnon)                    │
 │                                                                  │
 │  ┌─────────────┐   ┌────────────┐   ┌──────────────────────┐   │
-│  │  REST API   │   │  4-pass    │   │  Config profiles      │   │
+│  │  REST API   │   │  4-stage   │   │  Config profiles      │   │
 │  │  (FastAPI)  │──▶│  pipeline  │──▶│  (7 built-in YAML)   │   │
 │  │             │   │            │   │                       │   │
 │  │  React UI   │   │  + AI      │   │  + user-defined       │   │
@@ -94,13 +94,13 @@ Identified FHIR data                       De-identified FHIR data
 | Layer | Technology | Purpose |
 |---|---|---|
 | **API** | Python 3.12, FastAPI, uvicorn | REST API with Pydantic validation, OpenAPI docs |
-| **Pipeline** | Custom Python, FHIRPath (fhirpathpy) | 4-pass de-identification orchestrator |
+| **Pipeline** | Custom Python, FHIRPath (fhirpathpy) | 4-stage de-identification orchestrator |
 | **NLP** | Microsoft Presidio + spaCy `en_core_web_lg` | Named-entity recognition for clinical narrative PHI |
 | **Pseudonymization** | gPAS (University Medicine Greifswald), WildFly 38 | Reversible TTP pseudonymization |
 | **Databases** | PostgreSQL 16 (×4 instances), Redis 7 | App state, HAPI, gPAS, job queue, cache |
 | **FHIR** | HAPI FHIR R4 v7.6.0, fhirpathpy | Source + target FHIR servers, FHIRPath evaluation |
 | **AI agents** | litellm (OpenAI / Ollama), Presidio | Config generation, PII detection, compliance analysis |
-| **Frontend** | React 19, TypeScript 5.9, Vite 8, Tailwind CSS 4, Shadcn/ui | 13-page SPA with job management and visual config builder |
+| **Frontend** | React 19, TypeScript 5.9, Vite 8, Tailwind CSS 4, Shadcn/ui | 16-page SPA with job management, analytics dashboard, and visual config builder |
 | **Infrastructure** | Docker Compose (14 always-on services + 3 opt-in profiles), Helm (7 sub-charts) | Local + Kubernetes deployment |
 | **Observability** | Prometheus, structured JSON audit log, Prometheus Pushgateway | Metrics, audit trail, alerting |
 
@@ -118,7 +118,7 @@ privacy-toolkit/
 │   │   └── tests/           pytest suite (600+ tests)
 │   ├── analytics/           Analytics microservice (risk + synthetic data)
 │   └── nlp/                 NLP microservice (Presidio + spaCy, ~800 MB image)
-├── client/                  React 19 SPA (13 pages, Vite, Tailwind, Shadcn)
+├── client/                  React 19 SPA (16 pages, Vite, Tailwind, Shadcn)
 ├── helm/                    Kubernetes Helm charts (umbrella + 7 sub-charts)
 ├── docs/                    All project documentation (this directory)
 └── scripts/                 Utility scripts (patient import, verify, batch)

@@ -235,12 +235,12 @@ This is the raw FHIR R4 Patient resource as it exists on the source FHIR server.
 | Field | Transformation | Why |
 |---|---|---|
 | `id` | `obs-456` → `psn-W5J2N8K3` | gPAS pseudonym, reversible |
-| `subject.reference` | `Patient/patient-123` → `Patient/psn-R7K2M9P4` | Reference rewriting (Pass 3+4) — the patient pseudonym was computed in Pass 2; all cross-resource references are updated to match in post-processing. |
+| `subject.reference` | `Patient/patient-123` → `Patient/psn-R7K2M9P4` | Reference rewriting (finalize stage) — the patient pseudonym was computed in the pseudonymize stage; all cross-resource references are updated to match in post-processing. |
 | `effectiveDateTime` | `2023-09-22T14:15:00Z` → `2023` | `generalize` (date_year) — clinical dates generalized to year only |
 | `valueQuantity.value` | `72` | retained — clinical measurements are not direct identifiers |
-| `note[0].text` | names present | NLP `[[PERSON_1]]`, `[[PERSON_2]]` — Pass 1.5 NLP batch detection identified two PERSON entities and replaced them with typed tokens |
+| `note[0].text` | names present | NLP `[[PERSON_1]]`, `[[PERSON_2]]` — phi_detection stage identified two PERSON entities and replaced them with typed tokens |
 
-**Reference rewriting:** The `subject.reference` field originally pointed to `Patient/patient-123`. After Pass 2, the patient ID is now `psn-R7K2M9P4`. Pass 3+4 (`post_processor.py`) walks every resource and rewrites all matching references to keep the FHIR graph consistent.
+**Reference rewriting:** The `subject.reference` field originally pointed to `Patient/patient-123`. After pseudonymize stage, the patient ID is now `psn-R7K2M9P4`. The finalize stage (`post_processor.py`) walks every resource and rewrites all matching references to keep the FHIR graph consistent.
 
 ---
 
@@ -255,7 +255,7 @@ Charité Berlin. Phone follow-up scheduled: +49 30 98765432.
 Previous MRN at Vivantes: MRN-112233.
 ```
 
-**Pass 1.5 — NLP batch detection result:**
+**phi_detection stage — NLP batch detection result:**
 
 | Entity type | Detected text | Start | End | Replacement |
 |---|---|---|---|---|
