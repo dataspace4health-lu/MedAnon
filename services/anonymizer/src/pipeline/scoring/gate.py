@@ -35,6 +35,7 @@ _log = logging.getLogger("medanon.score_gate")
 # Configuration helpers
 # ---------------------------------------------------------------------------
 
+
 def _gate_enabled() -> bool:
     # Explicit override always wins.
     explicit = os.environ.get("MEDANON_SCORE_GATE_ENABLED", "").strip().lower()
@@ -55,12 +56,15 @@ def _min_composite() -> float:
 
 
 def _require_privacy() -> bool:
-    return os.environ.get("MEDANON_SCORE_GATE_REQUIRE_PRIVACY", "true").lower() != "false"
+    return (
+        os.environ.get("MEDANON_SCORE_GATE_REQUIRE_PRIVACY", "true").lower() != "false"
+    )
 
 
 # ---------------------------------------------------------------------------
 # Exception
 # ---------------------------------------------------------------------------
+
 
 class ScoreGateBlocked(Exception):
     """Raised by check_score_gate() when output is blocked.
@@ -72,6 +76,7 @@ class ScoreGateBlocked(Exception):
 # ---------------------------------------------------------------------------
 # Grade helper
 # ---------------------------------------------------------------------------
+
 
 def _grade(composite: float) -> str:
     if composite >= 90:
@@ -89,6 +94,7 @@ def _grade(composite: float) -> str:
 # Public entry point
 # ---------------------------------------------------------------------------
 
+
 def check_score_gate(score_summary: dict | None, config_profile: str = "auto") -> None:
     """Evaluate the aggregate score and raise ScoreGateBlocked if it fails.
 
@@ -103,23 +109,23 @@ def check_score_gate(score_summary: dict | None, config_profile: str = "auto") -
     if not score_summary or not score_summary.get("computed"):
         return
 
-    min_comp    = _min_composite()
+    min_comp = _min_composite()
     req_privacy = _require_privacy()
 
-    avg_composite        = score_summary.get("avg_composite", 100.0)
-    pass_count           = score_summary.get("pass_count", 0)
-    fail_count           = score_summary.get("fail_count", 0)
-    error_count          = score_summary.get("error_count", 0)
-    total                = pass_count + fail_count
-    avg_utility          = score_summary.get("avg_utility", 1.0)
-    avg_quality          = score_summary.get("avg_quality", 1.0)
-    batch_privacy        = score_summary.get("batch_privacy") or {}
-    profile              = score_summary.get("config_profile", config_profile)
-    text_risk_hits       = score_summary.get("text_risk_hits", 0)
+    avg_composite = score_summary.get("avg_composite", 100.0)
+    pass_count = score_summary.get("pass_count", 0)
+    fail_count = score_summary.get("fail_count", 0)
+    error_count = score_summary.get("error_count", 0)
+    total = pass_count + fail_count
+    avg_utility = score_summary.get("avg_utility", 1.0)
+    avg_quality = score_summary.get("avg_quality", 1.0)
+    batch_privacy = score_summary.get("batch_privacy") or {}
+    profile = score_summary.get("config_profile", config_profile)
+    text_risk_hits = score_summary.get("text_risk_hits", 0)
     identifier_risk_hits = score_summary.get("identifier_risk_hits", 0)
 
     issues: list[str] = []
-    fixes:  list[str] = []
+    fixes: list[str] = []
 
     # ── 1. HARD PII LEAK GATE (zero-tolerance, independent of score) ─────────
     # This fires even when composite = 100%.  Detected PII in the output means
@@ -170,7 +176,7 @@ def check_score_gate(score_summary: dict | None, config_profile: str = "auto") -
     # ── 2. COMPOSITE SCORE GATE ──────────────────────────────────────────────
     composite_blocked = avg_composite < min_comp
     if composite_blocked:
-        grade     = _grade(avg_composite)
+        grade = _grade(avg_composite)
         min_grade = _grade(min_comp)
         issues.append(
             f"Overall quality score is too low — "
@@ -269,16 +275,22 @@ def check_score_gate(score_summary: dict | None, config_profile: str = "auto") -
         for i, fix in enumerate(fixes, 1):
             lines.append(f"  {i}. {fix}")
 
-    lines.extend([
-        "",
-        "The output file has been deleted. "
-        "Resolve the issues above and re-run the job.",
-    ])
+    lines.extend(
+        [
+            "",
+            "The output file has been deleted. "
+            "Resolve the issues above and re-run the job.",
+        ]
+    )
 
     message = "\n".join(lines)
     _log.warning(
         "score_gate_blocked profile=%s composite=%.1f "
         "text_risk_hits=%d identifier_risk_hits=%d fail_count=%d",
-        profile, avg_composite, text_risk_hits, identifier_risk_hits, fail_count,
+        profile,
+        avg_composite,
+        text_risk_hits,
+        identifier_risk_hits,
+        fail_count,
     )
     raise ScoreGateBlocked(message)

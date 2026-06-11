@@ -83,6 +83,9 @@ ENDPOINT_ROLES: dict[str, str] = {
     "/v1/process/dicom/batch": "analyst",
     "/v1/process/hl7v2": "analyst",
     "/v1/process/hl7v2/batch": "analyst",
+    "/v1/process/cda": "analyst",
+    "/v1/process/tabular": "analyst",
+    "/v1/process/tabular/inspect": "analyst",
     "/v1/analyse/risk": "analyst",
     "/v1/generate/synthetic": "analyst",
     "/v1/process/and-upload": "admin",
@@ -90,6 +93,11 @@ ENDPOINT_ROLES: dict[str, str] = {
     "/v1/process/bulk-export": "admin",
     "/v1/process/cohort": "analyst",
     "/v1/jobs": "analyst",
+    # Workflow (DAG) orchestration — base role analyst; admin-only step types
+    # (bulk-export/cohort/bulk-import) are enforced per-request in the router
+    # since the requirement depends on the submitted graph.
+    "/v1/workflows": "analyst",
+    "/v1/workflows/template": "analyst",
     # Config profile management — list/read open to viewer; writes require admin
     # NOTE: POST /v1/configs requires admin — enforced via prefix match below.
     "/v1/configs": "viewer",
@@ -123,15 +131,20 @@ ENDPOINT_ROLE_PREFIXES: dict[str, str] = {
     "/v1/jobs/bulk-import": "admin",  # uploads to target FHIR server — requires admin
     "/v1/jobs/batch-patient-export": "analyst",
     "/v1/jobs/cohort": "analyst",
+    "/v1/jobs/tabular-batch": "analyst",  # local file de-id — no target upload
+    "/v1/jobs/sql-export": "analyst",  # DB → file de-id — no target upload
     "/v1/jobs/dead": "analyst",  # DLQ list — read-only triage view
     "/v1/jobs/": "analyst",  # covers /v1/jobs/{id} and /v1/jobs/{id}/result
+    "/v1/workflows/": "analyst",  # covers /v1/workflows/{id}; admin step types enforced in router
     "/v1/configs/": "viewer",  # covers /v1/configs/{name} — writes enforce admin in router
+    "/v1/sql-connections": "analyst",  # list/test; create/delete enforce admin in router
+    "/v1/process/sql/": "analyst",  # SQL schema inspect
     "/fhir/Group/": "admin",  # /fhir/Group/{id}/$export
     "/fhir/export-status/": "analyst",  # /fhir/export-status/{job_id}
     "/fhir/Subscription/": "analyst",  # /fhir/Subscription/{id} CRUD
     "/v1/ai/": "analyst",  # AI agent endpoints (generate-config enforced as admin in ENDPOINT_ROLES)
     "/v1/processing-runs/": "analyst",  # covers /v1/processing-runs/{id}
-    "/v1/api-keys/": "admin",           # covers /v1/api-keys/{id} and /v1/api-keys/{id}/rotate
+    "/v1/api-keys/": "admin",  # covers /v1/api-keys/{id} and /v1/api-keys/{id}/rotate
 }
 
 

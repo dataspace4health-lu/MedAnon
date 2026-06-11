@@ -31,7 +31,7 @@ class PrivacyDecision:
     passed: bool
     threshold: float
     attacker_risk: float
-    identifier_risk: float        # HIPAA Safe Harbor 18-identifier coverage
+    identifier_risk: float  # HIPAA Safe Harbor 18-identifier coverage
     text_risk: float
     config_identifier_risk: float = 0.0  # Active config rule coverage
     evidence: list[Evidence] = field(default_factory=list)

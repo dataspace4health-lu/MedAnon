@@ -7,7 +7,12 @@ from typing import AsyncIterator
 
 from utils.json_fast import loads as _json_loads, dumps as _json_dumps
 
-from pipeline.processor import process_data, process_data_batch, _BATCH_SIZE
+from pipeline.processor import (
+    process_data,
+    process_data_batch,
+    _BATCH_SIZE,
+    PiiLeakError,
+)
 from integrations.gpas.circuit_breaker import GpasUnavailableError
 from api.services import GPAS_FATAL_JSON
 
@@ -50,9 +55,7 @@ class ProcessingService:
         logger.info("Processing request: resourceType=%s", resource_type)
         try:
             result = await asyncio.wait_for(
-                asyncio.to_thread(
-                    process_data, resource, settings, None, _SCORING_ON
-                ),
+                asyncio.to_thread(process_data, resource, settings, None, _SCORING_ON),
                 timeout=_REQUEST_TIMEOUT,
             )
             logger.info("Processing complete: resourceType=%s", resource_type)
@@ -85,6 +88,15 @@ class ProcessingService:
                 "Not-implemented action for resourceType=%s: %s", resource_type, exc
             )
             raise ProcessingError("Unsupported operation", status=400) from exc
+        except PiiLeakError as exc:
+            # The unified validation barrier detected a personal-identifier leak
+            # in the output.  Block with a clear 422 rather than a generic 500.
+            logger.warning(
+                "pii_leak_blocked resourceType=%s detections=%d",
+                resource_type,
+                len(getattr(exc, "detections", [])),
+            )
+            raise ProcessingError(str(exc), status=422) from exc
         except Exception as exc:
             logger.error(
                 "Unexpected error processing resourceType=%s: %s",
@@ -138,8 +150,11 @@ class ProcessingService:
             chunk = valid_resources[chunk_start:chunk_end]
             try:
                 results = await asyncio.to_thread(
-                    process_data_batch, chunk, settings,
-                    None, _SCORING_ON,
+                    process_data_batch,
+                    chunk,
+                    settings,
+                    None,
+                    _SCORING_ON,
                 )
                 for i, r in enumerate(results):
                     valid_results[chunk_start + i] = _json_dumps(r)
@@ -167,8 +182,11 @@ class ProcessingService:
                     vi = chunk_start + idx
                     try:
                         r = await asyncio.to_thread(
-                            process_data_batch, [res], settings,
-                            None, _SCORING_ON,
+                            process_data_batch,
+                            [res],
+                            settings,
+                            None,
+                            _SCORING_ON,
                         )
                         valid_results[vi] = _json_dumps(r[0])
                     except GpasUnavailableError as gexc:
@@ -227,8 +245,11 @@ class ProcessingService:
             chunk = resources[chunk_start : chunk_start + _BATCH_SIZE]
             try:
                 results = await asyncio.to_thread(
-                    process_data_batch, chunk, settings,
-                    None, _SCORING_ON,
+                    process_data_batch,
+                    chunk,
+                    settings,
+                    None,
+                    _SCORING_ON,
                 )
                 for result in results:
                     yield _json_dumps(result)
@@ -252,8 +273,11 @@ class ProcessingService:
                 for idx, res in enumerate(chunk):
                     try:
                         result = await asyncio.to_thread(
-                            process_data_batch, [res], settings,
-                            None, _SCORING_ON,
+                            process_data_batch,
+                            [res],
+                            settings,
+                            None,
+                            _SCORING_ON,
                         )
                         yield _json_dumps(result[0])
                     except GpasUnavailableError as gexc:

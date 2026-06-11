@@ -11,7 +11,6 @@ import os
 import queue
 import threading
 import time
-from pathlib import Path
 
 from domain.jobs import JobStatus
 from pipeline.jobs.checkpoint import save_checkpoint
@@ -112,9 +111,25 @@ def process_with_bisect_fallback(
             )
             _worker_log.error(
                 "resource_processing_failed resource_type=%s id=%s error=%s",
-                rtype, rid, exc, exc_info=True,
+                rtype,
+                rid,
+                exc,
+                exc_info=True,
             )
-            return [({"error": "processing error", "resourceType": rtype, "id": rid}, None)]
+            from pipeline.correction import quarantine_record
+
+            return [
+                (
+                    quarantine_record(
+                        error="processing error",
+                        resource_type=rtype,
+                        resource_id=rid,
+                        stage="bisect",
+                        error_type=type(exc).__name__,
+                    ),
+                    None,
+                )
+            ]
 
     try:
         out = process_data_batch(
@@ -242,7 +257,9 @@ class _PipelineProgressDisplay:
     def __init__(self, job_id: str, label: str) -> None:
         self._job_id = job_id
         self._label = label
-        self._rows: list[dict] = []  # {"chunk": int, "count": int, "duration": float, "status": str}
+        self._rows: list[
+            dict
+        ] = []  # {"chunk": int, "count": int, "duration": float, "status": str}
         self._total_resources = 0
         self._job_start = time.monotonic()
         self._live = None
@@ -254,6 +271,7 @@ class _PipelineProgressDisplay:
             from rich.table import Table
             from rich.console import Console
             import sys
+
             if not sys.stderr.isatty():
                 return  # not a terminal — skip live display
             self._Console = Console
@@ -282,19 +300,23 @@ class _PipelineProgressDisplay:
             except Exception:
                 pass
 
-    def record_chunk(self, chunk_idx: int, resource_count: int, duration: float, ok: bool) -> None:
+    def record_chunk(
+        self, chunk_idx: int, resource_count: int, duration: float, ok: bool
+    ) -> None:
         if not getattr(self, "_enabled", False):
             return
         with self._lock:
             self._total_resources += resource_count
-            self._rows.append({
-                "chunk": chunk_idx + 1,
-                "count": resource_count,
-                "duration": duration,
-                "status": "✓" if ok else "⚠ fallback",
-            })
+            self._rows.append(
+                {
+                    "chunk": chunk_idx + 1,
+                    "count": resource_count,
+                    "duration": duration,
+                    "status": "✓" if ok else "⚠ fallback",
+                }
+            )
             if len(self._rows) > self._MAX_ROWS:
-                self._rows = self._rows[-self._MAX_ROWS:]
+                self._rows = self._rows[-self._MAX_ROWS :]
             elapsed = time.monotonic() - self._job_start
             throughput = self._total_resources / elapsed if elapsed > 0 else 0
             self._table = self._build_table(elapsed=elapsed, throughput=throughput)
@@ -307,7 +329,7 @@ class _PipelineProgressDisplay:
 
         tbl = Table(
             title=f"[bold]MedAnon[/bold] De-identification Pipeline  "
-                  f"[dim]job={self._job_id[:16]}  label={self._label}[/dim]",
+            f"[dim]job={self._job_id[:16]}  label={self._label}[/dim]",
             box=box.SIMPLE_HEAD,
             show_footer=bool(self._rows),
             expand=False,
@@ -325,7 +347,8 @@ class _PipelineProgressDisplay:
                 f"{row['count']:,}",
                 f"{row['duration']:.1f}s",
                 f"{tp:,.0f}/s",
-                f"[green]{row['status']}[/green]" if row["status"] == "✓"
+                f"[green]{row['status']}[/green]"
+                if row["status"] == "✓"
                 else f"[yellow]{row['status']}[/yellow]",
             )
 
@@ -391,6 +414,7 @@ class DeidentificationPipeline:
     def run(self) -> tuple[int, bool]:
         """Run the pipeline and return ``(count, was_cancelled)``."""
         import gc
+
         _gc_orig = gc.get_threshold()
         # Reduce gen-2 GC frequency during bulk processing: the long-lived gPAS
         # and NLP caches are stable and don't benefit from frequent collection.
@@ -491,7 +515,9 @@ class DeidentificationPipeline:
                 self._cancelled = True
                 break
 
-    def _deidentify_chunk(self, chunk: list[dict], checkpoint_writer: CheckpointWriter) -> None:
+    def _deidentify_chunk(
+        self, chunk: list[dict], checkpoint_writer: CheckpointWriter
+    ) -> None:
         """Process one chunk: de-identify (no lock) then write results (locked)."""
         _want_manifest = self._summary is not None
         _chunk_start = time.monotonic()
@@ -534,7 +560,9 @@ class DeidentificationPipeline:
                 self._count += 1
                 if self._summary is not None:
                     if _from_bisect and result.get("error"):
-                        self._summary.record_error(result.get("resourceType", "Unknown"))
+                        self._summary.record_error(
+                            result.get("resourceType", "Unknown")
+                        )
                     else:
                         entries = _manifests[idx] if _manifests else None
                         self._summary.record_resource(result, manifest_entries=entries)
@@ -559,7 +587,9 @@ class DeidentificationPipeline:
         if (chunk_idx + 1) % 5 == 0:
             fresh = self._store.get(self._job.id)
             if fresh and fresh.status == JobStatus.CANCELLED:
-                self._cancelled = True  # GIL-protected bool write; visible to all threads
+                self._cancelled = (
+                    True  # GIL-protected bool write; visible to all threads
+                )
 
 
 def stream_and_deidentify(
@@ -591,7 +621,15 @@ def stream_and_deidentify(
     """
     if _PIPELINE_ENABLED:
         return DeidentificationPipeline(
-            gen, settings, pseudonymizer, fh, start_count, store, job, label, summary,
+            gen,
+            settings,
+            pseudonymizer,
+            fh,
+            start_count,
+            store,
+            job,
+            label,
+            summary,
             cursor_state=cursor_state,
         ).run()
 
@@ -605,24 +643,29 @@ def stream_and_deidentify(
         _snapshots = [_json_dumps(r) for r in chunk]
         try:
             results = process_data_batch(
-                chunk, settings, pseudonymizer, attach_manifest=True,
+                chunk,
+                settings,
+                pseudonymizer,
+                attach_manifest=True,
             )
             for result in results:
                 fh.write(_json_dumps(result) + "\n")
                 count += 1
                 if summary is not None:
-                    summary.record_resource(result)
+                    summary.record_resource(result, manifest_entries=None)
         except Exception:
             fresh_chunk = [_json_loads(s) for s in _snapshots]
             # Binary-search fallback: isolates bad resources in log₂(N) depth.
-            pairs = process_with_bisect_fallback(fresh_chunk, settings, pseudonymizer, want_manifest=False)
+            pairs = process_with_bisect_fallback(
+                fresh_chunk, settings, pseudonymizer, want_manifest=False
+            )
             for result, _ in pairs:
                 fh.write(_json_dumps(result) + "\n")
                 if summary is not None:
                     if result.get("error"):
                         summary.record_error(result.get("resourceType", "Unknown"))
                     else:
-                        summary.record_resource(result)
+                        summary.record_resource(result, manifest_entries=None)
                 count += 1
 
         fh.flush()

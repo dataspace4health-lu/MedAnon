@@ -151,8 +151,10 @@ class JobService:
     def submit_risk_driven_export(self, server_url: str, params: dict) -> dict:
         """Create a risk-driven-export job. Returns the job dict."""
         import os
+
         if not os.environ.get("MEDANON_STAGING_DB_URL"):
             from fastapi import HTTPException
+
             raise HTTPException(
                 status_code=400,
                 detail="risk-driven-export requires the PostgreSQL staging layer. "
@@ -161,6 +163,63 @@ class JobService:
         store = self._get_store()
         self._assert_capacity(store)
         job = store.create("risk-driven-export", {"server_url": server_url, **params})
+        store.notify_new_job(job.id)
+        return self._job_to_dict(job)
+
+    def submit_tabular_batch(
+        self,
+        files: list[tuple[str, bytes]],
+        file_format: str,
+        config_profile: str,
+    ) -> dict:
+        """Stage uploaded tabular files and create a tabular-batch job.
+
+        Files are written to a per-job staging directory under the shared
+        ``MEDANON_OUTPUT_DIR`` (indexed ``000000``, ``000001`` … in upload
+        order) so the worker container can read them.  The original filenames
+        are carried in ``params.file_names`` for the output ZIP.
+        """
+        import os
+        import uuid
+
+        store = self._get_store()
+        self._assert_capacity(store)
+
+        output_dir = os.environ.get("MEDANON_OUTPUT_DIR", "/output")
+        # Stage files into a dir keyed by a fresh token BEFORE creating the job,
+        # so ``staged_dir`` is part of the initial params. The previous approach
+        # (create → mutate job.params → update) silently lost ``staged_dir`` on
+        # backends whose ``update()`` does not persist the params field (Redis,
+        # SQLite), letting the worker claim the job with ``staged_dir=None``.
+        staged_dir = os.path.join(output_dir, f"tabular-{uuid.uuid4().hex}")
+        os.makedirs(staged_dir, exist_ok=True)
+        for idx, (_name, data) in enumerate(files):
+            with open(os.path.join(staged_dir, f"{idx:06d}"), "wb") as fh:
+                fh.write(data)
+
+        job = store.create(
+            "tabular-batch",
+            {
+                "file_format": file_format,
+                "config_profile": config_profile,
+                "file_names": [name for name, _ in files],
+                "staged_dir": staged_dir,
+            },
+        )
+        store.notify_new_job(job.id)
+        return self._job_to_dict(job)
+
+    def submit_sql_export(self, params: dict) -> dict:
+        """Create a sql-export job. Returns the job dict.
+
+        *params* carries ``connection_id``, ``schema``, ``tables``,
+        ``output_format`` and either ``config_profile`` or inline ``rules``.
+        Credentials are never passed here — only the connection id, resolved from
+        the encrypted store at execution time.
+        """
+        store = self._get_store()
+        self._assert_capacity(store)
+        job = store.create("sql-export", params)
         store.notify_new_job(job.id)
         return self._job_to_dict(job)
 
@@ -195,6 +254,7 @@ class JobService:
         # rather than returning HTTP 410 to the client.
         if not job.result_path:
             import os
+
             canonical = os.path.join(
                 os.environ.get("MEDANON_OUTPUT_DIR", "/output"),
                 f"{job_id}.ndjson",
@@ -206,7 +266,11 @@ class JobService:
                 try:
                     store.update(job)
                 except Exception:
-                    logger.debug("backfill_result_path_persist_failed job=%s", job_id, exc_info=True)
+                    logger.debug(
+                        "backfill_result_path_persist_failed job=%s",
+                        job_id,
+                        exc_info=True,
+                    )
                 logger.info("backfill_result_path job=%s path=%s", job_id, canonical)
                 return canonical
             raise JobResultMissing()

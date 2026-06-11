@@ -83,7 +83,9 @@ def get_redis(url: str, *, decode_responses: bool = True):
         # ``StrictRedis`` is an alias of ``Redis`` in modern redis-py (>=3),
         # but using StrictRedis keeps compat with code/tests that only
         # provide that name.
-        client_cls = getattr(_redis, "StrictRedis", None) or getattr(_redis, "Redis", None)
+        client_cls = getattr(_redis, "StrictRedis", None) or getattr(
+            _redis, "Redis", None
+        )
         if client_cls is None:
             logger.warning("redis module has neither StrictRedis nor Redis class")
             return None
@@ -108,7 +110,10 @@ def get_redis(url: str, *, decode_responses: bool = True):
         masked = url.split("@")[-1] if "@" in url else url
         logger.info(
             "redis_pool_init host=%s decode=%s max_connections=%d socket_timeout=%.1fs",
-            masked, decode_responses, max_conn, socket_timeout,
+            masked,
+            decode_responses,
+            max_conn,
+            socket_timeout,
         )
         return client
 

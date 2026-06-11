@@ -15,7 +15,11 @@ import logging
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from api.schemas.api_keys import ApiKeyCreateRequest, ApiKeyCreateResponse, ApiKeyResponse
+from api.schemas.api_keys import (
+    ApiKeyCreateRequest,
+    ApiKeyCreateResponse,
+    ApiKeyResponse,
+)
 from api.services.api_keys import (
     ApiKeyAlreadyRevoked,
     ApiKeyNotFound,
@@ -107,7 +111,9 @@ async def revoke_api_key(key_id: str, request: Request):
     except ApiKeyNotFound:
         raise HTTPException(status_code=404, detail=f"API key {key_id!r} not found")
     except ApiKeyAlreadyRevoked:
-        raise HTTPException(status_code=409, detail=f"API key {key_id!r} is already revoked")
+        raise HTTPException(
+            status_code=409, detail=f"API key {key_id!r} is already revoked"
+        )
 
 
 @router.post("/api-keys/{key_id}/rotate", status_code=201)

@@ -35,15 +35,14 @@ from __future__ import annotations
 import logging
 import os
 import threading
+from contextlib import contextmanager
 
 from utils.json_fast import dumps_bytes as _json_dumps_bytes, loads as _json_loads
 from utils.metrics import PIPELINE_STAGE_LATENCY
+from utils.thread_pool import get_executor
 from utils.tracing import get_tracer as _get_tracer
 
-def _tracer():
-    return _get_tracer("medanon.pipeline")
-from utils.thread_pool import get_executor
-
+from pipeline.correction import quarantine_record
 from pipeline.manifest import _MANIFEST_ENABLED, _attach_manifest
 from pipeline.rule_matcher import _get_rules_for_resource
 from pipeline.action_dispatcher import evaluate_and_dispatch as _evaluate_and_dispatch
@@ -59,6 +58,28 @@ from pipeline.post_processor import (
     _post_process_resource,
     _shallow_post_process_bundle,
 )
+
+
+def _tracer():
+    return _get_tracer("medanon.pipeline")
+
+
+@contextmanager
+def _stage_span(name: str, *, metric_stage: "str | None" = None):
+    """Open a tracing span + Prometheus stage-latency timer for one pipeline stage.
+
+    Both the span and the timer are managed by ``with`` blocks, so they are
+    always closed/recorded even when the wrapped body raises. This replaces the
+    earlier manual ``__enter__()`` / ``__exit__(None, None, None)`` calls, which
+    leaked the span and dropped the latency sample on any exception.
+
+    ``metric_stage`` defaults to ``name`` but may differ when the span name and
+    the Prometheus ``stage`` label historically diverged.
+    """
+    with _tracer().start_as_current_span(name):
+        with PIPELINE_STAGE_LATENCY.labels(stage=metric_stage or name).time():
+            yield
+
 
 audit_log = logging.getLogger("medanon.audit")
 
@@ -76,24 +97,27 @@ _BATCH_SIZE = int(os.environ.get("MEDANON_BATCH_SIZE", "1000"))
 # Set to 0 to disable parallelism (sequential processing).
 _PARALLEL_WORKERS = int(os.environ.get("MEDANON_PARALLEL_WORKERS", "8"))
 
-_PII_GATE = os.environ.get("MEDANON_PII_GATE", "false").strip().lower() in (
-    "true", "1", "yes",
-)
-
 # When true (default) the heuristic attachment scanner in detect_phi_batch runs
 # on every batch even when no config nlp_* rule is present.  This ensures that
 # Attachment.data / *Base64Binary fields with embedded PHI are always scrubbed.
 # Set MEDANON_ATTACHMENT_SCAN=false to disable for throughput-sensitive pipelines
 # that guarantee no embedded PHI in attachment fields.
-_ATTACHMENT_SCAN = os.environ.get("MEDANON_ATTACHMENT_SCAN", "true").strip().lower() not in (
-    "false", "0", "no",
+_ATTACHMENT_SCAN = os.environ.get(
+    "MEDANON_ATTACHMENT_SCAN", "true"
+).strip().lower() not in (
+    "false",
+    "0",
+    "no",
 )
 
 # When set, forces sequential processing and clears all rule caches at the
 # start of every process_data_batch call.  Intended for tests only — never
 # set in production (disables parallelism and defeats caching).
-_DETERMINISTIC = os.environ.get("MEDANON_PIPELINE_DETERMINISTIC", "").strip().lower() in (
-    "true", "1",
+_DETERMINISTIC = os.environ.get(
+    "MEDANON_PIPELINE_DETERMINISTIC", ""
+).strip().lower() in (
+    "true",
+    "1",
 )
 if _DETERMINISTIC:
     _PARALLEL_WORKERS = 0
@@ -102,40 +126,21 @@ __all__ = [
     "process_data",
     "process_data_batch",
     "process_data_stream",
-    "process_with_bisect_fallback",
     "_get_default_pseudonymizer",
     "_BATCH_SIZE",
     "PiiLeakError",
 ]
 
 
-class PiiLeakError(Exception):
-    """Raised when the PII blocking gate detects critical PII in output."""
-
-    def __init__(self, detections: list[dict]):
-        self.detections = detections
-        critical = [d for d in detections if d.get("severity") == "critical"]
-        super().__init__(
-            f"PII gate blocked: {len(critical)} critical PII leak(s) detected"
-        )
-
-
-def _run_pii_gate(results: list[dict]) -> None:
-    """Run fast PII scan on de-identified results and raise on critical PII."""
-    if not _PII_GATE:
-        return
-    from integrations.ai.agents.pii_detector import detect_pii_fast
-
-    valid_resources = [r for r in results if isinstance(r, dict) and "error" not in r]
-    if not valid_resources:
-        return
-    detections = detect_pii_fast(valid_resources)
-    critical = [d for d in detections if d.get("severity") == "critical"]
-    if critical:
-        audit_log.warning(
-            "pii_gate_blocked count=%d critical=%d", len(detections), len(critical),
-        )
-        raise PiiLeakError(critical)
+# Output-gate primitives live in pipeline.gate; re-exported here under their
+# historical names so external imports (``from pipeline.processor import
+# PiiLeakError``) and test patch targets (``processor._run_pii_gate``) keep
+# working unchanged.
+from pipeline.gate import (  # noqa: E402
+    PiiLeakError,
+    quarantine_info_for as _quarantine_info_for,
+    run_pii_gate as _run_pii_gate,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -151,9 +156,9 @@ def _detect_phi(
 ) -> None:
     """phi_detection stage: batch NLP detection and in-place PHI replacement."""
     from pipeline.nlp_orchestrator import detect_phi_batch
-    with _tracer().start_as_current_span("phi_detection"):
-        with PIPELINE_STAGE_LATENCY.labels(stage="phi_detection").time():
-            detect_phi_batch(parsed, all_nlp_works, all_manifest_entries, processing_mode)
+
+    with _stage_span("phi_detection"):
+        detect_phi_batch(parsed, all_nlp_works, all_manifest_entries, processing_mode)
 
 
 def _pseudonymize(
@@ -164,19 +169,21 @@ def _pseudonymize(
     extra_values_by_domain: "dict[str, list[str]] | None",
 ) -> dict:
     """pseudonymize stage: batch gPAS lookup for all unique values across the chunk."""
-    with _tracer().start_as_current_span("pseudonymization"):
-      with PIPELINE_STAGE_LATENCY.labels(stage="pseudonymization").time():
-        return pseudonymize_identifier_batch(
-            all_gpas_works,
-            processing_mode,
-            pseudonymizer,
-            gpas_params,
-            extra_values_by_domain=extra_values_by_domain,
-        ) or {}
+    with _stage_span("pseudonymization"):
+        return (
+            pseudonymize_identifier_batch(
+                all_gpas_works,
+                processing_mode,
+                pseudonymizer,
+                gpas_params,
+                extra_values_by_domain=extra_values_by_domain,
+            )
+            or {}
+        )
 
 
 # Module-level singleton — GpasPseudonymizerAdapter is stateless (no instance
-# data; all state lives in the module-level gPAS client, circuit breaker, and   
+# data; all state lives in the module-level gPAS client, circuit breaker, and
 # cache). Re-using the same instance avoids per-request object allocation and
 # keeps the lazy import pattern to prevent circular imports at module load time.
 _default_pseudonymizer = None
@@ -230,11 +237,20 @@ def _assemble_resource(
         )
 
     # Separate depseudo work items from pseudo work items
-    depseudo_work = [w for w in gpas_work if w.rule.get("action") == "gpas_depseudonymize"]
-    pseudo_work = [w for w in gpas_work if w.rule.get("action") != "gpas_depseudonymize"] if depseudo_work else gpas_work
+    depseudo_work = [
+        w for w in gpas_work if w.rule.get("action") == "gpas_depseudonymize"
+    ]
+    pseudo_work = (
+        [w for w in gpas_work if w.rule.get("action") != "gpas_depseudonymize"]
+        if depseudo_work
+        else gpas_work
+    )
 
     batch_mapping = apply_pseudonym_mapping(
-        resource, pseudo_work, precomputed_mapping, processing_mode,
+        resource,
+        pseudo_work,
+        precomputed_mapping,
+        processing_mode,
         manifest_entries=manifest_entries,
     )
 
@@ -344,6 +360,211 @@ def _evaluate_rules(resource, settings, processing_mode, collect_refs=False):
         raise original_exc
 
 
+def _run_finalize_stage(
+    parsed,
+    all_gpas_works,
+    all_nlp_works,
+    all_manifest_entries,
+    settings,
+    pseudonymizer,
+    shared_mapping,
+    _batch_text_id_regex,
+    _batch_text_id_automaton,
+    _batch_ref_mapping,
+    attach_manifest,
+    processing_mode,
+    _return_manifest,
+    quarantine_info: "dict[int, dict] | None" = None,
+):
+    """Stage 4 — finalize: gPAS write-back + post-processing per resource.
+
+    Each resource is independent (``shared_mapping`` is read-only here), so the
+    work is dispatched to the thread pool for batches > 4 resources and run
+    sequentially otherwise. Intermediate per-resource data is freed as it is
+    consumed to cap peak memory, even when an exception propagates.
+    """
+    results: list[dict | None] = [None] * len(parsed)
+    n_resources = len(parsed)
+
+    if n_resources > 4 and _PARALLEL_WORKERS > 0:
+        # Parallel finalization: each resource is independent (shared_mapping is read-only)
+        pool = get_executor()
+        futures = {}
+        for i, (resource, gpas_work, manifest_entries_) in enumerate(
+            zip(parsed, all_gpas_works, all_manifest_entries)
+        ):
+            if resource is None:
+                results[i] = quarantine_record(
+                    error="match stage error",
+                    stage="match",
+                    **(quarantine_info or {}).get(i, {}),
+                )
+                continue
+            try:
+                fut = pool.submit(
+                    _assemble_resource,
+                    resource,
+                    settings,
+                    pseudonymizer,
+                    gpas_work,
+                    manifest_entries_,
+                    processing_mode,
+                    precomputed_mapping=shared_mapping,
+                    precompiled_text_id_regex=_batch_text_id_regex,
+                    precomputed_ref_mapping=_batch_ref_mapping,
+                    prebuilt_text_id_automaton=_batch_text_id_automaton,
+                    attach_manifest=attach_manifest,
+                )
+                futures[fut] = i
+            except TimeoutError:
+                audit_log.warning(
+                    "resource_assembly_worker_timeout: thread pool saturated at resource %d/%d, "
+                    "falling back to sequential",
+                    i,
+                    n_resources,
+                )
+                # Finalize remaining resources sequentially after draining futures
+                _finalize_sequential_start = i
+                break
+        else:
+            _finalize_sequential_start = None
+
+        from concurrent.futures import as_completed
+
+        try:
+            for fut in as_completed(futures):
+                i = futures[fut]
+                try:
+                    results[i] = fut.result()
+                except Exception as exc:
+                    resource = parsed[i]
+                    rtype = (
+                        resource.get("resourceType", "Unknown")
+                        if isinstance(resource, dict)
+                        else "Unknown"
+                    )
+                    audit_log.error(
+                        "resource_assembly_error resource_type=%s: %s", rtype, exc
+                    )
+                    if processing_mode != "skip":
+                        raise
+                    results[i] = quarantine_record(
+                        error="processing error",
+                        resource_type=rtype,
+                        stage="finalize",
+                        error_type=type(exc).__name__,
+                    )
+
+            if _finalize_sequential_start is not None:
+                for i, (resource, gpas_work, manifest_entries_) in enumerate(
+                    zip(
+                        parsed[_finalize_sequential_start:],
+                        all_gpas_works[_finalize_sequential_start:],
+                        all_manifest_entries[_finalize_sequential_start:],
+                    ),
+                    start=_finalize_sequential_start,
+                ):
+                    if resource is None:
+                        results[i] = quarantine_record(
+                            error="match stage error",
+                            stage="match",
+                            **(quarantine_info or {}).get(i, {}),
+                        )
+                        continue
+                    try:
+                        results[i] = _assemble_resource(
+                            resource,
+                            settings,
+                            pseudonymizer,
+                            gpas_work,
+                            manifest_entries_,
+                            processing_mode,
+                            precomputed_mapping=shared_mapping,
+                            precompiled_text_id_regex=_batch_text_id_regex,
+                            precomputed_ref_mapping=_batch_ref_mapping,
+                            prebuilt_text_id_automaton=_batch_text_id_automaton,
+                            attach_manifest=attach_manifest,
+                        )
+                    except Exception as exc:
+                        rtype = (
+                            resource.get("resourceType", "Unknown")
+                            if isinstance(resource, dict)
+                            else "Unknown"
+                        )
+                        audit_log.error(
+                            "resource_assembly_error resource_type=%s: %s", rtype, exc
+                        )
+                        if processing_mode != "skip":
+                            raise
+                        results[i] = quarantine_record(
+                            error="processing error",
+                            resource_type=rtype,
+                            stage="finalize",
+                            error_type=type(exc).__name__,
+                        )
+        finally:
+            # Always free intermediate per-resource data to cap peak memory,
+            # even when an exception propagates (e.g. processing_mode=raise).
+            for i in range(n_resources):
+                parsed[i] = None
+                all_gpas_works[i] = []
+                all_nlp_works[i] = []
+                if not _return_manifest:
+                    all_manifest_entries[i] = []
+    else:
+        # Small batch — sequential (no thread pool overhead)
+        for i, (resource, gpas_work, manifest_entries_) in enumerate(
+            zip(parsed, all_gpas_works, all_manifest_entries)
+        ):
+            if resource is None:
+                results[i] = quarantine_record(
+                    error="match stage error",
+                    stage="match",
+                    **(quarantine_info or {}).get(i, {}),
+                )
+            else:
+                try:
+                    result = _assemble_resource(
+                        resource,
+                        settings,
+                        pseudonymizer,
+                        gpas_work,
+                        manifest_entries_,
+                        processing_mode,
+                        precomputed_mapping=shared_mapping,
+                        precompiled_text_id_regex=_batch_text_id_regex,
+                        precomputed_ref_mapping=_batch_ref_mapping,
+                        prebuilt_text_id_automaton=_batch_text_id_automaton,
+                        attach_manifest=attach_manifest,
+                    )
+                    results[i] = result
+                except Exception as exc:
+                    rtype = (
+                        resource.get("resourceType", "Unknown")
+                        if isinstance(resource, dict)
+                        else "Unknown"
+                    )
+                    audit_log.error(
+                        "resource_assembly_error resource_type=%s: %s", rtype, exc
+                    )
+                    if processing_mode != "skip":
+                        raise
+                    results[i] = quarantine_record(
+                        error="processing error",
+                        resource_type=rtype,
+                        stage="finalize",
+                        error_type=type(exc).__name__,
+                    )
+            # Free intermediate data for this resource to reduce peak memory
+            parsed[i] = None
+            all_gpas_works[i] = []
+            all_nlp_works[i] = []
+            if not _return_manifest:
+                all_manifest_entries[i] = []
+
+    return results
+
+
 def process_data_batch(
     resources: list[dict],
     settings,
@@ -388,6 +609,7 @@ def process_data_batch(
 
     if _DETERMINISTIC:
         from pipeline.rule_matcher import clear_rule_caches
+
         clear_rule_caches()
 
     processing_mode = _processing_errors_mode(settings)
@@ -399,121 +621,213 @@ def process_data_batch(
     all_gpas_works: list[list] = []
     all_nlp_works: list[list] = []
     all_manifest_entries: list[list] = []
-    _all_ref_type_map: dict[str, str] = {}  # ref_id → resource_type for per-domain routing
+    # PHI-free identity info for resources quarantined in the match stage,
+    # keyed by parsed index — consumed by _run_finalize_stage so quarantine
+    # records are traceable to a source resource (1.6).
+    quarantine_info: dict[int, dict] = {}
+    _all_ref_type_map: dict[
+        str, str
+    ] = {}  # ref_id → resource_type for per-domain routing
 
     # Stage 1 — match: FHIRPath evaluation + action dispatch (parallel per resource).
     # Reference IDs are collected during the same call so they benefit from
     # thread pool parallelism rather than running serially afterward.
-    _batch_span = _tracer().start_as_current_span(
-        "pipeline.batch",
-    )
-    _batch_span.__enter__()
-    _stage_match_timer = PIPELINE_STAGE_LATENCY.labels(stage="rule_evaluation").time()
-    _stage_match_timer.__enter__()
-    _span_match = _tracer().start_as_current_span("rule_evaluation")
-    _span_match.__enter__()
-    if _PARALLEL_WORKERS > 0:
-        pool = get_executor()
-        futures = []
-        _parallel_fell_back = False
-        for resource in resources:
-            try:
-                futures.append(
-                    pool.submit(
-                        _evaluate_rules, resource, settings, processing_mode,
-                        collect_refs=_need_refs,
-                    )
-                )
-            except TimeoutError:
-                audit_log.warning(
-                    "rule_evaluation_worker_timeout: thread pool saturated after %d/%d resources, "
-                    "falling back to sequential",
-                    len(futures), len(resources),
-                )
-                _parallel_fell_back = True
-                break
-        for idx, future in enumerate(futures):
-            try:
-                resource, gpas_work, nlp_work, manifest_entries_, ref_type_map_ = future.result()
-                parsed.append(resource)
-                all_gpas_works.append(gpas_work)
-                all_nlp_works.append(nlp_work)
-                all_manifest_entries.append(manifest_entries_)
-                if ref_type_map_:
-                    _all_ref_type_map.update(ref_type_map_)
-            except Exception as exc:
-                audit_log.error("rule_evaluation_error error_type=%s", type(exc).__name__)
-                if processing_mode != "skip":
-                    raise
-                parsed.append(None)
-                all_gpas_works.append([])
-                all_nlp_works.append([])
-                all_manifest_entries.append([])
-        if _parallel_fell_back:
-            for resource in resources[len(futures):]:
-                try:
-                    resource, gpas_work, nlp_work, manifest_entries_, ref_type_map_ = _evaluate_rules(
-                        resource, settings, processing_mode,
-                        collect_refs=_need_refs,
-                    )
-                except Exception as exc:
-                    audit_log.error("rule_evaluation_error (sequential fallback) error_type=%s", type(exc).__name__)
-                    if processing_mode != "skip":
-                        raise
-                    parsed.append(None)
-                    all_gpas_works.append([])
-                    all_nlp_works.append([])
-                    all_manifest_entries.append([])
-                    continue
-                parsed.append(resource)
-                all_gpas_works.append(gpas_work)
-                all_nlp_works.append(nlp_work)
-                all_manifest_entries.append(manifest_entries_)
-                if ref_type_map_:
-                    _all_ref_type_map.update(ref_type_map_)
-    else:
-        for resource in resources:
-            try:
-                resource, gpas_work, nlp_work, manifest_entries_, ref_type_map_ = _evaluate_rules(
-                    resource, settings, processing_mode,
-                    collect_refs=_need_refs,
-                )
-            except Exception as exc:
-                rtype = (
-                    resource.get("resourceType", "Unknown")
-                    if isinstance(resource, dict)
-                    else "Unknown"
-                )
-                audit_log.error("rule_evaluation_error resource_type=%s error_type=%s", rtype, type(exc).__name__)
-                if processing_mode != "skip":
-                    raise
-                parsed.append(None)
-                all_gpas_works.append([])
-                all_nlp_works.append([])
-                all_manifest_entries.append([])
-                continue
+    #
+    # The whole instrumented body runs inside a try/finally that guarantees the
+    # batch span is closed on every exit path (success, return, or raise). The
+    # per-stage spans + latency timers use the ``_stage_span`` context manager,
+    # which likewise closes the span and records the sample even when the stage
+    # body raises (the previous manual ``__enter__``/``__exit__`` pairs leaked
+    # the span and dropped the metric on any exception).
+    _batch_span_cm = _tracer().start_as_current_span("pipeline.batch")
+    _batch_span_cm.__enter__()
+    try:
+        with _stage_span("rule_evaluation"):
+            if _PARALLEL_WORKERS > 0:
+                pool = get_executor()
+                futures = []
+                _parallel_fell_back = False
+                for resource in resources:
+                    try:
+                        futures.append(
+                            pool.submit(
+                                _evaluate_rules,
+                                resource,
+                                settings,
+                                processing_mode,
+                                collect_refs=_need_refs,
+                            )
+                        )
+                    except TimeoutError:
+                        audit_log.warning(
+                            "rule_evaluation_worker_timeout: thread pool saturated after %d/%d resources, "
+                            "falling back to sequential",
+                            len(futures),
+                            len(resources),
+                        )
+                        _parallel_fell_back = True
+                        break
+                for idx, future in enumerate(futures):
+                    try:
+                        (
+                            resource,
+                            gpas_work,
+                            nlp_work,
+                            manifest_entries_,
+                            ref_type_map_,
+                        ) = future.result()
+                        parsed.append(resource)
+                        all_gpas_works.append(gpas_work)
+                        all_nlp_works.append(nlp_work)
+                        all_manifest_entries.append(manifest_entries_)
+                        if ref_type_map_:
+                            _all_ref_type_map.update(ref_type_map_)
+                    except Exception as exc:
+                        audit_log.error(
+                            "rule_evaluation_error error_type=%s", type(exc).__name__
+                        )
+                        if processing_mode != "skip":
+                            raise
+                        quarantine_info[idx] = _quarantine_info_for(
+                            resources[idx], exc
+                        )
+                        parsed.append(None)
+                        all_gpas_works.append([])
+                        all_nlp_works.append([])
+                        all_manifest_entries.append([])
+                if _parallel_fell_back:
+                    for resource in resources[len(futures) :]:
+                        try:
+                            (
+                                resource,
+                                gpas_work,
+                                nlp_work,
+                                manifest_entries_,
+                                ref_type_map_,
+                            ) = _evaluate_rules(
+                                resource,
+                                settings,
+                                processing_mode,
+                                collect_refs=_need_refs,
+                            )
+                        except Exception as exc:
+                            audit_log.error(
+                                "rule_evaluation_error (sequential fallback) error_type=%s",
+                                type(exc).__name__,
+                            )
+                            if processing_mode != "skip":
+                                raise
+                            quarantine_info[len(parsed)] = _quarantine_info_for(
+                                resource, exc
+                            )
+                            parsed.append(None)
+                            all_gpas_works.append([])
+                            all_nlp_works.append([])
+                            all_manifest_entries.append([])
+                            continue
+                        parsed.append(resource)
+                        all_gpas_works.append(gpas_work)
+                        all_nlp_works.append(nlp_work)
+                        all_manifest_entries.append(manifest_entries_)
+                        if ref_type_map_:
+                            _all_ref_type_map.update(ref_type_map_)
+            else:
+                for resource in resources:
+                    try:
+                        (
+                            resource,
+                            gpas_work,
+                            nlp_work,
+                            manifest_entries_,
+                            ref_type_map_,
+                        ) = _evaluate_rules(
+                            resource,
+                            settings,
+                            processing_mode,
+                            collect_refs=_need_refs,
+                        )
+                    except Exception as exc:
+                        rtype = (
+                            resource.get("resourceType", "Unknown")
+                            if isinstance(resource, dict)
+                            else "Unknown"
+                        )
+                        audit_log.error(
+                            "rule_evaluation_error resource_type=%s error_type=%s",
+                            rtype,
+                            type(exc).__name__,
+                        )
+                        if processing_mode != "skip":
+                            raise
+                        quarantine_info[len(parsed)] = _quarantine_info_for(
+                            resource, exc
+                        )
+                        parsed.append(None)
+                        all_gpas_works.append([])
+                        all_nlp_works.append([])
+                        all_manifest_entries.append([])
+                        continue
 
-            parsed.append(resource)
-            all_gpas_works.append(gpas_work)
-            all_nlp_works.append(nlp_work)
-            all_manifest_entries.append(manifest_entries_)
-            if ref_type_map_:
-                _all_ref_type_map.update(ref_type_map_)
-    _stage_match_timer.__exit__(None, None, None)
-    _span_match.__exit__(None, None, None)
+                    parsed.append(resource)
+                    all_gpas_works.append(gpas_work)
+                    all_nlp_works.append(nlp_work)
+                    all_manifest_entries.append(manifest_entries_)
+                    if ref_type_map_:
+                        _all_ref_type_map.update(ref_type_map_)
 
-    # Build per-domain reference ID buckets for typed domain routing.
-    # Uses settings.domain_map so Patient references → spe.direct.patient-admin
-    # rather than the default domain (which would produce a different pseudonym).
-    _extra_values_by_domain: "dict[str, list[str]] | None" = None
-    if _all_ref_type_map:
-        _domain_map = getattr(settings, "domain_map", None)
-        _def_domain = gpas_params.get("gpas_domain", "") if gpas_params else ""
-        _extra_values_by_domain = {}
-        for _rid, _rtype in _all_ref_type_map.items():
-            _dom = (_domain_map or {}).get(_rtype, _def_domain)
-            _extra_values_by_domain.setdefault(_dom, []).append(_rid)
+        # Build per-domain reference ID buckets for typed domain routing.
+        # Uses settings.domain_map so Patient references → spe.direct.patient-admin
+        # rather than the default domain (which would produce a different pseudonym).
+        _extra_values_by_domain: "dict[str, list[str]] | None" = None
+        if _all_ref_type_map:
+            _domain_map = getattr(settings, "domain_map", None)
+            _def_domain = gpas_params.get("gpas_domain", "") if gpas_params else ""
+            _extra_values_by_domain = {}
+            for _rid, _rtype in _all_ref_type_map.items():
+                _dom = (_domain_map or {}).get(_rtype, _def_domain)
+                _extra_values_by_domain.setdefault(_dom, []).append(_rid)
 
+        return _finalize_batch(
+            resources,
+            settings,
+            pseudonymizer,
+            attach_manifest,
+            _return_manifest,
+            parsed,
+            all_gpas_works,
+            all_nlp_works,
+            all_manifest_entries,
+            _all_ref_type_map,
+            _extra_values_by_domain,
+            gpas_params,
+            processing_mode,
+            quarantine_info=quarantine_info,
+        )
+    finally:
+        _batch_span_cm.__exit__(None, None, None)
+
+
+def _finalize_batch(
+    resources,
+    settings,
+    pseudonymizer,
+    attach_manifest,
+    _return_manifest,
+    parsed,
+    all_gpas_works,
+    all_nlp_works,
+    all_manifest_entries,
+    _all_ref_type_map,
+    _extra_values_by_domain,
+    gpas_params,
+    processing_mode,
+    quarantine_info: "dict[int, dict] | None" = None,
+):
+    """Stages 2–4 of :func:`process_data_batch` (phi_detection ‖ pseudonymize, finalize).
+
+    Split out of ``process_data_batch`` so the match stage's ``with`` block stays
+    readable. Runs inside the caller's open ``pipeline.batch`` span.
+    """
     # Stages 2 + 3 — phi_detection (NLP) and pseudonymization (gPAS) run concurrently.
     # NLP processes free-text/narrative fields including heuristic attachment scans.
     # gPAS pre-fetches pseudonyms for structured identifiers and references.
@@ -541,6 +855,7 @@ def process_data_batch(
     _nlp_adapter_available = False
     if _ATTACHMENT_SCAN:
         from pipeline.deidentify import _get_nlp_adapter
+
         _nlp_adapter_available = _get_nlp_adapter() is not None
     _run_nlp_stage = _has_nlp or _nlp_adapter_available
 
@@ -548,10 +863,13 @@ def process_data_batch(
     _nlp_exc: "BaseException | None" = None
 
     if _PARALLEL_WORKERS > 0 and _run_nlp_stage:
+
         def _nlp_target() -> None:
             nonlocal _nlp_exc
             try:
-                _detect_phi(parsed, all_nlp_works, all_manifest_entries, processing_mode)
+                _detect_phi(
+                    parsed, all_nlp_works, all_manifest_entries, processing_mode
+                )
             except BaseException as exc:
                 _nlp_exc = exc
 
@@ -560,13 +878,24 @@ def process_data_batch(
         )
         _nlp_thread.start()
 
-    # gPAS runs in the caller thread while NLP runs concurrently above
-    shared_mapping = _pseudonymize(
-        all_gpas_works, processing_mode, pseudonymizer, gpas_params, _extra_values_by_domain
-    )
+    # gPAS runs in the caller thread while NLP runs concurrently above.
+    # If the gPAS stage raises, we MUST still join the NLP thread — otherwise it
+    # keeps mutating the ``parsed`` resource dicts after the batch has logically
+    # failed (an orphaned writer). The try/finally guarantees the join happens on
+    # every exit path before the exception propagates.
+    try:
+        shared_mapping = _pseudonymize(
+            all_gpas_works,
+            processing_mode,
+            pseudonymizer,
+            gpas_params,
+            _extra_values_by_domain,
+        )
+    finally:
+        if _nlp_thread is not None:
+            _nlp_thread.join()
 
     if _nlp_thread is not None:
-        _nlp_thread.join()
         if _nlp_exc is not None:
             raise _nlp_exc  # type: ignore[misc]
     elif _run_nlp_stage:
@@ -594,155 +923,29 @@ def process_data_batch(
 
     # Stage 4 — finalize: gPAS write-back + post-processing per resource (parallel).
     # shared_mapping is read-only here; each resource is independent.
-    results: list[dict | None] = [None] * len(parsed)
-    n_resources = len(parsed)
-
-    _span_finalize = _tracer().start_as_current_span("resource_assembly")
-    _span_finalize.__enter__()
-    _stage_finalize_timer = PIPELINE_STAGE_LATENCY.labels(stage="resource_assembly").time()
-    _stage_finalize_timer.__enter__()
-    if n_resources > 4 and _PARALLEL_WORKERS > 0:
-        # Parallel finalization: each resource is independent (shared_mapping is read-only)
-        pool = get_executor()
-        futures = {}
-        for i, (resource, gpas_work, manifest_entries_) in enumerate(
-            zip(parsed, all_gpas_works, all_manifest_entries)
-        ):
-            if resource is None:
-                results[i] = {"error": "match stage error", "resourceType": "Unknown"}
-                continue
-            try:
-                fut = pool.submit(
-                    _assemble_resource,
-                    resource,
-                    settings,
-                    pseudonymizer,
-                    gpas_work,
-                    manifest_entries_,
-                    processing_mode,
-                    precomputed_mapping=shared_mapping,
-                    precompiled_text_id_regex=_batch_text_id_regex,
-                    precomputed_ref_mapping=_batch_ref_mapping,
-                    prebuilt_text_id_automaton=_batch_text_id_automaton,
-                    attach_manifest=attach_manifest,
-                )
-                futures[fut] = i
-            except TimeoutError:
-                audit_log.warning(
-                    "resource_assembly_worker_timeout: thread pool saturated at resource %d/%d, "
-                    "falling back to sequential",
-                    i, n_resources,
-                )
-                # Finalize remaining resources sequentially after draining futures
-                _finalize_sequential_start = i
-                break
-        else:
-            _finalize_sequential_start = None
-
-        from concurrent.futures import as_completed
-
-        try:
-            for fut in as_completed(futures):
-                i = futures[fut]
-                try:
-                    results[i] = fut.result()
-                except Exception as exc:
-                    resource = parsed[i]
-                    rtype = (
-                        resource.get("resourceType", "Unknown")
-                        if isinstance(resource, dict)
-                        else "Unknown"
-                    )
-                    audit_log.error("resource_assembly_error resource_type=%s: %s", rtype, exc)
-                    if processing_mode != "skip":
-                        raise
-                    results[i] = {"error": "processing error", "resourceType": rtype}
-
-            if _finalize_sequential_start is not None:
-                for i, (resource, gpas_work, manifest_entries_) in enumerate(
-                    zip(
-                        parsed[_finalize_sequential_start:],
-                        all_gpas_works[_finalize_sequential_start:],
-                        all_manifest_entries[_finalize_sequential_start:],
-                    ),
-                    start=_finalize_sequential_start,
-                ):
-                    if resource is None:
-                        results[i] = {"error": "match stage error", "resourceType": "Unknown"}
-                        continue
-                    try:
-                        results[i] = _assemble_resource(
-                            resource, settings, pseudonymizer, gpas_work, manifest_entries_,
-                            processing_mode,
-                            precomputed_mapping=shared_mapping,
-                            precompiled_text_id_regex=_batch_text_id_regex,
-                            precomputed_ref_mapping=_batch_ref_mapping,
-                            prebuilt_text_id_automaton=_batch_text_id_automaton,
-                            attach_manifest=attach_manifest,
-                        )
-                    except Exception as exc:
-                        rtype = resource.get("resourceType", "Unknown") if isinstance(resource, dict) else "Unknown"
-                        audit_log.error("resource_assembly_error resource_type=%s: %s", rtype, exc)
-                        if processing_mode != "skip":
-                            raise
-                        results[i] = {"error": "processing error", "resourceType": rtype}
-        finally:
-            # Always free intermediate per-resource data to cap peak memory,
-            # even when an exception propagates (e.g. processing_mode=raise).
-            for i in range(n_resources):
-                parsed[i] = None
-                all_gpas_works[i] = []
-                all_nlp_works[i] = []
-                if not _return_manifest:
-                    all_manifest_entries[i] = []
-    else:
-        # Small batch — sequential (no thread pool overhead)
-        for i, (resource, gpas_work, manifest_entries_) in enumerate(
-            zip(parsed, all_gpas_works, all_manifest_entries)
-        ):
-            if resource is None:
-                results[i] = {"error": "match stage error", "resourceType": "Unknown"}
-            else:
-                try:
-                    result = _assemble_resource(
-                        resource,
-                        settings,
-                        pseudonymizer,
-                        gpas_work,
-                        manifest_entries_,
-                        processing_mode,
-                        precomputed_mapping=shared_mapping,
-                        precompiled_text_id_regex=_batch_text_id_regex,
-                        precomputed_ref_mapping=_batch_ref_mapping,
-                        prebuilt_text_id_automaton=_batch_text_id_automaton,
-                        attach_manifest=attach_manifest,
-                    )
-                    results[i] = result
-                except Exception as exc:
-                    rtype = (
-                        resource.get("resourceType", "Unknown")
-                        if isinstance(resource, dict)
-                        else "Unknown"
-                    )
-                    audit_log.error("resource_assembly_error resource_type=%s: %s", rtype, exc)
-                    if processing_mode != "skip":
-                        raise
-                    results[i] = {"error": "processing error", "resourceType": rtype}
-            # Free intermediate data for this resource to reduce peak memory
-            parsed[i] = None
-            all_gpas_works[i] = []
-            all_nlp_works[i] = []
-            if not _return_manifest:
-                all_manifest_entries[i] = []
-
-    _stage_finalize_timer.__exit__(None, None, None)
-    _span_finalize.__exit__(None, None, None)
-    _batch_span.__exit__(None, None, None)
+    with _stage_span("resource_assembly"):
+        results = _run_finalize_stage(
+            parsed,
+            all_gpas_works,
+            all_nlp_works,
+            all_manifest_entries,
+            settings,
+            pseudonymizer,
+            shared_mapping,
+            _batch_text_id_regex,
+            _batch_text_id_automaton,
+            _batch_ref_mapping,
+            attach_manifest,
+            processing_mode,
+            _return_manifest,
+            quarantine_info=quarantine_info,
+        )
 
     # PII blocking gate — runs at the single choke point that all callers
     # share: batch API, NDJSON streaming, async bulk/cohort jobs, staged
     # worker, and Bundle inner processing all call process_data_batch.
-    # Default-off (MEDANON_PII_GATE must be explicitly enabled).
+    # Default-ON; disable with MEDANON_OUTPUT_GATE_ENABLED=false (or skip the
+    # raw scan only with MEDANON_PII_GATE=false).
     _run_pii_gate([r for r in results if r is not None])
 
     if _return_manifest:
@@ -905,10 +1108,16 @@ def process_data_stream(
         chunk.append(resource)
         if len(chunk) >= chunk_size:
             yield from process_data_batch(
-                chunk, settings, pseudonymizer, attach_manifest=attach_manifest,
+                chunk,
+                settings,
+                pseudonymizer,
+                attach_manifest=attach_manifest,
             )
             chunk = []
     if chunk:
         yield from process_data_batch(
-            chunk, settings, pseudonymizer, attach_manifest=attach_manifest,
+            chunk,
+            settings,
+            pseudonymizer,
+            attach_manifest=attach_manifest,
         )

@@ -11,6 +11,7 @@ from fastapi.responses import Response
 
 from api.deps import MAX_BODY_BYTES, limiter
 from api.services.hl7v2 import Hl7v2Service
+from pipeline.processor import PiiLeakError
 
 router = APIRouter()
 logger = logging.getLogger("medanon")
@@ -46,8 +47,18 @@ async def process_hl7v2(request: Request):
             status_code=422, detail="Request body must be UTF-8 encoded"
         ) from exc
 
+    # When ?config_profile= is supplied, route through the full rule engine
+    # (Hl7v2Adapter → process_data_batch).  Without it, the legacy fixed-field
+    # scrubber is used (backward-compatible default).
+    config_profile = request.query_params.get("config_profile") or None
+
     try:
-        result = await _service.process_single(message_text)
+        result = await _service.process_single(message_text, config_profile)
+    except PiiLeakError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "pii_leak_detected", "message": str(exc)},
+        ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:

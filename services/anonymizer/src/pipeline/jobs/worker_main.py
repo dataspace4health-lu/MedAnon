@@ -55,13 +55,12 @@ async def _main() -> None:
 
             start_worker_health_server(metrics_port)
         except Exception as exc:
-            logger.warning(
-                "worker_health_server_failed port=%d: %s", metrics_port, exc
-            )
+            logger.warning("worker_health_server_failed port=%d: %s", metrics_port, exc)
 
     # Initialize OTel tracing for the worker process (no FastAPI, no HTTP instrumentation).
     try:
         from utils.tracing import setup_tracing_worker
+
         setup_tracing_worker()
     except Exception as _tracing_exc:
         logger.warning("tracing_init_failed: %s", _tracing_exc)
@@ -73,21 +72,44 @@ async def _main() -> None:
     job_store, pg_pool = await select_job_store(redis_url, app_db_url)
     # C11 guard: a dedicated worker container with SQLite is never safe.
     from pipeline.jobs.store_factory import assert_durable_store_or_exit
+
     assert_durable_store_or_exit(job_store, role="worker")
     store = init_job_store(store=job_store)
     _worker.init_worker(store, max_concurrent=max_concurrent)
+
+    # ``select_job_store`` only creates the shared PostgreSQL pool when Postgres
+    # is the JOB-STORE backend. With Redis as the job store, ``pg_pool`` stays
+    # None even though MEDANON_APP_DB_URL is set — leaving every Postgres
+    # app-state store (processing-run, workflow engine, sql-connection) to fall
+    # back to SQLite or fail. Create the shared pool here so the worker behaves
+    # like the API (which has the same fix). ``get_pool`` is an idempotent
+    # singleton, so this is a no-op when the pool already exists.
+    if pg_pool is None and app_db_url:
+        try:
+            from integrations.postgres.pool import get_pool
+
+            pg_pool = get_pool(app_db_url)
+            logger.info("app_db_pool=postgres (shared app-state pool)")
+        except Exception as exc:
+            logger.warning("app_db_pool_init_failed: %s", exc)
 
     # Initialize processing run store so scored job results are persisted to the
     # dashboard table.  Uses the same backend-selection logic as api/main.py.
     try:
         from pipeline.processing_run import init_processing_run_store
+
         if pg_pool is not None:
-            from integrations.postgres.processing_run_store import PostgresProcessingRunStore
+            from integrations.postgres.processing_run_store import (
+                PostgresProcessingRunStore,
+            )
+
             pr_store = PostgresProcessingRunStore(pg_pool)
             init_processing_run_store(store=pr_store)
             logger.info("processing_run_store=postgres")
         else:
-            pr_db = os.environ.get("MEDANON_PROCESSING_RUN_DB", "/output/processing_runs.db")
+            pr_db = os.environ.get(
+                "MEDANON_PROCESSING_RUN_DB", "/output/processing_runs.db"
+            )
             init_processing_run_store(pr_db)
             logger.info("processing_run_store=sqlite path=%s", pr_db)
     except Exception as exc:
@@ -97,6 +119,39 @@ async def _main() -> None:
     staging_store = await setup_staging(staging_url, app_db_url, pg_pool)
     if staging_store is not None:
         _worker.init_staging(staging_store)
+
+    # SQL-source connection store — Postgres only. The worker executes
+    # ``sql-export`` jobs which resolve a saved connection by id, so the worker
+    # MUST initialise this store too (the API initialises its own copy). Without
+    # it, sql-export fails with "SQL connection store is not initialised".
+    if pg_pool is not None:
+        try:
+            from integrations.postgres.sql_connection_store import (
+                PostgresSqlConnectionStore,
+            )
+            from pipeline.sql_connection import init_sql_connection_store
+
+            init_sql_connection_store(PostgresSqlConnectionStore(pg_pool))
+            logger.info("sql_connection_store=postgres")
+        except Exception as exc:
+            logger.warning("sql_connection_store_start_failed: %s", exc)
+
+    # Workflow engine — needed in the worker so the job terminal hook can
+    # advance DAG steps. Postgres-only ("staging is the ledger").
+    workflows_enabled = os.environ.get(
+        "MEDANON_WORKFLOWS_ENABLED", "true"
+    ).strip().lower() in ("true", "1", "yes")
+    if pg_pool is not None and workflows_enabled:
+        try:
+            from integrations.postgres.workflow_store import PostgresWorkflowStore
+            from pipeline.workflows import init_workflow_engine
+
+            wf_store = PostgresWorkflowStore(pg_pool)
+            wf_store.ensure_schema()
+            init_workflow_engine(wf_store, store)
+            logger.info("workflow_engine=postgres")
+        except Exception as exc:
+            logger.warning("workflow_engine_start_failed: %s", exc)
 
     # Graceful shutdown: stop accepting new jobs on SIGTERM/SIGINT,
     # let in-progress jobs finish (up to graceful-timeout).

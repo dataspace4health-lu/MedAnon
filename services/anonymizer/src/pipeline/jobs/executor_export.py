@@ -13,7 +13,11 @@ import time
 from pathlib import Path
 
 from domain.jobs import Job
-from pipeline.jobs.checkpoint import _truncate_to_lines, load_checkpoint, save_checkpoint
+from pipeline.jobs.checkpoint import (
+    _truncate_to_lines,
+    load_checkpoint,
+    save_checkpoint,
+)
 from pipeline.jobs.executor_stream import (
     INFRA_RESOURCE_TYPES,
     compress_ndjson,
@@ -59,7 +63,9 @@ def _filter_nonempty_types(
 
     def _check(rt: str) -> tuple[str, int]:
         try:
-            count = preflight_resource_count(server_url, resource_type=rt, token=token, timeout=5)
+            count = preflight_resource_count(
+                server_url, resource_type=rt, token=token, timeout=5
+            )
         except Exception:
             count = -1  # treat unknown as non-empty to be safe
         return rt, count
@@ -76,7 +82,8 @@ def _filter_nonempty_types(
     nonempty.sort(key=lambda rt: order.get(rt, 9999))
     _worker_log.info(
         "bulk_export_preflight kept=%d / total=%d resource types",
-        len(nonempty), len(candidate_types),
+        len(nonempty),
+        len(candidate_types),
     )
     return nonempty
 
@@ -118,7 +125,8 @@ def _use_staged(staging, estimated_rows: int | None) -> bool:
     if estimated_rows is not None and estimated_rows < _STAGED_THRESHOLD_ROWS:
         _worker_log.info(
             "staged_threshold_skip estimated_rows=%d threshold=%d — using stream path",
-            estimated_rows, _STAGED_THRESHOLD_ROWS,
+            estimated_rows,
+            _STAGED_THRESHOLD_ROWS,
         )
         return False
     return True
@@ -162,25 +170,34 @@ def _execute_bulk_export(job: Job, store, staging) -> None:
         # Observation/Condition/Procedure/etc. resources per patient.
         try:
             from integrations.fhir.reader import preflight_resource_count
+
             _token = job.params.get("token") or os.environ.get("FHIR_SOURCE_TOKEN")
             _patient_count = preflight_resource_count(
-                job.params["server_url"], resource_type="Patient",
-                token=_token, timeout=5,
+                job.params["server_url"],
+                resource_type="Patient",
+                token=_token,
+                timeout=5,
             )
             if _patient_count > 0:
                 estimated_rows = _patient_count * 15
                 _worker_log.info(
                     "bulk_export_estimated_rows job=%s patients=%d estimated=%d",
-                    job.id, _patient_count, estimated_rows,
+                    job.id,
+                    _patient_count,
+                    estimated_rows,
                 )
         except Exception:
             pass  # preflight failure → _use_staged will default to True (safe)
 
     if _use_staged(staging, estimated_rows):
         from pipeline.jobs.staged_worker import execute_bulk_export_staged
+
         return execute_bulk_export_staged(job, store, staging)
 
-    from integrations.fhir.client import fetch_all_resource_types, get_capability_statement
+    from integrations.fhir.client import (
+        fetch_all_resource_types,
+        get_capability_statement,
+    )
     from pipeline.config.service import get_settings
     from pipeline.processor import _get_default_pseudonymizer
 
@@ -209,9 +226,11 @@ def _execute_bulk_export(job: Job, store, staging) -> None:
         _truncate_to_lines(output_path, already_written)
         _worker_log.info(
             "bulk_export_resume job=%s from_line=%d cursor=%s",
-            job.id, already_written,
+            job.id,
+            already_written,
             f"rt={fhir_cursor['current_rt']} page={fhir_cursor['page_url']}"
-            if fhir_cursor else "none",
+            if fhir_cursor
+            else "none",
         )
 
     # ── Group-level export: use FHIR Bulk Data API (Group/{id}/$export) ────────
@@ -221,11 +240,16 @@ def _execute_bulk_export(job: Job, store, staging) -> None:
         from integrations.fhir.bulk import bulk_export as fhir_bulk_export
 
         _t0 = time.monotonic()
-        save_checkpoint(store, job, {"phase": "fetching", "lines_written": already_written})
+        save_checkpoint(
+            store, job, {"phase": "fetching", "lines_written": already_written}
+        )
         _worker_log.info("bulk_export_group_start job=%s group_id=%s", job.id, group_id)
 
         from pipeline.jobs.summary import JobSummaryCollector
-        collector = JobSummaryCollector(config_profile=profile, settings=settings, job_id=job.id)
+
+        collector = JobSummaryCollector(
+            config_profile=profile, settings=settings, job_id=job.id
+        )
 
         raw_gen = fhir_bulk_export(
             server_url,
@@ -240,24 +264,36 @@ def _execute_bulk_export(job: Job, store, staging) -> None:
         with _secure_open(output_path, open_mode, encoding="utf-8") as fh:
             count, cancelled = stream_and_deidentify(
                 skip_to(raw_gen, already_written),
-                settings, pseudonymizer, fh, already_written,
-                store, job, "bulk_export", summary=collector, cursor_state={},
+                settings,
+                pseudonymizer,
+                fh,
+                already_written,
+                store,
+                job,
+                "bulk_export",
+                summary=collector,
+                cursor_state={},
             )
 
         if not cancelled:
             if _COMPRESS_RESULTS:
                 output_path = compress_ndjson(output_path)
             from integrations.storage import store_result
+
             job.result_path = store_result(job.id, output_path)
             summary_dict = collector.to_dict(
                 file_size_bytes=os.path.getsize(output_path),
                 compressed=_COMPRESS_RESULTS,
             )
-            save_checkpoint(store, job, {
-                "phase": "done",
-                "lines_written": count,
-                "summary": summary_dict,
-            })
+            save_checkpoint(
+                store,
+                job,
+                {
+                    "phase": "done",
+                    "lines_written": count,
+                    "summary": summary_dict,
+                },
+            )
             _worker_log.info("bulk_export_group_done job=%s count=%d", job.id, count)
         return
 
@@ -268,7 +304,9 @@ def _execute_bulk_export(job: Job, store, staging) -> None:
         resource_types = [t.strip() for t in type_filter.split(",") if t.strip()]
     else:
         try:
-            all_types = get_capability_statement(server_url, token=token, timeout=timeout)
+            all_types = get_capability_statement(
+                server_url, token=token, timeout=timeout
+            )
             candidate_types = [t for t in all_types if t not in INFRA_RESOURCE_TYPES]
             # Skip resource types that have no data — avoids paginating through
             # dozens of empty FHIR R4 types that the capability statement lists
@@ -280,17 +318,27 @@ def _execute_bulk_export(job: Job, store, staging) -> None:
             )
         except Exception as exc:
             from integrations.fhir._transport import FhirCircuitBreakerOpen
+
             if isinstance(exc, FhirCircuitBreakerOpen):
                 raise
             _worker_log.warning(
                 "bulk_export capability_statement_failed job=%s: %s", job.id, exc
             )
-            resource_types = ["Patient", "Observation", "Condition", "Encounter", "Procedure"]
+            resource_types = [
+                "Patient",
+                "Observation",
+                "Condition",
+                "Encounter",
+                "Procedure",
+            ]
 
     if not resource_types:
-        _worker_log.info("bulk_export_empty job=%s — no resource types to export", job.id)
+        _worker_log.info(
+            "bulk_export_empty job=%s — no resource types to export", job.id
+        )
         _secure_open(output_path, "w").close()
         from integrations.storage import store_result
+
         job.result_path = store_result(job.id, output_path)
         save_checkpoint(store, job, {"phase": "done", "lines_written": 0})
         return
@@ -346,29 +394,37 @@ def _execute_bulk_export(job: Job, store, staging) -> None:
         resume_skip = (fhir_cursor or {}).get("page_offset", already_written)
 
     from pipeline.jobs.summary import JobSummaryCollector
-    collector = JobSummaryCollector(config_profile=profile, settings=settings, job_id=job.id)
+
+    collector = JobSummaryCollector(
+        config_profile=profile, settings=settings, job_id=job.id
+    )
 
     with _secure_open(output_path, open_mode, encoding="utf-8") as fh:
         count, cancelled = stream_and_deidentify(
             skip_to(resource_gen, resume_skip),
-            settings, pseudonymizer, fh, already_written,
-            store, job, "bulk_export", summary=collector, cursor_state=_cursor_state,
+            settings,
+            pseudonymizer,
+            fh,
+            already_written,
+            store,
+            job,
+            "bulk_export",
+            summary=collector,
+            cursor_state=_cursor_state,
         )
 
     if not cancelled:
-        if _COMPRESS_RESULTS:
-            output_path = compress_ndjson(output_path)
-        from integrations.storage import store_result
-        job.result_path = store_result(job.id, output_path)
+        # Compute the summary from the (local, streamed) output file BEFORE
+        # promoting it to the durable result store.  The score gate runs here,
+        # pre-publish, so a blocked job never calls store_result — eliminating
+        # the former write-then-delete race (publish, then delete from both the
+        # durable store and local disk).  On block we only remove the local
+        # staging file; job.result_path was never set.
         summary_dict = collector.to_dict(
             file_size_bytes=os.path.getsize(output_path),
-            compressed=_COMPRESS_RESULTS,
+            compressed=False,
         )
-        checkpoint_data: dict = {
-            "phase": "done",
-            "lines_written": count,
-            "summary": summary_dict,
-        }
+
         audit_report = collector.generate_audit_report(
             export_meta={"fhir_source": params.get("server_url", "")}
         )
@@ -378,23 +434,47 @@ def _execute_bulk_export(job: Job, store, staging) -> None:
                 audit_path = os.path.join(_OUTPUT_DIR, f"{job.id}_score_audit.md")
                 with open(audit_path, "w", encoding="utf-8") as fh:
                     fh.write(audit_report)
-                checkpoint_data["score_audit_path"] = audit_path
             except Exception:
-                _worker_log.debug("bulk_export_audit_write_failed job=%s", job.id, exc_info=True)
+                _worker_log.debug(
+                    "bulk_export_audit_write_failed job=%s", job.id, exc_info=True
+                )
                 audit_path = None
 
-        # Score gate: if quality is below threshold, delete output and fail the
-        # job with a plain-language explanation instead of returning bad data.
+        # Score gate (pre-publish): if quality is below threshold or PII leaked,
+        # fail the job with a plain-language explanation and never publish.
         from pipeline.scoring.gate import ScoreGateBlocked, check_score_gate
+
         try:
             check_score_gate(summary_dict.get("score"), profile)
         except ScoreGateBlocked:
             _cleanup_blocked_output(job, output_path, audit_path)
             raise
 
+        # Gate passed — now (and only now) promote the output to the durable
+        # store and finalise the job.
+        if _COMPRESS_RESULTS:
+            output_path = compress_ndjson(output_path)
+            # Refresh the file-size on the summary after compression.
+            summary_dict = collector.to_dict(
+                file_size_bytes=os.path.getsize(output_path),
+                compressed=True,
+            )
+        from integrations.storage import store_result
+
+        job.result_path = store_result(job.id, output_path)
+
+        checkpoint_data: dict = {
+            "phase": "done",
+            "lines_written": count,
+            "summary": summary_dict,
+        }
+        if audit_path:
+            checkpoint_data["score_audit_path"] = audit_path
+
         save_checkpoint(store, job, checkpoint_data)
         try:
             from api.services.scoring_helpers import persist_run_sync
+
             persist_run_sync(
                 endpoint="bulk_export",
                 config_profile=profile,
@@ -416,22 +496,29 @@ def _execute_cohort(job: Job, store, staging) -> None:
     if staging is not None and estimated_rows is None:
         try:
             from integrations.fhir.reader import preflight_resource_count
+
             _token = job.params.get("token") or os.environ.get("FHIR_SOURCE_TOKEN")
             _count = preflight_resource_count(
                 job.params["server_url"],
                 resource_type=job.params.get("search_type"),
-                token=_token, timeout=5,
+                token=_token,
+                timeout=5,
             )
             if _count > 0:
-                estimated_rows = _count * 10  # cohort: fewer linked resources than system export
+                estimated_rows = (
+                    _count * 10
+                )  # cohort: fewer linked resources than system export
                 _worker_log.info(
                     "cohort_estimated_rows job=%s preflight=%d estimated=%d",
-                    job.id, _count, estimated_rows,
+                    job.id,
+                    _count,
+                    estimated_rows,
                 )
         except Exception:
             pass
     if _use_staged(staging, estimated_rows):
         from pipeline.jobs.staged_worker import execute_cohort_staged
+
         return execute_cohort_staged(job, store, staging)
 
     from integrations.fhir.client import fetch_cohort, preflight_resource_count
@@ -461,14 +548,18 @@ def _execute_cohort(job: Job, store, staging) -> None:
         _worker_log.info("cohort_resume job=%s from_line=%d", job.id, already_written)
 
     if already_written == 0:
-        count = preflight_resource_count(server_url, resource_type=search_type, token=token)
+        count = preflight_resource_count(
+            server_url, resource_type=search_type, token=token
+        )
         if count == 0:
             _worker_log.info(
                 "cohort_empty job=%s — no %s resources found, skipping export",
-                job.id, search_type,
+                job.id,
+                search_type,
             )
             _secure_open(output_path, "w").close()
             from integrations.storage import store_result
+
             job.result_path = store_result(job.id, output_path)
             save_checkpoint(store, job, {"phase": "done", "lines_written": 0})
             return
@@ -485,53 +576,79 @@ def _execute_cohort(job: Job, store, staging) -> None:
     )
 
     from pipeline.jobs.summary import JobSummaryCollector
-    collector = JobSummaryCollector(config_profile=profile, settings=settings, job_id=job.id)
+
+    collector = JobSummaryCollector(
+        config_profile=profile, settings=settings, job_id=job.id
+    )
 
     with _secure_open(output_path, open_mode, encoding="utf-8") as fh:
         count, cancelled = stream_and_deidentify(
             skip_to(gen, already_written),
-            settings, pseudonymizer, fh, already_written,
-            store, job, "cohort", summary=collector,
+            settings,
+            pseudonymizer,
+            fh,
+            already_written,
+            store,
+            job,
+            "cohort",
+            summary=collector,
         )
 
     if not cancelled:
-        if _COMPRESS_RESULTS:
-            output_path = compress_ndjson(output_path)
-        from integrations.storage import store_result
-        job.result_path = store_result(job.id, output_path)
+        # Validate BEFORE promoting to the durable store (see the bulk-export
+        # path for the rationale — pre-publish gate eliminates write-then-delete).
         summary_dict = collector.to_dict(
             file_size_bytes=os.path.getsize(output_path),
-            compressed=_COMPRESS_RESULTS,
+            compressed=False,
         )
-        checkpoint_data = {
-            "phase": "done",
-            "lines_written": count,
-            "summary": summary_dict,
-        }
         audit_report = collector.generate_audit_report(
             export_meta={"fhir_source": server_url}
         )
         cohort_audit_path: str | None = None
         if audit_report:
             try:
-                cohort_audit_path = os.path.join(_OUTPUT_DIR, f"{job.id}_score_audit.md")
+                cohort_audit_path = os.path.join(
+                    _OUTPUT_DIR, f"{job.id}_score_audit.md"
+                )
                 with open(cohort_audit_path, "w", encoding="utf-8") as fh:
                     fh.write(audit_report)
-                checkpoint_data["score_audit_path"] = cohort_audit_path
             except Exception:
-                _worker_log.debug("cohort_audit_write_failed job=%s", job.id, exc_info=True)
+                _worker_log.debug(
+                    "cohort_audit_write_failed job=%s", job.id, exc_info=True
+                )
                 cohort_audit_path = None
 
         from pipeline.scoring.gate import ScoreGateBlocked, check_score_gate
+
         try:
             check_score_gate(summary_dict.get("score"), profile)
         except ScoreGateBlocked:
             _cleanup_blocked_output(job, output_path, cohort_audit_path)
             raise
 
+        # Gate passed — promote to the durable store and finalise.
+        if _COMPRESS_RESULTS:
+            output_path = compress_ndjson(output_path)
+            summary_dict = collector.to_dict(
+                file_size_bytes=os.path.getsize(output_path),
+                compressed=True,
+            )
+        from integrations.storage import store_result
+
+        job.result_path = store_result(job.id, output_path)
+
+        checkpoint_data = {
+            "phase": "done",
+            "lines_written": count,
+            "summary": summary_dict,
+        }
+        if cohort_audit_path:
+            checkpoint_data["score_audit_path"] = cohort_audit_path
+
         save_checkpoint(store, job, checkpoint_data)
         try:
             from api.services.scoring_helpers import persist_run_sync
+
             persist_run_sync(
                 endpoint="cohort",
                 config_profile=profile,
@@ -553,6 +670,7 @@ def _execute_reprocess(job: Job, store, staging) -> None:
         job.error = "Staging not configured (MEDANON_STAGING_DB_URL not set)"
         raise RuntimeError(job.error)
     from pipeline.jobs.staged_worker import execute_reprocess_staged
+
     return execute_reprocess_staged(job, store, staging)
 
 
@@ -560,6 +678,7 @@ def _execute_patient_export(job: Job, store, staging) -> None:
     """Run a patient $everything export + de-identify job."""
     if staging is not None:
         from pipeline.jobs.staged_worker import execute_patient_export_staged
+
         return execute_patient_export_staged(job, store, staging)
 
     from integrations.fhir.client import fetch_everything
@@ -587,22 +706,34 @@ def _execute_patient_export(job: Job, store, staging) -> None:
 
     _t0 = time.monotonic()
     save_checkpoint(store, job, {"phase": "fetching", "lines_written": already_written})
-    gen = fetch_everything(server_url, "Patient", patient_id, token=token, timeout=timeout)
+    gen = fetch_everything(
+        server_url, "Patient", patient_id, token=token, timeout=timeout
+    )
 
     from pipeline.jobs.summary import JobSummaryCollector
-    collector = JobSummaryCollector(config_profile=profile, settings=settings, job_id=job.id)
+
+    collector = JobSummaryCollector(
+        config_profile=profile, settings=settings, job_id=job.id
+    )
 
     with _secure_open(output_path, open_mode, encoding="utf-8") as fh:
         count, cancelled = stream_and_deidentify(
             skip_to(gen, already_written),
-            settings, pseudonymizer, fh, already_written,
-            store, job, "patient_export", summary=collector,
+            settings,
+            pseudonymizer,
+            fh,
+            already_written,
+            store,
+            job,
+            "patient_export",
+            summary=collector,
         )
 
     if not cancelled:
         if _COMPRESS_RESULTS:
             output_path = compress_ndjson(output_path)
         from integrations.storage import store_result
+
         job.result_path = store_result(job.id, output_path)
         summary_dict = collector.to_dict(
             file_size_bytes=os.path.getsize(output_path),
@@ -623,10 +754,13 @@ def _execute_patient_export(job: Job, store, staging) -> None:
                     fh.write(audit_report)
                 checkpoint_data["score_audit_path"] = audit_path
             except Exception:
-                _worker_log.debug("patient_export_audit_write_failed job=%s", job.id, exc_info=True)
+                _worker_log.debug(
+                    "patient_export_audit_write_failed job=%s", job.id, exc_info=True
+                )
         save_checkpoint(store, job, checkpoint_data)
         try:
             from api.services.scoring_helpers import persist_run_sync
+
             persist_run_sync(
                 endpoint="patient_export",
                 config_profile=profile,
@@ -650,6 +784,7 @@ def _execute_batch_patient_export(job: Job, store, staging) -> None:
     """
     if staging is not None:
         from pipeline.jobs.staged_worker import execute_batch_patient_export_staged
+
         return execute_batch_patient_export_staged(job, store, staging)
 
     from integrations.fhir.client import fetch_patients_everything
@@ -674,26 +809,40 @@ def _execute_batch_patient_export(job: Job, store, staging) -> None:
     open_mode = "a" if already_written > 0 else "w"
     if already_written:
         _truncate_to_lines(output_path, already_written)
-        _worker_log.info("batch_patient_resume job=%s from_line=%d", job.id, already_written)
+        _worker_log.info(
+            "batch_patient_resume job=%s from_line=%d", job.id, already_written
+        )
 
     _t0 = time.monotonic()
     save_checkpoint(store, job, {"phase": "fetching", "lines_written": already_written})
-    gen = fetch_patients_everything(server_url, patient_ids, token=token, timeout=timeout)
+    gen = fetch_patients_everything(
+        server_url, patient_ids, token=token, timeout=timeout
+    )
 
     from pipeline.jobs.summary import JobSummaryCollector
-    collector = JobSummaryCollector(config_profile=profile, settings=settings, job_id=job.id)
+
+    collector = JobSummaryCollector(
+        config_profile=profile, settings=settings, job_id=job.id
+    )
 
     with _secure_open(output_path, open_mode, encoding="utf-8") as fh:
         count, cancelled = stream_and_deidentify(
             skip_to(gen, already_written),
-            settings, pseudonymizer, fh, already_written,
-            store, job, "batch_patient_export", summary=collector,
+            settings,
+            pseudonymizer,
+            fh,
+            already_written,
+            store,
+            job,
+            "batch_patient_export",
+            summary=collector,
         )
 
     if not cancelled:
         if _COMPRESS_RESULTS:
             output_path = compress_ndjson(output_path)
         from integrations.storage import store_result
+
         job.result_path = store_result(job.id, output_path)
         summary_dict = collector.to_dict(
             file_size_bytes=os.path.getsize(output_path),
@@ -714,10 +863,15 @@ def _execute_batch_patient_export(job: Job, store, staging) -> None:
                     fh.write(audit_report)
                 checkpoint_data["score_audit_path"] = audit_path
             except Exception:
-                _worker_log.debug("batch_patient_export_audit_write_failed job=%s", job.id, exc_info=True)
+                _worker_log.debug(
+                    "batch_patient_export_audit_write_failed job=%s",
+                    job.id,
+                    exc_info=True,
+                )
         save_checkpoint(store, job, checkpoint_data)
         try:
             from api.services.scoring_helpers import persist_run_sync
+
             persist_run_sync(
                 endpoint="batch_patient_export",
                 config_profile=profile,
@@ -732,5 +886,7 @@ def _execute_batch_patient_export(job: Job, store, staging) -> None:
             _worker_log.debug("batch_patient_export_persist_run_failed", exc_info=True)
         _worker_log.info(
             "batch_patient_export_done job=%s patients=%d count=%d",
-            job.id, len(patient_ids), count,
+            job.id,
+            len(patient_ids),
+            count,
         )

@@ -5,6 +5,8 @@ Depends on:
   .protocol        — FHIR Parameters builders and response parsers
 """
 
+import hashlib
+import hmac as _hmac_mod
 import html
 import logging
 from utils.json_fast import loads as _json_loads, dumps_bytes as _json_dumps_bytes
@@ -16,6 +18,7 @@ import urllib3
 from urllib.parse import urlsplit, urlunsplit
 
 import utils.cache as _gpas_cache_mod
+from utils.pool_budget import gpas_pool_budget
 from utils.logging import REQUEST_ID
 from utils.metrics import (
     GPAS_CACHE_HITS,
@@ -33,7 +36,6 @@ gpas_log = logging.getLogger("medanon.gpas")
 # ---------------------------------------------------------------------------
 
 _JOB_WORKERS = int(os.environ.get("MEDANON_JOB_WORKERS", "3"))
-from utils.pool_budget import gpas_pool_budget
 _GPAS_POOL_SIZE = gpas_pool_budget()
 _gpas_pool = urllib3.PoolManager(
     num_pools=2,
@@ -136,9 +138,6 @@ def _resolve_gpas_headers(params):
 # ---------------------------------------------------------------------------
 # Cache helpers
 # ---------------------------------------------------------------------------
-
-import hashlib
-import hmac as _hmac_mod
 
 # HMAC-SHA256 key used to blind original identifiers in cache keys.
 # If MEDANON_HASH_KEY is not set we fall back to plain SHA256 (still one-way,
@@ -266,7 +265,9 @@ def _call_gpas_operation(base_url, operation, fhir_params, params):
         )
 
     try:
-        with bulkhead("gpas", wait_sec=float(os.environ.get("BULKHEAD_GPAS_WAIT_SEC", "2"))):
+        with bulkhead(
+            "gpas", wait_sec=float(os.environ.get("BULKHEAD_GPAS_WAIT_SEC", "2"))
+        ):
             return _call_gpas_operation_impl(base_url, operation, fhir_params, params)
     except UpstreamSaturated as exc:
         GPAS_CALL_COUNT.labels(operation=operation, status="error").inc()
@@ -288,7 +289,9 @@ def _call_gpas_operation_impl(base_url, operation, fhir_params, params):
     payload = _json_dumps_bytes(fhir_params)
 
     gpas_log.debug(
-        "gpas_call operation=%s parameters=%d", operation, len(fhir_params.get("parameter", []))
+        "gpas_call operation=%s parameters=%d",
+        operation,
+        len(fhir_params.get("parameter", [])),
     )
 
     retry_count = int(
@@ -334,20 +337,26 @@ def _call_gpas_operation_impl(base_url, operation, fhir_params, params):
                     for issue in outcome.get("issue", []):
                         if issue.get("diagnostics"):
                             diagnostics.append(issue["diagnostics"][:200])
-                    internal_detail = "; ".join(diagnostics)[:400] if diagnostics else detail[:200]
+                    internal_detail = (
+                        "; ".join(diagnostics)[:400] if diagnostics else detail[:200]
+                    )
                 except Exception:
                     internal_detail = detail[:200]
 
                 gpas_log.debug(
                     "gpas_error_detail operation=%s status=%d detail=%s",
-                    operation, resp.status, internal_detail,
+                    operation,
+                    resp.status,
+                    internal_detail,
                 )
 
                 # Build the safe public error message — operational info only.
                 # Do not call list_gpas_domains() here: it adds a second HTTP round-trip
                 # on every "Unknown domain" error and amplifies load when misconfigured.
                 # The full diagnostic is available at DEBUG level above.
-                safe_message = "Unknown domain" if "Unknown domain" in internal_detail else ""
+                safe_message = (
+                    "Unknown domain" if "Unknown domain" in internal_detail else ""
+                )
 
                 GPAS_LATENCY.labels(operation=operation).observe(
                     time.perf_counter() - t0
@@ -372,11 +381,14 @@ def _call_gpas_operation_impl(base_url, operation, fhir_params, params):
             _gpas_circuit_breaker.record_success()
             return _json_loads(body)
         except (urllib3.exceptions.HTTPError, OSError) as exc:
-            is_timeout = isinstance(exc, (
-                urllib3.exceptions.ConnectTimeoutError,
-                urllib3.exceptions.ReadTimeoutError,
-                urllib3.exceptions.TimeoutError,
-            ))
+            is_timeout = isinstance(
+                exc,
+                (
+                    urllib3.exceptions.ConnectTimeoutError,
+                    urllib3.exceptions.ReadTimeoutError,
+                    urllib3.exceptions.TimeoutError,
+                ),
+            )
             if attempt < retry_count:
                 time.sleep(retry_backoff * (2**attempt) * (0.5 + random.random()))
                 continue

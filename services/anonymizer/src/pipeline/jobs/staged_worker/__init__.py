@@ -20,6 +20,7 @@ Public API:
     execute_reprocess_staged(job, store, staging)
     execute_risk_driven_export_staged(job, store, staging)
 """
+
 from pipeline.jobs.staged_worker._executors import (
     execute_bulk_export_staged,
     execute_cohort_staged,
@@ -27,16 +28,19 @@ from pipeline.jobs.staged_worker._executors import (
     execute_batch_patient_export_staged,
     execute_reprocess_staged,
 )
+
 try:
     from pipeline.jobs.staged_worker._risk import (
         execute_risk_driven_export_staged,
     )
 except ImportError:
+
     def execute_risk_driven_export_staged(job, store, staging):
         raise NotImplementedError(
             "risk-driven export requires pipeline.jobs.staged_worker._risk "
             "which is not installed in this build"
         )
+
 
 __all__ = [
     "execute_bulk_export_staged",

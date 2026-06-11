@@ -13,10 +13,17 @@ class AgentService:
     async def get_status(self) -> dict:
         from integrations.ai.provider import is_ai_enabled
 
+        from integrations.ai.agents.pii_detector import pii_enforcement_status
+
         if not is_ai_enabled():
             return {
-                "enabled": False, "provider": "", "model": "",
-                "api_base": "", "circuit_breaker": {}, "cache_size": 0,
+                "enabled": False,
+                "provider": "",
+                "model": "",
+                "api_base": "",
+                "circuit_breaker": {},
+                "cache_size": 0,
+                "pii_enforcement": pii_enforcement_status(),
             }
         try:
             from integrations.ai.provider import get_provider
@@ -31,11 +38,17 @@ class AgentService:
                 "api_base": stats["api_base"],
                 "circuit_breaker": stats["circuit_breaker"],
                 "cache_size": stats["cache_size"],
+                "pii_enforcement": pii_enforcement_status(),
             }
         except Exception:
             return {
-                "enabled": True, "provider": "error", "model": "",
-                "api_base": "", "circuit_breaker": {}, "cache_size": 0,
+                "enabled": True,
+                "provider": "error",
+                "model": "",
+                "api_base": "",
+                "circuit_breaker": {},
+                "cache_size": 0,
+                "pii_enforcement": pii_enforcement_status(),
             }
 
     async def generate_config(self, prompt: str, regulation: str = "") -> dict:
@@ -43,32 +56,45 @@ class AgentService:
         ai_service_url = self._ai_service_url()
         if ai_service_url:
             return await asyncio.to_thread(
-                self._proxy_generate_config, ai_service_url, prompt, regulation,
+                self._proxy_generate_config,
+                ai_service_url,
+                prompt,
+                regulation,
             )
         from integrations.ai.agents.config_generator import generate_config
 
         return await asyncio.to_thread(generate_config, prompt, regulation)
 
     async def detect_pii(
-        self, resources: list[dict], use_ai: bool = True,
+        self,
+        resources: list[dict],
+        use_ai: bool = True,
     ) -> dict:
         ai_service_url = self._ai_service_url()
         if ai_service_url:
             return await asyncio.to_thread(
-                self._proxy_detect_pii, ai_service_url, resources, use_ai,
+                self._proxy_detect_pii,
+                ai_service_url,
+                resources,
+                use_ai,
             )
         from integrations.ai.agents.pii_detector import detect_pii_leaks
 
         return await asyncio.to_thread(detect_pii_leaks, resources, use_ai=use_ai)
 
     async def explain_config(
-        self, yaml_text: str, regulation: str = "",
+        self,
+        yaml_text: str,
+        regulation: str = "",
     ) -> str:
         """Returns explanation string."""
         ai_service_url = self._ai_service_url()
         if ai_service_url:
             return await asyncio.to_thread(
-                self._proxy_explain_config, ai_service_url, yaml_text, regulation,
+                self._proxy_explain_config,
+                ai_service_url,
+                yaml_text,
+                regulation,
             )
         from integrations.ai.agents.rule_explainer import (
             explain_config,
@@ -77,7 +103,9 @@ class AgentService:
 
         if regulation:
             return await asyncio.to_thread(
-                explain_regulatory_alignment, yaml_text, regulation,
+                explain_regulatory_alignment,
+                yaml_text,
+                regulation,
             )
         return await asyncio.to_thread(explain_config, yaml_text)
 
@@ -85,7 +113,10 @@ class AgentService:
         ai_service_url = self._ai_service_url()
         if ai_service_url:
             return await asyncio.to_thread(
-                self._proxy_advise_compliance, ai_service_url, yaml_text, regulation,
+                self._proxy_advise_compliance,
+                ai_service_url,
+                yaml_text,
+                regulation,
             )
         from integrations.ai.agents.compliance import advise_compliance
 
@@ -99,24 +130,95 @@ class AgentService:
         """Return the trimmed AI_SERVICE_URL or empty string."""
         return os.environ.get("AI_SERVICE_URL", "").strip()
 
+    # Hard cap on proxied AI-service responses (decompressed JSON bytes).
+    _MAX_PROXY_RESPONSE_BYTES = 10 * 1024 * 1024
+
     @staticmethod
-    def _post_proxy_json(base_url: str, path: str, payload: dict) -> dict:
+    def _validate_proxy_url(base_url: str) -> None:
+        """SSRF guard for the AI proxy target (C6).
+
+        ``AI_SERVICE_URL`` is admin-set env config (trusted, may legitimately
+        point at an in-cluster private address), so private nets are allowed
+        by default (MEDANON_AI_PROXY_ALLOW_PRIVATE=true). Link-local/metadata
+        ranges and non-http(s) schemes are ALWAYS rejected — those are the
+        cloud-metadata exfiltration vectors regardless of trust level.
+        """
+        import ipaddress
+        import socket
+        from urllib.parse import urlparse
+
+        parsed = urlparse(base_url)
+        if parsed.scheme not in ("http", "https"):
+            raise ValueError(
+                f"AI service URL must use http/https, got {parsed.scheme!r}",
+            )
+        host = parsed.hostname
+        if not host:
+            raise ValueError("AI service URL has no hostname")
+
+        try:
+            addrs = [ipaddress.ip_address(host)]
+        except ValueError:
+            try:
+                addrs = [
+                    ipaddress.ip_address(info[4][0])
+                    for info in socket.getaddrinfo(
+                        host, None, socket.AF_UNSPEC, socket.SOCK_STREAM
+                    )
+                ]
+            except socket.gaierror:
+                # Unresolvable → the request itself will fail; not an SSRF
+                # vector (consistent with api/deps._validate_server_url).
+                return
+
+        blocked = (
+            ipaddress.ip_network("169.254.0.0/16"),
+            ipaddress.ip_network("fe80::/10"),
+        )
+        for addr in addrs:
+            if any(addr in net for net in blocked):
+                raise ValueError(
+                    "AI service URL resolves to a link-local/metadata "
+                    f"address ({addr}) — refusing",
+                )
+
+        allow_private = os.environ.get(
+            "MEDANON_AI_PROXY_ALLOW_PRIVATE", "true"
+        ).strip().lower() in ("true", "1", "yes")
+        if not allow_private:
+            from api.deps import check_hostname_ssrf
+
+            err = check_hostname_ssrf(host)
+            if err:
+                raise ValueError(f"AI service URL rejected: {err}")
+
+    @classmethod
+    def _post_proxy_json(cls, base_url: str, path: str, payload: dict) -> dict:
         """POST JSON to the remote AI service and return the parsed dict.
 
         Centralised so all four agent proxies share request/response handling.
+        Uses the pooled urllib3 client (no redirect following — the pool is
+        built with retries=False) with an SSRF guard and a response-size cap.
         """
         import json
-        import urllib.request
 
+        from integrations.http_client import proxy_request
+
+        cls._validate_proxy_url(base_url)
         data = json.dumps(payload).encode()
-        req = urllib.request.Request(
+        resp = proxy_request(
+            "POST",
             f"{base_url.rstrip('/')}{path}",
-            data=data,
+            body=data,
             headers={"Content-Type": "application/json"},
-            method="POST",
+            timeout=120,
         )
-        with urllib.request.urlopen(req, timeout=120) as resp:  # noqa: S310 (SSRF tracked separately)
-            raw = resp.read()
+        raw = resp.data
+        if len(raw) > cls._MAX_PROXY_RESPONSE_BYTES:
+            raise ValueError(
+                f"AI service at {base_url}{path} returned oversized response "
+                f"({len(raw)} bytes > {cls._MAX_PROXY_RESPONSE_BYTES})",
+            )
         try:
             parsed = json.loads(raw)
         except json.JSONDecodeError as exc:
@@ -131,7 +233,10 @@ class AgentService:
 
     @staticmethod
     def _validate_response(
-        parsed: dict, schema_cls, base_url: str, path: str,
+        parsed: dict,
+        schema_cls,
+        base_url: str,
+        path: str,
     ) -> dict:
         """Validate ``parsed`` against ``schema_cls`` and return a dict.
 
@@ -151,35 +256,51 @@ class AgentService:
 
     @staticmethod
     def _proxy_generate_config(
-        base_url: str, prompt: str, regulation: str,
+        base_url: str,
+        prompt: str,
+        regulation: str,
     ) -> dict:
         from api.schemas.agents import ConfigGenerationResponse
 
         path = "/v1/ai/generate-config"
         parsed = AgentService._post_proxy_json(
-            base_url, path, {"prompt": prompt, "regulation": regulation},
+            base_url,
+            path,
+            {"prompt": prompt, "regulation": regulation},
         )
         return AgentService._validate_response(
-            parsed, ConfigGenerationResponse, base_url, path,
+            parsed,
+            ConfigGenerationResponse,
+            base_url,
+            path,
         )
 
     @staticmethod
     def _proxy_detect_pii(
-        base_url: str, resources: list[dict], use_ai: bool,
+        base_url: str,
+        resources: list[dict],
+        use_ai: bool,
     ) -> dict:
         from api.schemas.agents import PiiDetectionResponse
 
         path = "/v1/ai/detect-pii"
         parsed = AgentService._post_proxy_json(
-            base_url, path, {"resources": resources, "use_ai": use_ai},
+            base_url,
+            path,
+            {"resources": resources, "use_ai": use_ai},
         )
         return AgentService._validate_response(
-            parsed, PiiDetectionResponse, base_url, path,
+            parsed,
+            PiiDetectionResponse,
+            base_url,
+            path,
         )
 
     @staticmethod
     def _proxy_explain_config(
-        base_url: str, yaml_text: str, regulation: str,
+        base_url: str,
+        yaml_text: str,
+        regulation: str,
     ) -> str:
         """Remote /v1/ai/explain returns a JSON object with an `explanation` field.
 
@@ -187,7 +308,9 @@ class AgentService:
         """
         path = "/v1/ai/explain"
         parsed = AgentService._post_proxy_json(
-            base_url, path, {"yaml_text": yaml_text, "regulation": regulation},
+            base_url,
+            path,
+            {"yaml_text": yaml_text, "regulation": regulation},
         )
         explanation = parsed.get("explanation")
         if not isinstance(explanation, str):
@@ -198,7 +321,9 @@ class AgentService:
 
     @staticmethod
     def _proxy_advise_compliance(
-        base_url: str, yaml_text: str, regulation: str,
+        base_url: str,
+        yaml_text: str,
+        regulation: str,
     ) -> dict:
         """Remote /v1/ai/compliance returns the compliance analysis dict.
 
@@ -208,5 +333,7 @@ class AgentService:
         """
         path = "/v1/ai/compliance"
         return AgentService._post_proxy_json(
-            base_url, path, {"yaml_text": yaml_text, "regulation": regulation},
+            base_url,
+            path,
+            {"yaml_text": yaml_text, "regulation": regulation},
         )

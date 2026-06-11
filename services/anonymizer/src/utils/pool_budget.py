@@ -1,16 +1,16 @@
 """Centralized connection pool budget.
 
-Reads ``MEDANON_GLOBAL_MAX_CONNECTIONS`` (default 100) and derives per-subsystem
+Reads ``MEDANON_GLOBAL_MAX_CONNECTIONS`` (default 10000) and derives per-subsystem
 budgets as proportional allocations.  Each subsystem's own env-var override
 (e.g. ``GPAS_POOL_SIZE``) takes precedence over the budget-derived default.
 
 Budget allocation (when no per-subsystem override)::
 
-    gPAS HTTP      30%  →  30 connections  (GPAS_POOL_SIZE)
-    FHIR HTTP      15%  →  15 connections  (FHIR_POOL_SIZE)
-    Proxy HTTP     15%  →  15 connections  (PROXY_POOL_SIZE)  — shared NLP + Analytics
-    PG shared      25%  →  25 connections  (PG_POOL_MAX)
-    PG staging     15%  →  15 connections  (PG_STAGING_POOL_MAX)
+    gPAS HTTP      30%  →  3000 connections  (GPAS_POOL_SIZE)
+    FHIR HTTP      15%  →  1500 connections  (FHIR_POOL_SIZE)
+    Proxy HTTP     15%  →  1500 connections  (PROXY_POOL_SIZE)  — shared NLP + Analytics
+    PG shared      25%  →  2500 connections  (PG_POOL_MAX)
+    PG staging     15%  →  1500 connections  (PG_STAGING_POOL_MAX)
 """
 
 from __future__ import annotations

@@ -19,6 +19,7 @@ Numeric perturbation
 Numeric values are perturbed by a cryptographically random offset
 (``secrets.randbelow()``) per value — no ordering guarantee exists for numbers.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -26,7 +27,7 @@ import hmac as _hmac
 import logging
 import os
 import threading
-from datetime import date, timedelta
+from datetime import timedelta
 from typing import Any, Union
 
 from utils.crypto import bounded_random
@@ -84,8 +85,12 @@ def _date_offset(subject_id: str, noise_range: list) -> int:
     if secret_key:
         digest = _hmac.new(secret_key.encode(), msg, digestmod="sha256").digest()
     else:
-        allow_plain = os.environ.get("MEDANON_HASH_ALLOW_PLAIN", "").strip().lower() in (
-            "1", "true", "yes",
+        allow_plain = os.environ.get(
+            "MEDANON_HASH_ALLOW_PLAIN", ""
+        ).strip().lower() in (
+            "1",
+            "true",
+            "yes",
         )
         if not allow_plain:
             raise ValueError(
@@ -119,7 +124,9 @@ def _perturb_numeric(real_value: Union[int, float]) -> Any:
     )
 
 
-def _perturb_nodes(node: Any, key: str, value: Any, noise_range: list, date_offset: int) -> None:
+def _perturb_nodes(
+    node: Any, key: str, value: Any, noise_range: list, date_offset: int
+) -> None:
     if isinstance(node, list):
         for item in node:
             _perturb_nodes(item, key, value, noise_range, date_offset)
@@ -130,7 +137,9 @@ def _perturb_nodes(node: Any, key: str, value: Any, noise_range: list, date_offs
                     elem = node[key][idx]
                     if isinstance(elem, (int, float)) and not isinstance(elem, bool):
                         # Numeric: CSPRNG noise (no ordering guarantee)
-                        node[key][idx] = elem + bounded_random(noise_range[0], noise_range[1])
+                        node[key][idx] = elem + bounded_random(
+                            noise_range[0], noise_range[1]
+                        )
                     elif get_date(elem, date_format):
                         # Date: deterministic per-subject offset
                         node[key][idx] = (

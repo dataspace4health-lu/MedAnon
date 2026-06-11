@@ -101,7 +101,9 @@ class QualityEvaluator:
                 Evidence(
                     check="rule_coverage",
                     value=1.0,
-                    details={"reason": "no settings available — coverage not measurable"},
+                    details={
+                        "reason": "no settings available — coverage not measurable"
+                    },
                 )
             )
             return 1.0

@@ -53,10 +53,12 @@ class PostgresApiKeyStore:
 
     def _get_conn(self):
         from integrations.postgres.pool import get_conn
+
         return get_conn(self._pool)
 
     def _put_conn(self, conn) -> None:
         from integrations.postgres.pool import safe_putconn
+
         safe_putconn(self._pool, conn)
 
     # ------------------------------------------------------------------
@@ -112,7 +114,15 @@ class PostgresApiKeyStore:
                              revoked, description)
                         VALUES (%s, %s, %s, %s, %s, %s, FALSE, %s)
                         """,
-                        (key_id, key_hash, client_id, role, now, expires_at, description),
+                        (
+                            key_id,
+                            key_hash,
+                            client_id,
+                            role,
+                            now,
+                            expires_at,
+                            description,
+                        ),
                     )
         except psycopg2.IntegrityError:
             self._put_conn(conn)

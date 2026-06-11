@@ -12,7 +12,6 @@ import time
 import uuid
 from collections import Counter
 from datetime import datetime, timezone
-from typing import Any
 
 from utils.json_fast import loads as _json_loads
 from pipeline.manifest import extract_manifest_entries as _extract_manifest_entries
@@ -27,6 +26,7 @@ def _is_scoring_enabled() -> bool:
     """Check if scoring is enabled (cached at first call)."""
     try:
         from pipeline.scoring.constants import SCORING_ENABLED
+
         return SCORING_ENABLED
     except ImportError:
         return False
@@ -139,6 +139,7 @@ def make_collector(config_profile: str = "auto"):
         return None
     try:
         from pipeline.scoring.engine import ScoreCollector
+
         return ScoreCollector(config_profile=config_profile)
     except Exception:
         return None
@@ -220,6 +221,128 @@ async def persist_run(
         logger.debug("processing_run_persist_failed", exc_info=True)
 
 
+def apply_pii_leak_override(score: dict) -> "dict | None":
+    """Detect a PII leak in *score*, override the score in-place if one is found.
+
+    Returns the pii_leak info dict (same shape as ``extract_pii_leak_info``)
+    when a leak is detected, or ``None`` when the output is clean.
+
+    Mutates *score* directly so the persisted processing-run record reflects the
+    leak — privacy is forced to failed and composite to 0.  This is called by
+    both the non-streaming ``check_and_persist_with_leak`` path and the
+    streaming ``/process/ndjson`` + ``/process/batch`` generators (which cannot
+    block output after it has already been sent, but can embed the leak signal
+    in the stream trailer for client-side display).
+    """
+    pii_leak = extract_pii_leak_info(score)
+    if not pii_leak:
+        return None
+    if isinstance(score.get("batch_privacy"), dict):
+        score["batch_privacy"]["passed"] = False
+        score["batch_privacy"]["risk_score"] = 1.0
+        score["batch_privacy"]["pii_leak_override"] = True
+    else:
+        score["batch_privacy"] = {
+            "passed": False,
+            "risk_score": 1.0,
+            "threshold": 0.3,
+            "pii_leak_override": True,
+        }
+    total = (score.get("pass_count") or 0) + (score.get("fail_count") or 0)
+    score["avg_composite"] = 0.0
+    score["min_composite"] = 0.0
+    score["pass_count"] = 0
+    score["fail_count"] = total or score.get("total_scored", 1)
+    score["pii_leak_blocked"] = True
+    return pii_leak
+
+
+def extract_pii_leak_info(score: dict | None) -> "dict | None":
+    """Return a pii_leak block if identifier or text risk hits are > 0, else None."""
+    if not score or not score.get("computed"):
+        return None
+    id_hits = score.get("identifier_risk_hits", 0) or 0
+    txt_hits = score.get("text_risk_hits", 0) or 0
+    if id_hits == 0 and txt_hits == 0:
+        return None
+    msgs: list[str] = []
+    if id_hits > 0:
+        msgs.append(
+            f"{id_hits} resource(s) still contain HIPAA-sensitive fields "
+            "(Patient.name, identifier, birthDate, address, telecom) "
+            "that are NOT covered by any de-identification rule"
+        )
+    if txt_hits > 0:
+        msgs.append(
+            f"{txt_hits} resource(s) contain PII patterns in free-text fields "
+            "not scrubbed by an NLP rule (phone, email, SSN, dates)"
+        )
+    return {
+        "leaked": True,
+        "identifier_risk_hits": id_hits,
+        "text_risk_hits": txt_hits,
+        "resources_affected": max(id_hits, txt_hits),
+        "message": "; ".join(msgs),
+        "remediation": (
+            f"Open config profile '{score.get('config_profile', '?')}' and add rules "
+            "for every HIPAA-sensitive path. Run the Audit Report tab for the exact "
+            "uncovered paths."
+        ),
+    }
+
+
+async def check_and_persist_with_leak(
+    result,
+    endpoint: str,
+    settings,
+    t0: float,
+) -> "dict | None":
+    """Score synchronously (awaited), persist the run, and return the pii_leak block.
+
+    Unlike score_and_persist (fire-and-forget), this awaits scoring so the
+    caller can inspect the leak signal BEFORE returning the HTTP response.
+    """
+    if not _is_scoring_enabled():
+        return None
+    try:
+        config_profile = _get_config_profile(settings)
+        if isinstance(result, list):
+            input_type = "array"
+        elif isinstance(result, dict) and result.get("resourceType") == "Bundle":
+            input_type = "Bundle"
+        elif isinstance(result, dict):
+            input_type = result.get("resourceType", "unknown")
+        else:
+            input_type = "unknown"
+
+        run_id = str(uuid.uuid4())
+        summary, score, audit_report = await asyncio.to_thread(
+            score_results, result, settings, config_profile
+        )
+        duration_ms = int((time.monotonic() - t0) * 1000)
+
+        if audit_report:
+            score["audit_report"] = audit_report
+
+        await persist_run(
+            run_id=run_id,
+            endpoint=endpoint,
+            config_profile=config_profile,
+            config_hash=getattr(settings, "config_hash", None),
+            resource_count=summary.get("total_resources", 0),
+            error_count=summary.get("error_count", 0),
+            duration_ms=duration_ms,
+            input_type=input_type,
+            summary=summary,
+            score=score,
+        )
+        pii_leak_info = apply_pii_leak_override(score)
+        return pii_leak_info
+    except Exception:
+        logger.debug("check_and_persist_with_leak_failed", exc_info=True)
+        return None
+
+
 async def score_and_persist(
     result,
     endpoint: str,
@@ -233,8 +356,6 @@ async def score_and_persist(
     if not _is_scoring_enabled():
         return
     try:
-        import os
-
         config_profile = _get_config_profile(settings)
 
         # Determine input type
@@ -254,17 +375,8 @@ async def score_and_persist(
         )
         duration_ms = int((time.monotonic() - t0) * 1000)
 
-        # Write audit report to file alongside job result files
         if audit_report:
-            try:
-                output_dir = os.environ.get("MEDANON_OUTPUT_DIR", "/output")
-                audit_path = os.path.join(output_dir, f"{run_id}_score_audit.md")
-                os.makedirs(output_dir, exist_ok=True)
-                with open(audit_path, "w", encoding="utf-8") as fh:
-                    fh.write(audit_report)
-                score["audit_report_path"] = audit_path
-            except Exception:
-                logger.debug("score_audit_write_failed run=%s", run_id, exc_info=True)
+            score["audit_report"] = audit_report
 
         await persist_run(
             run_id=run_id,

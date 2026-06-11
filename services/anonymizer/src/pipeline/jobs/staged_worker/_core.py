@@ -8,16 +8,14 @@ from __future__ import annotations
 
 import logging
 import time
-from utils.json_fast import loads as _json_loads, dumps as _json_dumps
+from utils.json_fast import dumps as _json_dumps
 import os
-from pathlib import Path
 
 import queue
 import threading
 
 from domain.jobs import JobStatus
-from pipeline.jobs.checkpoint import load_checkpoint, save_checkpoint, _truncate_to_lines
-from integrations.storage import store_result
+from pipeline.jobs.checkpoint import save_checkpoint
 
 _log = logging.getLogger("medanon.staged_worker")
 
@@ -36,7 +34,9 @@ _PREFETCH_QUEUE_SIZE: int = int(os.environ.get("MEDANON_PIPELINE_QUEUE_SIZE", "4
 # Counter-intuitively this gives the biggest single-process throughput win:
 # Pass 1 alone is GIL-bound, but each batch spends >50% of its time waiting
 # on gPAS/NLP HTTP, so overlapping multiple batches reclaims that time.
-_PROCESS_WORKERS: int = max(1, int(os.environ.get("MEDANON_STAGING_PROCESS_WORKERS", "1")))
+_PROCESS_WORKERS: int = max(
+    1, int(os.environ.get("MEDANON_STAGING_PROCESS_WORKERS", "1"))
+)
 
 # Output mode: "stream" (default) writes a single NDJSON file; "shards" writes
 # one {job_id}_p{NNNNNN}.ndjson per partition so multiple workers can claim
@@ -143,7 +143,9 @@ def _fetch_staged_resources(batch_rows: list[dict]) -> list[dict]:
         except Exception as exc:
             _log.warning(
                 "staged_refetch_failed resource_type=%s count=%d: %s",
-                rtype, len(ids), exc,
+                rtype,
+                len(ids),
+                exc,
             )
     return resources
 
@@ -220,7 +222,9 @@ def _process_batch_with_fallback(
             try:
                 resources = _fetch_staged_resources([row])
                 if not resources:
-                    raise ValueError(f"Resource not found on FHIR server: {row.get('resource_id')}")
+                    raise ValueError(
+                        f"Resource not found on FHIR server: {row.get('resource_id')}"
+                    )
                 result = process_data_batch(
                     resources, settings, pseudonymizer, attach_manifest=True
                 )[0]
@@ -232,16 +236,24 @@ def _process_batch_with_fallback(
             except Exception as exc:
                 _log.error(
                     "%s job=%s resource_type=%s row_id=%d error=%s",
-                    label, job_id, rtype, row["id"], exc,
+                    label,
+                    job_id,
+                    rtype,
+                    row["id"],
+                    exc,
                 )
                 fh.write(
-                    _json_dumps({"error": "processing error", "resourceType": rtype}) + "\n"
+                    _json_dumps({"error": "processing error", "resourceType": rtype})
+                    + "\n"
                 )
                 try:
                     staging.mark_error(job_id, row["id"], str(exc))
                 except Exception:
                     _log.warning(
-                        "%s job=%s mark_error failed row_id=%d", label, job_id, row["id"]
+                        "%s job=%s mark_error failed row_id=%d",
+                        label,
+                        job_id,
+                        row["id"],
                     )
                 failed += 1
                 if summary is not None:
@@ -287,13 +299,19 @@ def _compute_batch_fallback_parallel(
             except Exception as exc:
                 _log.error(
                     "%s job=%s resource_type=%s row_id=%d error=%s",
-                    label, job_id, rtype, row["id"], exc,
-                )
-                output.append((
-                    {"error": "processing error", "resourceType": rtype},
+                    label,
+                    job_id,
+                    rtype,
                     row["id"],
-                    False,
-                ))
+                    exc,
+                )
+                output.append(
+                    (
+                        {"error": "processing error", "resourceType": rtype},
+                        row["id"],
+                        False,
+                    )
+                )
         return output
 
 
@@ -323,9 +341,13 @@ def _write_computed_results(
                 summary.record_resource(result)
         else:
             try:
-                staging.mark_error(job_id, row_id, result.get("error", "processing error"))
+                staging.mark_error(
+                    job_id, row_id, result.get("error", "processing error")
+                )
             except Exception:
-                _log.warning("%s job=%s mark_error failed row_id=%d", label, job_id, row_id)
+                _log.warning(
+                    "%s job=%s mark_error failed row_id=%d", label, job_id, row_id
+                )
             failed += 1
             if summary is not None:
                 summary.record_error(result.get("resourceType", "Unknown"))
@@ -435,8 +457,13 @@ def _run_staged_phase2(
                         # Timeout: Phase 1 is still running — save a checkpoint
                         # so the UI shows "fetching" and check for cancellation.
                         if _checkpoint_or_cancel(
-                            store, job, processed, label,
-                            phase1_done, phase1_state, staged_count,
+                            store,
+                            job,
+                            processed,
+                            label,
+                            phase1_done,
+                            phase1_state,
+                            staged_count,
                         ):
                             return processed
                         continue
@@ -460,8 +487,13 @@ def _run_staged_phase2(
 
                     if _batch_num % 5 == 0:
                         if _checkpoint_or_cancel(
-                            store, job, processed, label,
-                            phase1_done, phase1_state, staged_count,
+                            store,
+                            job,
+                            processed,
+                            label,
+                            phase1_done,
+                            phase1_state,
+                            staged_count,
                         ):
                             return processed
             else:
@@ -475,15 +507,29 @@ def _run_staged_phase2(
                     head = inflight.popleft()
                     computed = head.result()
                     ok, bad = _write_computed_results(
-                        computed, fh, staging, _staging_id, label, summary=collector,
+                        computed,
+                        fh,
+                        staging,
+                        _staging_id,
+                        label,
+                        summary=collector,
                     )
                     processed += ok + bad
                     _batch_num += 1
                     if _batch_num % 5 == 0:
-                        return 1 if _checkpoint_or_cancel(
-                            store, job, processed, label,
-                            phase1_done, phase1_state, staged_count,
-                        ) else 0
+                        return (
+                            1
+                            if _checkpoint_or_cancel(
+                                store,
+                                job,
+                                processed,
+                                label,
+                                phase1_done,
+                                phase1_state,
+                                staged_count,
+                            )
+                            else 0
+                        )
                     return 0
 
                 while True:
@@ -552,7 +598,9 @@ def _run_staged_phase2_partition_claim(
     partition_count = staging.plan_partitions(job.id)
     _log.info(
         "%s_partition_plan job=%s partitions=%d",
-        label, job.id, partition_count,
+        label,
+        job.id,
+        partition_count,
     )
 
     processed = 0
@@ -561,7 +609,9 @@ def _run_staged_phase2_partition_claim(
     while True:
         claim = staging.claim_next_partition(job.id)
         if claim is None:
-            _log.info("%s_partitions_exhausted job=%s processed=%d", label, job.id, processed)
+            _log.info(
+                "%s_partitions_exhausted job=%s processed=%d", label, job.id, processed
+            )
             break
 
         resource_type, partition_id = claim
@@ -580,8 +630,14 @@ def _run_staged_phase2_partition_claim(
                     chunk.append(row)
                     if len(chunk) >= _BATCH_SIZE:
                         ok, bad = _process_batch_with_fallback(
-                            chunk, settings, pseudonymizer, processing_mode,
-                            fh, staging, job.id, label,
+                            chunk,
+                            settings,
+                            pseudonymizer,
+                            processing_mode,
+                            fh,
+                            staging,
+                            job.id,
+                            label,
                             summary=collector,
                         )
                         shard_ok += ok
@@ -589,8 +645,14 @@ def _run_staged_phase2_partition_claim(
                         chunk = []
                 if chunk:
                     ok, bad = _process_batch_with_fallback(
-                        chunk, settings, pseudonymizer, processing_mode,
-                        fh, staging, job.id, label,
+                        chunk,
+                        settings,
+                        pseudonymizer,
+                        processing_mode,
+                        fh,
+                        staging,
+                        job.id,
+                        label,
                         summary=collector,
                     )
                     shard_ok += ok
@@ -602,22 +664,35 @@ def _run_staged_phase2_partition_claim(
             if _partitions_done % _LOG_EVERY == 0:
                 _log.info(
                     "%s_partition_progress job=%s done=%d/%d processed=%d",
-                    label, job.id, _partitions_done, partition_count, processed,
+                    label,
+                    job.id,
+                    _partitions_done,
+                    partition_count,
+                    processed,
                 )
             else:
                 _log.debug(
                     "%s_partition_done job=%s partition=%d ok=%d bad=%d",
-                    label, job.id, partition_id, shard_ok, shard_bad,
+                    label,
+                    job.id,
+                    partition_id,
+                    shard_ok,
+                    shard_bad,
                 )
         except Exception as exc:
             _log.error(
                 "%s_partition_failed job=%s partition=%d: %s",
-                label, job.id, partition_id, exc, exc_info=True,
+                label,
+                job.id,
+                partition_id,
+                exc,
+                exc_info=True,
             )
             with suppress(Exception):
                 staging.release_partition(job.id, resource_type, partition_id)
             with suppress(Exception):
                 import os as _os
+
                 _os.unlink(shard_path)
             raise
 
@@ -660,19 +735,31 @@ def _run_staged_phase2_shards(
     parallelism = max(1, _PROCESS_WORKERS)
     _log.info(
         "%s_shards_start job=%s parallelism=%d",
-        label, job.id, parallelism,
+        label,
+        job.id,
+        parallelism,
     )
 
     if parallelism == 1:
         processed = _run_staged_phase2_partition_claim(
-            job, store, staging, settings, pseudonymizer, processing_mode,
-            output_dir, label, collector,
+            job,
+            store,
+            staging,
+            settings,
+            pseudonymizer,
+            processing_mode,
+            output_dir,
+            label,
+            collector,
         )
     else:
         # Plan once (idempotent) so all worker threads see the partition set.
         partition_count = staging.plan_partitions(job.id)
         _log.info(
-            "%s_shards_planned job=%s partitions=%d", label, job.id, partition_count,
+            "%s_shards_planned job=%s partitions=%d",
+            label,
+            job.id,
+            partition_count,
         )
 
         results: list[int] = []
@@ -682,8 +769,15 @@ def _run_staged_phase2_shards(
             futures = [
                 pool.submit(
                     _run_staged_phase2_partition_claim,
-                    job, store, staging, settings, pseudonymizer, processing_mode,
-                    output_dir, label, collector,
+                    job,
+                    store,
+                    staging,
+                    settings,
+                    pseudonymizer,
+                    processing_mode,
+                    output_dir,
+                    label,
+                    collector,
                 )
                 for _ in range(parallelism)
             ]
@@ -696,7 +790,10 @@ def _run_staged_phase2_shards(
     merged_lines = _merge_shards(job.id, output_dir, output_path)
     _log.info(
         "%s_shards_merged job=%s lines=%d processed=%d",
-        label, job.id, merged_lines, processed,
+        label,
+        job.id,
+        merged_lines,
+        processed,
     )
     return processed
 
@@ -755,12 +852,13 @@ def _persist_scoring_run(job, profile: str, summary_dict: dict, endpoint: str) -
         )
     except Exception:
         _log.debug(
-            "staged_persist_run_failed job=%s endpoint=%s", job.id, endpoint, exc_info=True
+            "staged_persist_run_failed job=%s endpoint=%s",
+            job.id,
+            endpoint,
+            exc_info=True,
         )
 
 
 # ---------------------------------------------------------------------------
 # Public: two-phase executors
 # ---------------------------------------------------------------------------
-
-

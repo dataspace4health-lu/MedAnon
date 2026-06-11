@@ -57,10 +57,12 @@ class PostgresConfigStore:
 
     def _get_conn(self):
         from integrations.postgres.pool import get_conn
+
         return get_conn(self._pool)
 
     def _put_conn(self, conn) -> None:
         from integrations.postgres.pool import safe_putconn
+
         safe_putconn(self._pool, conn)
 
     def _seed_system_configs(self) -> None:
@@ -166,9 +168,7 @@ class PostgresConfigStore:
         try:
             with conn:
                 with conn.cursor() as cur:
-                    cur.execute(
-                        "DELETE FROM medanon.configs WHERE name = %s", (name,)
-                    )
+                    cur.execute("DELETE FROM medanon.configs WHERE name = %s", (name,))
         finally:
             self._put_conn(conn)
         logger.info("config_deleted name=%s", name)

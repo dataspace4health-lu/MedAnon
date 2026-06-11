@@ -37,7 +37,9 @@ def setup_tracing(app) -> bool:
 
     try:
         from opentelemetry import trace
-        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+            OTLPSpanExporter,
+        )
         from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
         from opentelemetry.instrumentation.logging import LoggingInstrumentor
         from opentelemetry.instrumentation.urllib3 import URLLib3Instrumentor
@@ -96,18 +98,58 @@ def get_tracer(name: str = "medanon.pipeline"):
     """
     try:
         from opentelemetry import trace
+
         return trace.get_tracer(name)
     except ImportError:
         return _NoopTracer()
 
 
+def run_with_current_context(fn):
+    """Wrap *fn* so it runs with the *caller's* active OTel context attached.
+
+    Python ``threading.Thread`` targets do not inherit the active span context,
+    so a span opened inside the thread becomes an orphan (no parent link).  Call
+    this in the spawning thread to capture the current context, then run the
+    returned wrapper as the thread target — the child's spans will correctly
+    parent to the active span.
+
+    Degrades to a no-op pass-through when OpenTelemetry is not installed, so
+    callers never need to guard the import.
+    """
+    try:
+        from opentelemetry import context as _otel_context
+    except ImportError:
+        return fn
+
+    token_ctx = _otel_context.get_current()
+
+    def _wrapped(*args, **kwargs):
+        token = _otel_context.attach(token_ctx)
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            _otel_context.detach(token)
+
+    return _wrapped
+
+
 class _NoopSpan:
     """Minimal no-op span so callers don't need to guard with 'if tracer'."""
-    def __enter__(self): return self
-    def __exit__(self, *_): pass
-    def set_attribute(self, *_): pass
-    def record_exception(self, *_): pass
-    def set_status(self, *_): pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        pass
+
+    def set_attribute(self, *_):
+        pass
+
+    def record_exception(self, *_):
+        pass
+
+    def set_status(self, *_):
+        pass
 
 
 class _NoopTracer:
@@ -126,7 +168,9 @@ def setup_tracing_worker() -> bool:
 
     try:
         from opentelemetry import trace
-        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+            OTLPSpanExporter,
+        )
         from opentelemetry.instrumentation.logging import LoggingInstrumentor
         from opentelemetry.sdk.resources import Resource
         from opentelemetry.sdk.trace import TracerProvider
@@ -139,17 +183,23 @@ def setup_tracing_worker() -> bool:
         service_name = os.environ.get("OTEL_SERVICE_NAME", "medanon-worker")
         endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "http://jaeger:4318")
         traces_endpoint = (
-            endpoint if endpoint.endswith("/v1/traces")
+            endpoint
+            if endpoint.endswith("/v1/traces")
             else endpoint.rstrip("/") + "/v1/traces"
         )
         resource = Resource.create({"service.name": service_name})
         provider = TracerProvider(resource=resource)
-        provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=traces_endpoint)))
+        provider.add_span_processor(
+            BatchSpanProcessor(OTLPSpanExporter(endpoint=traces_endpoint))
+        )
         trace.set_tracer_provider(provider)
         LoggingInstrumentor().instrument(set_logging_format=False)
-        logger.info("OTel tracing enabled (worker, service=%s, endpoint=%s)", service_name, traces_endpoint)
+        logger.info(
+            "OTel tracing enabled (worker, service=%s, endpoint=%s)",
+            service_name,
+            traces_endpoint,
+        )
         return True
     except Exception as exc:
         logger.warning("OTel worker setup failed: %s", exc)
         return False
-

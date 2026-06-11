@@ -47,19 +47,21 @@ def explain_config(yaml_text: str, *, streaming: bool = False):
     When streaming=True, returns a generator of text chunks (for SSE).
     When streaming=False, returns the complete explanation string.
     """
+    from integrations.ai.prompt_guard import sanitize_untrusted
     from integrations.ai.provider import (
         NotAvailableError,
         ProviderUnavailableError,
         get_provider,
     )
 
+    safe_yaml = sanitize_untrusted(yaml_text, max_len=65536)
     messages = [
         {"role": "system", "content": _EXPLAIN_SYSTEM_PROMPT},
         {
             "role": "user",
             "content": (
                 "Explain this de-identification configuration:\n\n"
-                f"```yaml\n{yaml_text}\n```"
+                f"```yaml\n{safe_yaml}\n```"
             ),
         },
     ]
@@ -71,9 +73,12 @@ def explain_config(yaml_text: str, *, streaming: bool = False):
         return iter([result]) if streaming else result
 
     try:
+        # YAML rule text only — no resource content (phi_payload=False).
         if streaming:
-            return provider.complete_streaming(messages, temperature=0.3)
-        return provider.complete(messages, temperature=0.3)
+            return provider.complete_streaming(
+                messages, temperature=0.3, phi_payload=False
+            )
+        return provider.complete(messages, temperature=0.3, phi_payload=False)
     except ProviderUnavailableError:
         result = _static_explain(yaml_text)
         return iter([result]) if streaming else result
@@ -103,26 +108,29 @@ def _static_explain(yaml_text: str) -> str:
 
 def explain_regulatory_alignment(yaml_text: str, regulation: str) -> str:
     """Analyse config against a specific regulation."""
+    from integrations.ai.prompt_guard import clean_label, sanitize_untrusted
     from integrations.ai.provider import (
         NotAvailableError,
         ProviderUnavailableError,
         get_provider,
     )
 
+    safe_yaml = sanitize_untrusted(yaml_text, max_len=65536)
+    safe_regulation = clean_label(regulation) or "the specified regulation"
     messages = [
         {"role": "system", "content": _EXPLAIN_SYSTEM_PROMPT},
         {
             "role": "user",
             "content": (
-                f"Analyse this configuration's alignment with {regulation} "
+                f"Analyse this configuration's alignment with {safe_regulation} "
                 "requirements. Identify gaps and recommendations.\n\n"
-                f"```yaml\n{yaml_text}\n```"
+                f"```yaml\n{safe_yaml}\n```"
             ),
         },
     ]
 
     try:
         provider = get_provider()
-        return provider.complete(messages, temperature=0.2)
+        return provider.complete(messages, temperature=0.2, phi_payload=False)
     except (NotAvailableError, ProviderUnavailableError):
         return f"AI unavailable. Manual {regulation} alignment review required."

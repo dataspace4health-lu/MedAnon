@@ -197,3 +197,38 @@ class UploadToTargetRequest(BaseModel):
         default=None,
         description="Bearer token for the target FHIR server. Falls back to FHIR_TARGET_TOKEN env var when not provided.",
     )
+
+
+class SqlExportJobRequest(BaseModel):
+    """Request body for POST /jobs/sql-export.
+
+    De-identifies selected tables of a saved SQL source connection to files
+    (one per table) in a result ZIP. Credentials are never sent here — only the
+    saved ``connection_id`` (resolved from the encrypted store at run time).
+    Provide either a saved ``config_profile`` (with ``table:``/``column:`` rules)
+    or inline ``rules``.
+    """
+
+    connection_id: str = Field(description="Saved SQL source connection id.")
+    tables: list[str] = Field(min_length=1, description="Tables to export.")
+    schema_name: str = Field(
+        default="public", alias="schema", description="Source schema."
+    )
+    output_format: str = Field(default="csv", description="csv | ndjson | parquet.")
+    config_profile: str = Field(
+        default="auto",
+        description="Saved profile whose table:/column: rules to apply.",
+    )
+    rules: list[dict] | None = Field(
+        default=None,
+        description="Inline column rules; take precedence over config_profile.",
+    )
+    chunk_size: int = Field(default=1000, ge=1, le=100000)
+
+    model_config = {"populate_by_name": True}
+
+    @model_validator(mode="after")
+    def _check_format(self):
+        if self.output_format.lower() not in ("csv", "ndjson", "parquet"):
+            raise ValueError("output_format must be csv, ndjson, or parquet")
+        return self

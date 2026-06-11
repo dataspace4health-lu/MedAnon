@@ -47,27 +47,33 @@ def advise_compliance(yaml_text: str, regulation: str) -> dict:
 
     Returns structured gap analysis with recommendations.
     """
+    from integrations.ai.prompt_guard import clean_label, sanitize_untrusted
     from integrations.ai.provider import (
         NotAvailableError,
         ProviderUnavailableError,
         get_provider,
     )
 
+    safe_yaml = sanitize_untrusted(yaml_text, max_len=65536)
+    safe_regulation = clean_label(regulation) or "the specified regulation"
     messages = [
         {"role": "system", "content": _COMPLIANCE_SYSTEM_PROMPT},
         {
             "role": "user",
             "content": (
-                f"Analyse this de-identification configuration for {regulation}"
+                f"Analyse this de-identification configuration for {safe_regulation}"
                 " compliance. Output ONLY the JSON analysis.\n\n"
-                f"```yaml\n{yaml_text}\n```"
+                f"```yaml\n{safe_yaml}\n```"
             ),
         },
     ]
 
     try:
         provider = get_provider()
-        response = provider.complete(messages, temperature=0.1, max_tokens=4096)
+        # YAML rule text only — no resource content (phi_payload=False).
+        response = provider.complete(
+            messages, temperature=0.1, max_tokens=4096, phi_payload=False
+        )
         match = re.search(r"\{.*\}", response, re.DOTALL)
         if match:
             return json.loads(match.group())
@@ -113,14 +119,16 @@ def _static_compliance_check(yaml_text: str, regulation: str) -> dict:
         return {
             "regulation": regulation,
             "compliance_score": 0.5,
-            "gaps": [{
-                "requirement": "Static fallback unavailable",
-                "description": (
-                    f"No deterministic fallback exists for '{regulation}'. "
-                    "Enable the AI provider for substantive analysis."
-                ),
-                "severity": "medium",
-            }],
+            "gaps": [
+                {
+                    "requirement": "Static fallback unavailable",
+                    "description": (
+                        f"No deterministic fallback exists for '{regulation}'. "
+                        "Enable the AI provider for substantive analysis."
+                    ),
+                    "severity": "medium",
+                }
+            ],
             "excess": [],
             "recommendations": [],
             "source": "static_unsupported",
@@ -132,11 +140,13 @@ def _static_compliance_check(yaml_text: str, regulation: str) -> dict:
     gaps: list[dict] = []
     for path in required_paths:
         if not any(path in m for m in matches):
-            gaps.append({
-                "requirement": f"{label_prefix}: {path}",
-                "description": f"No rule covers {path}",
-                "severity": severity,
-            })
+            gaps.append(
+                {
+                    "requirement": f"{label_prefix}: {path}",
+                    "description": f"No rule covers {path}",
+                    "severity": severity,
+                }
+            )
 
     # 0.1 deduction per gap; clamped to [0, 1].
     score = max(0.0, 1.0 - len(gaps) * 0.1)
@@ -160,8 +170,12 @@ _STATIC_REGULATIONS: dict[str, dict] = {
         "label_prefix": "HIPAA identifier",
         "severity": "critical",
         "required_paths": [
-            "Patient.name", "Patient.telecom", "Patient.address",
-            "Patient.birthDate", "Patient.identifier", "Patient.photo",
+            "Patient.name",
+            "Patient.telecom",
+            "Patient.address",
+            "Patient.birthDate",
+            "Patient.identifier",
+            "Patient.photo",
         ],
     },
     "gdpr": {
@@ -170,7 +184,9 @@ _STATIC_REGULATIONS: dict[str, dict] = {
         "label_prefix": "GDPR Art. 4(5) / minimization",
         "severity": "high",
         "required_paths": [
-            "Patient.identifier", "Patient.name", "Patient.telecom",
+            "Patient.identifier",
+            "Patient.name",
+            "Patient.telecom",
             "Patient.address",
         ],
     },
@@ -181,7 +197,8 @@ _STATIC_REGULATIONS: dict[str, dict] = {
         "label_prefix": "21 CFR Part 11 record",
         "severity": "medium",
         "required_paths": [
-            "Patient.identifier", "Practitioner.identifier",
+            "Patient.identifier",
+            "Practitioner.identifier",
         ],
     },
     "hipaa_expert_determination": {
@@ -200,10 +217,15 @@ _REGULATION_ALIASES: dict[str, set[str]] = {
     "hipaa": {"hipaa safe harbor", "safe harbor", "hipaa-safe-harbor"},
     "gdpr": {"gdpr eu", "eu gdpr", "general data protection regulation"},
     "fda_21_cfr_part_11": {
-        "fda", "21 cfr part 11", "21 cfr 11", "fda 21 cfr part 11",
+        "fda",
+        "21 cfr part 11",
+        "21 cfr 11",
+        "fda 21 cfr part 11",
         "cfr part 11",
     },
     "hipaa_expert_determination": {
-        "expert determination", "hipaa expert", "expert-determination",
+        "expert determination",
+        "hipaa expert",
+        "expert-determination",
     },
 }

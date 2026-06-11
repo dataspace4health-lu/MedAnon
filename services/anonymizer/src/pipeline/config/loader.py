@@ -9,6 +9,7 @@ Public API:
     load_config(path)         — parse and validate a YAML config file
     load_config_str(yaml_str) — parse from an in-memory YAML string
 """
+
 import logging
 import os
 import re
@@ -22,77 +23,77 @@ _config_log = logging.getLogger("medanon.config")
 # Any resource type NOT listed here falls back to the profile's GPAS_DOMAIN env var.
 _DEFAULT_DOMAIN_MAP: dict[str, str] = {
     # Patient demographics
-    "Patient":                     "spe.direct.patient-admin",
-    "RelatedPerson":               "spe.direct.patient-admin",
-    "Person":                      "spe.direct.patient-admin",
+    "Patient": "spe.direct.patient-admin",
+    "RelatedPerson": "spe.direct.patient-admin",
+    "Person": "spe.direct.patient-admin",
     # Clinical workforce
-    "Practitioner":                "spe.operational.org-practitioner",
-    "PractitionerRole":            "spe.operational.org-practitioner",
-    "Organization":                "spe.operational.org-practitioner",
-    "OrganizationAffiliation":     "spe.operational.org-practitioner",
-    "HealthcareService":           "spe.operational.org-practitioner",
-    "Location":                    "spe.operational.org-practitioner",
-    "Endpoint":                    "spe.operational.org-practitioner",
+    "Practitioner": "spe.operational.org-practitioner",
+    "PractitionerRole": "spe.operational.org-practitioner",
+    "Organization": "spe.operational.org-practitioner",
+    "OrganizationAffiliation": "spe.operational.org-practitioner",
+    "HealthcareService": "spe.operational.org-practitioner",
+    "Location": "spe.operational.org-practitioner",
+    "Endpoint": "spe.operational.org-practitioner",
     # Clinical observations
-    "Observation":                 "spe.clinical.observation",
-    "QuestionnaireResponse":       "spe.clinical.observation",
-    "RiskAssessment":              "spe.clinical.observation",
+    "Observation": "spe.clinical.observation",
+    "QuestionnaireResponse": "spe.clinical.observation",
+    "RiskAssessment": "spe.clinical.observation",
     # Conditions, procedures, allergies, medications
-    "Condition":                   "spe.clinical.condition-procedure",
-    "Procedure":                   "spe.clinical.condition-procedure",
-    "AllergyIntolerance":          "spe.clinical.condition-procedure",
-    "FamilyMemberHistory":         "spe.clinical.condition-procedure",
-    "ClinicalImpression":          "spe.clinical.condition-procedure",
-    "DetectedIssue":               "spe.clinical.condition-procedure",
-    "MedicationRequest":           "spe.clinical.condition-procedure",
-    "MedicationAdministration":    "spe.clinical.condition-procedure",
-    "MedicationDispense":          "spe.clinical.condition-procedure",
-    "MedicationStatement":         "spe.clinical.condition-procedure",
-    "Medication":                  "spe.clinical.condition-procedure",
-    "Immunization":                "spe.clinical.condition-procedure",
-    "ImmunizationEvaluation":      "spe.clinical.condition-procedure",
-    "ImmunizationRecommendation":  "spe.clinical.condition-procedure",
-    "NutritionOrder":              "spe.clinical.condition-procedure",
-    "VisionPrescription":          "spe.clinical.condition-procedure",
+    "Condition": "spe.clinical.condition-procedure",
+    "Procedure": "spe.clinical.condition-procedure",
+    "AllergyIntolerance": "spe.clinical.condition-procedure",
+    "FamilyMemberHistory": "spe.clinical.condition-procedure",
+    "ClinicalImpression": "spe.clinical.condition-procedure",
+    "DetectedIssue": "spe.clinical.condition-procedure",
+    "MedicationRequest": "spe.clinical.condition-procedure",
+    "MedicationAdministration": "spe.clinical.condition-procedure",
+    "MedicationDispense": "spe.clinical.condition-procedure",
+    "MedicationStatement": "spe.clinical.condition-procedure",
+    "Medication": "spe.clinical.condition-procedure",
+    "Immunization": "spe.clinical.condition-procedure",
+    "ImmunizationEvaluation": "spe.clinical.condition-procedure",
+    "ImmunizationRecommendation": "spe.clinical.condition-procedure",
+    "NutritionOrder": "spe.clinical.condition-procedure",
+    "VisionPrescription": "spe.clinical.condition-procedure",
     # Reports & documents
-    "DiagnosticReport":            "spe.clinical.report-text",
-    "DocumentReference":           "spe.clinical.report-text",
-    "Composition":                 "spe.clinical.report-text",
-    "Media":                       "spe.clinical.report-text",
-    "DocumentManifest":            "spe.clinical.report-text",
+    "DiagnosticReport": "spe.clinical.report-text",
+    "DocumentReference": "spe.clinical.report-text",
+    "Composition": "spe.clinical.report-text",
+    "Media": "spe.clinical.report-text",
+    "DocumentManifest": "spe.clinical.report-text",
     # Encounters & care
-    "Encounter":                   "spe.direct.resource-id",
-    "EpisodeOfCare":               "spe.direct.resource-id",
-    "CarePlan":                    "spe.direct.resource-id",
-    "CareTeam":                    "spe.direct.resource-id",
-    "Goal":                        "spe.direct.resource-id",
+    "Encounter": "spe.direct.resource-id",
+    "EpisodeOfCare": "spe.direct.resource-id",
+    "CarePlan": "spe.direct.resource-id",
+    "CareTeam": "spe.direct.resource-id",
+    "Goal": "spe.direct.resource-id",
     # Scheduling & workflow
-    "ServiceRequest":              "spe.operational.scheduling",
-    "Appointment":                 "spe.operational.scheduling",
-    "AppointmentResponse":         "spe.operational.scheduling",
-    "Schedule":                    "spe.operational.scheduling",
-    "Slot":                        "spe.operational.scheduling",
-    "Task":                        "spe.operational.scheduling",
-    "Communication":               "spe.operational.scheduling",
-    "CommunicationRequest":        "spe.operational.scheduling",
+    "ServiceRequest": "spe.operational.scheduling",
+    "Appointment": "spe.operational.scheduling",
+    "AppointmentResponse": "spe.operational.scheduling",
+    "Schedule": "spe.operational.scheduling",
+    "Slot": "spe.operational.scheduling",
+    "Task": "spe.operational.scheduling",
+    "Communication": "spe.operational.scheduling",
+    "CommunicationRequest": "spe.operational.scheduling",
     # Financial / billing
-    "Coverage":                    "spe.financial.coverage",
-    "Claim":                       "spe.financial.claims",
-    "ClaimResponse":               "spe.financial.claims",
-    "ExplanationOfBenefit":        "spe.financial.claims",
-    "CoverageEligibilityRequest":  "spe.financial.claims",
+    "Coverage": "spe.financial.coverage",
+    "Claim": "spe.financial.claims",
+    "ClaimResponse": "spe.financial.claims",
+    "ExplanationOfBenefit": "spe.financial.claims",
+    "CoverageEligibilityRequest": "spe.financial.claims",
     "CoverageEligibilityResponse": "spe.financial.claims",
-    "PaymentNotice":               "spe.financial.claims",
-    "PaymentReconciliation":       "spe.financial.claims",
+    "PaymentNotice": "spe.financial.claims",
+    "PaymentReconciliation": "spe.financial.claims",
     # Devices & media
-    "Device":                      "spe.direct.document-media",
-    "DeviceRequest":               "spe.direct.document-media",
-    "DeviceUseStatement":          "spe.direct.document-media",
-    "Binary":                      "spe.direct.document-media",
+    "Device": "spe.direct.document-media",
+    "DeviceRequest": "spe.direct.document-media",
+    "DeviceUseStatement": "spe.direct.document-media",
+    "Binary": "spe.direct.document-media",
     # Audit / provenance
-    "Provenance":                  "spe.technical.references",
-    "AuditEvent":                  "spe.technical.references",
-    "Consent":                     "spe.technical.references",
+    "Provenance": "spe.technical.references",
+    "AuditEvent": "spe.technical.references",
+    "Consent": "spe.technical.references",
 }
 
 
@@ -124,17 +125,19 @@ class Settings:
                 # silently overwrite them via setattr (e.g. a YAML key "filename"
                 # would corrupt the LRU cache key; "processing_errors" is
                 # validated and sanitized separately).
-                _MANAGED_ATTRS = frozenset({
-                    "filename",
-                    "processing_errors",
-                    "processingError",
-                    "rewrite_references",
-                    "rewrite_text_ids",
-                    "domain_map",
-                    "general",
-                    "config_hash",
-                    "privacy_model",
-                })
+                _MANAGED_ATTRS = frozenset(
+                    {
+                        "filename",
+                        "processing_errors",
+                        "processingError",
+                        "rewrite_references",
+                        "rewrite_text_ids",
+                        "domain_map",
+                        "general",
+                        "config_hash",
+                        "privacy_model",
+                    }
+                )
 
                 # Set values of the dictionary as class attributes
                 for key in cfg:
@@ -173,7 +176,9 @@ class Settings:
                         # Key absent from YAML — inherit the built-in default map.
                         self.domain_map: dict[str, str] = _DEFAULT_DOMAIN_MAP
                     elif isinstance(raw_domain_map, dict):
-                        self.domain_map = {str(k): str(v) for k, v in raw_domain_map.items()}
+                        self.domain_map = {
+                            str(k): str(v) for k, v in raw_domain_map.items()
+                        }
                     else:
                         self.domain_map = {}
                 else:
@@ -187,7 +192,9 @@ class Settings:
                 # Absent → privacy_model is None → engine behaves as today.
                 raw_pm = cfg.get("privacy_model")
                 if raw_pm is not None and isinstance(raw_pm, dict):
-                    self.privacy_model: dict | None = self._validate_privacy_model(raw_pm)
+                    self.privacy_model: dict | None = self._validate_privacy_model(
+                        raw_pm
+                    )
                 else:
                     self.privacy_model = None
 
@@ -264,6 +271,32 @@ class Settings:
                 raise ValueError(f"rules[{idx}].action must be a non-empty string")
             if "params" in rule and not isinstance(rule["params"], dict):
                 raise ValueError(f"rules[{idx}].params must be a mapping when provided")
+            if "condition" in rule and not isinstance(rule["condition"], dict):
+                raise ValueError(
+                    f"rules[{idx}].condition must be a mapping when provided"
+                )
+            if "conditions" in rule and not isinstance(rule["conditions"], list):
+                raise ValueError(
+                    f"rules[{idx}].conditions must be a list when provided"
+                )
+
+        # Schema validation: action names + per-action params (Pydantic).
+        # MEDANON_RULE_SCHEMA_STRICT=true → raise; default → warn-only so
+        # existing deployments keep working while profiles are cleaned up.
+        from pipeline.config.rule_schema import validate_rules_schema
+
+        schema_errors = validate_rules_schema(rules)
+        if schema_errors:
+            strict = os.environ.get(
+                "MEDANON_RULE_SCHEMA_STRICT", "false"
+            ).lower() in ("true", "1", "yes")
+            if strict:
+                raise ValueError(
+                    "Rule schema validation failed:\n  "
+                    + "\n  ".join(schema_errors)
+                )
+            for err in schema_errors:
+                _config_log.warning("rule_schema_violation %s", err)
 
         # Warn about potentially conflicting rules (same match, different actions)
         self._check_rule_conflicts(rules)
@@ -353,7 +386,9 @@ class Settings:
         # target_k
         target_k = pm.get("target_k")
         if target_k is None:
-            raise ValueError("privacy_model.target_k is required when privacy_model is enabled")
+            raise ValueError(
+                "privacy_model.target_k is required when privacy_model is enabled"
+            )
         try:
             target_k = int(target_k)
         except (TypeError, ValueError):
@@ -369,7 +404,9 @@ class Settings:
             except (TypeError, ValueError):
                 raise ValueError("privacy_model.target_l must be an integer")
             if target_l < 2:
-                raise ValueError(f"privacy_model.target_l must be >= 2 (got {target_l})")
+                raise ValueError(
+                    f"privacy_model.target_l must be >= 2 (got {target_l})"
+                )
 
         # max_suppression
         max_suppression = pm.get("max_suppression", 0.05)
@@ -396,9 +433,7 @@ class Settings:
         # quasi_identifiers
         qis_raw = pm.get("quasi_identifiers")
         if not isinstance(qis_raw, list) or len(qis_raw) == 0:
-            raise ValueError(
-                "privacy_model.quasi_identifiers must be a non-empty list"
-            )
+            raise ValueError("privacy_model.quasi_identifiers must be a non-empty list")
         if len(qis_raw) > max_qi_count:
             raise ValueError(
                 f"privacy_model.quasi_identifiers has {len(qis_raw)} entries but "
@@ -407,7 +442,9 @@ class Settings:
         quasi_identifiers = []
         for i, qi in enumerate(qis_raw, start=1):
             if not isinstance(qi, dict):
-                raise ValueError(f"privacy_model.quasi_identifiers[{i}] must be a mapping")
+                raise ValueError(
+                    f"privacy_model.quasi_identifiers[{i}] must be a mapping"
+                )
             path = qi.get("path", "")
             if not isinstance(path, str) or not path.strip():
                 raise ValueError(

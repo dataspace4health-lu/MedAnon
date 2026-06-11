@@ -20,6 +20,7 @@ Usage
 The output resources are tagged with the ``SYN`` observation value code so
 downstream systems can distinguish synthetic from real de-identified data.
 """
+
 from __future__ import annotations
 
 import random
@@ -37,6 +38,7 @@ _SYN_TAG = {
 # ---------------------------------------------------------------------------
 # Distribution extraction
 # ---------------------------------------------------------------------------
+
 
 def _extract_distributions(
     patients: list[dict],
@@ -97,6 +99,7 @@ def _extract_distributions(
 # Synthetic patient builder
 # ---------------------------------------------------------------------------
 
+
 def _make_patient(
     rng: random.Random,
     dists: dict[str, list[str]],
@@ -137,15 +140,22 @@ def _make_patient(
 
     if marital:
         resource["maritalStatus"] = {
-            "coding": [{"system": "http://terminology.hl7.org/CodeSystem/v3-MaritalStatus", "code": marital}],
+            "coding": [
+                {
+                    "system": "http://terminology.hl7.org/CodeSystem/v3-MaritalStatus",
+                    "code": marital,
+                }
+            ],
         }
 
     if language:
-        resource["communication"] = [{
-            "language": {
-                "coding": [{"system": "urn:ietf:bcp:47", "code": language}],
-            },
-        }]
+        resource["communication"] = [
+            {
+                "language": {
+                    "coding": [{"system": "urn:ietf:bcp:47", "code": language}],
+                },
+            }
+        ]
 
     return resource
 
@@ -153,6 +163,7 @@ def _make_patient(
 # ---------------------------------------------------------------------------
 # Condition distribution extraction & builder
 # ---------------------------------------------------------------------------
+
 
 def _extract_condition_distributions(
     conditions: list[dict],
@@ -184,9 +195,16 @@ def _extract_condition_distributions(
         if isinstance(cats, list) and cats:
             categories.append(cats[0])
         else:
-            categories.append({
-                "coding": [{"system": "http://terminology.hl7.org/CodeSystem/condition-category", "code": "encounter-diagnosis"}],
-            })
+            categories.append(
+                {
+                    "coding": [
+                        {
+                            "system": "http://terminology.hl7.org/CodeSystem/condition-category",
+                            "code": "encounter-diagnosis",
+                        }
+                    ],
+                }
+            )
 
     return {
         "codes": codes,
@@ -214,10 +232,12 @@ def _make_condition(
         "subject": {"reference": f"Patient/{patient_id}"},
         "code": code,
         "clinicalStatus": {
-            "coding": [{
-                "system": "http://terminology.hl7.org/CodeSystem/condition-clinical",
-                "code": clinical_status,
-            }],
+            "coding": [
+                {
+                    "system": "http://terminology.hl7.org/CodeSystem/condition-clinical",
+                    "code": clinical_status,
+                }
+            ],
         },
         "category": [category],
     }
@@ -226,6 +246,7 @@ def _make_condition(
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 def generate_synthetic_patients(
     patients: list[dict],
@@ -251,7 +272,9 @@ def generate_synthetic_patients(
         ValueError: If *patients* is empty or *count* is out of range.
     """
     if not patients:
-        raise ValueError("patients list must not be empty — no distribution to sample from")
+        raise ValueError(
+            "patients list must not be empty — no distribution to sample from"
+        )
     if count < 1 or count > 10_000:
         raise ValueError(f"count must be between 1 and 10 000, got {count}")
 

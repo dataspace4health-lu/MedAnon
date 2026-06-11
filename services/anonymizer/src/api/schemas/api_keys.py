@@ -11,16 +11,26 @@ _VALID_ROLES = {"admin", "analyst", "viewer"}
 
 
 class ApiKeyCreateRequest(BaseModel):
-    client_id: str = Field(description="Human-readable client identifier (1-64 alphanumeric chars)")
-    role: str = Field(default="analyst", description="RBAC role: admin | analyst | viewer")
-    expires_at: str | None = Field(default=None, description="ISO-8601 expiry timestamp (null = never)")
-    description: str = Field(default="", max_length=256, description="Optional free-text description")
+    client_id: str = Field(
+        description="Human-readable client identifier (1-64 alphanumeric chars)"
+    )
+    role: str = Field(
+        default="analyst", description="RBAC role: admin | analyst | viewer"
+    )
+    expires_at: str | None = Field(
+        default=None, description="ISO-8601 expiry timestamp (null = never)"
+    )
+    description: str = Field(
+        default="", max_length=256, description="Optional free-text description"
+    )
 
     @field_validator("client_id")
     @classmethod
     def _validate_client_id(cls, v: str) -> str:
         if not _CLIENT_ID_RE.match(v):
-            raise ValueError("client_id must be 1-64 alphanumeric/dash/underscore characters")
+            raise ValueError(
+                "client_id must be 1-64 alphanumeric/dash/underscore characters"
+            )
         return v
 
     @field_validator("role")
@@ -47,4 +57,6 @@ class ApiKeyResponse(BaseModel):
 class ApiKeyCreateResponse(ApiKeyResponse):
     """Response on key creation — includes raw key (returned exactly once)."""
 
-    raw_key: str = Field(description="Secret API key — store securely; not retrievable again")
+    raw_key: str = Field(
+        description="Secret API key — store securely; not retrievable again"
+    )

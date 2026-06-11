@@ -46,11 +46,23 @@ _PROFILE_MAP = {
 _CACHE_TTL = int(os.environ.get("MEDANON_CONFIG_CACHE_TTL", "0"))
 _last_clear: float = 0.0
 
+# Max distinct config profiles kept resident in the LRU (E5.4).  Deployments
+# with many user-defined profiles can raise this; the default of 32 covers the
+# 8 bundled profiles plus headroom for ad-hoc user configs.
+_CACHE_SIZE = max(1, int(os.environ.get("MEDANON_CONFIG_CACHE_SIZE", "32")))
 
-@lru_cache(maxsize=32)
+
+@lru_cache(maxsize=_CACHE_SIZE)
 def _load_settings(abs_path: str) -> Settings:
     """Internal: load and cache settings by absolute file path."""
-    return Settings(abs_path)
+    settings = Settings(abs_path)
+    try:
+        from pipeline.rule_matcher import warm_rule_caches
+
+        warm_rule_caches(settings)
+    except Exception:
+        pass
+    return settings
 
 
 def _resolve_profile(profile: str) -> str:
@@ -100,7 +112,11 @@ def _resolve_profile(profile: str) -> str:
 
 
 def clear_settings_cache() -> None:
-    """Invalidate the config cache — next call to get_settings() reloads from disk."""
+    """Invalidate the config cache — next call to get_settings() reloads from disk.
+
+    Called from the config CRUD endpoints (POST/PUT/DELETE /v1/configs) so
+    profile edits take effect without a process restart.
+    """
     global _last_clear
     _load_settings.cache_clear()
     _last_clear = time.monotonic()
@@ -109,6 +125,13 @@ def clear_settings_cache() -> None:
         from pipeline.rule_matcher import clear_rule_caches
 
         clear_rule_caches()
+    except ImportError:
+        pass
+    # And the gPAS params cache (keyed per profile content)
+    try:
+        from pipeline.gpas_orchestrator import clear_gpas_params_cache
+
+        clear_gpas_params_cache()
     except ImportError:
         pass
 

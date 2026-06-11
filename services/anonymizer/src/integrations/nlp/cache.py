@@ -53,8 +53,12 @@ _log = logging.getLogger("medanon.nlp.cache")
 _NLP_MODEL_VERSION = os.environ.get("NLP_MODEL_VERSION", "v1").strip() or "v1"
 
 _NLP_CACHE_MAX = int(os.environ.get("MEDANON_NLP_CACHE_MAX_ENTRIES", "100000"))
-_NLP_CACHE_ENABLED = os.environ.get("MEDANON_NLP_CACHE_ENABLED", "true").strip().lower() in (
-    "1", "true", "yes",
+_NLP_CACHE_ENABLED = os.environ.get(
+    "MEDANON_NLP_CACHE_ENABLED", "true"
+).strip().lower() in (
+    "1",
+    "true",
+    "yes",
 )
 
 # Lazily constructed singletons — kept module-private.

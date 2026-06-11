@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from utils.json_fast import loads as _json_loads
 from utils.logging import REQUEST_ID
+from utils.pool_budget import proxy_pool_budget
 import logging
 import os
 import random
@@ -16,7 +17,6 @@ import urllib3
 
 _log = logging.getLogger("medanon.http_client")
 
-from utils.pool_budget import proxy_pool_budget
 _POOL_SIZE = proxy_pool_budget()
 _RETRY_COUNT = int(os.environ.get("PROXY_RETRY_COUNT", "2"))
 _RETRY_BACKOFF = float(os.environ.get("PROXY_RETRY_BACKOFF_SEC", "0.3"))
@@ -51,6 +51,7 @@ def _record_retry(url: str, reason: str) -> None:
     except Exception:
         pass  # metrics must never break the data path
 
+
 # Raised (instead of plain ValueError) when all retry attempts exhaust on a
 # connect/read timeout so callers can distinguish timeout failures from other
 # upstream errors and call circuit_breaker.record_timeout() accordingly.
@@ -79,7 +80,8 @@ def proxy_request(
         request_timeout = timeout
     else:
         request_timeout = urllib3.Timeout(
-            connect=_DEFAULT_CONNECT_TIMEOUT, read=timeout,
+            connect=_DEFAULT_CONNECT_TIMEOUT,
+            read=timeout,
         )
     for attempt in range(_RETRY_COUNT + 1):
         try:
@@ -126,11 +128,14 @@ def proxy_request(
                 _record_retry(url, "connection")
                 time.sleep(_RETRY_BACKOFF * (2**attempt) * (0.5 + random.random()))
                 continue
-            if isinstance(exc, (
-                urllib3.exceptions.ConnectTimeoutError,
-                urllib3.exceptions.ReadTimeoutError,
-                urllib3.exceptions.TimeoutError,
-            )):
+            if isinstance(
+                exc,
+                (
+                    urllib3.exceptions.ConnectTimeoutError,
+                    urllib3.exceptions.ReadTimeoutError,
+                    urllib3.exceptions.TimeoutError,
+                ),
+            ):
                 raise ProxyTimeoutError(
                     f"Upstream service timed out for {url}: {exc}"
                 ) from exc
@@ -174,7 +179,10 @@ def proxy_post_stream(
     """
     for attempt in range(_RETRY_COUNT + 1):
         try:
-            merged_headers = {"X-Request-ID": REQUEST_ID.get("-"), "Content-Type": content_type}
+            merged_headers = {
+                "X-Request-ID": REQUEST_ID.get("-"),
+                "Content-Type": content_type,
+            }
             resp = _pool.request(
                 "POST",
                 url,
@@ -190,7 +198,10 @@ def proxy_post_stream(
                 if should_retry and attempt < _RETRY_COUNT:
                     _log.warning(
                         "proxy stream %s HTTP %d — retrying (%d/%d)",
-                        url, resp.status, attempt + 1, _RETRY_COUNT,
+                        url,
+                        resp.status,
+                        attempt + 1,
+                        _RETRY_COUNT,
                     )
                     _record_retry(url, "http_429" if resp.status == 429 else "http_5xx")
                     time.sleep(_RETRY_BACKOFF * (2**attempt) * (0.5 + random.random()))
@@ -209,16 +220,21 @@ def proxy_post_stream(
             if attempt < _RETRY_COUNT:
                 _log.warning(
                     "proxy stream %s connection error — retrying (%d/%d)",
-                    url, attempt + 1, _RETRY_COUNT,
+                    url,
+                    attempt + 1,
+                    _RETRY_COUNT,
                 )
                 _record_retry(url, "connection")
                 time.sleep(_RETRY_BACKOFF * (2**attempt) * (0.5 + random.random()))
                 continue
-            if isinstance(exc, (
-                urllib3.exceptions.ConnectTimeoutError,
-                urllib3.exceptions.ReadTimeoutError,
-                urllib3.exceptions.TimeoutError,
-            )):
+            if isinstance(
+                exc,
+                (
+                    urllib3.exceptions.ConnectTimeoutError,
+                    urllib3.exceptions.ReadTimeoutError,
+                    urllib3.exceptions.TimeoutError,
+                ),
+            ):
                 raise ProxyTimeoutError(
                     f"Upstream service timed out for {url}: {exc}"
                 ) from exc

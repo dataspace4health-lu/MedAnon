@@ -14,13 +14,7 @@ try:
     def dumps(obj) -> str:
         """Compact JSON string (no extra whitespace)."""
         return _orjson.dumps(obj).decode("utf-8")
-    def dumps_sorted(obj) -> str:
-        """Compact JSON string with keys sorted recursively — stable across runs.
 
-        Use for dedup / cache keys where two equal dicts must hash identically
-        regardless of insertion order.
-        """
-        return _orjson.dumps(obj, option=_orjson.OPT_SORT_KEYS).decode("utf-8")
     def dumps_sorted(obj) -> str:
         """Compact JSON string with keys sorted recursively — stable across runs.
 

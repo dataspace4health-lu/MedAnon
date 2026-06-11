@@ -26,7 +26,8 @@ from api.services.scoring_helpers import (
     _is_scoring_enabled,
     _get_config_profile,
     make_collector,
-    score_and_persist,
+    check_and_persist_with_leak,
+    apply_pii_leak_override,
     score_json_line,
     persist_run,
 )
@@ -90,10 +91,19 @@ async def process(
     except ProcessingError as exc:
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
 
+    pii_leak = None
     if _is_scoring_enabled():
-        retain_task(
-            score_and_persist(result, "/v1/process", runtime_settings, t0)
+        pii_leak = await check_and_persist_with_leak(
+            result, "/v1/process", runtime_settings, t0
         )
+
+    if pii_leak:
+        # PII detected — block output entirely, return 422 with leak info.
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "pii_leak_detected", "pii_leak": pii_leak},
+        )
+
     if idem_key:
         _idem.remember("/v1/process", idem_key, body_hash, 200, result)
     return result
@@ -125,7 +135,6 @@ async def process_ndjson(
     async def _generate():
         collector = make_collector(profile)
         count = 0
-        error_count = 0
         t0 = time.monotonic()
         disconnected = False
         async for line in _service.process_ndjson_lines(lines, runtime_settings):
@@ -137,19 +146,22 @@ async def process_ndjson(
             yield line + "\n"
             count += 1
         score = collector.aggregate() if collector else None
+        pii_leak = apply_pii_leak_override(score) if score else None
         if not disconnected:
-            yield stream_trailer(count, score) + "\n"
+            yield stream_trailer(count, score, pii_leak=pii_leak) + "\n"
         if score is not None:
-            retain_task(persist_run(
-                endpoint="/v1/process/ndjson",
-                config_profile=profile,
-                resource_count=count,
-                error_count=score.get("error_count", 0),
-                duration_ms=int((time.monotonic() - t0) * 1000),
-                input_type="ndjson",
-                summary={"total_resources": count},
-                score=score,
-            ))
+            retain_task(
+                persist_run(
+                    endpoint="/v1/process/ndjson",
+                    config_profile=profile,
+                    resource_count=count,
+                    error_count=score.get("error_count", 0),
+                    duration_ms=int((time.monotonic() - t0) * 1000),
+                    input_type="ndjson",
+                    summary={"total_resources": count},
+                    score=score,
+                )
+            )
 
     return StreamingResponse(_generate(), media_type="application/x-ndjson")
 
@@ -197,13 +209,23 @@ async def process_raw(
         t0 = time.monotonic()
         result = await _service.process_resource(payload, runtime_settings)
 
+        pii_leak = None
         if _is_scoring_enabled():
-            retain_task(
-                score_and_persist(result, "/v1/process/raw", runtime_settings, t0)
+            pii_leak = await check_and_persist_with_leak(
+                result, "/v1/process/raw", runtime_settings, t0
+            )
+
+        if pii_leak:
+            # Block output — return 422 with structured pii_leak payload.
+            raise HTTPException(
+                status_code=422,
+                detail={"code": "pii_leak_detected", "pii_leak": pii_leak},
             )
 
         text, media_type = serialize_payload(result, out_format=output_format)
         return Response(content=text, media_type=media_type)
+    except HTTPException:
+        raise  # let our 422 pii_leak_detected (and others) pass through
     except ProcessingError as exc:
         if exc.status == 422:
             raise HTTPException(status_code=422, detail="Invalid input") from exc
@@ -286,18 +308,21 @@ async def process_batch(
                 yield line + "\n"
                 count += 1
         score = collector.aggregate() if collector else None
+        pii_leak = apply_pii_leak_override(score) if score else None
         if not disconnected:
-            yield stream_trailer(count, score) + "\n"
+            yield stream_trailer(count, score, pii_leak=pii_leak) + "\n"
         if score is not None:
-            retain_task(persist_run(
-                endpoint="/v1/process/batch",
-                config_profile=profile,
-                resource_count=count,
-                error_count=score.get("error_count", 0),
-                duration_ms=int((time.monotonic() - t0) * 1000),
-                input_type="Bundle" if is_bundle else "batch",
-                summary={"total_resources": count},
-                score=score,
-            ))
+            retain_task(
+                persist_run(
+                    endpoint="/v1/process/batch",
+                    config_profile=profile,
+                    resource_count=count,
+                    error_count=score.get("error_count", 0),
+                    duration_ms=int((time.monotonic() - t0) * 1000),
+                    input_type="Bundle" if is_bundle else "batch",
+                    summary={"total_resources": count},
+                    score=score,
+                )
+            )
 
     return StreamingResponse(_generate(), media_type="application/x-ndjson")

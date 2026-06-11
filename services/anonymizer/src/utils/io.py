@@ -16,9 +16,9 @@ def read_resource_from_file(filename: str):
             json_data = json.load(jfile)
             print(f":thumbs_up: json {filename} read")
             return json_data
-    except IOError as e:
+    except IOError:
         print(f":sad_but_relieved_face: File {filename} does not exist.")
         raise
-    except ValueError as e:
+    except ValueError:
         print(":sad_but_relieved_face: Cannot parse json data.")
         raise

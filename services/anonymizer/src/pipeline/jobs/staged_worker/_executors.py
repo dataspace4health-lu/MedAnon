@@ -7,6 +7,7 @@ Contains five public executor functions:
     execute_batch_patient_export_staged — multi-patient $everything export
     execute_reprocess_staged           — re-process already-staged rows
 """
+
 from __future__ import annotations
 
 import os
@@ -19,19 +20,18 @@ from pipeline.jobs.staged_worker._core import (
     _OUTPUT_MODE,
     _INFRA,
     _BATCH_SIZE,
-    _checkpoint_or_cancel,
-    _process_batch_with_fallback,
-    _compute_batch_fallback_parallel,
-    _write_computed_results,
     _run_staged_phase2,
-    _run_staged_phase2_partition_claim,
     _run_staged_phase2_shards,
-    _merge_shards,
     _persist_scoring_run,
 )
 from domain.jobs import JobStatus
-from pipeline.jobs.checkpoint import load_checkpoint, save_checkpoint, _truncate_to_lines
+from pipeline.jobs.checkpoint import (
+    load_checkpoint,
+    save_checkpoint,
+    _truncate_to_lines,
+)
 from integrations.storage import store_result
+
 
 def execute_bulk_export_staged(job, store, staging) -> None:
     """Staged two-phase bulk-export executor (synchronous — runs via asyncio.to_thread)."""
@@ -68,11 +68,15 @@ def execute_bulk_export_staged(job, store, staging) -> None:
     # immediately shows "fetching" instead of staying at "queued" during
     # get_capability_statement (up to 3 retries × 35s = 105s).
     if phase == "fetching":
-        save_checkpoint(store, job, {
-            "phase": "fetching",
-            "staged_count": staged_count,
-            "processed": processed,
-        })
+        save_checkpoint(
+            store,
+            job,
+            {
+                "phase": "fetching",
+                "staged_count": staged_count,
+                "processed": processed,
+            },
+        )
 
     # ── Determine resource types ────────────────────────────────────────────
     if resource_type:
@@ -114,7 +118,9 @@ def execute_bulk_export_staged(job, store, staging) -> None:
 
     from pipeline.jobs.summary import JobSummaryCollector
 
-    collector = JobSummaryCollector(config_profile=profile, settings=settings, job_id=job.id)
+    collector = JobSummaryCollector(
+        config_profile=profile, settings=settings, job_id=job.id
+    )
 
     # ════════════════════════════════════════════════════════════════════════
     # Phase 1 + Phase 2 (overlapped): fetch into staging while processing
@@ -133,13 +139,19 @@ def execute_bulk_export_staged(job, store, staging) -> None:
         phase1_exc: list = []
 
         def _run_phase1() -> None:
-            _log.info("staged_fetch_start job=%s resource_types=%s", job.id, resource_types)
+            _log.info(
+                "staged_fetch_start job=%s resource_types=%s", job.id, resource_types
+            )
             buffer: list[dict] = []
             try:
                 for ti, rt in enumerate(resource_types):
                     if ti < phase1_state["type_index"]:
                         continue  # already fetched in a previous run
-                    start = phase1_state["fetch_cursor"] if ti == phase1_state["type_index"] else None
+                    start = (
+                        phase1_state["fetch_cursor"]
+                        if ti == phase1_state["type_index"]
+                        else None
+                    )
 
                     for resource, page_url, page_offset in fetch_resource_type(
                         server_url,
@@ -156,7 +168,9 @@ def execute_bulk_export_staged(job, store, staging) -> None:
                             if fresh and fresh.status == JobStatus.CANCELLED:
                                 _log.info("staged_fetch_cancelled job=%s", job.id)
                                 return
-                            inserted = staging.stage_batch(job.id, buffer, fhir_source_url=server_url)
+                            inserted = staging.stage_batch(
+                                job.id, buffer, fhir_source_url=server_url
+                            )
                             phase1_state["staged_count"] += inserted
                             buffer.clear()
                             phase1_state["fetch_cursor"] = page_url
@@ -164,7 +178,9 @@ def execute_bulk_export_staged(job, store, staging) -> None:
                             phase1_state["type_name"] = rt
 
                     if buffer:
-                        inserted = staging.stage_batch(job.id, buffer, fhir_source_url=server_url)
+                        inserted = staging.stage_batch(
+                            job.id, buffer, fhir_source_url=server_url
+                        )
                         phase1_state["staged_count"] += inserted
                         buffer.clear()
                     phase1_state["fetch_cursor"] = None
@@ -182,11 +198,15 @@ def execute_bulk_export_staged(job, store, staging) -> None:
         # Save an early "fetching" checkpoint before Phase 1 starts so the UI
         # immediately shows the correct phase instead of staying at "queued"
         # while Phase 1 works through all 130+ FHIR resource types.
-        save_checkpoint(store, job, {
-            "phase": "fetching",
-            "staged_count": staged_count,
-            "processed": processed,
-        })
+        save_checkpoint(
+            store,
+            job,
+            {
+                "phase": "fetching",
+                "staged_count": staged_count,
+                "processed": processed,
+            },
+        )
 
         phase1_thread = threading.Thread(target=_run_phase1, daemon=True)
         phase1_thread.start()
@@ -201,18 +221,34 @@ def execute_bulk_export_staged(job, store, staging) -> None:
 
         if _OUTPUT_MODE == "shards":
             processed = _run_staged_phase2_shards(
-                job, store, staging, settings, pseudonymizer, processing_mode,
-                _OUTPUT_DIR, output_path,
-                "staged_bulk_export", collector,
+                job,
+                store,
+                staging,
+                settings,
+                pseudonymizer,
+                processing_mode,
+                _OUTPUT_DIR,
+                output_path,
+                "staged_bulk_export",
+                collector,
                 phase1_done=phase1_done,
                 phase1_thread=phase1_thread,
                 phase1_exc=phase1_exc,
             )
         else:
             processed = _run_staged_phase2(
-                job, store, staging, settings, pseudonymizer, processing_mode,
-                output_path, open_mode, staged_count, processed,
-                "staged_bulk_export", collector,
+                job,
+                store,
+                staging,
+                settings,
+                pseudonymizer,
+                processing_mode,
+                output_path,
+                open_mode,
+                staged_count,
+                processed,
+                "staged_bulk_export",
+                collector,
                 phase1_done=phase1_done,
                 phase1_state=phase1_state,
             )
@@ -239,7 +275,11 @@ def execute_bulk_export_staged(job, store, staging) -> None:
                     _fh.write(audit_report)
                 checkpoint_data["score_audit_path"] = audit_path
             except Exception:
-                _log.debug("staged_bulk_export_audit_write_failed job=%s", job.id, exc_info=True)
+                _log.debug(
+                    "staged_bulk_export_audit_write_failed job=%s",
+                    job.id,
+                    exc_info=True,
+                )
         save_checkpoint(store, job, checkpoint_data)
         _persist_scoring_run(job, profile, summary_dict, "staged_bulk_export")
         _log.info("staged_bulk_export_done job=%s processed=%d", job.id, processed)
@@ -250,7 +290,9 @@ def execute_bulk_export_staged(job, store, staging) -> None:
     elif phase == "processing":
         from pipeline.jobs.summary import JobSummaryCollector
 
-        collector = JobSummaryCollector(config_profile=profile, settings=settings, job_id=job.id)
+        collector = JobSummaryCollector(
+            config_profile=profile, settings=settings, job_id=job.id
+        )
         open_mode = "a" if processed > 0 else "w"
         if processed > 0:
             _truncate_to_lines(output_path, processed)
@@ -258,15 +300,31 @@ def execute_bulk_export_staged(job, store, staging) -> None:
 
         if _OUTPUT_MODE == "shards":
             processed = _run_staged_phase2_shards(
-                job, store, staging, settings, pseudonymizer, processing_mode,
-                _OUTPUT_DIR, output_path,
-                "staged_bulk_export", collector,
+                job,
+                store,
+                staging,
+                settings,
+                pseudonymizer,
+                processing_mode,
+                _OUTPUT_DIR,
+                output_path,
+                "staged_bulk_export",
+                collector,
             )
         else:
             processed = _run_staged_phase2(
-                job, store, staging, settings, pseudonymizer, processing_mode,
-                output_path, open_mode, staged_count, processed,
-                "staged_bulk_export", collector,
+                job,
+                store,
+                staging,
+                settings,
+                pseudonymizer,
+                processing_mode,
+                output_path,
+                open_mode,
+                staged_count,
+                processed,
+                "staged_bulk_export",
+                collector,
             )
 
         job.result_path = store_result(job.id, output_path)
@@ -285,7 +343,11 @@ def execute_bulk_export_staged(job, store, staging) -> None:
                     _fh.write(audit_report)
                 checkpoint_data["score_audit_path"] = audit_path
             except Exception:
-                _log.debug("staged_bulk_export_audit_write_failed job=%s", job.id, exc_info=True)
+                _log.debug(
+                    "staged_bulk_export_audit_write_failed job=%s",
+                    job.id,
+                    exc_info=True,
+                )
         save_checkpoint(store, job, checkpoint_data)
         _persist_scoring_run(job, profile, summary_dict, "staged_bulk_export")
         _log.info("staged_bulk_export_done job=%s processed=%d", job.id, processed)
@@ -358,12 +420,16 @@ def execute_cohort_staged(job, store, staging) -> None:
                         if fresh and fresh.status == JobStatus.CANCELLED:
                             _log.info("staged_cohort_fetch_cancelled job=%s", job.id)
                             return
-                        inserted = staging.stage_batch(job.id, buffer, fhir_source_url=server_url)
+                        inserted = staging.stage_batch(
+                            job.id, buffer, fhir_source_url=server_url
+                        )
                         phase1_state["staged_count"] += inserted
                         buffer.clear()
 
                 if buffer:
-                    inserted = staging.stage_batch(job.id, buffer, fhir_source_url=server_url)
+                    inserted = staging.stage_batch(
+                        job.id, buffer, fhir_source_url=server_url
+                    )
                     phase1_state["staged_count"] += inserted
 
                 _log.info(
@@ -381,15 +447,28 @@ def execute_cohort_staged(job, store, staging) -> None:
 
         from pipeline.jobs.summary import JobSummaryCollector
 
-        collector = JobSummaryCollector(config_profile=profile, settings=settings, job_id=job.id)
+        collector = JobSummaryCollector(
+            config_profile=profile, settings=settings, job_id=job.id
+        )
         _log.info(
-            "staged_cohort_process_start job=%s processed=%d (overlap mode)", job.id, processed
+            "staged_cohort_process_start job=%s processed=%d (overlap mode)",
+            job.id,
+            processed,
         )
 
         processed = _run_staged_phase2(
-            job, store, staging, settings, pseudonymizer, processing_mode,
-            output_path, "w", staged_count, processed,
-            "staged_cohort", collector,
+            job,
+            store,
+            staging,
+            settings,
+            pseudonymizer,
+            processing_mode,
+            output_path,
+            "w",
+            staged_count,
+            processed,
+            "staged_cohort",
+            collector,
             phase1_done=phase1_done,
             phase1_state=phase1_state,
         )
@@ -416,7 +495,9 @@ def execute_cohort_staged(job, store, staging) -> None:
                     _fh.write(audit_report)
                 checkpoint_data["score_audit_path"] = audit_path
             except Exception:
-                _log.debug("staged_cohort_audit_write_failed job=%s", job.id, exc_info=True)
+                _log.debug(
+                    "staged_cohort_audit_write_failed job=%s", job.id, exc_info=True
+                )
         save_checkpoint(store, job, checkpoint_data)
         _persist_scoring_run(job, profile, summary_dict, "staged_cohort")
         _log.info("staged_cohort_done job=%s processed=%d", job.id, processed)
@@ -427,16 +508,27 @@ def execute_cohort_staged(job, store, staging) -> None:
     elif phase == "processing":
         from pipeline.jobs.summary import JobSummaryCollector
 
-        collector = JobSummaryCollector(config_profile=profile, settings=settings, job_id=job.id)
+        collector = JobSummaryCollector(
+            config_profile=profile, settings=settings, job_id=job.id
+        )
         open_mode = "a" if processed > 0 else "w"
         if processed > 0:
             _truncate_to_lines(output_path, processed)
         _log.info("staged_cohort_process_start job=%s processed=%d", job.id, processed)
 
         processed = _run_staged_phase2(
-            job, store, staging, settings, pseudonymizer, processing_mode,
-            output_path, open_mode, staged_count, processed,
-            "staged_cohort", collector,
+            job,
+            store,
+            staging,
+            settings,
+            pseudonymizer,
+            processing_mode,
+            output_path,
+            open_mode,
+            staged_count,
+            processed,
+            "staged_cohort",
+            collector,
         )
 
         job.result_path = store_result(job.id, output_path)
@@ -455,7 +547,9 @@ def execute_cohort_staged(job, store, staging) -> None:
                     _fh.write(audit_report)
                 checkpoint_data["score_audit_path"] = audit_path
             except Exception:
-                _log.debug("staged_cohort_audit_write_failed job=%s", job.id, exc_info=True)
+                _log.debug(
+                    "staged_cohort_audit_write_failed job=%s", job.id, exc_info=True
+                )
         save_checkpoint(store, job, checkpoint_data)
         _persist_scoring_run(job, profile, summary_dict, "staged_cohort")
         _log.info("staged_cohort_done job=%s processed=%d", job.id, processed)
@@ -490,12 +584,17 @@ def execute_patient_export_staged(job, store, staging) -> None:
     # Phase 1 + Phase 2 (overlapped)
     # ════════════════════════════════════════════════════════════════════════
     if phase == "fetching":
-        phase1_state: dict = {"staged_count": staged_count, "fetch_cursor": fetch_cursor}
+        phase1_state: dict = {
+            "staged_count": staged_count,
+            "fetch_cursor": fetch_cursor,
+        }
         phase1_done = threading.Event()
         phase1_exc: list = []
 
         def _run_phase1() -> None:
-            _log.info("staged_patient_fetch_start job=%s patient=%s", job.id, patient_id)
+            _log.info(
+                "staged_patient_fetch_start job=%s patient=%s", job.id, patient_id
+            )
             buffer: list[dict] = []
             try:
                 gen = fetch_everything(
@@ -513,12 +612,16 @@ def execute_patient_export_staged(job, store, staging) -> None:
                         if fresh and fresh.status == JobStatus.CANCELLED:
                             _log.info("staged_patient_fetch_cancelled job=%s", job.id)
                             return
-                        inserted = staging.stage_batch(job.id, buffer, fhir_source_url=server_url)
+                        inserted = staging.stage_batch(
+                            job.id, buffer, fhir_source_url=server_url
+                        )
                         phase1_state["staged_count"] += inserted
                         buffer.clear()
 
                 if buffer:
-                    inserted = staging.stage_batch(job.id, buffer, fhir_source_url=server_url)
+                    inserted = staging.stage_batch(
+                        job.id, buffer, fhir_source_url=server_url
+                    )
                     phase1_state["staged_count"] += inserted
 
                 _log.info(
@@ -536,15 +639,28 @@ def execute_patient_export_staged(job, store, staging) -> None:
 
         from pipeline.jobs.summary import JobSummaryCollector
 
-        collector = JobSummaryCollector(config_profile=profile, settings=settings, job_id=job.id)
+        collector = JobSummaryCollector(
+            config_profile=profile, settings=settings, job_id=job.id
+        )
         _log.info(
-            "staged_patient_process_start job=%s processed=%d (overlap mode)", job.id, processed
+            "staged_patient_process_start job=%s processed=%d (overlap mode)",
+            job.id,
+            processed,
         )
 
         processed = _run_staged_phase2(
-            job, store, staging, settings, pseudonymizer, processing_mode,
-            output_path, "w", staged_count, processed,
-            "staged_patient", collector,
+            job,
+            store,
+            staging,
+            settings,
+            pseudonymizer,
+            processing_mode,
+            output_path,
+            "w",
+            staged_count,
+            processed,
+            "staged_patient",
+            collector,
             phase1_done=phase1_done,
             phase1_state=phase1_state,
         )
@@ -571,7 +687,9 @@ def execute_patient_export_staged(job, store, staging) -> None:
                     _fh.write(audit_report)
                 checkpoint_data["score_audit_path"] = audit_path
             except Exception:
-                _log.debug("staged_patient_audit_write_failed job=%s", job.id, exc_info=True)
+                _log.debug(
+                    "staged_patient_audit_write_failed job=%s", job.id, exc_info=True
+                )
         save_checkpoint(store, job, checkpoint_data)
         _persist_scoring_run(job, profile, summary_dict, "staged_patient_export")
         _log.info("staged_patient_export_done job=%s processed=%d", job.id, processed)
@@ -582,16 +700,27 @@ def execute_patient_export_staged(job, store, staging) -> None:
     elif phase == "processing":
         from pipeline.jobs.summary import JobSummaryCollector
 
-        collector = JobSummaryCollector(config_profile=profile, settings=settings, job_id=job.id)
+        collector = JobSummaryCollector(
+            config_profile=profile, settings=settings, job_id=job.id
+        )
         open_mode = "a" if processed > 0 else "w"
         if processed > 0:
             _truncate_to_lines(output_path, processed)
         _log.info("staged_patient_process_start job=%s processed=%d", job.id, processed)
 
         processed = _run_staged_phase2(
-            job, store, staging, settings, pseudonymizer, processing_mode,
-            output_path, open_mode, staged_count, processed,
-            "staged_patient", collector,
+            job,
+            store,
+            staging,
+            settings,
+            pseudonymizer,
+            processing_mode,
+            output_path,
+            open_mode,
+            staged_count,
+            processed,
+            "staged_patient",
+            collector,
         )
 
         job.result_path = store_result(job.id, output_path)
@@ -610,7 +739,9 @@ def execute_patient_export_staged(job, store, staging) -> None:
                     _fh.write(audit_report)
                 checkpoint_data["score_audit_path"] = audit_path
             except Exception:
-                _log.debug("staged_patient_audit_write_failed job=%s", job.id, exc_info=True)
+                _log.debug(
+                    "staged_patient_audit_write_failed job=%s", job.id, exc_info=True
+                )
         save_checkpoint(store, job, checkpoint_data)
         _persist_scoring_run(job, profile, summary_dict, "staged_patient_export")
         _log.info("staged_patient_export_done job=%s processed=%d", job.id, processed)
@@ -668,14 +799,20 @@ def execute_batch_patient_export_staged(job, store, staging) -> None:
                     if len(buffer) >= _BATCH_SIZE:
                         fresh = store.get(job.id)
                         if fresh and fresh.status == JobStatus.CANCELLED:
-                            _log.info("staged_batch_patient_fetch_cancelled job=%s", job.id)
+                            _log.info(
+                                "staged_batch_patient_fetch_cancelled job=%s", job.id
+                            )
                             return
-                        inserted = staging.stage_batch(job.id, buffer, fhir_source_url=server_url)
+                        inserted = staging.stage_batch(
+                            job.id, buffer, fhir_source_url=server_url
+                        )
                         phase1_state["staged_count"] += inserted
                         buffer.clear()
 
                 if buffer:
-                    inserted = staging.stage_batch(job.id, buffer, fhir_source_url=server_url)
+                    inserted = staging.stage_batch(
+                        job.id, buffer, fhir_source_url=server_url
+                    )
                     phase1_state["staged_count"] += inserted
 
                 _log.info(
@@ -693,7 +830,9 @@ def execute_batch_patient_export_staged(job, store, staging) -> None:
 
         from pipeline.jobs.summary import JobSummaryCollector
 
-        collector = JobSummaryCollector(config_profile=profile, settings=settings, job_id=job.id)
+        collector = JobSummaryCollector(
+            config_profile=profile, settings=settings, job_id=job.id
+        )
         _log.info(
             "staged_batch_patient_process_start job=%s processed=%d (overlap mode)",
             job.id,
@@ -701,9 +840,18 @@ def execute_batch_patient_export_staged(job, store, staging) -> None:
         )
 
         processed = _run_staged_phase2(
-            job, store, staging, settings, pseudonymizer, processing_mode,
-            output_path, "w", staged_count, processed,
-            "staged_batch_patient", collector,
+            job,
+            store,
+            staging,
+            settings,
+            pseudonymizer,
+            processing_mode,
+            output_path,
+            "w",
+            staged_count,
+            processed,
+            "staged_batch_patient",
+            collector,
             phase1_done=phase1_done,
             phase1_state=phase1_state,
         )
@@ -720,7 +868,9 @@ def execute_batch_patient_export_staged(job, store, staging) -> None:
     elif phase == "processing":
         from pipeline.jobs.summary import JobSummaryCollector
 
-        collector = JobSummaryCollector(config_profile=profile, settings=settings, job_id=job.id)
+        collector = JobSummaryCollector(
+            config_profile=profile, settings=settings, job_id=job.id
+        )
         open_mode = "a" if processed > 0 else "w"
         if processed > 0:
             _truncate_to_lines(output_path, processed)
@@ -729,9 +879,18 @@ def execute_batch_patient_export_staged(job, store, staging) -> None:
         )
 
         processed = _run_staged_phase2(
-            job, store, staging, settings, pseudonymizer, processing_mode,
-            output_path, open_mode, staged_count, processed,
-            "staged_batch_patient", collector,
+            job,
+            store,
+            staging,
+            settings,
+            pseudonymizer,
+            processing_mode,
+            output_path,
+            open_mode,
+            staged_count,
+            processed,
+            "staged_batch_patient",
+            collector,
         )
 
     # ════════════════════════════════════════════════════════════════════════
@@ -742,7 +901,8 @@ def execute_batch_patient_export_staged(job, store, staging) -> None:
     if collector is None:
         _log.warning(
             "staged_batch_patient_unexpected_phase job=%s phase=%s — skipping finalize",
-            job.id, phase,
+            job.id,
+            phase,
         )
         return
 
@@ -750,14 +910,16 @@ def execute_batch_patient_export_staged(job, store, staging) -> None:
     if fresh and fresh.status == JobStatus.CANCELLED:
         _log.info(
             "staged_batch_patient_cancelled_skip_finalize job=%s processed=%d",
-            job.id, processed,
+            job.id,
+            processed,
         )
         return
 
     if not os.path.exists(output_path):
         _log.warning(
             "staged_batch_patient_no_output job=%s path=%s — skipping finalize",
-            job.id, output_path,
+            job.id,
+            output_path,
         )
         return
 
@@ -777,12 +939,16 @@ def execute_batch_patient_export_staged(job, store, staging) -> None:
                 _fh.write(audit_report)
             checkpoint_data["score_audit_path"] = audit_path
         except Exception:
-            _log.debug("staged_batch_patient_audit_write_failed job=%s", job.id, exc_info=True)
+            _log.debug(
+                "staged_batch_patient_audit_write_failed job=%s", job.id, exc_info=True
+            )
     save_checkpoint(store, job, checkpoint_data)
     _persist_scoring_run(job, profile, summary_dict, "staged_batch_patient_export")
     _log.info(
         "staged_batch_patient_export_done job=%s processed=%d result_path=%s",
-        job.id, processed, job.result_path,
+        job.id,
+        processed,
+        job.result_path,
     )
 
 
@@ -814,7 +980,9 @@ def execute_reprocess_staged(job, store, staging) -> None:
 
     from pipeline.jobs.summary import JobSummaryCollector
 
-    collector = JobSummaryCollector(config_profile=profile, settings=settings, job_id=job.id)
+    collector = JobSummaryCollector(
+        config_profile=profile, settings=settings, job_id=job.id
+    )
 
     _log.info(
         "staged_reprocess_start job=%s source=%s profile=%s",
@@ -827,9 +995,18 @@ def execute_reprocess_staged(job, store, staging) -> None:
         _truncate_to_lines(output_path, processed)
 
     processed = _run_staged_phase2(
-        job, store, staging, settings, pseudonymizer, processing_mode,
-        output_path, open_mode, 0, processed,
-        "staged_reprocess", collector,
+        job,
+        store,
+        staging,
+        settings,
+        pseudonymizer,
+        processing_mode,
+        output_path,
+        open_mode,
+        0,
+        processed,
+        "staged_reprocess",
+        collector,
         staging_job_id=source_job_id,
     )
 
@@ -848,7 +1025,9 @@ def execute_reprocess_staged(job, store, staging) -> None:
                 _fh.write(audit_report)
             checkpoint_data["score_audit_path"] = audit_path
         except Exception:
-            _log.debug("staged_reprocess_audit_write_failed job=%s", job.id, exc_info=True)
+            _log.debug(
+                "staged_reprocess_audit_write_failed job=%s", job.id, exc_info=True
+            )
     save_checkpoint(store, job, checkpoint_data)
     _persist_scoring_run(job, profile, summary_dict, "staged_reprocess")
     _log.info("staged_reprocess_done job=%s processed=%d", job.id, processed)
@@ -857,4 +1036,3 @@ def execute_reprocess_staged(job, store, staging) -> None:
 # ---------------------------------------------------------------------------
 # Risk-driven adaptive generalization executor
 # ---------------------------------------------------------------------------
-

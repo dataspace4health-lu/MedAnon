@@ -5,6 +5,7 @@ lookup from a configurable mapping table.  Used for generalisation (e.g.
 mapping a specific diagnosis code to a broader category) and for replacing
 identifying values with de-identified equivalents.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -35,7 +36,10 @@ def _substitute_nodes(node: Any, key: str, value: Any, new_value: Any) -> None:
 
 def substitute_by_path(resource: dict, el: dict, params: dict) -> None:
     if "substitute_with" not in params:
-        _log.warning("substitute rule missing substitute_with param — defaulting to %r", _DEFAULT_SUBSTITUTE)
+        _log.warning(
+            "substitute rule missing substitute_with param — defaulting to %r",
+            _DEFAULT_SUBSTITUTE,
+        )
     substitute_value = params.get("substitute_with", _DEFAULT_SUBSTITUTE)
     ret = resource
     path = el["path"]  # "Patient.name"

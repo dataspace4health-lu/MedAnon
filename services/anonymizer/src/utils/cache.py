@@ -218,7 +218,9 @@ class RedisCache:
                     count += len(keys)
                 if cursor == 0:
                     break
-            _cache_log.info("redis_cache_flushed count=%d prefix=%s", count, self._prefix)
+            _cache_log.info(
+                "redis_cache_flushed count=%d prefix=%s", count, self._prefix
+            )
             return count
         except Exception as exc:
             _cache_log.warning("redis_cache_flush_failed: %s", exc)

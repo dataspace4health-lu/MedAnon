@@ -25,7 +25,9 @@ def check_gpas_cache_coherence(redis_url: str | None = None) -> dict:
         reason: str     — human-readable explanation
     """
     if os.environ.get("MEDANON_GPAS_CANARY_ENABLED", "true").lower() in (
-        "false", "0", "no",
+        "false",
+        "0",
+        "no",
     ):
         return {"checked": False, "flushed": False, "reason": "canary disabled via env"}
 
@@ -60,12 +62,19 @@ def _run_canary_probe(redis_url: str, gpas_url: str, domain: str) -> dict:
     }
     fhir_request = _build_pseudonymize_params(domain, [CANARY_ORIGINAL])
     resp_json = _call_gpas_operation(
-        base_url, "pseudonymizeAllowCreate", fhir_request, params,
+        base_url,
+        "pseudonymizeAllowCreate",
+        fhir_request,
+        params,
     )
     mapping = _parse_pseudonymize_response(resp_json)
     current_pseudonym = mapping.get(CANARY_ORIGINAL)
     if not current_pseudonym:
-        return {"checked": False, "flushed": False, "reason": "canary not returned by gPAS"}
+        return {
+            "checked": False,
+            "flushed": False,
+            "reason": "canary not returned by gPAS",
+        }
 
     # 2. Compare with stored canary in Redis (shared pool — no per-call client)
     canary_key = CANARY_KEY_PREFIX + domain
@@ -73,14 +82,22 @@ def _run_canary_probe(redis_url: str, gpas_url: str, domain: str) -> dict:
 
     client = get_redis(redis_url, decode_responses=True)
     if client is None:
-        return {"checked": False, "flushed": False, "reason": "redis client unavailable"}
+        return {
+            "checked": False,
+            "flushed": False,
+            "reason": "redis client unavailable",
+        }
     stored_pseudonym = client.get(canary_key)
 
     if stored_pseudonym is None:
         # Fresh Redis or first run — store canary, no flush needed
         client.set(canary_key, current_pseudonym)
         _log.info("gpas_canary_stored domain=%s (first run)", domain)
-        return {"checked": True, "flushed": False, "reason": "canary stored (first run)"}
+        return {
+            "checked": True,
+            "flushed": False,
+            "reason": "canary stored (first run)",
+        }
 
     if stored_pseudonym == current_pseudonym:
         _log.info("gpas_canary_ok domain=%s (cache coherent)", domain)
@@ -89,7 +106,9 @@ def _run_canary_probe(redis_url: str, gpas_url: str, domain: str) -> dict:
     # 3. Staleness detected — flush all caches
     _log.warning(
         "gpas_canary_mismatch domain=%s stored=%s current=%s — flushing caches",
-        domain, stored_pseudonym, current_pseudonym,
+        domain,
+        stored_pseudonym,
+        current_pseudonym,
     )
     from utils.cache import flush_cache
 

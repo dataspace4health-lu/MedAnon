@@ -50,8 +50,12 @@ def _execute_bulk_import(job: Job, store, staging) -> None:
     target_url = params["target_url"]
     target_token = params.get("target_token") or os.environ.get("FHIR_TARGET_TOKEN")
     timeout = float(params.get("timeout", 30))
-    parallel = int(params.get("parallel", os.environ.get("MEDANON_UPLOAD_PARALLEL", "4")))
-    batch_size = int(params.get("batch_size", os.environ.get("MEDANON_UPLOAD_BATCH_SIZE", "500")))
+    parallel = int(
+        params.get("parallel", os.environ.get("MEDANON_UPLOAD_PARALLEL", "4"))
+    )
+    batch_size = int(
+        params.get("batch_size", os.environ.get("MEDANON_UPLOAD_BATCH_SIZE", "500"))
+    )
 
     if source_job_id:
         src = store.get(source_job_id)
@@ -126,7 +130,9 @@ def _execute_bulk_import(job: Job, store, staging) -> None:
                 obj = _json_loads(line)
             except (ValueError, TypeError):
                 continue
-            if not (isinstance(obj, dict) and obj.get("resourceType") and "error" not in obj):
+            if not (
+                isinstance(obj, dict) and obj.get("resourceType") and "error" not in obj
+            ):
                 continue
             rt = obj["resourceType"]
             rid = str(obj.get("id", ""))
@@ -173,9 +179,16 @@ def _execute_bulk_import(job: Job, store, staging) -> None:
 
     _worker_log.info(
         "bulk_import_start job=%s source=%s total=%d tiers=%d parallel=%d batch_size=%d",
-        job.id, source_job_id or ndjson_path, total, len(tier_raw), parallel, batch_size,
+        job.id,
+        source_job_id or ndjson_path,
+        total,
+        len(tier_raw),
+        parallel,
+        batch_size,
     )
-    save_checkpoint(store, job, {"phase": "uploading", "lines_written": 0, "staged_count": total})
+    save_checkpoint(
+        store, job, {"phase": "uploading", "lines_written": 0, "staged_count": total}
+    )
 
     def _parse_and_rewrite(raw: str) -> dict:
         obj = _json_loads(raw)
@@ -202,21 +215,30 @@ def _execute_bulk_import(job: Job, store, staging) -> None:
             else:
                 errors += 1
                 if len(error_details) < _MAX_ERROR_DETAILS:
-                    error_details.append({
-                        "resourceType": result.get("resourceType", "Unknown"),
-                        "error": (result.get("error") or "unknown error")[:200],
-                    })
+                    error_details.append(
+                        {
+                            "resourceType": result.get("resourceType", "Unknown"),
+                            "error": (result.get("error") or "unknown error")[:200],
+                        }
+                    )
 
     def _checkpoint_progress() -> None:
-        save_checkpoint(store, job, {
-            "phase": "uploading",
-            "lines_written": uploaded + errors,
-            "staged_count": total,
-        })
+        save_checkpoint(
+            store,
+            job,
+            {
+                "phase": "uploading",
+                "lines_written": uploaded + errors,
+                "staged_count": total,
+            },
+        )
 
     for tier_level in sorted(tier_raw.keys()):
         tier_lines = tier_raw.pop(tier_level)
-        chunks = [tier_lines[i: i + batch_size] for i in range(0, len(tier_lines), batch_size)]
+        chunks = [
+            tier_lines[i : i + batch_size]
+            for i in range(0, len(tier_lines), batch_size)
+        ]
         del tier_lines
 
         if pool is not None and len(chunks) > 1:
@@ -243,17 +265,23 @@ def _execute_bulk_import(job: Job, store, staging) -> None:
                 _tally(_upload_chunk(chunk))
                 _checkpoint_progress()
 
-    save_checkpoint(store, job, {
-        "phase": "done",
-        "lines_written": uploaded + errors,
-        "uploaded": uploaded,
-        "staged_count": total,
-        "errors": errors,
-        "error_details": error_details,
-    })
+    save_checkpoint(
+        store,
+        job,
+        {
+            "phase": "done",
+            "lines_written": uploaded + errors,
+            "uploaded": uploaded,
+            "staged_count": total,
+            "errors": errors,
+            "error_details": error_details,
+        },
+    )
     job.result_path = ndjson_path
     store.update(job)
-    _worker_log.info("bulk_import_done job=%s uploaded=%d errors=%d", job.id, uploaded, errors)
+    _worker_log.info(
+        "bulk_import_done job=%s uploaded=%d errors=%d", job.id, uploaded, errors
+    )
 
     # Surface a hard failure when no resource was successfully uploaded.  The
     # job runner above us treats raised exceptions as job failure; without this,

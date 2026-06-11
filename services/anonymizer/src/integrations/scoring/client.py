@@ -107,7 +107,9 @@ class RemoteScoringClient:
         self._breaker = CircuitBreaker(
             name="scoring",
             failure_threshold=int(os.environ.get("SCORING_CB_FAILURE_THRESHOLD", "5")),
-            recovery_timeout_sec=float(os.environ.get("SCORING_CB_RECOVERY_TIMEOUT_SEC", "30")),
+            recovery_timeout_sec=float(
+                os.environ.get("SCORING_CB_RECOVERY_TIMEOUT_SEC", "30")
+            ),
         )
 
     @property

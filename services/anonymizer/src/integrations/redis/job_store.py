@@ -338,7 +338,9 @@ class RedisJobStore:
         # ZSCAN guarantees we see every member at least once even when the
         # set is being mutated concurrently.
         while True:
-            cursor, items = self._client.zscan(_INDEX_KEY, cursor=cursor, count=batch_size)
+            cursor, items = self._client.zscan(
+                _INDEX_KEY, cursor=cursor, count=batch_size
+            )
             if items:
                 ids = [member for member, _score in items]
                 pipe = self._client.pipeline(transaction=False)
@@ -350,7 +352,11 @@ class RedisJobStore:
                     cleanup = self._client.pipeline(transaction=False)
                     cleanup.zrem(_INDEX_KEY, *ghosts)
                     for status_val in (
-                        "pending", "running", "done", "failed", "cancelled"
+                        "pending",
+                        "running",
+                        "done",
+                        "failed",
+                        "cancelled",
                     ):
                         cleanup.srem(f"{_STATUS_PREFIX}{status_val}", *ghosts)
                     # Type sets are unbounded by name, so scan them too.

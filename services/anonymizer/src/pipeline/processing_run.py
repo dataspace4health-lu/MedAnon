@@ -251,7 +251,9 @@ def init_processing_run_store(db_path: Any = None, store: Any = None) -> Any:
         # auto-implement ``__fspath__`` and would falsely match.
         store = db_path
         db_path = None
-    _processing_run_store = store if store is not None else SqliteProcessingRunStore(db_path)
+    _processing_run_store = (
+        store if store is not None else SqliteProcessingRunStore(db_path)
+    )
     _log.info("processing_run_store initialised")
     return _processing_run_store
 

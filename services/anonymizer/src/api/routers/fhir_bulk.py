@@ -317,7 +317,9 @@ async def export_status(request: Request, job_id: str) -> Response:
         )
 
     if job.status == JobStatus.CANCELLED:
-        outcome = _operation_outcome("information", "informational", "Export was cancelled")
+        outcome = _operation_outcome(
+            "information", "informational", "Export was cancelled"
+        )
         return Response(
             status_code=410,
             content=_json_dumps(outcome),

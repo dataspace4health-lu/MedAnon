@@ -6,13 +6,118 @@ analysis of free-text fields in de-identified FHIR resources.
 PHI Safety: This agent MUST use a LOCAL/self-hosted model because it receives
 de-identified text that may contain residual PII. The model string is forced
 to MEDANON_AI_PII_PROVIDER regardless of the global MEDANON_AI_PROVIDER.
+
+Local-only enforcement (C4): when MEDANON_AI_PII_REQUIRE_LOCAL is true
+(the default) the PII model is verified to resolve to a loopback/private
+endpoint before any de-identified text is sent. If it cannot be proven local
+the AI layer is skipped (fail-closed) so residual PHI never reaches an
+external LLM.
 """
 
 import logging
 import os
 import re
 
+from integrations.ai.local_guard import (  # noqa: F401  (re-exported for compat)
+    PiiModelNotLocalError,
+    _host_is_local,
+    _local_model_prefixes,
+    _pii_require_local,
+    assert_endpoint_local,
+)
+
 _log = logging.getLogger("medanon.ai.pii_detector")
+
+
+def _extract_json_array(text: str) -> list:
+    """Parse a JSON array from an LLM response.
+
+    Chat models (MedGemma, gemma, etc.) commonly wrap JSON in ```json fences
+    and add prose despite instructions. Try a direct parse first, then a
+    fenced block, then the first bracketed ``[...]`` span. Returns [] if no
+    valid array is found rather than raising.
+    """
+    import json
+
+    for candidate in _json_candidates(text):
+        try:
+            parsed = json.loads(candidate)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if isinstance(parsed, list):
+            return parsed
+    return []
+
+
+def _json_candidates(text: str):
+    text = text.strip()
+    yield text
+    fence = re.search(r"```(?:json)?\s*\n?(.*?)```", text, re.DOTALL)
+    if fence:
+        yield fence.group(1).strip()
+    span = re.search(r"\[.*\]", text, re.DOTALL)
+    if span:
+        yield span.group(0)
+
+
+def _assert_pii_model_is_local(model: str, api_base: str | None) -> None:
+    """Enforce the local-only PII model contract (C4).
+
+    No-op when MEDANON_AI_PII_REQUIRE_LOCAL is disabled. Otherwise raises
+    PiiModelNotLocalError unless the endpoint is provably local — either an
+    explicit local ``api_base`` or a recognised local provider prefix. The
+    caller MUST treat a raise as fail-closed (do not send PHI).
+
+    The actual check lives in ``integrations.ai.local_guard`` and is ALSO
+    enforced unconditionally inside ``LLMProvider`` for ``phi_payload=True``
+    calls — this wrapper exists for the early caller-side check (precise
+    error before any work) and for backward compatibility.
+    """
+    if not _pii_require_local():
+        return
+    assert_endpoint_local(model, api_base)
+
+
+def pii_enforcement_status() -> dict:
+    """Report the C4 local-only PII enforcement posture for /v1/ai/status.
+
+    Returns the configured PII model/endpoint, whether enforcement is active,
+    and whether the resolved endpoint is provably local (loopback/private).
+    Performs no PHI processing — safe to call from a status handler.
+    """
+    model = os.environ.get("MEDANON_AI_PII_PROVIDER", "").strip()
+    api_base = (
+        os.environ.get("MEDANON_AI_PII_API_BASE", "").strip()
+        or os.environ.get("MEDANON_AI_API_BASE", "").strip()
+        or None
+    )
+    require_local = _pii_require_local()
+    configured = bool(model)
+    local_verified = False
+    detail = ""
+    if not configured:
+        detail = "AI PII scan disabled (MEDANON_AI_PII_PROVIDER unset)."
+    else:
+        try:
+            _assert_pii_model_is_local(model, api_base)
+            local_verified = True
+            detail = (
+                "PII model endpoint verified local/self-hosted."
+                if require_local
+                else "Local-only enforcement disabled (opt-out)."
+            )
+        except PiiModelNotLocalError as exc:
+            local_verified = False
+            detail = str(exc)
+    return {
+        "configured": configured,
+        "model": model,
+        "api_base": api_base or "",
+        "require_local": require_local,
+        "local_verified": local_verified,
+        "detail": detail,
+    }
+
 
 # Regex patterns matching pipeline/scoring/privacy.py:_PII_PATTERNS
 PII_PATTERNS: dict[str, re.Pattern] = {
@@ -130,16 +235,18 @@ def detect_pii_leaks(
         for field_path, text in text_fields:
             for name, pattern in PII_PATTERNS.items():
                 for match in pattern.finditer(text):
-                    all_detections.append({
-                        "resource_id": resource_id,
-                        "resource_type": resource_type,
-                        "field_path": field_path,
-                        "type": name,
-                        "evidence": match.group()[:30],
-                        "confidence": 0.9,
-                        "severity": _SEVERITY_MAP.get(name, "medium"),
-                        "source": "regex",
-                    })
+                    all_detections.append(
+                        {
+                            "resource_id": resource_id,
+                            "resource_type": resource_type,
+                            "field_path": field_path,
+                            "type": name,
+                            "evidence": match.group()[:30],
+                            "confidence": 0.9,
+                            "severity": _SEVERITY_MAP.get(name, "medium"),
+                            "source": "regex",
+                        }
+                    )
 
         # Layer 2: NER scan (existing Presidio adapter)
         try:
@@ -152,7 +259,10 @@ def detect_pii_leaks(
                 for field_path, text in text_fields:
                     try:
                         hits = adapter.detect(
-                            text, entities=[], threshold=0.5, language="en",
+                            text,
+                            entities=[],
+                            threshold=0.5,
+                            language="en",
                         )
                         for hit in hits:
                             etype = (
@@ -160,16 +270,18 @@ def detect_pii_leaks(
                                 if isinstance(hit, tuple) and len(hit) >= 3
                                 else "UNKNOWN"
                             )
-                            all_detections.append({
-                                "resource_id": resource_id,
-                                "resource_type": resource_type,
-                                "field_path": field_path,
-                                "type": etype.lower(),
-                                "evidence": f"NER entity: {etype}",
-                                "confidence": 0.7,
-                                "severity": _SEVERITY_MAP.get(etype, "medium"),
-                                "source": "ner",
-                            })
+                            all_detections.append(
+                                {
+                                    "resource_id": resource_id,
+                                    "resource_type": resource_type,
+                                    "field_path": field_path,
+                                    "type": etype.lower(),
+                                    "evidence": f"NER entity: {etype}",
+                                    "confidence": 0.7,
+                                    "severity": _SEVERITY_MAP.get(etype, "medium"),
+                                    "source": "ner",
+                                }
+                            )
                     except Exception:
                         pass
         except ImportError:
@@ -232,6 +344,25 @@ def _ai_scan_resource(
     if not pii_model:
         return []
 
+    # Pin the PII scan to a dedicated self-hosted endpoint. When
+    # MEDANON_AI_PII_API_BASE is unset, fall back to the global
+    # MEDANON_AI_API_BASE (e.g. the Ollama VM) rather than letting litellm
+    # default to localhost — otherwise a model_override silently routes to
+    # 127.0.0.1 on THIS host instead of the configured remote VM.
+    pii_api_base = (
+        os.environ.get("MEDANON_AI_PII_API_BASE", "").strip()
+        or os.environ.get("MEDANON_AI_API_BASE", "").strip()
+        or None
+    )
+
+    # C4: refuse to ship de-identified text to a non-local LLM. Fail-closed —
+    # skip the AI layer rather than risk PHI exfiltration.
+    try:
+        _assert_pii_model_is_local(pii_model, pii_api_base)
+    except PiiModelNotLocalError as exc:
+        _log.error("ai_pii_scan_blocked_non_local_model: %s", exc)
+        return []
+
     try:
         provider = get_provider()
     except NotAvailableError:
@@ -242,8 +373,6 @@ def _ai_scan_resource(
     )
 
     try:
-        import json
-
         response = provider.complete(
             messages=[
                 {"role": "system", "content": _PII_SYSTEM_PROMPT},
@@ -256,14 +385,21 @@ def _ai_scan_resource(
                 },
             ],
             model_override=pii_model,
+            api_base_override=pii_api_base,
             temperature=0.0,
             max_tokens=2048,
+            # De-identified text may carry residual PHI — the provider
+            # re-enforces endpoint locality (defense in depth vs the early
+            # _assert_pii_model_is_local check above).
+            phi_payload=True,
         )
-        detections = json.loads(response)
-        if isinstance(detections, list):
+        detections = _extract_json_array(response)
+        if detections:
             for d in detections:
-                d["source"] = "ai"
-            return detections
+                if isinstance(d, dict):
+                    d["source"] = "ai"
+            return [d for d in detections if isinstance(d, dict)]
+        _log.info("ai_pii_scan_no_parseable_json len=%d", len(response or ""))
     except (ProviderUnavailableError, Exception) as exc:
         _log.debug("ai_pii_scan_failed: %s", exc)
     return []

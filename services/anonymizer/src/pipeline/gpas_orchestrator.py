@@ -32,10 +32,22 @@ _gpas_params_lru: dict = {}
 _gpas_params_lock = threading.Lock()
 
 
+def clear_gpas_params_cache() -> None:
+    """Clear the per-profile gPAS params cache (called on config change)."""
+    with _gpas_params_lock:
+        _gpas_params_lru.clear()
+
+
 def _extract_gpas_params(settings) -> dict | None:
-    """Return the params dict from the first ``gpas_pseudonymize`` rule, or *None*."""
+    """Return the params dict from the first ``gpas_pseudonymize`` rule, or *None*.
+
+    Cached per ``(filename, config_hash)`` — content-keyed so an in-place
+    profile edit can never serve stale gPAS params.
+    """
     rules = getattr(settings, "rules", [])
-    rules_key = getattr(settings, "filename", None)
+    from pipeline.rule_matcher import _settings_cache_key
+
+    rules_key = _settings_cache_key(settings)
     if rules_key is not None:
         cached = _gpas_params_lru.get(rules_key, _SENTINEL)
         if cached is not _SENTINEL:
@@ -111,7 +123,9 @@ def pseudonymize_resource_identifiers(
     def _call_domain(domain: str) -> tuple[str, dict | None, Exception | None]:
         unique_values = list(dict.fromkeys(domain_to_values[domain]))
         try:
-            partial = pseudonymizer.pseudonymize_batch(unique_values, domain_to_params[domain])
+            partial = pseudonymizer.pseudonymize_batch(
+                unique_values, domain_to_params[domain]
+            )
             return domain, partial, None
         except GpasUnavailableError as exc:
             return domain, None, exc
@@ -188,11 +202,15 @@ def pseudonymize_resource_identifiers(
                 try:
                     perform_deidentification("redact", resource, item.element, {})
                     if _MANIFEST_ENABLED and manifest_entries is not None:
-                        manifest_entries.append({
-                            "rule": item.rule.get("name", item.rule.get("match", "?")),
-                            "action": "redact",
-                            "path": item.element.get("path", "?"),
-                        })
+                        manifest_entries.append(
+                            {
+                                "rule": item.rule.get(
+                                    "name", item.rule.get("match", "?")
+                                ),
+                                "action": "redact",
+                                "path": item.element.get("path", "?"),
+                            }
+                        )
                 except Exception as exc2:
                     audit_log.warning(
                         "fallback_redact_failed path=%s error_type=%s",
@@ -230,11 +248,13 @@ def pseudonymize_resource_identifiers(
         )
         _substitute_nodes(ret, path[-1], _orig_val, _write_back)
         if _MANIFEST_ENABLED and manifest_entries is not None:
-            manifest_entries.append({
-                "rule": item.rule.get("name", item.rule.get("match", "?")),
-                "action": item.rule.get("action", "gpas_pseudonymize"),
-                "path": item.element.get("path", "?"),
-            })
+            manifest_entries.append(
+                {
+                    "rule": item.rule.get("name", item.rule.get("match", "?")),
+                    "action": item.rule.get("action", "gpas_pseudonymize"),
+                    "path": item.element.get("path", "?"),
+                }
+            )
 
     return batch_mapping
 
@@ -281,7 +301,9 @@ def depseudonymize_resource_identifiers(
             if processing_mode == "skip":
                 audit_log.warning(
                     "gpas_depseudo_batch_failed domain=%s count=%d error_type=%s",
-                    domain, len(unique_values), type(exc).__name__,
+                    domain,
+                    len(unique_values),
+                    type(exc).__name__,
                     exc_info=False,
                 )
                 continue
@@ -332,7 +354,7 @@ def apply_pseudonym_mapping(
     Returns the same *batch_mapping* passed in (for text-ID rewriting parity
     with :func:`pseudonymize_resource_identifiers`).
     """
-    if not gpas_work or not batch_mapping:
+    if not gpas_work:
         return batch_mapping
 
     for item in gpas_work:
@@ -347,11 +369,15 @@ def apply_pseudonym_mapping(
                 try:
                     perform_deidentification("redact", resource, item.element, {})
                     if _MANIFEST_ENABLED and manifest_entries is not None:
-                        manifest_entries.append({
-                            "rule": item.rule.get("name", item.rule.get("match", "?")),
-                            "action": "redact",
-                            "path": item.element.get("path", "?"),
-                        })
+                        manifest_entries.append(
+                            {
+                                "rule": item.rule.get(
+                                    "name", item.rule.get("match", "?")
+                                ),
+                                "action": "redact",
+                                "path": item.element.get("path", "?"),
+                            }
+                        )
                 except Exception as exc2:
                     audit_log.warning(
                         "fallback_redact_failed path=%s error_type=%s",
@@ -385,11 +411,13 @@ def apply_pseudonym_mapping(
         )
         _substitute_nodes(ret, path[-1], _orig_val, _write_back)
         if _MANIFEST_ENABLED and manifest_entries is not None:
-            manifest_entries.append({
-                "rule": item.rule.get("name", item.rule.get("match", "?")),
-                "action": item.rule.get("action", "gpas_pseudonymize"),
-                "path": item.element.get("path", "?"),
-            })
+            manifest_entries.append(
+                {
+                    "rule": item.rule.get("name", item.rule.get("match", "?")),
+                    "action": item.rule.get("action", "gpas_pseudonymize"),
+                    "path": item.element.get("path", "?"),
+                }
+            )
 
     return batch_mapping
 
@@ -485,7 +513,9 @@ def pseudonymize_identifier_batch(
     primary_domains = [d for d in domain_to_values if not d.startswith(_EXTRA_KEY)]
     extra_domains = [d for d in domain_to_values if d.startswith(_EXTRA_KEY)]
 
-    def _call_domain(domain: str, values: list[str]) -> tuple[str, dict | None, Exception | None]:
+    def _call_domain(
+        domain: str, values: list[str]
+    ) -> tuple[str, dict | None, Exception | None]:
         """Call gPAS for a single domain. Returns (domain, mapping, error)."""
         try:
             partial = pseudonymizer.pseudonymize_batch(values, domain_to_params[domain])
@@ -495,7 +525,9 @@ def pseudonymize_identifier_batch(
         except Exception as exc:
             return domain, None, exc
 
-    def _process_result(domain: str, partial: dict | None, exc: Exception | None) -> None:
+    def _process_result(
+        domain: str, partial: dict | None, exc: Exception | None
+    ) -> None:
         """Handle result from a single domain call."""
         if exc is not None:
             if isinstance(exc, GpasUnavailableError):
@@ -558,13 +590,17 @@ def pseudonymize_identifier_batch(
     if exclude_cached:
         for domain in primary_domains:
             all_vals = list(dict.fromkeys(domain_to_values[domain]))
-            need = [v for v in all_vals if v in exclude_cached and v not in combined_mapping]
+            need = [
+                v for v in all_vals if v in exclude_cached and v not in combined_mapping
+            ]
             if not need:
                 continue
             # Pass 1: pure cache lookup — hot L1 hit → O(1) shard lock, no HTTP;
             # warm L2 hit → one Redis mget (~1 ms), promotes to L1.
             try:
-                cached_partial = pseudonymizer.lookup_cache_batch(need, domain_to_params[domain])
+                cached_partial = pseudonymizer.lookup_cache_batch(
+                    need, domain_to_params[domain]
+                )
                 combined_mapping.update(cached_partial)
             except Exception:
                 cached_partial = {}
@@ -573,7 +609,9 @@ def pseudonymize_identifier_batch(
             if not cold:
                 continue
             try:
-                partial = pseudonymizer.pseudonymize_batch(cold, domain_to_params[domain])
+                partial = pseudonymizer.pseudonymize_batch(
+                    cold, domain_to_params[domain]
+                )
                 combined_mapping.update(partial)
             except Exception as exc:
                 audit_log.warning(

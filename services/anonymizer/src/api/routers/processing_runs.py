@@ -11,6 +11,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import PlainTextResponse
 
 from api.auth import AuthContext
 from api.schemas.processing_runs import (
@@ -67,6 +68,27 @@ async def processing_run_stats():
     store = _get_store()
     stats = await asyncio.to_thread(store.get_stats)
     return stats
+
+
+@router.get("/{run_id}/score/report", response_class=PlainTextResponse)
+async def get_processing_run_score_report(run_id: str):
+    """Return the Markdown audit report for a processing run.
+
+    The report is stored in the ``score`` JSONB column when scoring runs.
+    Returns 404 if the run does not exist or has not been scored yet.
+    """
+    store = _get_store()
+    run = await asyncio.to_thread(store.get, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Processing run not found")
+    score = run.get("score") or {}
+    report = score.get("audit_report")
+    if not report:
+        raise HTTPException(
+            status_code=404,
+            detail="No audit report for this run. Enable MEDANON_SCORING_ENABLED=true and re-process.",
+        )
+    return PlainTextResponse(content=report, media_type="text/markdown")
 
 
 @router.get("/{run_id}", response_model=ProcessingRunResponse)

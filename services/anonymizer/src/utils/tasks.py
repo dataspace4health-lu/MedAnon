@@ -21,7 +21,9 @@ _log = logging.getLogger("medanon.tasks")
 _BACKGROUND_TASKS: Set[asyncio.Task[Any]] = set()
 
 
-def retain_task(coro: Coroutine[Any, Any, Any] | Awaitable[Any], *, name: str | None = None) -> asyncio.Task[Any]:
+def retain_task(
+    coro: Coroutine[Any, Any, Any] | Awaitable[Any], *, name: str | None = None
+) -> asyncio.Task[Any]:
     """Schedule *coro* with `asyncio.create_task` and keep a strong reference.
 
     The task is added to a module-level set and removed automatically when it

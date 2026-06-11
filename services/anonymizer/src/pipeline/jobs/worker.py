@@ -26,8 +26,10 @@ from pipeline.jobs.checkpoint import save_checkpoint
 from utils import audit
 from utils.tracing import get_tracer as _get_tracer
 
+
 def _tracer():
     return _get_tracer("medanon.worker")
+
 
 _worker_log = logging.getLogger("medanon.worker")
 
@@ -39,22 +41,39 @@ _PHI_UUID_RE = re.compile(
 )
 _PHI_DATE_RE = re.compile(r"\b\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}[^\s]*)?\b")
 _PHI_EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b")
-_PHI_PHONE_RE = re.compile(r"(?<!\d)(?:\+\d{1,3}[\s\-]?)?(?:\(?\d{2,4}\)?[\s\-.]?)?\d{3,4}[\s\-.]?\d{4}(?!\d)")
+_PHI_PHONE_RE = re.compile(
+    r"(?<!\d)(?:\+\d{1,3}[\s\-]?)?(?:\(?\d{2,4}\)?[\s\-.]?)?\d{3,4}[\s\-.]?\d{4}(?!\d)"
+)
+_PHI_SSN_RE = re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
+_PHI_MRN_RE = re.compile(r"\b(?:MRN|mrn)[:\s#]?\d{4,}\b")
 
 
 def _sanitize_error(exc: BaseException, max_len: int = 400) -> str:
     """Return a PHI-scrubbed, truncated string representation of *exc*.
 
     Replaces UUID-like strings (FHIR resource IDs), ISO date strings, email
-    addresses, and phone numbers with placeholders so they are never persisted
-    in the job error field or audit log.
+    addresses, phone numbers, SSNs, and MRNs with placeholders so they are
+    never persisted in the job error field or audit log.  Increments
+    ``medanon_error_phi_scrubbed_total`` whenever a substitution actually fired
+    so operators can detect handlers that leak PHI into exception messages.
     """
-    text = str(exc)
-    text = _PHI_UUID_RE.sub("[ID]", text)
+    raw = str(exc)
+    text = _PHI_UUID_RE.sub("[ID]", raw)
     text = _PHI_DATE_RE.sub("[DATE]", text)
     text = _PHI_EMAIL_RE.sub("[EMAIL]", text)
     text = _PHI_PHONE_RE.sub("[PHONE]", text)
+    text = _PHI_SSN_RE.sub("[SSN]", text)
+    text = _PHI_MRN_RE.sub("[MRN]", text)
+    if text != raw:
+        try:
+            from utils.metrics import ERROR_PHI_SCRUBBED
+
+            ERROR_PHI_SCRUBBED.inc()
+        except Exception:
+            pass
     return text[:max_len]
+
+
 _store = None
 _staging = None  # StagingStore instance; set by init_staging() when MEDANON_STAGING_DB_URL is configured
 _OUTPUT_DIR = os.environ.get("MEDANON_OUTPUT_DIR", "/output")
@@ -92,6 +111,10 @@ from pipeline.jobs.executors import (  # noqa: E402
     _execute_reprocess,
     _execute_risk_driven_export,
 )
+from pipeline.jobs.executor_tabular import (  # noqa: E402
+    execute_tabular_batch as _execute_tabular_batch,
+)
+from pipeline.jobs.executor_sql import execute_sql_export as _execute_sql_export  # noqa: E402
 
 
 def store_result(job_id: str, local_path: str) -> str:
@@ -109,8 +132,14 @@ _EXECUTORS = {
     "reprocess": lambda job: _execute_reprocess(job, _store, _staging),
     "patient-export": lambda job: _execute_patient_export(job, _store, _staging),
     "bulk-import": lambda job: _execute_bulk_import(job, _store, _staging),
-    "batch-patient-export": lambda job: _execute_batch_patient_export(job, _store, _staging),
-    "risk-driven-export": lambda job: _execute_risk_driven_export(job, _store, _staging),
+    "batch-patient-export": lambda job: _execute_batch_patient_export(
+        job, _store, _staging
+    ),
+    "risk-driven-export": lambda job: _execute_risk_driven_export(
+        job, _store, _staging
+    ),
+    "tabular-batch": lambda job: _execute_tabular_batch(job, _store, _staging),
+    "sql-export": lambda job: _execute_sql_export(job, _store, _staging),
 }
 
 
@@ -192,9 +221,7 @@ async def _stale_recovery_loop() -> None:
                     _STALE_RECOVERY_TIMEOUT_MIN,
                 )
         except Exception as exc:
-            _worker_log.warning(
-                "stale_recovery_error: %s", type(exc).__name__
-            )
+            _worker_log.warning("stale_recovery_error: %s", type(exc).__name__)
         try:
             recovered_parts = await asyncio.to_thread(
                 _staging.recover_stale_partitions,
@@ -211,6 +238,32 @@ async def _stale_recovery_loop() -> None:
             _worker_log.warning(
                 "stale_partition_recovery_error: %s", type(exc).__name__
             )
+
+
+_WORKFLOW_RECONCILE_INTERVAL_SEC: int = int(
+    os.environ.get("MEDANON_WORKFLOW_RECONCILE_INTERVAL_SEC", "30")
+)
+
+
+async def _workflow_reconcile_loop() -> None:
+    """Periodically re-derive workflow step readiness (lost-enqueue recovery).
+
+    Idempotent thanks to the engine's CAS guards. No-op when the workflow
+    engine isn't configured or the interval is ``<= 0``.
+    """
+    if _WORKFLOW_RECONCILE_INTERVAL_SEC <= 0:
+        return
+    from pipeline.workflows import get_workflow_engine
+
+    while True:
+        await asyncio.sleep(_WORKFLOW_RECONCILE_INTERVAL_SEC)
+        engine = get_workflow_engine()
+        if engine is None:
+            continue
+        try:
+            await asyncio.to_thread(engine.reconcile)
+        except Exception as exc:
+            _worker_log.warning("workflow_reconcile_error: %s", type(exc).__name__)
 
 
 def _cleanup_expired_results() -> int:
@@ -324,6 +377,30 @@ async def _run_job(job: Job) -> None:
         _store.update(job)
         return
 
+    # Re-fetch current state before starting: an external CANCELLED (or a
+    # delete) between enqueue and execution must not be overwritten with
+    # RUNNING — the stale queue snapshot would clobber the cancel and the
+    # executor would run anyway. The refreshed record also carries the latest
+    # retry count for the poison-job check below.
+    try:
+        refreshed = _store.get(job.id)
+    except Exception as exc:
+        # Store blip — proceed with the snapshot rather than dropping the job.
+        _worker_log.warning(
+            "job_refresh_failed id=%s: %s", job.id, type(exc).__name__
+        )
+        refreshed = job
+    if refreshed is None:
+        _worker_log.info("job_deleted_before_start id=%s", job.id)
+        return
+    if refreshed.status == JobStatus.CANCELLED:
+        from utils.metrics import WORKER_JOBS_TOTAL
+
+        _worker_log.info("job_cancelled_before_start id=%s", job.id)
+        WORKER_JOBS_TOTAL.labels(job_type=job.type, status="cancelled").inc()
+        return
+    job = refreshed
+
     # Poison job protection: check retry count from checkpoint data.
     # _retry_count is incremented only after a failed attempt (in the except
     # block below), so checking >= here gives exactly _MAX_JOB_RETRIES attempts.
@@ -365,6 +442,7 @@ async def _run_job(job: Job) -> None:
         )
     except Exception as exc:
         from pipeline.scoring.gate import ScoreGateBlocked
+
         gate_blocked = isinstance(exc, ScoreGateBlocked)
 
         job.status = JobStatus.ERROR
@@ -407,6 +485,9 @@ async def _run_job(job: Job) -> None:
             _store.update(job)
         except Exception as update_exc:
             _worker_log.error("job_status_update_failed id=%s: %s", job.id, update_exc)
+        # Workflow DAG hook: advance the owning workflow (no-op for non-workflow
+        # jobs). Isolated so a workflow-store hiccup never fails the job.
+        _notify_workflow_terminal(job)
 
 
 async def _run_and_release(job: Job, message_id: str | None = None) -> None:
@@ -482,7 +563,9 @@ def _route_to_dlq(job, retry_count: int) -> None:
         _store.update(job)
     _worker_log.error(
         "job_poison id=%s retries=%d type=%s — routed to DLQ",
-        job.id, retry_count, job.type,
+        job.id,
+        retry_count,
+        job.type,
     )
     audit.emit(
         "job.poison",
@@ -492,6 +575,24 @@ def _route_to_dlq(job, retry_count: int) -> None:
         detail={"retry_count": retry_count, "max_retries": _MAX_JOB_RETRIES},
     )
     _emit_dlq_stream(job, retry_count)
+    # A DEAD step also fails its owning workflow.
+    _notify_workflow_terminal(job)
+
+
+def _notify_workflow_terminal(job) -> None:
+    """Advance the owning workflow (no-op for non-workflow jobs).
+
+    Isolated + fail-soft: a workflow-store error must never affect the job's
+    own terminal handling.
+    """
+    try:
+        from pipeline.workflows import get_workflow_engine
+
+        engine = get_workflow_engine()
+        if engine is not None:
+            engine.on_job_terminal(job)
+    except Exception as exc:
+        _worker_log.warning("workflow_terminal_hook_failed id=%s: %s", job.id, exc)
 
 
 def _check_retry_limit(job) -> bool:
@@ -524,9 +625,14 @@ def _recover_running_jobs() -> int:
     if hasattr(_store, "claim_stale_jobs"):
         try:
             stale_pairs = _store.claim_stale_jobs(min_idle_ms=0)
-            _TERMINAL = frozenset({
-                JobStatus.DONE, JobStatus.ERROR, JobStatus.CANCELLED, JobStatus.DEAD,
-            })
+            _TERMINAL = frozenset(
+                {
+                    JobStatus.DONE,
+                    JobStatus.ERROR,
+                    JobStatus.CANCELLED,
+                    JobStatus.DEAD,
+                }
+            )
             for job_id, message_id in stale_pairs:
                 job = _store.get(job_id)
                 if job is None or job.status in _TERMINAL:
@@ -537,12 +643,16 @@ def _recover_running_jobs() -> int:
                         _store.ack_job(message_id)
                         _worker_log.debug(
                             "recovery_ack_terminal job=%s msg=%s status=%s",
-                            job_id, message_id, job.status if job else "missing",
+                            job_id,
+                            message_id,
+                            job.status if job else "missing",
                         )
                     except Exception as ack_exc:
                         _worker_log.warning(
                             "recovery_ack_terminal_failed job=%s msg=%s: %s",
-                            job_id, message_id, ack_exc,
+                            job_id,
+                            message_id,
+                            ack_exc,
                         )
                     continue
                 if job.status == JobStatus.RUNNING:
@@ -661,6 +771,7 @@ async def worker_loop() -> None:
 
     if _staging is not None:
         from utils.tasks import retain_task
+
         retain_task(_cleanup_loop(), name="staging_cleanup")
         _worker_log.info(
             "staging_cleanup scheduled interval_sec=%d", _STAGING_CLEANUP_INTERVAL_SEC
@@ -678,6 +789,7 @@ async def worker_loop() -> None:
 
     if _RESULT_TTL_SEC > 0:
         from utils.tasks import retain_task
+
         retain_task(_result_cleanup_loop(), name="result_cleanup")
         _worker_log.info(
             "result_cleanup scheduled interval_sec=%d ttl_days=%.1f",
@@ -692,15 +804,31 @@ async def worker_loop() -> None:
     # Periodic Redis index orphan sweep — no-op for non-Redis backends.
     if _store is not None and hasattr(_store, "cleanup_orphan_index"):
         from utils.tasks import retain_task
+
         retain_task(_redis_index_sweep_loop(), name="redis_index_sweep")
         _worker_log.info(
             "redis_index_sweep scheduled interval_sec=%d",
             _REDIS_INDEX_SWEEP_INTERVAL_SEC,
         )
 
+    # Workflow reconciliation sweep — no-op when the engine isn't configured.
+    if _WORKFLOW_RECONCILE_INTERVAL_SEC > 0:
+        from pipeline.workflows import get_workflow_engine
+
+        if get_workflow_engine() is not None:
+            from utils.tasks import retain_task
+
+            retain_task(_workflow_reconcile_loop(), name="workflow_reconcile")
+            _worker_log.info(
+                "workflow_reconcile scheduled interval_sec=%d",
+                _WORKFLOW_RECONCILE_INTERVAL_SEC,
+            )
+
     _poll_count = 0
-    # Touch heartbeat file to signal readiness
-    Path(_HEARTBEAT_PATH).touch()
+    try:
+        Path(_HEARTBEAT_PATH).touch()
+    except OSError as exc:
+        _worker_log.warning("heartbeat_touch_failed path=%s: %s", _HEARTBEAT_PATH, exc)
 
     # Background heartbeat task — runs independently of the semaphore so that
     # the heartbeat file stays fresh even when all job slots are occupied.
@@ -712,13 +840,16 @@ async def worker_loop() -> None:
                 # Log degraded state so operators can diagnose failed liveness
                 # probes (e.g. /output mounted read-only).  Do not break the
                 # loop — heartbeat file staleness already signals the problem.
-                _worker_log.warning("heartbeat_touch_failed path=%s: %s", _HEARTBEAT_PATH, exc)
+                _worker_log.warning(
+                    "heartbeat_touch_failed path=%s: %s", _HEARTBEAT_PATH, exc
+                )
             try:
                 await asyncio.wait_for(_shutdown_event.wait(), timeout=15)
             except asyncio.TimeoutError:
                 pass
 
     from utils.tasks import retain_task as _retain_task
+
     _heartbeat_task = _retain_task(_heartbeat_loop(), name="worker_heartbeat")
 
     while not _shutdown_event.is_set():

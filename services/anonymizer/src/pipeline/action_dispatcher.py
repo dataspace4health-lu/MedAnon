@@ -20,6 +20,7 @@ from pipeline.rule_matcher import (
     _evaluate_simple_path,
     _evaluate_where_path,
     _resolve_rule_params,
+    evaluate_rule_condition,
 )
 from pipeline.deidentify import (
     deident_actions as _deident_actions,
@@ -29,7 +30,10 @@ from pipeline.deidentify import (
     perform_pseudonymization,
     perform_depseudonymization,
 )
-from pipeline.structural_phi import apply_structural_heuristics as _apply_structural_heuristics
+from pipeline.exceptions import FallbackRedactError
+from pipeline.structural_phi import (
+    apply_structural_heuristics as _apply_structural_heuristics,
+)
 
 audit_log = logging.getLogger("medanon.audit")
 
@@ -75,6 +79,24 @@ BatchWork = PseudonymizationTask
 NlpWork = PHIDetectionTask
 
 
+def _bare_path_prefix(expr: str) -> str:
+    """Trim a FHIRPath expression to its leading bare dot-path.
+
+    ``"Patient.name.where(use='official').given"`` → ``"Patient.name"``.
+    ``find_nodes`` silently returns ``[]`` for function segments like
+    ``where(...)``, so a fallback redact targeting the raw expression would
+    no-op and leave the field intact. Redacting the longest plain-navigable
+    prefix over-redacts (drops the whole parent field) — the fail-closed
+    direction.
+    """
+    expr = expr.strip()
+    paren = expr.find("(")
+    if paren != -1:
+        head = expr[:paren]
+        expr = head.rsplit(".", 1)[0] if "." in head else head
+    return expr.strip().rstrip(".")
+
+
 # ---------------------------------------------------------------------------
 # Rule evaluation: evaluate de-identification rules, dispatch immediate actions,
 # collect deferred pseudonymization and PHI-detection tasks.
@@ -101,12 +123,34 @@ def evaluate_and_dispatch(
     nlp_work: list[PHIDetectionTask] = []
     # Dedup key: (path, action, stable_value_key) — see _stable_value_key below.
     processed_paths: set[tuple] = set()
+    # Conflict detection: first action applied to each concrete path. A later
+    # rule with a *different* action on the same path is a config conflict.
+    path_action_seen: dict[str, str] = {}
 
     _apply_structural_heuristics(resource)
 
     for rule in applicable_rules:
         action = rule["action"]
         params = _resolve_rule_params(rule, settings)
+
+        # Conditional rules (E2.4): skip this rule entirely when its optional
+        # condition/conditions block does not hold for the current resource.
+        if not evaluate_rule_condition(rule, resource):
+            audit_log.debug(
+                "rule_skipped_condition action=%s match=%s",
+                action,
+                rule.get("match"),
+            )
+            if _MANIFEST_ENABLED:
+                manifest_entries.append(
+                    {
+                        "rule": rule.get("name", rule["match"]),
+                        "action": action,
+                        "path": rule.get("match", ""),
+                        "skipped_reason": "condition_not_met",
+                    }
+                )
+            continue
 
         # Apply domain_map override: route this resource type to its leaf gPAS domain.
         # Only runs for gpas_pseudonymize/gpas_depseudonymize when the config has a domain_map.
@@ -143,19 +187,49 @@ def evaluate_and_dispatch(
                             else "unknown",
                             type(exc).__name__,
                         )
-                        # Fail-safe: construct a synthetic element targeting the
-                        # candidate path so the downstream redact action can strip
-                        # the field.  Without this, a FHIRPath evaluation failure
-                        # silently passes the element through unprocessed.
-                        fallback_el = {"path": candidate, "value": None}
+                        # Fail-safe: redact the longest plain-navigable prefix of
+                        # the candidate path. The raw expression may contain
+                        # function segments (where(), first(), …) that find_nodes
+                        # cannot navigate — it returns [] for those, so a redact
+                        # targeting the raw expression silently no-ops and the
+                        # element passes through unprocessed.
+                        fallback_path = _bare_path_prefix(candidate)
+                        fallback_el = {"path": fallback_path, "value": None}
+                        try:
+                            from utils.metrics import ACTION_FALLBACK
+
+                            ACTION_FALLBACK.labels(
+                                action=str(action), reason=type(exc).__name__
+                            ).inc()
+                        except Exception:  # noqa: BLE001 — metrics must never break the pipeline
+                            pass
                         try:
                             perform_deidentification(
                                 "redact", resource, fallback_el, {}
                             )
-                        except Exception:
+                        except Exception as redact_exc:
+                            # A resource we can neither evaluate nor redact must
+                            # not be emitted: raise so the skip-mode handler in
+                            # the processor quarantines the whole resource.
                             audit_log.error(
-                                "fhirpath_fallback_redact_failed expression=%s — PHI may be exposed",
+                                "fhirpath_fallback_redact_failed expression=%s "
+                                "fallback_path=%s error_type=%s — quarantining resource",
                                 candidate,
+                                fallback_path,
+                                type(redact_exc).__name__,
+                            )
+                            raise FallbackRedactError(
+                                f"fallback redact failed for path {fallback_path!r} "
+                                f"after FHIRPath evaluation error"
+                            ) from redact_exc
+                        if _MANIFEST_ENABLED:
+                            manifest_entries.append(
+                                {
+                                    "rule": rule.get("name", rule["match"]),
+                                    "action": "redact",
+                                    "path": fallback_path,
+                                    "reason": "fhirpath_eval_fallback",
+                                }
                             )
                         continue
                     raise
@@ -211,6 +285,26 @@ def evaluate_and_dispatch(
             el_val = el.get("value")
             val_key = _stable_value_key(el_val)
             processed_paths.add((el.get("path", "?"), action, val_key, params_key))
+            # Surface config conflicts: same path claimed by a different action.
+            el_path = el.get("path", "?")
+            prior = path_action_seen.get(el_path)
+            if prior is None:
+                path_action_seen[el_path] = action
+            elif prior != action:
+                audit_log.warning(
+                    "rule_conflict path=%s action_a=%s action_b=%s",
+                    el_path,
+                    prior,
+                    action,
+                )
+                try:
+                    from utils.metrics import RULE_CONFLICT_TOTAL
+
+                    RULE_CONFLICT_TOTAL.labels(
+                        path=el_path, action_a=prior, action_b=action
+                    ).inc()
+                except Exception:  # noqa: BLE001 — metrics must never break the pipeline
+                    pass
 
         for el in elements_to_process:
             el_path = el.get("path", "?")
@@ -236,7 +330,7 @@ def evaluate_and_dispatch(
                 # "abc-123" (bare) and a reference "urn:uuid:abc-123" produce two
                 # separate gPAS entries with different pseudonyms, breaking linkage.
                 if isinstance(val, str) and val.startswith("urn:uuid:"):
-                    serialized = val[len("urn:uuid:"):]
+                    serialized = val[len("urn:uuid:") :]
                 gpas_work.append(
                     PseudonymizationTask(
                         rule=rule,
@@ -282,6 +376,14 @@ def evaluate_and_dispatch(
                         type(exc).__name__,
                         exc_info=False,
                     )
+                    try:
+                        from utils.metrics import ACTION_FALLBACK
+
+                        ACTION_FALLBACK.labels(
+                            action=str(action), reason=type(exc).__name__
+                        ).inc()
+                    except Exception:
+                        pass
                     try:
                         perform_deidentification("redact", resource, el, {})
                         actual_action = "redact"

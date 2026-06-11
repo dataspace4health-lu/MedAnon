@@ -16,8 +16,6 @@ _log = logging.getLogger("medanon.summary")
 
 # Re-export the canonical extractor (single source of truth in pipeline.manifest).
 from pipeline.manifest import (  # noqa: E402
-    MANIFEST_SYSTEM as _MANIFEST_SYSTEM,
-    MANIFEST_FULL_EXT_URL as _MANIFEST_FULL_EXT_URL,
     extract_manifest_entries as _extract_manifest_entries,
 )
 

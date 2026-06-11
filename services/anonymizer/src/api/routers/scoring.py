@@ -26,7 +26,9 @@ _service = ScoringService()
 @router.post("/score")
 async def score_resource(
     req: ScoreResourceRequest,
-    include_audit: bool = Query(default=False, description="Include Markdown audit report in response"),
+    include_audit: bool = Query(
+        default=False, description="Include Markdown audit report in response"
+    ),
 ):
     """Score a de-identified FHIR resource.
 

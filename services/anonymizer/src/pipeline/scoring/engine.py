@@ -45,6 +45,26 @@ _quality_eval = QualityEvaluator()
 _MAX_PATIENTS: int = int(os.environ.get("MEDANON_SCORE_MAX_PATIENTS", "10000"))
 
 
+# Quasi-identifier extractor, resolved once and cached at module level.  It was
+# previously imported inside ``record_resource`` on *every* Patient (inside the
+# accumulator lock) — hoisting the resolution out of the per-resource hot loop
+# avoids a repeated import lookup in the critical section.
+_extract_patient_qi = None
+
+
+def _get_qi_extractor():
+    """Return the cached ``analytics.risk._extract_patient_qi`` (or a no-op)."""
+    global _extract_patient_qi
+    if _extract_patient_qi is None:
+        try:
+            from analytics.risk import _extract_patient_qi as _fn
+
+            _extract_patient_qi = _fn
+        except ImportError:
+            _extract_patient_qi = lambda _r: ("", "", "")  # noqa: E731 - tiny fallback
+    return _extract_patient_qi
+
+
 def compute_composite(
     privacy: PrivacyDecision,
     utility: ModuleScore,
@@ -125,6 +145,7 @@ def _get_remote_client():
         return None
     if _REMOTE_CLIENT is None or _REMOTE_CLIENT_URL != url:
         from integrations.scoring import get_remote_scoring_client
+
         _REMOTE_CLIENT = get_remote_scoring_client()
         _REMOTE_CLIENT_URL = url
     return _REMOTE_CLIENT
@@ -220,11 +241,14 @@ class ScoreCollector:
         "_config_profile",
         "_text_risk_hits",
         "_identifier_risk_hits",
+        "_config_risk_sum",
+        "_config_risk_count",
         "_lock",
     )
 
     def __init__(self, config_profile: str = "auto") -> None:
         import threading
+
         self._pass_count: int = 0
         self._fail_count: int = 0
         self._composite_sum: float = 0.0
@@ -243,6 +267,12 @@ class ScoreCollector:
         # independent of the composite score.
         self._text_risk_hits: int = 0
         self._identifier_risk_hits: int = 0
+        # Accumulate per-resource config_identifier_risk so the aggregate
+        # batch_privacy can report the average coverage gap across all scored
+        # resources (only counted when settings was available, i.e. > 0.0 or
+        # settings was passed and rules were found — tracked via _config_risk_count).
+        self._config_risk_sum: float = 0.0
+        self._config_risk_count: int = 0
         # Guards all mutable accumulators below.  ``record_resource`` and
         # ``aggregate`` may run concurrently from the parallel finalize stage
         # in the pipeline; without this lock, increments and the reservoir
@@ -344,16 +374,19 @@ class ScoreCollector:
                     self._text_risk_hits += 1
                 if result.privacy.identifier_risk > 0:
                     self._identifier_risk_hits += 1
+                # Accumulate config_identifier_risk when settings was available.
+                # _config_coverage() returns 0.0 both when settings=None AND when
+                # all rules fired — use config_risk_count to track only cases
+                # where settings was present (i.e. the evaluator had rules to check).
+                if result.privacy.config_identifier_risk > 0.0:
+                    self._config_risk_sum += result.privacy.config_identifier_risk
+                    self._config_risk_count += 1
 
             # Accumulate Patient QI tuples for batch-level k-anonymity
             # (reservoir sampling).
             if deidentified.get("resourceType") == "Patient":
                 self._patient_seen += 1
-                try:
-                    from analytics.risk import _extract_patient_qi
-                    qi = _extract_patient_qi(deidentified)
-                except ImportError:
-                    qi = ("", "", "")
+                qi = _get_qi_extractor()(deidentified)
                 if len(self._patient_qis) < _MAX_PATIENTS:
                     self._patient_qis.append(qi)
                 else:
@@ -379,6 +412,28 @@ class ScoreCollector:
         if self._patient_qis:
             batch_privacy = _privacy_eval.evaluate_batch_from_qis(
                 self._patient_qis,
+            )
+
+        # Inject the per-resource average config_identifier_risk into batch_privacy.
+        # evaluate_batch_from_qis() returns config_identifier_risk=0.0 because it
+        # only has QI tuples, not per-resource settings.  We correct that here
+        # by substituting the average accumulated during record_resource() calls.
+        avg_config_risk = (
+            self._config_risk_sum / self._config_risk_count
+            if self._config_risk_count > 0
+            else 0.0
+        )
+        if batch_privacy is not None and avg_config_risk > 0.0:
+            # Replace the placeholder 0.0 with the actual computed average.
+            batch_privacy = PrivacyDecision(
+                risk_score=batch_privacy.risk_score,
+                passed=batch_privacy.passed,
+                threshold=batch_privacy.threshold,
+                attacker_risk=batch_privacy.attacker_risk,
+                identifier_risk=batch_privacy.identifier_risk,
+                config_identifier_risk=round(avg_config_risk, 4),
+                text_risk=batch_privacy.text_risk,
+                evidence=batch_privacy.evidence,
             )
 
         avg_composite = self._composite_sum / total if total else 0.0

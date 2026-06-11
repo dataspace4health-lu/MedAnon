@@ -8,6 +8,7 @@ Canonical definitions of:
     ``JobNotComplete``       — job is still running
     ``JobResultMissing``     — result file has been cleaned up
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -72,8 +73,6 @@ class JobQueueFull(Exception):
     """
 
     def __init__(self, pending: int, cap: int):
-        super().__init__(
-            f"Job queue full: {pending} pending jobs (cap {cap})."
-        )
+        super().__init__(f"Job queue full: {pending} pending jobs (cap {cap}).")
         self.pending = pending
         self.cap = cap

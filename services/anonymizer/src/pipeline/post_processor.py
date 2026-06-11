@@ -5,8 +5,10 @@ All functions mutate the supplied object in place.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
+from functools import lru_cache
 
 audit_log = logging.getLogger("medanon.audit")
 
@@ -18,13 +20,15 @@ _MAX_NESTING_DEPTH = 50
 # types (Observation, Organization, Location, …) may have non-PHI display
 # labels (e.g. "Leukocytes [#/volume] in Blood"); those are preserved and
 # handled by the Pass-1 nlp_detect_act rule on "*.display" instead.
-_PERSON_RESOURCE_TYPES = frozenset({
-    "Patient",
-    "Practitioner",
-    "Person",
-    "RelatedPerson",
-    "PractitionerRole",
-})
+_PERSON_RESOURCE_TYPES = frozenset(
+    {
+        "Patient",
+        "Practitioner",
+        "Person",
+        "RelatedPerson",
+        "PractitionerRole",
+    }
+)
 
 # ---------------------------------------------------------------------------
 # Aho-Corasick text-ID replacement (optional, falls back to regex)
@@ -143,14 +147,18 @@ def _replace_text_ids(text: str, id_map: dict, automaton=None, compiled=None) ->
     return text
 
 
-def _build_text_id_matcher(id_map: dict) -> tuple:
-    """Build the best available text-ID matcher for *id_map*.
+def _id_map_digest(id_map: dict) -> str:
+    """Return a stable hex digest of sorted (key, value) pairs in *id_map*."""
+    h = hashlib.sha256()
+    for k, v in sorted(id_map.items()):
+        h.update(f"{k}\x00{v}\x00".encode())
+    return h.hexdigest()
 
-    Returns ``(automaton, compiled_regex)``.  Exactly one will be non-None
-    (Aho-Corasick preferred), or both None if *id_map* is empty.
-    """
-    if not id_map:
-        return None, None
+
+@lru_cache(maxsize=64)
+def _build_text_id_matcher_cached(digest: str, frozen_items: tuple) -> tuple:
+    """Build and cache the best-available text-ID matcher, keyed by content digest."""
+    id_map = dict(frozen_items)
     automaton = _build_text_id_automaton(id_map)
     if automaton is not None:
         return automaton, None
@@ -158,6 +166,22 @@ def _build_text_id_matcher(id_map: dict) -> tuple:
     if not parts:
         return None, None
     return None, re.compile(r"\b(" + "|".join(parts) + r")\b")
+
+
+def _build_text_id_matcher(id_map: dict) -> tuple:
+    """Build the best available text-ID matcher for *id_map*.
+
+    Returns ``(automaton, compiled_regex)``.  Exactly one will be non-None
+    (Aho-Corasick preferred), or both None if *id_map* is empty.
+
+    Results are memoized by content digest so repeated calls with the same
+    mapping (common across large batches) avoid rebuilding the automaton.
+    """
+    if not id_map:
+        return None, None
+    digest = _id_map_digest(id_map)
+    frozen = tuple(sorted(id_map.items()))
+    return _build_text_id_matcher_cached(digest, frozen)
 
 
 _STRUCTURAL_FIELDS = frozenset(("id", "reference", "url", "resourceType"))
@@ -247,7 +271,7 @@ def _collect_reference_ids(
         ref = obj.get("reference")
         if isinstance(ref, str) and ref and "?" not in ref and not ref.startswith("#"):
             if ref.startswith("urn:uuid:"):
-                resource_id = ref[len("urn:uuid:"):]
+                resource_id = ref[len("urn:uuid:") :]
                 if resource_id:
                     ids.add(resource_id)
                     # urn:uuid: references don't carry a resource type — they fall
@@ -486,7 +510,6 @@ def _shallow_post_process_bundle(
     if not ref_mapping or not isinstance(bundle, dict):
         return
 
-    entries = bundle.get("entry")
     for key, value in bundle.items():
         if key == "entry" and isinstance(value, list):
             for entry_item in value:

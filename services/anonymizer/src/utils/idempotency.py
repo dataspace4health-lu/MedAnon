@@ -47,7 +47,9 @@ def hash_body(body: bytes | str | dict | list) -> str:
     produce the same hash regardless of key order or whitespace.
     """
     if isinstance(body, (dict, list)):
-        payload = json.dumps(body, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        payload = json.dumps(body, sort_keys=True, separators=(",", ":")).encode(
+            "utf-8"
+        )
     elif isinstance(body, str):
         payload = body.encode("utf-8")
     else:
@@ -192,7 +194,11 @@ def lookup_or_conflict(scope: str, key: str, body_hash: str) -> dict | None:
 
 
 def remember(
-    scope: str, key: str, body_hash: str, status: int, body: Any,
+    scope: str,
+    key: str,
+    body_hash: str,
+    status: int,
+    body: Any,
     ttl_sec: int = DEFAULT_TTL_SEC,
 ) -> None:
     """Store a successful response for future replay under ``(scope, key)``.

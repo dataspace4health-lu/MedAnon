@@ -10,7 +10,6 @@ import urllib.parse as _urlparse
 from utils.json_fast import loads as _json_loads
 import queue as _queue
 import time
-from concurrent.futures import Future as _Future
 from urllib.parse import urlencode
 
 from integrations.fhir import _transport as _t
@@ -40,6 +39,7 @@ def _validate_bulk_file_url(url: str) -> None:
     err = check_hostname_ssrf(hostname)
     if err:
         raise ValueError(f"Bulk file URL rejected (SSRF): {err}")
+
 
 _BULK_DOWNLOAD_PARALLEL = int(os.environ.get("MEDANON_BULK_DOWNLOAD_PARALLEL", "4"))
 

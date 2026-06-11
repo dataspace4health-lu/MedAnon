@@ -98,11 +98,13 @@ def _attach_suppressed_tag(resource: dict) -> None:
     """
     meta = resource.setdefault("meta", {})
     tags = meta.setdefault("tag", [])
-    tags.append({
-        "system": _SUPPRESSED_SYSTEM,
-        "code": "patient-suppressed",
-        "display": "Suppressed for k-anonymity guarantee",
-    })
+    tags.append(
+        {
+            "system": _SUPPRESSED_SYSTEM,
+            "code": "patient-suppressed",
+            "display": "Suppressed for k-anonymity guarantee",
+        }
+    )
 
 
 def apply_plan(
@@ -128,7 +130,10 @@ def apply_plan(
             return None
         # Overwrite QI fields with the solver-chosen generalization level.
         from pipeline.privacy.hierarchies import level_value
-        for qi_path, qi_kind in zip(plan.levels.keys(), _iter_kinds(plan, privacy_model)):
+
+        for qi_path, qi_kind in zip(
+            plan.levels.keys(), _iter_kinds(plan, privacy_model)
+        ):
             lvl = plan.levels[qi_path]
             if lvl == 0:
                 continue  # level 0 = identity; no change needed
@@ -166,6 +171,7 @@ def filter_and_apply(
 # Internal helpers
 # ---------------------------------------------------------------------------
 
+
 def _get_field_value(resource: dict, fhir_path: str) -> str:
     """Read a scalar field value for the purpose of generalising it."""
     parts = fhir_path.split(".")
@@ -189,6 +195,8 @@ def _get_field_value(resource: dict, fhir_path: str) -> str:
 
 def _iter_kinds(plan: "GeneralizationPlan", privacy_model: dict):
     """Yield the kind string for each QI path in plan.levels order."""
-    kind_map = {q["path"]: q["kind"] for q in privacy_model.get("quasi_identifiers", [])}
+    kind_map = {
+        q["path"]: q["kind"] for q in privacy_model.get("quasi_identifiers", [])
+    }
     for p in plan.levels:
         yield kind_map.get(p, "category")

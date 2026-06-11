@@ -104,7 +104,9 @@ def get_pool(
             maxconn = pg_pool_budget()
 
         enriched = _enrich_dsn(db_url)
-        logger.info("creating shared PostgreSQL pool (min=%d, max=%d)", minconn, maxconn)
+        logger.info(
+            "creating shared PostgreSQL pool (min=%d, max=%d)", minconn, maxconn
+        )
         _pool = ThreadedConnectionPool(minconn, maxconn, enriched)
         _db_url = db_url  # store original URL for identity comparison
         return _pool

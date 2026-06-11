@@ -42,7 +42,9 @@ from psycopg2.pool import ThreadedConnectionPool
 
 logger = logging.getLogger("medanon.staging")
 
-_PARTITION_TARGET_ROWS: int = int(os.environ.get("MEDANON_PARTITION_TARGET_ROWS", "50000"))
+_PARTITION_TARGET_ROWS: int = int(
+    os.environ.get("MEDANON_PARTITION_TARGET_ROWS", "50000")
+)
 
 _DDL = """
 CREATE SCHEMA IF NOT EXISTS medanon;
@@ -252,7 +254,7 @@ class StagingStore:
                 with conn.cursor() as cur:
                     psycopg2.extras.execute_values(
                         cur,
-                        f"""
+                        """
                         INSERT INTO medanon.staged_resources
                             (job_id, resource_id, resource_type, fhir_source_url, expires_at)
                         VALUES %s
@@ -346,9 +348,7 @@ class StagingStore:
         finally:
             self._put_conn(conn)
 
-    def get_all_resources(
-        self, job_id: str, page_size: int = 500
-    ) -> Iterable[dict]:
+    def get_all_resources(self, job_id: str, page_size: int = 500) -> Iterable[dict]:
         """Iterate over every resource for a job (e.g. for re-processing).
 
         Uses keyset pagination on the integer ``id`` PK — releases and
@@ -359,9 +359,7 @@ class StagingStore:
         while True:
             conn = self._get_conn()
             try:
-                with conn.cursor(
-                    cursor_factory=psycopg2.extras.RealDictCursor
-                ) as cur:
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                     cur.execute(
                         """
                         SELECT id, resource_id, resource_type, fhir_source_url
@@ -625,9 +623,7 @@ class StagingStore:
         while True:
             conn = self._get_conn()
             try:
-                with conn.cursor(
-                    cursor_factory=psycopg2.extras.RealDictCursor
-                ) as cur:
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                     cur.execute(
                         """
                         SELECT id, resource_id, resource_type, fhir_source_url

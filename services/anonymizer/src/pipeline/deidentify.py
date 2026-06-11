@@ -22,10 +22,27 @@ from actions.perturb import perturb_by_path
 from actions.substitute import substitute_by_path
 from actions.generalize import generalize_by_path
 from actions.scrub_text import scrub_text_by_path
+from actions.mask import mask_by_path
+from actions.date_shift import date_shift_by_path
+from actions.tokenize import tokenize_by_path
 from actions.encrypt import encrypt_by_path
 from actions.decrypt import decrypt_by_path
+from pipeline.exceptions import NlpError, NlpUnavailableError
 
 _log = logging.getLogger("medanon.actions")
+
+# Exception types that signal a *programming defect*, not a recoverable runtime
+# failure.  These must never be swallowed by a fail-closed redact — doing so
+# would mask a bug (e.g. a typo in an action) behind a legitimate-looking
+# redaction.  When one of these escapes from NLP/replacement code we re-raise it
+# so it reaches the job-level error boundary and is observable.
+_BUG_EXCEPTIONS = (AttributeError, TypeError, NameError, ImportError)
+
+
+def _is_bug(exc: BaseException) -> bool:
+    """True if *exc* indicates a code defect that must not be silently redacted."""
+    return isinstance(exc, _BUG_EXCEPTIONS)
+
 
 # ---------------------------------------------------------------------------
 # NLP adapter — resolved lazily on first call
@@ -46,6 +63,30 @@ if _NLP_FAIL_MODE not in ("redact", "raise"):
         _NLP_FAIL_MODE,
     )
     _NLP_FAIL_MODE = "redact"
+
+
+def _resolve_fail_mode(params: dict) -> str:
+    """Resolve the NLP failure mode for a single action invocation (E3.3).
+
+    Precedence: a per-rule / per-profile ``fail_mode`` param (sourced from the
+    profile's ``nlp.fail_mode`` block) overrides the process-global
+    ``MEDANON_NLP_FAIL_MODE``.  Invalid values fall back to the global default
+    so a typo in a profile can never silently pass unscrubbed PHI through.
+    """
+    override = params.get("fail_mode")
+    if override is None:
+        return _NLP_FAIL_MODE
+    mode = str(override).strip().lower()
+    if mode not in ("redact", "raise"):
+        _log.warning(
+            "Invalid nlp fail_mode=%r in config — only 'redact'/'raise' supported; "
+            "using global default %r",
+            override,
+            _NLP_FAIL_MODE,
+        )
+        return _NLP_FAIL_MODE
+    return mode
+
 
 # NLP detector helpers — imported lazily once on first use, then cached.
 _nlp_resolve_entities = None
@@ -89,6 +130,7 @@ def _get_nlp_adapter():
         nlp_url = os.environ.get("NLP_SERVICE_URL", "")
         if nlp_url:
             from integrations.nlp.adapter import RemoteNlpAdapter
+
             _nlp_adapter = RemoteNlpAdapter()
         else:
             _log.warning(
@@ -121,8 +163,10 @@ def nlp_scrub_by_path(resource: dict, el: dict, params: dict) -> None:
 
     adapter = _get_nlp_adapter()
     if adapter is None:
-        if _NLP_FAIL_MODE == "raise":
-            raise RuntimeError(f"NLP adapter unavailable — cannot scrub {el['path']}")
+        if _resolve_fail_mode(params) == "raise":
+            raise NlpUnavailableError(
+                f"NLP adapter unavailable — cannot scrub {el['path']}"
+            )
         _log.error("nlp_unavailable path=%s — redacting as safety fallback", el["path"])
         redact_by_path(resource, el, params.get("redact_params", {}))
         return
@@ -142,7 +186,7 @@ def nlp_scrub_by_path(resource: dict, el: dict, params: dict) -> None:
 
     try:
         nodes = find_nodes(resource, parent_path, [])
-    except Exception:
+    except (ValueError, LookupError, RuntimeError):
         _log.error(
             "nlp_find_nodes_failed path=%s — redacting field as safety fallback", path
         )
@@ -161,7 +205,7 @@ def nlp_scrub_by_path(resource: dict, el: dict, params: dict) -> None:
             if isinstance(current, dict) and isinstance(current.get("div"), str):
                 try:
                     current["div"] = _nlp_scrub_xhtml(current["div"], scrub_fn)
-                except Exception:
+                except (NlpError, RuntimeError, OSError, ValueError):
                     _log.error(
                         "nlp_scrub_failed path=%s.%s — redacting field", path, field
                     )
@@ -169,7 +213,7 @@ def nlp_scrub_by_path(resource: dict, el: dict, params: dict) -> None:
             elif isinstance(current, str):
                 try:
                     node[field] = _nlp_scrub_xhtml(current, scrub_fn)
-                except Exception:
+                except (NlpError, RuntimeError, OSError, ValueError):
                     _log.error(
                         "nlp_scrub_failed path=%s.%s — redacting field", path, field
                     )
@@ -177,7 +221,7 @@ def nlp_scrub_by_path(resource: dict, el: dict, params: dict) -> None:
         elif isinstance(current, str):
             try:
                 node[field] = scrub_fn(current)
-            except Exception:
+            except (NlpError, RuntimeError, OSError, ValueError):
                 _log.error("nlp_scrub_failed path=%s.%s — redacting field", path, field)
                 node[field] = "[REDACTED]"
         elif isinstance(current, list):
@@ -185,7 +229,7 @@ def nlp_scrub_by_path(resource: dict, el: dict, params: dict) -> None:
                 if isinstance(v, str):
                     try:
                         current[i] = scrub_fn(v)
-                    except Exception:
+                    except (NlpError, RuntimeError, OSError, ValueError):
                         _log.error(
                             "nlp_scrub_failed path=%s.%s[%d] — redacting field",
                             path,
@@ -337,6 +381,7 @@ _ENTITY_PRIORITY: dict[str, int] = {
 
 def _merge_overlapping_spans(
     hits: list[tuple[int, int, str]],
+    priorities: "dict[str, int] | None" = None,
 ) -> list[tuple[int, int, str]]:
     """Resolve overlapping detected spans into a non-overlapping ordered list.
 
@@ -352,22 +397,45 @@ def _merge_overlapping_spans(
       1. Sort hits by ``(start, -length)`` so larger spans appear first at
          each start position.
       2. Walk the list keeping the earliest non-overlapping span.  When a new
-         span overlaps the previously kept one, pick the winner via
-         ``_ENTITY_PRIORITY`` (higher wins, ties broken by longer span).
+         span overlaps the previously kept one, *union-merge* the coordinates
+         (``min(start), max(end)``) so every character detected by either span
+         stays covered — a partial overlap must never leave an uncovered
+         head/tail un-redacted.  ``_ENTITY_PRIORITY`` (higher wins, ties broken
+         by longer span) only picks which entity *label* drives the replacement
+         strategy for the merged span.
       3. Return spans sorted by descending start so the caller's existing
          right-to-left replacement loop is correct.
     """
     if not hits:
         return []
 
-    # Drop zero-width spans
-    cleaned = [(s, e, t) for (s, e, t) in hits if e > s]
+    # Sanitise spans fail-safe: the NLP service is an external dependency and
+    # may emit malformed spans (wrong arity, non-integer/negative offsets,
+    # start >= end).  A bad span must never crash the pipeline or corrupt text —
+    # we silently drop it and keep the well-formed ones.  This is the single
+    # choke point every replacement passes through, so validating here protects
+    # both _replace_span call sites.
+    cleaned: list[tuple[int, int, str]] = []
+    for hit in hits:
+        try:
+            s, e, t = hit  # raises ValueError on wrong arity
+        except (ValueError, TypeError):
+            _log.warning("nlp_span_malformed dropped=%r (bad arity)", hit)
+            continue
+        if not isinstance(s, int) or not isinstance(e, int):
+            _log.warning("nlp_span_malformed dropped=%r (non-int offsets)", hit)
+            continue
+        if s < 0 or e <= s:
+            # Negative start, zero-width, or inverted span — drop.
+            continue
+        cleaned.append((s, e, t))
     if not cleaned:
         return []
 
     cleaned.sort(key=lambda h: (h[0], -(h[1] - h[0])))
 
     accepted: list[tuple[int, int, str]] = []
+    merge_count = 0
     for s, e, t in cleaned:
         if not accepted:
             accepted.append((s, e, t))
@@ -377,24 +445,60 @@ def _merge_overlapping_spans(
             # No overlap — accept
             accepted.append((s, e, t))
             continue
-        # Overlap — keep the higher-priority entity, ties broken by longer span
-        prio_new = _ENTITY_PRIORITY.get(t, 50)
-        prio_old = _ENTITY_PRIORITY.get(last_t, 50)
+        # Overlap — union-merge coordinates so the full extent of both spans is
+        # replaced.  Replacing one span with the other wholesale leaves the
+        # uncovered head/tail characters of the loser un-redacted (a leak).
+        # Priority only decides which entity label drives the replacement
+        # strategy: ``priorities`` (from the profile ``nlp.entity_priorities``
+        # block) wins; the hard-coded ``_ENTITY_PRIORITY`` is the fallback.
+        prio_map = priorities if priorities else _ENTITY_PRIORITY
+        prio_new = prio_map.get(t, 50)
+        prio_old = prio_map.get(last_t, 50)
         len_new = e - s
         len_old = last_e - last_s
-        if (prio_new, len_new) > (prio_old, len_old):
-            accepted[-1] = (s, e, t)
-        # Otherwise drop the new span
+        winner_t = t if (prio_new, len_new) > (prio_old, len_old) else last_t
+        # Sort order guarantees s >= last_s, so the union start is last_s and
+        # the merged span cannot newly overlap accepted[-2].
+        accepted[-1] = (last_s, max(last_e, e), winner_t)
+        merge_count += 1
+        # Offsets + types only — never span text (PHI).
+        _log.debug(
+            "nlp_span_union_merged kept=(%d,%d,%s) new=(%d,%d,%s) label=%s",
+            last_s,
+            last_e,
+            last_t,
+            s,
+            e,
+            t,
+            winner_t,
+        )
 
+    if merge_count:
+        _log.info("nlp_span_overlaps_merged count=%d", merge_count)
     accepted.sort(key=lambda h: h[0], reverse=True)
     return accepted
 
 
 def _replace_span(
-    text: str, start: int, end: int, entity_type: str,
-    entity_action: str, token_state: dict,
+    text: str,
+    start: int,
+    end: int,
+    entity_type: str,
+    entity_action: str,
+    token_state: dict,
 ) -> str:
-    """Replace a single detected span using the entity-specific strategy."""
+    """Replace a single detected span using the entity-specific strategy.
+
+    Offsets are clamped to ``[0, len(text)]`` defensively so a malformed span
+    (negative start, out-of-bounds end) cannot produce a negative-index slice
+    artefact or raise — it degrades to a no-op or a clamped replacement.
+    """
+    n = len(text)
+    start = max(0, min(start, n))
+    end = max(0, min(end, n))
+    if end <= start:
+        # Nothing valid to replace after clamping.
+        return text
     span_text = text[start:end]
     if entity_action == "keep":
         return text
@@ -426,6 +530,7 @@ def _replace_span(
     else:
         # tokenize (default)
         from integrations.nlp.utils import _tokenize
+
         replacement = _tokenize(span_text, entity_type, token_state)
     return text[:start] + replacement + text[end:]
 
@@ -451,14 +556,20 @@ def nlp_detect_act_by_path(resource: dict, el: dict, params: dict) -> None:
     threshold = float(params.get("threshold", 0.4))
     language = str(params.get("language", "en"))
     use_html = bool(params.get("html", False))
+    # Entity → action policy: hard-coded defaults < profile/rule ``entity_actions``
+    # (the latter merged in by _resolve_rule_params).  Same precedence for the
+    # overlap-resolution priorities.
     entity_actions = {**_DEFAULT_ENTITY_ACTIONS, **(params.get("entity_actions") or {})}
     default_action = entity_actions.get("default", "tokenize")
+    entity_priorities = {**_ENTITY_PRIORITY, **(params.get("entity_priorities") or {})}
     token_state = params.get("_token_state") or {"next": {}, "map": {}, "reverse": {}}
 
     adapter = _get_nlp_adapter()
     if adapter is None:
-        if _NLP_FAIL_MODE == "raise":
-            raise RuntimeError(f"NLP adapter unavailable — cannot detect {el['path']}")
+        if _resolve_fail_mode(params) == "raise":
+            raise NlpUnavailableError(
+                f"NLP adapter unavailable — cannot detect {el['path']}"
+            )
         _log.error("nlp_unavailable path=%s — redacting as safety fallback", el["path"])
         redact_by_path(resource, el, {})
         params["_actual_action"] = "nlp_detect_act/redact"
@@ -476,9 +587,10 @@ def nlp_detect_act_by_path(resource: dict, el: dict, params: dict) -> None:
 
     try:
         nodes = find_nodes(resource, parent_path, [])
-    except Exception:
+    except (ValueError, LookupError, RuntimeError):
         _log.error(
-            "nlp_detect_act_find_nodes_failed path=%s — redacting as safety fallback", path
+            "nlp_detect_act_find_nodes_failed path=%s — redacting as safety fallback",
+            path,
         )
         redact_by_path(resource, el, {})
         params["_actual_action"] = "nlp_detect_act/redact"
@@ -490,13 +602,14 @@ def nlp_detect_act_by_path(resource: dict, el: dict, params: dict) -> None:
     # HTML / XHTML path — serial, one detect call per xhtml node
     # ------------------------------------------------------------------
     if use_html:
+
         def detect_and_replace_html(text: str) -> str:
             if not text or not text.strip():
                 return text
             hits = adapter.detect(text, entities, threshold, language)
             if not hits:
                 return text
-            sorted_hits = _merge_overlapping_spans(hits)
+            sorted_hits = _merge_overlapping_spans(hits, entity_priorities)
             for start, end, entity_type in sorted_hits:
                 if not text[start:end].strip():
                     continue
@@ -519,7 +632,7 @@ def nlp_detect_act_by_path(resource: dict, el: dict, params: dict) -> None:
                     if result != current["div"]:
                         current["div"] = result
                         changed = True
-                except Exception:
+                except (NlpError, RuntimeError, OSError, ValueError):
                     _log.error("nlp_detect_act_failed path=%s — redacting", path)
                     current["div"] = "[REDACTED]"
                     changed = True
@@ -529,7 +642,7 @@ def nlp_detect_act_by_path(resource: dict, el: dict, params: dict) -> None:
                     if result != current:
                         node[field] = result
                         changed = True
-                except Exception:
+                except (NlpError, RuntimeError, OSError, ValueError):
                     _log.error("nlp_detect_act_failed path=%s — redacting", path)
                     node[field] = "[REDACTED]"
                     changed = True
@@ -577,7 +690,7 @@ def nlp_detect_act_by_path(resource: dict, el: dict, params: dict) -> None:
             batch_hits = [adapter.detect(texts[0], entities, threshold, language)]
         else:
             batch_hits = adapter.detect_batch(texts, entities, threshold, language)
-    except Exception:
+    except (NlpError, RuntimeError, OSError, ValueError):
         _log.error(
             "nlp_detect_act_batch_failed path=%s — redacting as safety fallback", path
         )
@@ -590,7 +703,7 @@ def nlp_detect_act_by_path(resource: dict, el: dict, params: dict) -> None:
         if not hits:
             continue
         text = orig_text
-        sorted_hits = _merge_overlapping_spans(hits)
+        sorted_hits = _merge_overlapping_spans(hits, entity_priorities)
         for start, end, entity_type in sorted_hits:
             if not text[start:end].strip():
                 continue
@@ -613,6 +726,9 @@ def nlp_detect_act_by_path(resource: dict, el: dict, params: dict) -> None:
 deident_actions = {
     "redact": redact_by_path,
     "perturb": perturb_by_path,
+    "date_shift": date_shift_by_path,
+    "mask": mask_by_path,
+    "tokenize": tokenize_by_path,
     "cryptohash": cryptohash_by_path,
     "substitute": substitute_by_path,
     "generalize": generalize_by_path,

@@ -22,6 +22,7 @@ Usage
     report = assess_risk(ndjson_text)          # mixed Patient+Condition NDJSON
     print(report["summary"]["risk_level"])     # "low" | "medium" | "high" | "critical"
 """
+
 from __future__ import annotations
 
 import datetime
@@ -35,18 +36,20 @@ from typing import Any
 # De-identification sentinel detection
 # ---------------------------------------------------------------------------
 
-_QI_SUPPRESSED_VALUES: frozenset[str] = frozenset({
-    "",
-    "[redacted]",
-    "redacted",
-    "unknown",
-    "other",
-    "unk",
-    "[removed]",
-    "removed",
-    "[masked]",
-    "masked",
-})
+_QI_SUPPRESSED_VALUES: frozenset[str] = frozenset(
+    {
+        "",
+        "[redacted]",
+        "redacted",
+        "unknown",
+        "other",
+        "unk",
+        "[removed]",
+        "removed",
+        "[masked]",
+        "masked",
+    }
+)
 
 _DECADE_DATE_RE = re.compile(r"^\d{3}x$")
 # Decade-aligned 4-digit year emitted by the ``date_decade`` generalize strategy
@@ -84,6 +87,7 @@ def _is_qi_suppressed(value: str, field: str = "") -> bool:
 # ---------------------------------------------------------------------------
 # Quasi-identifier extraction
 # ---------------------------------------------------------------------------
+
 
 def _extract_patient_qi(resource: dict) -> tuple[str, str, str]:
     """Return (gender, birth_year, zip_prefix_3) for one Patient resource.
@@ -131,6 +135,7 @@ def extract_quasi_identifiers(
 # Condition code map
 # ---------------------------------------------------------------------------
 
+
 def build_conditions_map(resources: list[dict]) -> dict[str, set[str]]:
     """Build a mapping of patient_id → set of Condition codes.
 
@@ -162,6 +167,7 @@ def build_conditions_map(resources: list[dict]) -> dict[str, set[str]]:
 # ---------------------------------------------------------------------------
 # k-anonymity
 # ---------------------------------------------------------------------------
+
 
 def compute_k_anonymity(qi_tuples: list[tuple[str, str, str]]) -> dict[str, Any]:
     """Compute k-anonymity and derived risk metrics from QI tuples.
@@ -217,8 +223,7 @@ def compute_k_anonymity(qi_tuples: list[tuple[str, str, str]]) -> dict[str, Any]
 
     # Records where at least one QI field is missing/sentinel
     records_with_missing_qi = sum(
-        k for (g, by, zp), k in group_counts.items()
-        if not g or not by or not zp
+        k for (g, by, zp), k in group_counts.items() if not g or not by or not zp
     )
 
     groups = [
@@ -255,6 +260,7 @@ def compute_k_anonymity(qi_tuples: list[tuple[str, str, str]]) -> dict[str, Any]
 # l-diversity
 # ---------------------------------------------------------------------------
 
+
 def compute_l_diversity(
     qi_tuples: list[tuple[str, str, str]],
     patient_ids: list[str],
@@ -282,11 +288,14 @@ def compute_l_diversity(
 
     l_values = [len(codes) for codes in group_codes.values()]
     if not l_values:
-        return {"computed": False, "reason": "Could not correlate Conditions to Patients"}
+        return {
+            "computed": False,
+            "reason": "Could not correlate Conditions to Patients",
+        }
 
     min_l = min(l_values)
     max_l = max(l_values)
-    violations = sum(1 for l in l_values if l < 2)
+    violations = sum(1 for lv in l_values if lv < 2)
 
     details = [
         {
@@ -311,6 +320,7 @@ def compute_l_diversity(
 # Top-level entry points
 # ---------------------------------------------------------------------------
 
+
 def assess_risk_resources(resources: list[dict]) -> dict[str, Any]:
     """Compute full re-identification risk report from a pre-parsed resource list.
 
@@ -331,14 +341,18 @@ def assess_risk_resources(resources: list[dict]) -> dict[str, Any]:
     input_lines = len(resources)
 
     if patient_count == 0:
-        warnings.append("No Patient resources found in input — risk metrics require Patient resources.")
+        warnings.append(
+            "No Patient resources found in input — risk metrics require Patient resources."
+        )
         k_result = compute_k_anonymity([])
         return {
             **k_result,
             "l_diversity": {"computed": False, "reason": "No Patient resources"},
             "warnings": warnings,
             "meta": {
-                "computed_at": datetime.datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                "computed_at": datetime.datetime.now(timezone.utc)
+                .isoformat()
+                .replace("+00:00", "Z"),
                 "input_lines": input_lines,
                 "patient_lines": 0,
                 "condition_lines": 0,
@@ -368,7 +382,9 @@ def assess_risk_resources(resources: list[dict]) -> dict[str, Any]:
         "groups": k_result["groups"],
         "warnings": warnings,
         "meta": {
-            "computed_at": datetime.datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "computed_at": datetime.datetime.now(timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z"),
             "input_lines": input_lines,
             "patient_lines": patient_count,
             "condition_lines": condition_count,

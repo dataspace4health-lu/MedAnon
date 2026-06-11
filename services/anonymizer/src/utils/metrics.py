@@ -56,6 +56,29 @@ SEEN_VALUES_CAP_REACHED = Counter(
     "Times the in-process seen-values dedup set reached its cap (deprecated — always 0)",
 )
 
+# ── Rule conflicts ───────────────────────────────────────────────────────────
+# Incremented when two config rules target the same resource path with a
+# different action (e.g. a `redact` rule and a `mask` rule both matching
+# Patient.telecom.value).  Surfaced statically by GET /v1/configs/{name}/conflicts
+# and at runtime by the action dispatcher dedup loop.
+RULE_CONFLICT_TOTAL = Counter(
+    "medanon_rule_conflict_total",
+    "Config rules in conflict (same path, different action)",
+    ["path", "action_a", "action_b"],
+)
+
+# ── Action fallback (E1.1) ───────────────────────────────────────────────────
+# Incremented when an action handler raises a recoverable error and the
+# dispatcher falls back to redaction in "skip" mode.  ``reason`` is the
+# exception type name so operators can see *why* an action failed instead of
+# the failure being silently masked by a successful-looking redaction.
+ACTION_FALLBACK = Counter(
+    "medanon_action_fallback_total",
+    "Times an action failed and the dispatcher fell back to redaction",
+    ["action", "reason"],
+)
+
+
 # ── NLP detection cache ──────────────────────────────────────────────────────
 
 NLP_CACHE_HITS = Counter(
@@ -66,6 +89,40 @@ NLP_CACHE_HITS = Counter(
 NLP_CACHE_MISSES = Counter(
     "medanon_nlp_cache_misses_total",
     "NLP detection cache misses (forwarded to NLP service)",
+)
+
+# ── Error PHI scrubbing (H1.3) ───────────────────────────────────────────────
+# Incremented whenever _sanitize_error actually removed a PHI-looking token
+# (UUID/date/email/phone/SSN/MRN) from an exception message before it was
+# persisted to the job error field or audit log.  A rising rate flags action
+# handlers that interpolate raw values into exception messages.
+ERROR_PHI_SCRUBBED = Counter(
+    "medanon_error_phi_scrubbed_total",
+    "Exception messages from which PHI-looking tokens were scrubbed",
+)
+
+# ── Async audit queue (F.18) ─────────────────────────────────────────────────
+# Incremented when the bounded async-audit queue is full and an event's
+# off-hot-path sinks (Redis Stream / S3) are dropped. The authoritative stdout
+# JSON line is still written synchronously, so this counts degraded-durability
+# events, not lost records.
+AUDIT_DROPPED = Counter(
+    "medanon_audit_dropped_total",
+    "Audit events whose async (Redis/S3) sinks were dropped due to a full queue",
+)
+
+# ── NLP L2 (Redis) detection cache (E5.6) ────────────────────────────────────
+# The NLP microservice keeps an optional Redis-backed L2 cache for detection
+# results (NLP_REDIS_URL).  These mirror the service-side counters so the
+# anonymizer's /metrics scrape reports L2 effectiveness alongside L1.
+NLP_L2_CACHE_HITS = Counter(
+    "medanon_nlp_l2_cache_hits_total",
+    "NLP L2 (Redis) detection cache hits",
+)
+
+NLP_L2_CACHE_MISSES = Counter(
+    "medanon_nlp_l2_cache_misses_total",
+    "NLP L2 (Redis) detection cache misses",
 )
 
 # ── Per-stage pipeline latency ───────────────────────────────────────────────
@@ -89,7 +146,11 @@ PIPELINE_STAGE_LATENCY = Histogram(
 FHIR_CALL_COUNT = Counter(
     "medanon_fhir_calls_total",
     "Total FHIR server HTTP calls",
-    ["operation", "status", "role"],  # status: "ok" | "error"; role: "source" | "target"
+    [
+        "operation",
+        "status",
+        "role",
+    ],  # status: "ok" | "error"; role: "source" | "target"
 )
 
 FHIR_LATENCY = Histogram(

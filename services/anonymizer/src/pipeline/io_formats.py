@@ -10,6 +10,7 @@ Public API:
     parse_input(data, fmt)        — parse raw bytes/str
     serialize_output(resources, fmt) — serialize to bytes
 """
+
 from pathlib import Path
 from utils.json_fast import (
     loads as _json_loads,
@@ -17,7 +18,7 @@ from utils.json_fast import (
     dumps_pretty as _json_dumps_pretty,
 )
 import defusedxml.ElementTree as ET
-import xml.etree.ElementTree as _ET_WRITE  
+import xml.etree.ElementTree as _ET_WRITE
 
 
 # Common FHIR repeating element names that should be represented as lists even
@@ -274,23 +275,42 @@ def read_input_file(input_path, in_format, strip_line_prefix="//"):
         return read_fhir_xml(input_path)
 
     if in_format == "ndjson":
-        records = []
-        with open(input_path, "r", encoding="utf-8-sig") as fin:
-            for line_number, raw_line in enumerate(fin, start=1):
-                line = raw_line.strip()
-                if not line:
-                    continue
-                if strip_line_prefix and line.startswith(strip_line_prefix):
-                    line = line[len(strip_line_prefix) :]
-                try:
-                    records.append(_json_loads(line))
-                except (ValueError, TypeError) as exc:
-                    raise ValueError(
-                        f"Invalid NDJSON at line {line_number}: {exc}"
-                    ) from exc
-        return records
+        return list(iter_ndjson(input_path, strip_line_prefix=strip_line_prefix or "//"))
 
     raise ValueError(f"Unsupported input format: {in_format}")
+
+
+def iter_ndjson(input_path: str, strip_line_prefix: str = "//"):
+    """Yield parsed FHIR resources one at a time from an NDJSON file.
+
+    Memory-efficient alternative to :func:`read_input_file` for large files:
+    never holds more than one line's JSON in memory at once.  Preserves line
+    numbers in error messages so callers can identify bad lines.
+
+    Args:
+        input_path: Path to the ``.ndjson`` file.
+        strip_line_prefix: Leading token to strip before JSON parsing (default
+            ``"//"`` for comment-prefixed lines in test fixtures).
+
+    Yields:
+        Parsed resource dicts.
+
+    Raises:
+        ValueError: On malformed JSON, with the offending line number embedded.
+    """
+    with open(input_path, "r", encoding="utf-8-sig") as fin:
+        for line_number, raw_line in enumerate(fin, start=1):
+            line = raw_line.strip()
+            if not line:
+                continue
+            if strip_line_prefix and line.startswith(strip_line_prefix):
+                line = line[len(strip_line_prefix):]
+            try:
+                yield _json_loads(line)
+            except (ValueError, TypeError) as exc:
+                raise ValueError(
+                    f"Invalid NDJSON at line {line_number}: {exc}"
+                ) from exc
 
 
 def write_output_file(payload, output_path, out_format, pretty=False):

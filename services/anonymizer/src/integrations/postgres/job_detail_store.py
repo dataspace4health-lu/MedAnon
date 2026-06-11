@@ -25,10 +25,12 @@ class PostgresJobDetailStore:
 
     def _get_conn(self):
         from integrations.postgres.pool import get_conn
+
         return get_conn(self._pool)
 
     def _put_conn(self, conn) -> None:
         from integrations.postgres.pool import safe_putconn
+
         safe_putconn(self._pool, conn)
 
     def get(self, job_id: str) -> dict | None:

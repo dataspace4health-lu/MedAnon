@@ -22,10 +22,12 @@ class PostgresProcessingRunStore:
 
     def _get_conn(self):
         from integrations.postgres.pool import get_conn
+
         return get_conn(self._pool)
 
     def _put_conn(self, conn) -> None:
         from integrations.postgres.pool import safe_putconn
+
         safe_putconn(self._pool, conn)
 
     def create(self, run: dict) -> None:
@@ -65,9 +67,7 @@ class PostgresProcessingRunStore:
         conn = self._get_conn()
         try:
             with conn:
-                with conn.cursor(
-                    cursor_factory=psycopg2.extras.RealDictCursor
-                ) as cur:
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                     cur.execute(
                         "SELECT * FROM medanon.processing_runs WHERE id = %s",
                         (run_id,),
@@ -103,9 +103,7 @@ class PostgresProcessingRunStore:
         conn = self._get_conn()
         try:
             with conn:
-                with conn.cursor(
-                    cursor_factory=psycopg2.extras.RealDictCursor
-                ) as cur:
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                     cur.execute(
                         f"SELECT COUNT(*) AS cnt FROM medanon.processing_runs{where_sql}",
                         params,
@@ -135,9 +133,7 @@ class PostgresProcessingRunStore:
         conn = self._get_conn()
         try:
             with conn:
-                with conn.cursor(
-                    cursor_factory=psycopg2.extras.RealDictCursor
-                ) as cur:
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                     # All-time totals — kept cheap via a small covering query.
                     cur.execute(
                         """
@@ -150,9 +146,7 @@ class PostgresProcessingRunStore:
                     totals = cur.fetchone()
 
                     # Recent window — uses idx_processing_runs_created.
-                    window_cutoff = (
-                        f"NOW() - INTERVAL '{window_days} days'"
-                    )
+                    window_cutoff = f"NOW() - INTERVAL '{window_days} days'"
                     cur.execute(
                         f"""
                         SELECT
@@ -174,9 +168,7 @@ class PostgresProcessingRunStore:
                         LIMIT 20
                         """
                     )
-                    by_endpoint = {
-                        r["endpoint"]: r["cnt"] for r in cur.fetchall()
-                    }
+                    by_endpoint = {r["endpoint"]: r["cnt"] for r in cur.fetchall()}
 
                     cur.execute(
                         f"""
@@ -188,9 +180,7 @@ class PostgresProcessingRunStore:
                         LIMIT 20
                         """
                     )
-                    by_profile = {
-                        r["config_profile"]: r["cnt"] for r in cur.fetchall()
-                    }
+                    by_profile = {r["config_profile"]: r["cnt"] for r in cur.fetchall()}
 
             avg = agg["avg_composite"]
             return {

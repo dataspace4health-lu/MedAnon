@@ -6,7 +6,6 @@ communication, pagination, and input validation.
 
 import os
 import queue as _queue
-from utils.thread_pool import get_executor
 from urllib.parse import urlencode
 
 from integrations.fhir import _transport as _t
@@ -207,7 +206,9 @@ def fetch_resources_by_ids(
         )
 
         while url:
-            bundle = _get_json(url, token=token, timeout=timeout, operation="fetch_by_ids")
+            bundle = _get_json(
+                url, token=token, timeout=timeout, operation="fetch_by_ids"
+            )
             for entry in bundle.get("entry", []):
                 res = entry.get("resource")
                 if isinstance(res, dict):
@@ -332,8 +333,13 @@ def fetch_all_resource_types(
                 continue
             start_url = current_rt_start_url if rt == current_rt else None
             for resource, page_url, page_offset in fetch_resource_type(
-                base_url, rt, params=params, token=token, timeout=timeout,
-                start_url=start_url, yield_cursors=True,
+                base_url,
+                rt,
+                params=params,
+                token=token,
+                timeout=timeout,
+                start_url=start_url,
+                yield_cursors=True,
             ):
                 if yield_cursors:
                     yield rt, resource, page_url, page_offset
@@ -342,6 +348,7 @@ def fetch_all_resource_types(
         return
 
     import logging as _logging
+
     _log = _logging.getLogger("medanon.fhir.reader")
 
     _SENTINEL = object()
@@ -359,7 +366,11 @@ def fetch_all_resource_types(
         start_url = current_rt_start_url if rt == current_rt else None
         try:
             for resource in fetch_resource_type(
-                base_url, rt, params=params, token=token, timeout=timeout,
+                base_url,
+                rt,
+                params=params,
+                token=token,
+                timeout=timeout,
                 start_url=start_url,
             ):
                 result_q.put((rt, resource))
@@ -370,7 +381,8 @@ def fetch_all_resource_types(
             _log.warning(
                 "fhir_fetch_partial_failure rt=%s — resources from this type "
                 "will be missing from the export: %s",
-                rt, exc,
+                rt,
+                exc,
             )
             result_q.put((_SENTINEL, rt, exc))
         finally:
@@ -383,6 +395,7 @@ def fetch_all_resource_types(
     # faster.  A private pool with _FHIR_FETCH_PARALLEL threads saturates the FHIR
     # HTTP connection pool (FHIR_POOL_SIZE) without starving any other subsystem.
     from concurrent.futures import ThreadPoolExecutor as _TPE
+
     _fetch_pool = _TPE(
         max_workers=_FHIR_FETCH_PARALLEL,
         thread_name_prefix="medanon-fhir-parallel",
@@ -411,7 +424,8 @@ def fetch_all_resource_types(
                 _log.error(
                     "fhir_fetch_type_failed rt=%s error=%s — resources from "
                     "this type will be missing from the output",
-                    failed_rt, exc,
+                    failed_rt,
+                    exc,
                 )
                 continue
             yield item
@@ -423,7 +437,8 @@ def fetch_all_resource_types(
             "fhir_fetch_incomplete failed_types=%s — export is missing resources "
             "from %d type(s). Re-run with MEDANON_FHIR_FETCH_PARALLEL=1 to use "
             "serial fetch which is crash-safe.",
-            failed_rts, len(failed_rts),
+            failed_rts,
+            len(failed_rts),
         )
 
 
@@ -522,7 +537,10 @@ def fetch_cohort(
                 result_q.put(_SENTINEL)
 
         from concurrent.futures import ThreadPoolExecutor as _TPE
-        _cohort_pool = _TPE(max_workers=_COHORT_PARALLEL, thread_name_prefix="medanon-cohort")
+
+        _cohort_pool = _TPE(
+            max_workers=_COHORT_PARALLEL, thread_name_prefix="medanon-cohort"
+        )
         for pid in sorted_pids:
             _cohort_pool.submit(_fetch_patient, pid)
         finished = 0
@@ -620,7 +638,10 @@ def fetch_patients_everything(
                 result_q.put(_SENTINEL)
 
         from concurrent.futures import ThreadPoolExecutor as _TPE
-        _batch_pool = _TPE(max_workers=_COHORT_PARALLEL, thread_name_prefix="medanon-batch-patient")
+
+        _batch_pool = _TPE(
+            max_workers=_COHORT_PARALLEL, thread_name_prefix="medanon-batch-patient"
+        )
         for pid in pid_list:
             _batch_pool.submit(_fetch_patient, pid)
         finished = 0

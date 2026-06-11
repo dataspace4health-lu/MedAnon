@@ -77,11 +77,13 @@ def attach_suppressed_tag(resource: dict, reason: str = "k-anonymity") -> None:
     """
     meta = resource.setdefault("meta", {})
     tags = meta.setdefault("tag", [])
-    tags.append({
-        "system": _SUPPRESSED_SYSTEM,
-        "code": "patient-suppressed",
-        "display": f"Suppressed for {reason} guarantee",
-    })
+    tags.append(
+        {
+            "system": _SUPPRESSED_SYSTEM,
+            "code": "patient-suppressed",
+            "display": f"Suppressed for {reason} guarantee",
+        }
+    )
 
 
 def extract_manifest_entries(resource: dict) -> list[dict]:

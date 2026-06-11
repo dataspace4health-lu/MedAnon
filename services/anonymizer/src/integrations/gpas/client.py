@@ -22,8 +22,6 @@ from .transport import (
     _resolve_gpas_base,
     _is_cache_enabled,
     _blind_identifier,
-    _cache_get,
-    _cache_set,
     _cache_get_many,
     _cache_set_many,
     _call_gpas_operation,
@@ -54,9 +52,7 @@ _log = logging.getLogger("medanon.gpas")
 # future batch-size increases without wasting thread budget now.  Raise to 16
 # only when MEDANON_BATCH_SIZE ≥ 5000 and gPAS can absorb the load.
 # Override via GPAS_SUBBATCH_PARALLEL.
-_GPAS_SUBBATCH_PARALLEL = max(
-    1, int(os.environ.get("GPAS_SUBBATCH_PARALLEL", "8"))
-)
+_GPAS_SUBBATCH_PARALLEL = max(1, int(os.environ.get("GPAS_SUBBATCH_PARALLEL", "8")))
 _subbatch_executor: ThreadPoolExecutor | None = None
 _subbatch_executor_lock = threading.Lock()
 
@@ -150,10 +146,18 @@ def gpas_pseudonymize_batch(values, params):
                     partial = future.result()
                     mapping.update(partial)
                     if use_cache:
-                        _cache_set_many({
-                            ("pseudonymize", base_url, domain, operation, _blind_identifier(orig)): psn
-                            for orig, psn in partial.items()
-                        })
+                        _cache_set_many(
+                            {
+                                (
+                                    "pseudonymize",
+                                    base_url,
+                                    domain,
+                                    operation,
+                                    _blind_identifier(orig),
+                                ): psn
+                                for orig, psn in partial.items()
+                            }
+                        )
                 except GpasUnavailableError:
                     raise
                 except Exception as exc:
@@ -171,10 +175,18 @@ def gpas_pseudonymize_batch(values, params):
                     partial = _call_chunk(retry_chunk)
                     mapping.update(partial)
                     if use_cache:
-                        _cache_set_many({
-                            ("pseudonymize", base_url, domain, operation, _blind_identifier(orig)): psn
-                            for orig, psn in partial.items()
-                        })
+                        _cache_set_many(
+                            {
+                                (
+                                    "pseudonymize",
+                                    base_url,
+                                    domain,
+                                    operation,
+                                    _blind_identifier(orig),
+                                ): psn
+                                for orig, psn in partial.items()
+                            }
+                        )
                 except GpasUnavailableError:
                     raise
                 except Exception as exc:
@@ -188,10 +200,18 @@ def gpas_pseudonymize_batch(values, params):
         # Cache results from the single-batch fast path (multi-chunk results
         # are already cached immediately per-chunk inside the parallel loop).
         if use_cache and len(unique_uncached) <= _GPAS_MAX_BATCH:
-            _cache_set_many({
-                ("pseudonymize", base_url, domain, operation, _blind_identifier(orig)): psn
-                for orig, psn in mapping.items()
-            })
+            _cache_set_many(
+                {
+                    (
+                        "pseudonymize",
+                        base_url,
+                        domain,
+                        operation,
+                        _blind_identifier(orig),
+                    ): psn
+                    for orig, psn in mapping.items()
+                }
+            )
 
         result.update(mapping)
 
@@ -222,9 +242,7 @@ def gpas_depseudonymize_by_path(resource, el, params):
     # patient identifier (PHI).  Original values must only be stored in gPAS
     # (the authorised TTP), not in Redis or any other backing store we control.
     fhir_request = _build_depseudonymize_params(domain, [pseudonym_value])
-    resp_json = _call_gpas_operation(
-        base_url, "dePseudonymize", fhir_request, params
-    )
+    resp_json = _call_gpas_operation(base_url, "dePseudonymize", fhir_request, params)
     mapping = _parse_depseudonymize_response(resp_json)
     original = mapping.get(pseudonym_value)
 

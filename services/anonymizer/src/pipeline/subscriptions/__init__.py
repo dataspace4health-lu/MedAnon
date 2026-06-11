@@ -9,7 +9,6 @@ The ``dispatch_subscriptions`` function is in ``dispatcher.py``.
 """
 
 from pipeline.subscriptions.store import SqliteSubscriptionStore  # noqa: F401
-from typing import Optional
 
 _sub_store = None
 

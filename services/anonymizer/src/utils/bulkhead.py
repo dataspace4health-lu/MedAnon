@@ -100,10 +100,14 @@ def bulkhead(name: str, *, wait_sec: float = 0.0):
     to block briefly during transient bursts before giving up.
     """
     sem = _get(name)
-    acquired = sem.acquire(timeout=wait_sec) if wait_sec > 0 else sem.acquire(blocking=False)
+    acquired = (
+        sem.acquire(timeout=wait_sec) if wait_sec > 0 else sem.acquire(blocking=False)
+    )
     if not acquired:
         _record_rejected(name)
-        _log.warning("bulkhead_saturated upstream=%s capacity=%d", name, _CAPACITY[name])
+        _log.warning(
+            "bulkhead_saturated upstream=%s capacity=%d", name, _CAPACITY[name]
+        )
         raise UpstreamSaturated(f"bulkhead {name} saturated")
     _record_acquired(name)
     try:

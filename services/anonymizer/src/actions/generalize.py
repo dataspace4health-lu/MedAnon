@@ -43,14 +43,79 @@ from utils.fhirpath import find_nodes
 _log = logging.getLogger("medanon.generalize")
 
 
+# -- date parsing helpers -----------------------------------------------------
+#
+# FHIR dates are always ISO 8601, so the ISO fast-path below is tried first and
+# preserves the original behaviour exactly.  Tabular exports (CSV/Excel), by
+# contrast, carry dates in many locale formats (``02/04/1980``, ``04.02.1980``,
+# ``Feb 4 1980`` …), which the ISO-only regex silently passed through unchanged.
+# The fallbacks below recover the year/month from those layouts.
+
+# Common non-ISO layouts found in spreadsheet exports, tried in order only when
+# the value is not already ISO-prefixed.
+_FALLBACK_DATE_FORMATS = (
+    "%d/%m/%Y",
+    "%m/%d/%Y",
+    "%d-%m-%Y",
+    "%m-%d-%Y",
+    "%d.%m.%Y",
+    "%Y/%m/%d",
+    "%Y.%m.%d",
+    "%d %b %Y",
+    "%d %B %Y",
+    "%b %d, %Y",
+    "%B %d, %Y",
+    "%b %d %Y",
+    "%d-%b-%Y",
+    "%d-%B-%Y",
+)
+
+# A 4-digit year (1900-2099) appearing anywhere in the string.  Year is
+# unambiguous regardless of day/month ordering, so this safely handles formats
+# like ``02/04/1980`` where full date parsing would be ambiguous.
+_YEAR_RE = re.compile(r"(?:^|\D)((?:19|20)\d{2})(?:\D|$)")
+
+
+def _parse_date_loose(value):
+    """Best-effort parse of a date string to a :class:`datetime.date`.
+
+    Tries the ISO ``YYYY-MM-DD`` prefix first (covering ``date`` and
+    ``dateTime``), then the common non-ISO spreadsheet layouts.  Returns
+    ``None`` when nothing matches so callers can fall back to a year-only
+    extraction or pass the value through unchanged.
+    """
+    s = str(value).strip()
+    if not s:
+        return None
+    try:
+        return datetime.strptime(s[:10], "%Y-%m-%d").date()
+    except ValueError:
+        pass
+    for fmt in _FALLBACK_DATE_FORMATS:
+        try:
+            return datetime.strptime(s, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _extract_year(value):
+    """Return the 4-digit year string for a date in any layout, else ``None``."""
+    s = str(value).strip()
+    m = re.match(r"(\d{4})", s)  # ISO fast-path (unchanged behaviour)
+    if m:
+        return m.group(1)
+    m = _YEAR_RE.search(s)  # year anywhere, e.g. '02/04/1980'
+    return m.group(1) if m else None
+
+
 # -- core generalization functions -------------------------------------------
 
 
 def _generalize_date_year(value):
-    """Extract just the year from a FHIR date or dateTime string."""
-    s = str(value).strip()
-    m = re.match(r"(\d{4})", s)
-    return m.group(1) if m else s
+    """Extract just the year from a date or dateTime string (any layout)."""
+    year = _extract_year(value)
+    return year if year is not None else str(value).strip()
 
 
 def _generalize_date_year_instant(value):
@@ -59,16 +124,18 @@ def _generalize_date_year_instant(value):
     "2024-03-15T10:30:00Z"   → "2024-01-01T00:00:00Z"
     "2024-03-15T10:30:00+02" → "2024-01-01T00:00:00Z"
     """
-    s = str(value).strip()
-    m = re.match(r"(\d{4})", s)
-    return f"{m.group(1)}-01-01T00:00:00Z" if m else s
+    year = _extract_year(value)
+    return f"{year}-01-01T00:00:00Z" if year is not None else str(value).strip()
 
 
 def _generalize_date_year_month(value):
-    """Extract year-month from a FHIR date or dateTime string."""
+    """Extract year-month from a date or dateTime string (any layout)."""
     s = str(value).strip()
     m = re.match(r"(\d{4}-\d{2})", s)
-    return m.group(1) if m else s
+    if m:
+        return m.group(1)
+    d = _parse_date_loose(s)
+    return d.strftime("%Y-%m") if d is not None else s
 
 
 def _generalize_date_decade(value):
@@ -78,21 +145,18 @@ def _generalize_date_decade(value):
     improving k-anonymity for birth dates while preserving rough age cohort.
     Outputs a valid FHIR year (YYYY) rather than the non-standard '199x' form.
     """
-    s = str(value).strip()
-    m = re.match(r"(\d{3})", s)
-    return f"{m.group(1)}0" if m else s
+    year = _extract_year(value)
+    return f"{year[:3]}0" if year is not None else str(value).strip()
 
 
 def _generalize_age_bracket(value, bracket_size=10):
-    """Convert a birth date string to an age bracket like '30-39'."""
-    s = str(value).strip()[:10]  # take date portion
-    try:
-        birth = datetime.strptime(s, "%Y-%m-%d").date()
-    except ValueError:
-        try:
-            birth = datetime.strptime(s[:4], "%Y").date().replace(month=1, day=1)
-        except ValueError:
-            return s
+    """Convert a birth date string (any layout) to an age bracket like '30-39'."""
+    birth = _parse_date_loose(value)
+    if birth is None:
+        year = _extract_year(value)
+        if year is None:
+            return str(value).strip()[:10]
+        birth = date(int(year), 1, 1)
     today = date.today()
     age = (
         today.year - birth.year - ((today.month, today.day) < (birth.month, birth.day))
@@ -153,8 +217,12 @@ _STRATEGIES = {
     "date_decade": lambda v, p: _generalize_date_decade(v),
     "age_bracket": lambda v, p: _generalize_age_bracket(v, p.get("bracket_size", 10)),
     "number_round": lambda v, p: _generalize_number_round(v, p.get("precision", 10)),
-    "zip_prefix": lambda v, p: _generalize_zip_prefix(v, p.get("prefix_length", p.get("prefix_len", 3))),
-    "category": lambda v, p: _generalize_category(v, p.get("mapping", {}), p.get("unmapped", "[REDACTED]")),
+    "zip_prefix": lambda v, p: _generalize_zip_prefix(
+        v, p.get("prefix_length", p.get("prefix_len", 3))
+    ),
+    "category": lambda v, p: _generalize_category(
+        v, p.get("mapping", {}), p.get("unmapped", "[REDACTED]")
+    ),
 }
 
 

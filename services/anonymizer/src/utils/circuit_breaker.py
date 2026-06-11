@@ -37,6 +37,7 @@ _log = logging.getLogger("medanon.circuit_breaker")
 # which is an optional dependency in some test contexts; guard at use sites.
 try:
     from utils.metrics import CIRCUIT_BREAKER_STATE, CIRCUIT_BREAKER_TRIPS
+
     _METRICS_OK = True
 except Exception:  # pragma: no cover — defensive
     CIRCUIT_BREAKER_STATE = None
@@ -276,7 +277,9 @@ class RedisCircuitBreaker(CircuitBreaker):
     _KEY_WINDOW_START = "window_start"
     _KEY_TRIPS = "trips"
 
-    def __init__(self, name: str, redis_client=None, redis_prefix: str = "medanon:cb", **kw) -> None:
+    def __init__(
+        self, name: str, redis_client=None, redis_prefix: str = "medanon:cb", **kw
+    ) -> None:
         super().__init__(name, **kw)
         self._redis = redis_client
         self._prefix = f"{redis_prefix}:{name}"
@@ -384,10 +387,16 @@ class RedisCircuitBreaker(CircuitBreaker):
         super().reset()
         if self._redis is not None:
             try:
-                keys = [self._rkey(s) for s in (
-                    self._KEY_STATE, self._KEY_FAILURES, self._KEY_TIMEOUTS,
-                    self._KEY_LAST_FAIL, self._KEY_WINDOW_START,
-                )]
+                keys = [
+                    self._rkey(s)
+                    for s in (
+                        self._KEY_STATE,
+                        self._KEY_FAILURES,
+                        self._KEY_TIMEOUTS,
+                        self._KEY_LAST_FAIL,
+                        self._KEY_WINDOW_START,
+                    )
+                ]
                 self._redis.delete(*keys)
             except Exception:
                 pass

@@ -45,6 +45,7 @@ _MAX_PATIENTS = int(os.environ.get("MEDANON_KANON_MAX_PATIENTS", "200000"))
 # QI extraction helpers
 # ---------------------------------------------------------------------------
 
+
 def _extract_field_value(resource: dict, fhir_path: str) -> str:
     """Extract a single scalar QI value from a resource using a simple path.
 
@@ -79,7 +80,7 @@ def _extract_field_value(resource: dict, fhir_path: str) -> str:
         # e.g. CodeableConcept — take text or first coding.code
         codings = obj.get("coding") or []
         if codings and isinstance(codings, list):
-            code = (codings[0].get("code") or codings[0].get("display") or "")
+            code = codings[0].get("code") or codings[0].get("display") or ""
             return str(code).strip()
         return str(obj.get("text") or "").strip()
     return str(obj).strip()
@@ -109,6 +110,7 @@ def _extract_subject_patient_id(resource: dict) -> str:
 # QiIndex dataclass
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class QiIndex:
     """Compact QI index for a full dataset.
@@ -124,6 +126,7 @@ class QiIndex:
     total_resources Total resources seen (all types).
     sampled         True if reservoir sampling was applied (dataset exceeded cap).
     """
+
     qi_paths: list[str] = field(default_factory=list)
     qi_kinds: list[str] = field(default_factory=list)
     patient_ids: list[str] = field(default_factory=list)
@@ -137,6 +140,7 @@ class QiIndex:
 # ---------------------------------------------------------------------------
 # Builder
 # ---------------------------------------------------------------------------
+
 
 def build_qi_index(
     staged_iter: Iterable[dict],
@@ -157,7 +161,6 @@ def build_qi_index(
         Reservoir cap.  Overridden by ``MEDANON_KANON_MAX_PATIENTS`` env var
         at module load; explicit parameter is for testing.
     """
-    from utils.json_fast import loads as _json_loads
 
     qis = privacy_model.get("quasi_identifiers", [])
     qi_paths = [q["path"] for q in qis]
@@ -196,9 +199,7 @@ def build_qi_index(
         if rtype == "Patient":
             total_patients += 1
             pid = str(resource.get("id") or "")
-            qi_values = tuple(
-                _extract_field_value(resource, path) for path in qi_paths
-            )
+            qi_values = tuple(_extract_field_value(resource, path) for path in qi_paths)
 
             if len(patient_ids) < reservoir_size:
                 patient_ids.append(pid)

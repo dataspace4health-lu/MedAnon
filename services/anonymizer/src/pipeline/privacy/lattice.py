@@ -62,6 +62,7 @@ MAX_QI_COUNT = 5
 # Output dataclass
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class GeneralizationPlan:
     """Result of the lattice solver.
@@ -82,6 +83,7 @@ class GeneralizationPlan:
     total_nodes_evaluated  How many lattice nodes were checked.
     solve_time_sec    Wall time for the solver.
     """
+
     levels: dict[str, int] = field(default_factory=dict)
     node: tuple[int, ...] = field(default_factory=tuple)
     suppressed_ids: set[str] = field(default_factory=set)
@@ -100,6 +102,7 @@ class GeneralizationPlan:
 # Core helpers
 # ---------------------------------------------------------------------------
 
+
 def _apply_levels(
     qi_tuples: list[tuple[str, ...]],
     node: tuple[int, ...],
@@ -111,10 +114,7 @@ def _apply_levels(
     """
     result = []
     for raw in qi_tuples:
-        gen = tuple(
-            h.apply(lvl, val)
-            for h, lvl, val in zip(hierarchies, node, raw)
-        )
+        gen = tuple(h.apply(lvl, val) for h, lvl, val in zip(hierarchies, node, raw))
         result.append(gen)
     return result
 
@@ -129,13 +129,16 @@ def _compute_suppression(
     Returns ``(min_class_size_after_suppression, suppressed_patient_id_set)``.
     """
     from collections import Counter
+
     counts = Counter(generalised)
     suppressed: set[str] = set()
     for qi_tuple, pid in zip(generalised, patient_ids):
         if counts[qi_tuple] < target_k:
             suppressed.add(pid)
     # After removing suppressed patients, recompute surviving class sizes.
-    surviving = [qt for qt, pid in zip(generalised, patient_ids) if pid not in suppressed]
+    surviving = [
+        qt for qt, pid in zip(generalised, patient_ids) if pid not in suppressed
+    ]
     if not surviving:
         return 0, suppressed
     surviving_counts = Counter(surviving)
@@ -154,6 +157,7 @@ def _compute_l_diversity(
     Returns 0 when conditions data is absent or no surviving patients exist.
     """
     from collections import defaultdict
+
     if not conditions_by_patient:
         return 0
     group_codes: dict[tuple, set[str]] = defaultdict(set)
@@ -177,6 +181,7 @@ def _information_loss(node: tuple[int, ...], max_levels: list[int]) -> float:
 # ---------------------------------------------------------------------------
 # Solver entry point
 # ---------------------------------------------------------------------------
+
 
 def solve(qi_index: "QiIndex", privacy_model: dict) -> GeneralizationPlan:
     """Search the generalization lattice and return the optimal plan.
@@ -210,7 +215,9 @@ def solve(qi_index: "QiIndex", privacy_model: dict) -> GeneralizationPlan:
     total_patients = len(qi_index.patient_ids)
 
     if total_patients == 0:
-        _log.warning("solve: no Patient records in index — returning trivially-feasible plan")
+        _log.warning(
+            "solve: no Patient records in index — returning trivially-feasible plan"
+        )
         return GeneralizationPlan(
             levels={p: 0 for p in qi_paths},
             node=tuple([0] * n_qi),
@@ -230,7 +237,12 @@ def solve(qi_index: "QiIndex", privacy_model: dict) -> GeneralizationPlan:
     _log.info(
         "solve: target_k=%d target_l=%s max_suppression=%.2f "
         "n_qi=%d total_nodes=%d total_patients=%d",
-        target_k, target_l, max_suppression, n_qi, total_nodes, total_patients,
+        target_k,
+        target_l,
+        max_suppression,
+        n_qi,
+        total_nodes,
+        total_patients,
     )
 
     best_plan: GeneralizationPlan | None = None
@@ -289,7 +301,11 @@ def solve(qi_index: "QiIndex", privacy_model: dict) -> GeneralizationPlan:
         _log.warning(
             "solve: no feasible node (target_k=%d target_l=%s max_suppression=%.2f). "
             "on_unsatisfiable=%s nodes_evaluated=%d",
-            target_k, target_l, max_suppression, on_unsatisfiable, nodes_evaluated,
+            target_k,
+            target_l,
+            max_suppression,
+            on_unsatisfiable,
+            nodes_evaluated,
         )
 
         if on_unsatisfiable == "fail":

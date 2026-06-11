@@ -13,6 +13,7 @@ from fastapi.responses import Response
 
 from api.deps import limiter
 from api.services.dicom import DicomService
+from pipeline.processor import PiiLeakError
 
 router = APIRouter()
 logger = logging.getLogger("medanon")
@@ -43,8 +44,17 @@ async def process_dicom(request: Request):
     if not body:
         raise HTTPException(status_code=422, detail="Request body is empty")
 
+    # ?config_profile= routes through the full rule engine (DicomAdapter);
+    # absent → legacy PS3.15 blanket scrubber (backward-compatible default).
+    config_profile = request.query_params.get("config_profile") or None
+
     try:
-        result = await _service.process_single(body)
+        result = await _service.process_single(body, config_profile)
+    except PiiLeakError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "pii_leak_detected", "message": str(exc)},
+        ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:

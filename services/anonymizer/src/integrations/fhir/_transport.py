@@ -16,6 +16,7 @@ from urllib.parse import urlparse, urlunparse
 from utils.circuit_breaker import CircuitBreaker
 from utils.logging import REQUEST_ID
 from utils.metrics import FHIR_CALL_COUNT, FHIR_LATENCY
+from utils.pool_budget import fhir_pool_budget
 
 
 class FhirCircuitBreakerOpen(Exception):
@@ -24,7 +25,7 @@ class FhirCircuitBreakerOpen(Exception):
 
 __all__ = [
     # Connection pools & logger
-    "_pool",          # back-compat alias → _pool_source
+    "_pool",  # back-compat alias → _pool_source
     "_pool_source",
     "_pool_target",
     "log",
@@ -62,7 +63,6 @@ __all__ = [
 # or saturated downstream cannot drag down the other.
 # ---------------------------------------------------------------------------
 
-from utils.pool_budget import fhir_pool_budget
 _FHIR_POOL_SIZE = fhir_pool_budget()
 
 # Per-role timeouts.  Defaults preserve the previous behaviour (5s connect /
@@ -243,7 +243,9 @@ def _retry_request(
                 FHIR_LATENCY.labels(operation=operation, role=role).observe(
                     time.perf_counter() - t0
                 )
-                FHIR_CALL_COUNT.labels(operation=operation, status="error", role=role).inc()
+                FHIR_CALL_COUNT.labels(
+                    operation=operation, status="error", role=role
+                ).inc()
                 if should_retry:
                     cb.record_failure()
                 if resp.data and log.isEnabledFor(logging.DEBUG):
@@ -259,7 +261,9 @@ def _retry_request(
                     f"FHIR server HTTP {resp.status} for {url} (see DEBUG log for details)"
                 )
 
-            FHIR_LATENCY.labels(operation=operation, role=role).observe(time.perf_counter() - t0)
+            FHIR_LATENCY.labels(operation=operation, role=role).observe(
+                time.perf_counter() - t0
+            )
             FHIR_CALL_COUNT.labels(operation=operation, status="ok", role=role).inc()
             cb.record_success()
 
@@ -276,7 +280,9 @@ def _retry_request(
                 )
                 time.sleep(_FHIR_RETRY_BACKOFF * (2**attempt) * (0.5 + random.random()))
                 continue
-            FHIR_LATENCY.labels(operation=operation, role=role).observe(time.perf_counter() - t0)
+            FHIR_LATENCY.labels(operation=operation, role=role).observe(
+                time.perf_counter() - t0
+            )
             FHIR_CALL_COUNT.labels(operation=operation, status="error", role=role).inc()
             cb.record_failure()
             raise ValueError(f"FHIR server connection error for {url}: {exc}") from exc

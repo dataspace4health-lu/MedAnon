@@ -45,6 +45,9 @@ _VALID_ACTIONS = frozenset(
         "encrypt",
         "decrypt",
         "perturb",
+        "date_shift",
+        "mask",
+        "tokenize",
         "substitute",
         "generalize",
         "scrub_text",
@@ -235,6 +238,16 @@ def _get_store():
     return _config_store
 
 
+def _invalidate_settings_cache() -> None:
+    """Invalidate settings + rule + gPAS params caches after a profile change."""
+    try:
+        from pipeline.config.service import clear_settings_cache
+
+        clear_settings_cache()
+    except Exception:
+        pass
+
+
 def _read_yaml(name: str, is_system: bool) -> str:
     """Read and return raw YAML for a config (system or user-defined)."""
     if is_system:
@@ -289,6 +302,97 @@ def get_config(name: str, request: Request):
     return PlainTextResponse(yaml_text, media_type="text/yaml")
 
 
+@router.get("/configs/{name}/conflicts")
+def get_config_conflicts(name: str, request: Request):
+    """Report rules that target the same FHIR path with a different action.
+
+    Conflicts are usually a config mistake: the firing order then decides the
+    outcome.  Each conflict increments ``medanon_rule_conflict_total`` so the
+    condition is observable in Prometheus as well as the API response.
+    """
+    from pipeline.rule_matcher import detect_rule_conflicts
+    from utils.metrics import RULE_CONFLICT_TOTAL
+
+    _validate_name(name)
+    store = _get_store()
+    meta = store.get(name)
+    if meta is None:
+        raise HTTPException(status_code=404, detail=f"Config '{name}' not found.")
+
+    yaml_text = _read_yaml(name, meta["is_system"])
+    try:
+        parsed = yaml.safe_load(yaml_text) or {}
+    except yaml.YAMLError as exc:
+        raise HTTPException(
+            status_code=422, detail=f"Config '{name}' is not valid YAML: {exc}"
+        ) from exc
+
+    rules = parsed.get("rules") if isinstance(parsed, dict) else None
+    conflicts = detect_rule_conflicts(rules if isinstance(rules, list) else [])
+
+    for conflict in conflicts:
+        actions = conflict["actions"]
+        # Emit one labelled sample per action pair so the path/action_a/action_b
+        # cardinality stays bounded and readable.
+        for i in range(len(actions) - 1):
+            RULE_CONFLICT_TOTAL.labels(
+                path=conflict["path"],
+                action_a=actions[i],
+                action_b=actions[i + 1],
+            ).inc()
+        if conflicts:
+            logger.warning(
+                "rule_conflict config=%s path=%s actions=%s",
+                name,
+                conflict["path"],
+                ",".join(actions),
+            )
+
+    return {"config": name, "conflict_count": len(conflicts), "conflicts": conflicts}
+
+
+@router.get("/configs/{name}/coverage")
+def get_config_coverage(name: str, request: Request):
+    """Lint a profile for PHI-path coverage gaps (E1.5).
+
+    Statically checks the profile's rules against ``KNOWN_PHI_PATHS`` and
+    reports which well-known identifier paths are not covered by any rule, so
+    an operator can spot omissions before running the profile on real data.
+    """
+    from pipeline.config.linter import lint_profile
+
+    _validate_name(name)
+    store = _get_store()
+    meta = store.get(name)
+    if meta is None:
+        raise HTTPException(status_code=404, detail=f"Config '{name}' not found.")
+
+    yaml_text = _read_yaml(name, meta["is_system"])
+    try:
+        parsed = yaml.safe_load(yaml_text) or {}
+    except yaml.YAMLError as exc:
+        raise HTTPException(
+            status_code=422, detail=f"Config '{name}' is not valid YAML: {exc}"
+        ) from exc
+
+    report = lint_profile(parsed if isinstance(parsed, dict) else {})
+    if report["uncovered"]:
+        logger.warning(
+            "config_coverage_gaps config=%s uncovered=%d/%d",
+            name,
+            len(report["uncovered"]),
+            report["total_known_paths"],
+        )
+
+    # Schema violations (unknown actions, bad params) surface alongside
+    # coverage gaps so the UI shows both before the profile is ever run.
+    from pipeline.config.rule_schema import validate_rules_schema
+
+    rules = parsed.get("rules", []) if isinstance(parsed, dict) else []
+    schema_errors = validate_rules_schema(rules if isinstance(rules, list) else [])
+    return {"config": name, **report, "schema_errors": schema_errors}
+
+
 @router.post("/configs", status_code=201)
 def create_config(body: ConfigCreateRequest, request: Request):
     """Create a new user-defined config profile.
@@ -309,6 +413,7 @@ def create_config(body: ConfigCreateRequest, request: Request):
     _validate_and_write(body.name, body.description, body.rules, body.general)
 
     meta = store.create(body.name, body.description)
+    _invalidate_settings_cache()
     logger.info("config_created name=%s", body.name)
     return {"config": meta}
 
@@ -340,6 +445,7 @@ def update_config(name: str, body: ConfigUpdateRequest, request: Request):
     if body.description is not None:
         store.update_description(name, body.description)
 
+    _invalidate_settings_cache()
     logger.info("config_updated name=%s", name)
     return {"config": store.get(name)}
 
@@ -374,4 +480,5 @@ def delete_config(name: str, request: Request):
     except (KeyError, PermissionError) as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
+    _invalidate_settings_cache()
     logger.info("config_deleted name=%s", name)

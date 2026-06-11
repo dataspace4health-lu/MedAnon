@@ -55,8 +55,20 @@ def _is_client_error(exc: Exception) -> bool:
     # proxy_post_json raises ValueError with the HTTP status in the message.
     return isinstance(exc, ValueError) and any(
         f"HTTP {code}" in msg
-        for code in ("400", "401", "403", "404", "405", "408", "409", "410",
-                     "413", "415", "422", "429")
+        for code in (
+            "400",
+            "401",
+            "403",
+            "404",
+            "405",
+            "408",
+            "409",
+            "410",
+            "413",
+            "415",
+            "422",
+            "429",
+        )
     )
 
 
@@ -86,12 +98,14 @@ def _nlp_fallback_token(text: str | None = None, entity_type: str = "ANY") -> st
 def _validate_detect_response(raw: dict) -> dict:
     """Validate the NLP /v1/detect response against the contract schema."""
     from api.schemas.nlp import NlpDetectResponse
+
     return NlpDetectResponse.model_validate(raw).model_dump()
 
 
 def _validate_batch_response(raw: dict) -> dict:
     """Validate the NLP /v1/detect/batch response against the contract schema."""
     from api.schemas.nlp import NlpBatchResponse
+
     return NlpBatchResponse.model_validate(raw).model_dump()
 
 
@@ -156,6 +170,7 @@ def detect_remote(
     # This eliminates the HTTP round-trip for every text that was already seen during
     # the same bulk run — the dominant cost for large bulk jobs.
     from integrations.nlp.cache import lookup_many, store_many
+
     _cached, _keys = lookup_many([text], entities, threshold, language)
     if _cached[0] is not None:
         return _cached[0]
@@ -177,8 +192,11 @@ def detect_remote(
     url = _nlp_service_url("/v1/detect")
     try:
         from utils.bulkhead import bulkhead, UpstreamSaturated
+
         try:
-            with bulkhead("nlp", wait_sec=float(os.environ.get("BULKHEAD_NLP_WAIT_SEC", "1"))):
+            with bulkhead(
+                "nlp", wait_sec=float(os.environ.get("BULKHEAD_NLP_WAIT_SEC", "1"))
+            ):
                 raw = proxy_post_json(url, payload, timeout=_NLP_DETECT_TIMEOUT)
         except UpstreamSaturated as exc:
             raise NlpUnavailableError("NLP bulkhead saturated") from exc
@@ -232,8 +250,11 @@ def _detect_batch_chunk(
     url = _nlp_service_url("/v1/detect/batch")
     try:
         from utils.bulkhead import bulkhead, UpstreamSaturated
+
         try:
-            with bulkhead("nlp", wait_sec=float(os.environ.get("BULKHEAD_NLP_WAIT_SEC", "1"))):
+            with bulkhead(
+                "nlp", wait_sec=float(os.environ.get("BULKHEAD_NLP_WAIT_SEC", "1"))
+            ):
                 raw = proxy_post_json(url, payload, timeout=_NLP_BATCH_TIMEOUT)
         except UpstreamSaturated as exc:
             raise NlpUnavailableError("NLP bulkhead saturated") from exc
@@ -241,16 +262,14 @@ def _detect_batch_chunk(
         all_detections = result.get("detections") or []
         if len(all_detections) == len(texts):
             _nlp_cb.record_success()
-            return [
-                [(d[0], d[1], d[2]) for d in dets]
-                for dets in all_detections
-            ]
+            return [[(d[0], d[1], d[2]) for d in dets] for dets in all_detections]
         # Length mismatch is a protocol error — the service is misbehaving.
         # Record a CB failure so a consistently-broken service trips the breaker.
         _nlp_cb.record_failure()
         _log.warning(
             "detect_batch response length mismatch: expected %d, got %d",
-            len(texts), len(all_detections),
+            len(texts),
+            len(all_detections),
         )
     except Exception as exc:
         # Only record as a server failure when the error is NOT a client-side
@@ -271,7 +290,9 @@ def _detect_batch_chunk(
     results: list[list[tuple[int, int, str]]] = []
     for t in texts:
         if not _nlp_cb.allow_request():
-            raise NlpUnavailableError("NLP circuit breaker OPEN during sequential fallback")
+            raise NlpUnavailableError(
+                "NLP circuit breaker OPEN during sequential fallback"
+            )
         results.append(detect_remote(t, entities, threshold, language))
     return results
 
@@ -406,8 +427,11 @@ def analyze_and_replace_remote(
     url = _nlp_service_url("/v1/detect")
     try:
         from utils.bulkhead import bulkhead, UpstreamSaturated
+
         try:
-            with bulkhead("nlp", wait_sec=float(os.environ.get("BULKHEAD_NLP_WAIT_SEC", "1"))):
+            with bulkhead(
+                "nlp", wait_sec=float(os.environ.get("BULKHEAD_NLP_WAIT_SEC", "1"))
+            ):
                 raw = proxy_post_json(url, payload, timeout=_NLP_DETECT_TIMEOUT)
         except UpstreamSaturated:
             _log.warning("nlp_bulkhead_saturated — returning redacted placeholder")
@@ -461,7 +485,11 @@ def analyze_and_replace_batch_remote(
                 break
             chunk_results = analyze_and_replace_batch_remote(
                 texts[i : i + _NLP_CLIENT_BATCH_LIMIT],
-                entities, threshold, language, mode, token_state,
+                entities,
+                threshold,
+                language,
+                mode,
+                token_state,
             )
             all_results.extend(chunk_results)
         return all_results
@@ -515,7 +543,9 @@ def analyze_and_replace_batch_remote(
             "nlp_batch_error type=%s cb_state=%s — %s",
             type(exc).__name__,
             _nlp_cb.state,
-            "CB open, returning placeholders" if not _nlp_cb.allow_request() else "falling back to sequential",
+            "CB open, returning placeholders"
+            if not _nlp_cb.allow_request()
+            else "falling back to sequential",
         )
         # If batch failure tripped the circuit breaker, bail immediately rather than
         # spawning hundreds of sub-batch HTTP calls under degradation.

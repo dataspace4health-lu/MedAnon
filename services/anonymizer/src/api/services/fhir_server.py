@@ -58,8 +58,11 @@ class FhirServerService:
         """Process a single chunk via process_data_batch, yielding results."""
         try:
             results = await asyncio.to_thread(
-                process_data_batch, chunk, settings,
-                None, _SCORING_ON,
+                process_data_batch,
+                chunk,
+                settings,
+                None,
+                _SCORING_ON,
             )
             for result in results:
                 yield _json_dumps(result)
@@ -72,8 +75,11 @@ class FhirServerService:
             for res in chunk:
                 try:
                     result = await asyncio.to_thread(
-                        process_data_batch, [res], settings,
-                        None, _SCORING_ON,
+                        process_data_batch,
+                        [res],
+                        settings,
+                        None,
+                        _SCORING_ON,
                     )
                     yield _json_dumps(result[0])
                 except GpasUnavailableError as gexc:

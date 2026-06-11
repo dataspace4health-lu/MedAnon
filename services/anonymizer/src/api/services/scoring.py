@@ -18,7 +18,7 @@ from typing import Any
 from utils.json_fast import loads as _json_loads
 from pipeline.scoring.engine import score_resource
 from pipeline.scoring.audit import ScoreAuditCollector
-from pipeline.manifest import MANIFEST_SYSTEM, extract_manifest_entries as _extract_manifest_entries
+from pipeline.manifest import extract_manifest_entries as _extract_manifest_entries
 
 logger = logging.getLogger("medanon")
 
@@ -65,9 +65,7 @@ class ScoringService:
             import datetime as _dt
 
             scored_at = (
-                _dt.datetime.now(_dt.timezone.utc)
-                .isoformat()
-                .replace("+00:00", "Z")
+                _dt.datetime.now(_dt.timezone.utc).isoformat().replace("+00:00", "Z")
             )
             collector = ScoreAuditCollector(
                 config_profile=config_profile, scored_at=scored_at

@@ -1,10 +1,11 @@
 """AI Agent API endpoints — /v1/ai/*.
 
-    GET   /v1/ai/status          — provider health + circuit breaker state
-    POST  /v1/ai/generate-config — generate config from natural language
-    POST  /v1/ai/detect-pii      — scan de-identified resources for PII leaks
-    POST  /v1/ai/explain         — explain config rules (supports SSE streaming)
-    POST  /v1/ai/compliance      — regulatory gap analysis
+GET   /v1/ai/status          — provider health + circuit breaker state
+POST  /v1/ai/generate-config — generate config from natural language
+POST  /v1/ai/detect-pii      — scan de-identified resources for PII leaks
+POST  /v1/ai/explain         — explain config rules (supports SSE streaming)
+POST  /v1/ai/chat            — conversational Q&A about a config (SSE stream)
+POST  /v1/ai/compliance      — regulatory gap analysis
 """
 
 import json
@@ -16,6 +17,7 @@ from fastapi.responses import StreamingResponse
 from api.deps import limiter
 from api.schemas.agents import (
     AgentStatusResponse,
+    ChatRequest,
     ComplianceRequest,
     ConfigGenerationRequest,
     ConfigGenerationResponse,
@@ -29,6 +31,9 @@ router = APIRouter(prefix="/ai", tags=["AI Agents"])
 logger = logging.getLogger("medanon")
 
 _service = AgentService()
+
+# Marker distinguishing "queue empty, keep waiting" from a real None sentinel.
+_SENTINEL_EMPTY = object()
 
 
 @router.get("/status", response_model=AgentStatusResponse)
@@ -52,7 +57,8 @@ async def generate_config(body: ConfigGenerationRequest, request: Request):
     except Exception as exc:
         logger.error("ai_generate_config_error: %s", exc)
         raise HTTPException(
-            status_code=502, detail=f"Config generation failed: {exc}",
+            status_code=502,
+            detail=f"Config generation failed: {exc}",
         )
     return result
 
@@ -70,7 +76,8 @@ async def detect_pii(body: PiiDetectionRequest, request: Request):
     except Exception as exc:
         logger.error("ai_detect_pii_error: %s", exc)
         raise HTTPException(
-            status_code=502, detail=f"PII detection failed: {exc}",
+            status_code=502,
+            detail=f"PII detection failed: {exc}",
         )
     return result
 
@@ -99,6 +106,7 @@ async def explain_config_endpoint(body: ExplainRequest, request: Request):
                     from integrations.ai.agents.rule_explainer import (
                         explain_config as _explain,
                     )
+
                     gen = _explain(body.yaml_text, streaming=True)
                     if hasattr(gen, "__iter__") or hasattr(gen, "__next__"):
                         for chunk in gen:
@@ -137,6 +145,82 @@ async def explain_config_endpoint(body: ExplainRequest, request: Request):
     return {"explanation": result}
 
 
+@router.post("/chat")
+@limiter.limit("30/minute")
+async def chat_config_endpoint(body: ChatRequest, request: Request):
+    """Conversational Q&A about the de-identification config being built.
+
+    Streams the answer as SSE (the UI consumes ``data: {"text": ...}`` chunks
+    terminated by ``data: [DONE]``). The optional ``model`` field selects which
+    local model answers (e.g. ``ollama/gemma3:1b`` vs the medical model).
+    """
+    import asyncio as _asyncio
+    import queue as _queue
+    import threading as _threading
+
+    history = [m.model_dump() for m in body.history]
+
+    async def _sse_generator():
+        # Produce chunks in a dedicated daemon thread (litellm's streaming
+        # generator is synchronous and blocking). The drain loop polls the
+        # queue with a short timeout via the event loop's executor — using a
+        # dedicated producer thread (not the shared executor) avoids starving
+        # the single default executor worker, which would otherwise deadlock
+        # the get() call against the produce() call.
+        chunk_queue: _queue.Queue = _queue.Queue()
+        loop = _asyncio.get_event_loop()
+
+        def _produce():
+            try:
+                from integrations.ai.agents.config_chat import chat_config
+
+                gen = chat_config(
+                    body.question,
+                    config_yaml=body.config_yaml,
+                    history=history,
+                    model=body.model,
+                    streaming=True,
+                )
+                if hasattr(gen, "__iter__") or hasattr(gen, "__next__"):
+                    for chunk in gen:
+                        chunk_queue.put(chunk)
+                else:
+                    chunk_queue.put(str(gen))
+            except Exception as exc:  # noqa: BLE001 — surfaced to the client
+                chunk_queue.put(exc)
+            finally:
+                chunk_queue.put(None)  # completion sentinel
+
+        producer = _threading.Thread(target=_produce, daemon=True)
+        producer.start()
+
+        def _next():
+            try:
+                return chunk_queue.get(timeout=0.5)
+            except _queue.Empty:
+                return _SENTINEL_EMPTY
+
+        while True:
+            item = await loop.run_in_executor(None, _next)
+            if item is _SENTINEL_EMPTY:
+                # Keep the connection alive while the model is still producing.
+                yield ": keep-alive\n\n"
+                continue
+            if item is None:
+                yield "data: [DONE]\n\n"
+                break
+            if isinstance(item, Exception):
+                yield f"data: {json.dumps({'error': str(item)})}\n\n"
+                break
+            yield f"data: {json.dumps({'text': item})}\n\n"
+
+    return StreamingResponse(
+        _sse_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @router.post("/compliance")
 @limiter.limit("10/minute")
 async def compliance_analysis(body: ComplianceRequest, request: Request):
@@ -146,6 +230,7 @@ async def compliance_analysis(body: ComplianceRequest, request: Request):
     except Exception as exc:
         logger.error("ai_compliance_error: %s", exc)
         raise HTTPException(
-            status_code=502, detail=f"Compliance analysis failed: {exc}",
+            status_code=502,
+            detail=f"Compliance analysis failed: {exc}",
         )
     return result

@@ -34,13 +34,20 @@ async def _retry_async(
             if attempt < retries:
                 logger.warning(
                     "%s_failed attempt=%d/%d: %s — retrying in %.0fs",
-                    label, attempt, retries, exc, backoff,
+                    label,
+                    attempt,
+                    retries,
+                    exc,
+                    backoff,
                 )
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, _MAX_BACKOFF)
             else:
                 logger.warning(
-                    "%s_failed falling_back=%s: %s", label, fallback_label, exc,
+                    "%s_failed falling_back=%s: %s",
+                    label,
+                    fallback_label,
+                    exc,
                 )
     return None
 
@@ -56,26 +63,34 @@ async def select_job_store(redis_url: str, app_db_url: str):
 
     # 1. Redis
     if redis_url:
+
         def _make_redis():
             from integrations.redis.job_store import RedisJobStore
+
             return RedisJobStore(redis_url)
 
         job_store = await _retry_async(
-            _make_redis, label="redis_job_store", fallback_label="next",
+            _make_redis,
+            label="redis_job_store",
+            fallback_label="next",
         )
         if job_store is not None:
             logger.info("job_store=redis")
 
     # 2. PostgreSQL
     if job_store is None and app_db_url:
+
         def _make_postgres():
             from integrations.postgres.pool import get_pool
             from integrations.postgres.job_store import PostgresJobStore
+
             pool = get_pool(app_db_url)
             return PostgresJobStore(pool), pool
 
         result = await _retry_async(
-            _make_postgres, label="postgres_job_store", fallback_label="sqlite",
+            _make_postgres,
+            label="postgres_job_store",
+            fallback_label="sqlite",
         )
         if result is not None:
             job_store, pg_pool = result
@@ -107,7 +122,11 @@ def assert_durable_store_or_exit(
     """
     if job_store is not None:  # Redis or PostgreSQL — durable, all good
         return
-    if os.environ.get("MEDANON_ALLOW_SQLITE_FALLBACK", "").lower() in ("true", "1", "yes"):
+    if os.environ.get("MEDANON_ALLOW_SQLITE_FALLBACK", "").lower() in (
+        "true",
+        "1",
+        "yes",
+    ):
         logger.warning(
             "sqlite_fallback_allowed role=%s — only safe in single-container "
             "local dev; set MEDANON_REDIS_URL or MEDANON_APP_DB_URL in production",
@@ -116,10 +135,9 @@ def assert_durable_store_or_exit(
         return
 
     if require_durable is None:
-        require_durable = (
-            os.environ.get("MEDANON_REQUIRE_DURABLE_STORE", "").lower()
-            in ("true", "1", "yes")
-        )
+        require_durable = os.environ.get(
+            "MEDANON_REQUIRE_DURABLE_STORE", ""
+        ).lower() in ("true", "1", "yes")
 
     if role == "worker":
         # The dedicated worker container ALWAYS shares /output with the API
@@ -166,7 +184,8 @@ async def setup_redis_cache(redis_url: str) -> None:
     _gpas_operation = os.environ.get("GPAS_OPERATION", "pseudonymizeAllowCreate")
     logger.info(
         "gpas_cache_keys domain=%s operation=%s — must be stable across runs",
-        _gpas_domain, _gpas_operation,
+        _gpas_domain,
+        _gpas_operation,
     )
 
     if not redis_url:
@@ -178,13 +197,19 @@ async def setup_redis_cache(redis_url: str) -> None:
 
     def _make_cache():
         from utils.cache import (
-            LocalLruCache, RedisCache, TieredCache, configure_cache,
+            LocalLruCache,
+            RedisCache,
+            TieredCache,
+            configure_cache,
         )
+
         configure_cache(TieredCache(LocalLruCache(), RedisCache(redis_url)))
         return True  # sentinel to distinguish success from retry exhaustion
 
     ok = await _retry_async(
-        _make_cache, label="redis_cache_setup", fallback_label="local",
+        _make_cache,
+        label="redis_cache_setup",
+        fallback_label="local",
     )
     if ok:
         logger.info("gpas_cache=tiered(local+redis)")
@@ -196,6 +221,7 @@ async def check_gpas_canary(redis_url: str) -> None:
         return
     try:
         from integrations.gpas.canary import check_gpas_cache_coherence
+
         result = check_gpas_cache_coherence(redis_url)
         if result.get("flushed"):
             logger.warning("gpas_canary: %s", result["reason"])
@@ -221,13 +247,16 @@ async def setup_staging(
 
     def _make_staging():
         from integrations.staging.store import StagingStore
+
         shared_pool = pg_pool if url == app_db_url else None
         store = StagingStore(url, retention_days=retention_days, pool=shared_pool)
         store.ensure_schema()
         return store
 
     result = await _retry_async(
-        _make_staging, retries=3, label="staging_store_setup",
+        _make_staging,
+        retries=3,
+        label="staging_store_setup",
         fallback_label="streaming",
     )
     if result is not None:
@@ -259,10 +288,12 @@ def select_staging_store(
 
     if resolved_backend == "iceberg":
         from integrations.iceberg.staging_store import IcebergStagingStore  # type: ignore[import]
+
         return IcebergStagingStore.from_env()
 
     url = staging_db_url or app_db_url
     if not url:
         return None
     from integrations.staging.store import StagingStore
+
     return StagingStore(url)

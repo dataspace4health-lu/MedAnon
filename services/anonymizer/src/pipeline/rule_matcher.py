@@ -396,6 +396,20 @@ _PER_TYPE_CACHE_MAX = 256
 _cache_lock = threading.Lock()
 
 
+def _settings_cache_key(settings) -> "tuple | None":
+    """Content-dependent cache key for per-profile caches.
+
+    ``(filename, config_hash)`` — including the content hash makes
+    stale-after-edit structurally impossible: an in-place profile edit
+    produces a new hash, so old cache entries are simply never hit again
+    (they age out of the bounded caches).
+    """
+    filename = getattr(settings, "filename", None)
+    if filename is None:
+        return None
+    return (filename, getattr(settings, "config_hash", None))
+
+
 def _get_rule_resource_type(rule: dict) -> str:
     """Return the resource-type prefix of a rule's match expression (or ``'*'``)."""
     match = rule.get("match", "")
@@ -409,21 +423,36 @@ def _get_rule_resource_type(rule: dict) -> str:
     return "*"
 
 
+_DEFAULT_PRIORITY = 100
+
+
 def _build_rule_index(rules: list) -> dict[str, list]:
-    """Build ``{resourceType: [rules]}`` index for fast rule lookup."""
+    """Build ``{resourceType: [rules]}`` index for fast rule lookup.
+
+    Rules are stable-sorted by ``priority`` (ascending; lower number = higher
+    priority, same as many scheduler conventions) so that dispatch always fires
+    higher-priority rules first.  Rules without a ``priority`` key default to
+    ``_DEFAULT_PRIORITY`` (100); within the same priority value the YAML order
+    is preserved (stable sort).
+    """
     index: dict[str, list] = {}
     for rule in rules:
         if not isinstance(rule, dict) or "match" not in rule or "action" not in rule:
             continue
         rt = _get_rule_resource_type(rule)
         index.setdefault(rt, []).append(rule)
+    for rt, rule_list in index.items():
+        index[rt] = sorted(
+            rule_list,
+            key=lambda r: int(r.get("priority", _DEFAULT_PRIORITY)),
+        )
     return index
 
 
 def _get_rules_for_resource(resource: dict, settings) -> list:
     """Return only the rules applicable to this resource's type."""
     rules = getattr(settings, "rules", [])
-    rules_key = getattr(settings, "filename", None)
+    rules_key = _settings_cache_key(settings)
 
     # Rule index: lock-free read, lock only on miss (double-check)
     if rules_key and rules_key in _rule_index_cache:
@@ -477,6 +506,37 @@ def clear_rule_caches() -> None:
         _per_type_cache.clear()
 
 
+def warm_rule_caches(settings) -> int:
+    """Pre-populate FHIRPath caches for every rule in *settings*.
+
+    Iterates all match expressions, classifies them, and (for "complex" / full
+    FHIRPath expressions) compiles the ANTLR grammar eagerly so the first real
+    request does not pay the compile cost.
+
+    Returns the number of expressions compiled.
+    """
+    import time
+
+    rules = getattr(settings, "rules", [])
+    compiled = 0
+    t0 = time.monotonic()
+    for rule in rules:
+        expr = rule.get("match", "") if isinstance(rule, dict) else ""
+        if not expr:
+            continue
+        kind = _classify_match(expr)
+        if kind == "complex":
+            try:
+                _compile_fhirpath(expr)
+                compiled += 1
+            except Exception:
+                pass
+    elapsed_ms = (time.monotonic() - t0) * 1000
+    _log = __import__("logging").getLogger("medanon.rule_matcher")
+    _log.debug("fhirpath_warmup rules=%d compiled=%d elapsed_ms=%.1f", len(rules), compiled, elapsed_ms)
+    return compiled
+
+
 # ---------------------------------------------------------------------------
 # Dynamic parameter interpolation
 # ---------------------------------------------------------------------------
@@ -497,16 +557,208 @@ def _interpolate_dynamic(value, dynamic_settings: dict):
     return value
 
 
+_NLP_ACTIONS = frozenset({"nlp_scrub", "nlp_detect", "nlp_detect_act"})
+
+
+def _merge_profile_nlp(params: dict, rule: dict, settings) -> dict:
+    """Inject profile-level ``nlp.entity_actions`` / ``entity_priorities`` into
+    NLP-action params, with rule-level params taking precedence.
+
+    Precedence (lowest → highest): hard-coded defaults (applied in the action)
+    < profile ``nlp:`` block < per-rule ``params``.  This lets an operator set
+    the entity→action policy once in the profile YAML instead of repeating it on
+    every rule or editing code.  No-op for non-NLP actions and when no profile
+    ``nlp`` block is present.
+    """
+    if rule.get("action") not in _NLP_ACTIONS:
+        return params
+    nlp_cfg = getattr(settings, "nlp", None)
+    if not isinstance(nlp_cfg, dict):
+        return params
+
+    profile_actions = nlp_cfg.get("entity_actions")
+    profile_priorities = nlp_cfg.get("entity_priorities")
+    profile_fail_mode = nlp_cfg.get("fail_mode")
+    if (
+        not isinstance(profile_actions, dict)
+        and not isinstance(profile_priorities, dict)
+        and profile_fail_mode is None
+    ):
+        return params
+
+    merged = dict(params)  # shallow copy so we never mutate the rule's params
+    if isinstance(profile_actions, dict):
+        rule_actions = merged.get("entity_actions") or {}
+        # profile is the base; rule-level entries override.
+        merged["entity_actions"] = {**profile_actions, **rule_actions}
+    if isinstance(profile_priorities, dict):
+        rule_priorities = merged.get("entity_priorities") or {}
+        merged["entity_priorities"] = {**profile_priorities, **rule_priorities}
+    # fail_mode: profile is the base; a per-rule param overrides it (E3.3).
+    if profile_fail_mode is not None and "fail_mode" not in merged:
+        merged["fail_mode"] = profile_fail_mode
+    return merged
+
+
 def _resolve_rule_params(rule: dict, settings) -> dict:
     """Return rule params merged with any dynamic overrides from *settings*."""
     dynamic_settings = getattr(settings, "dynamic_rule_settings", None)
     # Skip deepcopy when no dynamic settings (the common case)
     if not isinstance(dynamic_settings, dict) or not dynamic_settings:
-        return rule.get("params", {})
+        return _merge_profile_nlp(rule.get("params", {}), rule, settings)
 
     params = deepcopy(rule["params"]) if "params" in rule else {}
     params = _interpolate_dynamic(params, dynamic_settings)
     for key, value in dynamic_settings.items():
         if key in params:
             params[key] = value
-    return params
+    return _merge_profile_nlp(params, rule, settings)
+
+
+# ---------------------------------------------------------------------------
+# Conditional rule evaluation (E2.4)
+# ---------------------------------------------------------------------------
+
+_CONDITION_OPS = frozenset({"eq", "ne", "in", "not_in", "exists", "not_exists"})
+
+
+def _condition_values(resource: dict, path: str) -> list:
+    """Collect the value(s) a condition ``path`` resolves to in *resource*.
+
+    Reuses the same FHIRPath fast-paths as rule matching so a condition can
+    target any expression a ``match`` can (simple dot-paths, wildcards,
+    ``.where(...)``, or full FHIRPath).  Evaluation errors degrade to an empty
+    result rather than raising — a malformed condition must never crash the
+    pipeline.
+    """
+    values: list = []
+    for candidate in _build_match_candidates(path, resource):
+        match_class = _classify_match(candidate)
+        try:
+            if match_class in ("simple", "wildcard"):
+                nodes = _evaluate_simple_path(resource, candidate)
+            elif match_class == "where":
+                nodes = _evaluate_where_path(resource, candidate)
+            else:
+                nodes = _evaluate_fhirpath_cached(resource, candidate)
+        except Exception:
+            nodes = []
+        for node in nodes:
+            values.append(node.get("value") if isinstance(node, dict) else node)
+    return values
+
+
+def _eval_single_condition(resource: dict, cond: dict) -> bool:
+    """Evaluate one ``{path, op, value}`` condition against *resource*."""
+    path = cond.get("path")
+    if not path:
+        return True
+    op = str(cond.get("op", "exists")).strip().lower()
+    if op not in _CONDITION_OPS:
+        audit_log.warning(
+            "rule_condition_invalid_op op=%r path=%s — treating rule as applicable",
+            op,
+            path,
+        )
+        return True
+
+    values = _condition_values(resource, path)
+
+    if op == "exists":
+        return len(values) > 0
+    if op == "not_exists":
+        return len(values) == 0
+
+    expected = cond.get("value")
+    if op == "eq":
+        return any(v == expected for v in values)
+    if op == "ne":
+        return not any(v == expected for v in values)
+
+    options = expected if isinstance(expected, (list, tuple, set)) else [expected]
+    if op == "in":
+        return any(v in options for v in values)
+    if op == "not_in":
+        return not any(v in options for v in values)
+    return True
+
+
+def _eval_condition_node(resource: dict, node: dict) -> bool:
+    """Evaluate a single condition node, honouring ``any_of`` / ``all_of``."""
+    if not isinstance(node, dict):
+        return True
+    if isinstance(node.get("any_of"), list):
+        return any(_eval_condition_node(resource, c) for c in node["any_of"])
+    if isinstance(node.get("all_of"), list):
+        return all(_eval_condition_node(resource, c) for c in node["all_of"])
+    return _eval_single_condition(resource, node)
+
+
+def evaluate_rule_condition(rule: dict, resource: dict) -> bool:
+    """Return ``True`` if *rule* should fire against *resource* (E2.4).
+
+    A rule may carry an optional ``condition`` (single node) and/or a
+    ``conditions`` list (all must pass — logical AND).  Each node supports the
+    operators ``eq``/``ne``/``in``/``not_in``/``exists``/``not_exists`` and the
+    nesting keys ``any_of`` (OR) / ``all_of`` (AND).  Rules without either key
+    always fire, so existing profiles are unaffected.
+    """
+    cond = rule.get("condition")
+    conds = rule.get("conditions")
+    if cond is None and conds is None:
+        return True
+    if not isinstance(resource, dict):
+        return True
+
+    if isinstance(cond, dict) and not _eval_condition_node(resource, cond):
+        return False
+    if isinstance(conds, list):
+        for node in conds:
+            if not _eval_condition_node(resource, node):
+                return False
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Static rule-conflict detection
+# ---------------------------------------------------------------------------
+
+
+def detect_rule_conflicts(rules: list[dict]) -> list[dict]:
+    """Return conflicts where multiple rules target the same match path with a
+    *different* action.
+
+    A conflict means the same FHIR path is claimed by more than one action
+    (e.g. one rule ``redact``s ``Patient.telecom.value`` while another ``mask``s
+    it).  The order rules fire in then decides the outcome, which is usually a
+    config mistake.  Two rules with the *same* action on the same path are not
+    reported — that is a harmless duplicate.
+
+    Each returned conflict is a dict::
+
+        {"path": <match>, "actions": [<action_a>, <action_b>, ...],
+         "rules": [<rule_name_a>, <rule_name_b>, ...]}
+    """
+    by_path: dict[str, list[tuple[str, str]]] = {}
+    for rule in rules:
+        if not isinstance(rule, dict):
+            continue
+        match = rule.get("match")
+        action = rule.get("action")
+        if not isinstance(match, str) or not isinstance(action, str):
+            continue
+        name = str(rule.get("name", match))
+        by_path.setdefault(match, []).append((action, name))
+
+    conflicts: list[dict] = []
+    for path, entries in by_path.items():
+        actions = {action for action, _ in entries}
+        if len(actions) > 1:
+            conflicts.append(
+                {
+                    "path": path,
+                    "actions": sorted(actions),
+                    "rules": [name for _, name in entries],
+                }
+            )
+    return conflicts

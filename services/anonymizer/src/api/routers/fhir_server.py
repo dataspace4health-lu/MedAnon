@@ -33,7 +33,6 @@ from api.services.scoring_helpers import (
     _is_scoring_enabled,
     _get_config_profile,
     make_collector,
-    score_and_persist,
     score_json_line,
     persist_run,
 )
@@ -122,16 +121,18 @@ async def process_from_server(
         if not disconnected:
             yield stream_trailer(count, score) + "\n"
         if score is not None:
-            retain_task(persist_run(
-                endpoint="/v1/process/from-server",
-                config_profile=profile,
-                resource_count=count,
-                error_count=score.get("error_count", 0),
-                duration_ms=int((time.monotonic() - t0) * 1000),
-                input_type="from-server",
-                summary={"total_resources": count},
-                score=score,
-            ))
+            retain_task(
+                persist_run(
+                    endpoint="/v1/process/from-server",
+                    config_profile=profile,
+                    resource_count=count,
+                    error_count=score.get("error_count", 0),
+                    duration_ms=int((time.monotonic() - t0) * 1000),
+                    input_type="from-server",
+                    summary={"total_resources": count},
+                    score=score,
+                )
+            )
 
     return StreamingResponse(_generate(), media_type="application/x-ndjson")
 
@@ -192,16 +193,22 @@ async def process_everything(
         if not disconnected:
             yield stream_trailer(count, score) + "\n"
         if score is not None:
-            retain_task(persist_run(
-                endpoint="/v1/process/everything",
-                config_profile=profile,
-                resource_count=count,
-                error_count=score.get("error_count", 0),
-                duration_ms=int((time.monotonic() - t0) * 1000),
-                input_type="everything",
-                summary={"total_resources": count, "resource_type": req.resource_type, "resource_id": req.resource_id},
-                score=score,
-            ))
+            retain_task(
+                persist_run(
+                    endpoint="/v1/process/everything",
+                    config_profile=profile,
+                    resource_count=count,
+                    error_count=score.get("error_count", 0),
+                    duration_ms=int((time.monotonic() - t0) * 1000),
+                    input_type="everything",
+                    summary={
+                        "total_resources": count,
+                        "resource_type": req.resource_type,
+                        "resource_id": req.resource_id,
+                    },
+                    score=score,
+                )
+            )
 
     return StreamingResponse(_generate(), media_type="application/x-ndjson")
 
@@ -259,15 +266,17 @@ async def process_and_upload(
         logger.error("process_and_upload error: %s", type(exc).__name__, exc_info=False)
         raise HTTPException(status_code=500, detail="De-identification error") from exc
     if _is_scoring_enabled():
-        retain_task(persist_run(
-            endpoint="/v1/process/and-upload",
-            config_profile=profile,
-            resource_count=result.get("uploaded", 0) + result.get("errors", 0),
-            error_count=result.get("errors", 0),
-            duration_ms=int((time.monotonic() - t0) * 1000),
-            input_type="and-upload",
-            summary=result,
-        ))
+        retain_task(
+            persist_run(
+                endpoint="/v1/process/and-upload",
+                config_profile=profile,
+                resource_count=result.get("uploaded", 0) + result.get("errors", 0),
+                error_count=result.get("errors", 0),
+                duration_ms=int((time.monotonic() - t0) * 1000),
+                input_type="and-upload",
+                summary=result,
+            )
+        )
     return result
 
 
@@ -354,16 +363,18 @@ async def process_round_trip(
         if not disconnected:
             yield stream_trailer(count, score) + "\n"
         if score is not None:
-            retain_task(persist_run(
-                endpoint="/v1/process/round-trip",
-                config_profile=profile,
-                resource_count=count,
-                error_count=score.get("error_count", 0),
-                duration_ms=int((time.monotonic() - t0) * 1000),
-                input_type="round-trip",
-                summary={"total_resources": count},
-                score=score,
-            ))
+            retain_task(
+                persist_run(
+                    endpoint="/v1/process/round-trip",
+                    config_profile=profile,
+                    resource_count=count,
+                    error_count=score.get("error_count", 0),
+                    duration_ms=int((time.monotonic() - t0) * 1000),
+                    input_type="round-trip",
+                    summary={"total_resources": count},
+                    score=score,
+                )
+            )
 
     return StreamingResponse(_generate(), media_type="application/x-ndjson")
 
@@ -428,16 +439,18 @@ async def process_bulk_export(
         if not disconnected:
             yield stream_trailer(count, score) + "\n"
         if score is not None:
-            retain_task(persist_run(
-                endpoint="/v1/process/bulk-export",
-                config_profile=profile,
-                resource_count=count,
-                error_count=score.get("error_count", 0),
-                duration_ms=int((time.monotonic() - t0) * 1000),
-                input_type="bulk-export",
-                summary={"total_resources": count, "level": req.level},
-                score=score,
-            ))
+            retain_task(
+                persist_run(
+                    endpoint="/v1/process/bulk-export",
+                    config_profile=profile,
+                    resource_count=count,
+                    error_count=score.get("error_count", 0),
+                    duration_ms=int((time.monotonic() - t0) * 1000),
+                    input_type="bulk-export",
+                    summary={"total_resources": count, "level": req.level},
+                    score=score,
+                )
+            )
 
     return StreamingResponse(_generate(), media_type="application/x-ndjson")
 
@@ -499,16 +512,18 @@ async def process_cohort(
         if not disconnected:
             yield stream_trailer(count, score) + "\n"
         if score is not None:
-            retain_task(persist_run(
-                endpoint="/v1/process/cohort",
-                config_profile=profile,
-                resource_count=count,
-                error_count=score.get("error_count", 0),
-                duration_ms=int((time.monotonic() - t0) * 1000),
-                input_type="cohort",
-                summary={"total_resources": count, "search_type": req.search_type},
-                score=score,
-            ))
+            retain_task(
+                persist_run(
+                    endpoint="/v1/process/cohort",
+                    config_profile=profile,
+                    resource_count=count,
+                    error_count=score.get("error_count", 0),
+                    duration_ms=int((time.monotonic() - t0) * 1000),
+                    input_type="cohort",
+                    summary={"total_resources": count, "search_type": req.search_type},
+                    score=score,
+                )
+            )
 
     return StreamingResponse(_generate(), media_type="application/x-ndjson")
 

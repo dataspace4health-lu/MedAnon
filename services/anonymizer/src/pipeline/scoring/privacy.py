@@ -21,10 +21,8 @@ from typing import Any
 from pipeline.scoring.models import Evidence, PrivacyDecision
 from pipeline.scoring.constants import (
     HIPAA_SENSITIVE_PATHS,
-    PHI_RESOURCE_TYPES,
     NER_ENABLED,
     NER_THRESHOLD,
-    REDACTED_SENTINELS,
     RISK_LEVEL_MAP,
     RISK_THRESHOLD,
     SCORE_CONFIG_GATE,
@@ -49,6 +47,26 @@ _PII_PATTERNS: dict[str, re.Pattern] = {
     ),
     "mrn": re.compile(r"\b(?:MRN|mrn)[:\s#]?\d{4,}\b"),
 }
+
+# ---------------------------------------------------------------------------
+# Per-type re-identification weights (F.24)
+# ---------------------------------------------------------------------------
+# A single uncovered *direct* identifier (SSN, MRN, email) is enough to
+# re-identify an individual, so it must dominate the text-risk score and trip
+# the output gate on its own.  Quasi-identifiers (a lone date, an IP) are far
+# weaker and only accumulate risk in aggregate.  The previous flat 0.15/entity
+# scheme let a leaked SSN slip under most gate thresholds.
+_PII_TYPE_WEIGHTS: dict[str, float] = {
+    "ssn": 0.95,
+    "mrn": 0.90,
+    "email": 0.70,
+    "phone": 0.60,
+    "ip": 0.40,
+    "date_iso": 0.25,
+}
+# NER entities and unknown regex types fall back to the legacy per-entity weight.
+_DEFAULT_PII_WEIGHT = 0.15
+
 
 # ---------------------------------------------------------------------------
 # HIPAA identifier detection helpers
@@ -244,6 +262,7 @@ class PrivacyRiskEvaluator:
         if n < 5:
             try:
                 from analytics.risk import compute_k_anonymity
+
                 k_result = compute_k_anonymity(patient_qis)
                 summary = k_result.get("summary", {})
                 min_k = summary.get("min_k", 1)
@@ -499,19 +518,15 @@ class PrivacyRiskEvaluator:
             # Not a PHI-bearing resource type
             return 0.0
 
-        if not manifest_entries and rtype in PHI_RESOURCE_TYPES:
-            evidence.append(
-                Evidence(
-                    check="identifier_coverage",
-                    value=1.0,
-                    details={
-                        "reason": "no_transformations_detected",
-                        "resource_type": rtype,
-                    },
-                    severity="critical",
-                )
-            )
-            return 1.0
+        # NOTE: We deliberately do NOT short-circuit to risk=1.0 when
+        # manifest_entries is empty.  An empty manifest can mean either
+        # (a) a genuine leak — sensitive fields are present but nothing was
+        # transformed — or (b) a *sparse* resource that simply has no sensitive
+        # fields to transform (e.g. a Patient with only id/resourceType).  The
+        # per-field existence analysis below distinguishes the two correctly:
+        # case (a) accumulates unmatched present fields (risk > 0), while case
+        # (b) finds no sensitive fields present (risk = 0).  The old shortcut
+        # scored both at 1.0, over-blocking sparse resources at the output gate.
 
         # Build set of manifest-covered paths (match on path prefix)
         covered_paths: set[str] = set()
@@ -528,9 +543,7 @@ class PrivacyRiskEvaluator:
         # entry when they actually transform something, so a clean field
         # produces no manifest entry even though the rule ran and the field is
         # safe. Treat such paths as config-covered to avoid false positives.
-        conditional_actions = frozenset(
-            {"nlp_detect_act", "nlp_scrub", "nlp_detect"}
-        )
+        conditional_actions = frozenset({"nlp_detect_act", "nlp_scrub", "nlp_detect"})
         config_covered_paths: set[str] = set()
         if settings is not None and hasattr(settings, "rules"):
             for rule in settings.rules:
@@ -547,42 +560,56 @@ class PrivacyRiskEvaluator:
                     config_covered_paths.add(match_expr)
 
         unmatched = []
+        present = 0  # sensitive fields actually present in this resource
         for s_path in sensitive:
             # Check manifest coverage
-            if any(
+            covered = any(
                 s_path == cp
                 or cp.startswith(s_path + ".")
                 or s_path.startswith(cp + ".")
                 for cp in covered_paths
-            ):
-                continue
+            )
 
             # Check config conditional-rule coverage (field is safe but
             # produced no manifest entry because no PII was found)
             leaf = s_path.split(".")[-1]
             if s_path in config_covered_paths or leaf in config_covered_paths:
-                continue
+                covered = True
 
             # Precise field existence check
             if "." in s_path:
                 # Compound path (e.g. "location.period", "contact.name")
                 # — verify the full nested path exists, not just the root.
-                if not _nested_path_exists(deidentified, s_path):
-                    continue
+                field_present = _nested_path_exists(deidentified, s_path)
             else:
                 # Simple path — check root field existence
-                if s_path not in deidentified:
-                    continue
-                # Bare FHIR References are transitively covered by
-                # reference rewriting + *.id pseudonymization.
-                if _is_bare_reference(deidentified[s_path]):
-                    continue
+                field_present = s_path in deidentified
+                if field_present:
+                    # The resource ``id`` and bare FHIR References are
+                    # transitively covered by ``*.id`` pseudonymization +
+                    # reference rewriting — an opaque server key is not, on its
+                    # own, re-identifying PHI.
+                    if s_path == "id" or _is_bare_reference(deidentified[s_path]):
+                        covered = True
 
-            unmatched.append(s_path)
+            if not field_present:
+                # Absent sensitive fields cannot leak; exclude them from the
+                # denominator so the risk fraction reflects what the resource
+                # *actually exposes*, not the full catalogue of possible paths.
+                continue
 
+            present += 1
+            if not covered:
+                unmatched.append(s_path)
+
+        # Risk = fraction of *present* sensitive fields left uncovered.  Using
+        # ``present`` (not the full ``sensitive`` list) as the denominator means
+        # a resource whose every present sensitive field is uncovered scores
+        # high regardless of how many sensitive paths it lacks — while a sparse
+        # resource with no sensitive fields present scores 0.
         total = len(sensitive)
-        matched = total - len(unmatched)
-        risk = len(unmatched) / total if total > 0 else 0.0
+        matched = present - len(unmatched)
+        risk = len(unmatched) / present if present > 0 else 0.0
 
         evidence.append(
             Evidence(
@@ -590,6 +617,7 @@ class PrivacyRiskEvaluator:
                 value=risk,
                 details={
                     "total_sensitive": total,
+                    "present_sensitive": present,
                     "matched": matched,
                     "unmatched": unmatched[:10],
                 },
@@ -653,7 +681,9 @@ class PrivacyRiskEvaluator:
                     "fired": len(covered),
                     "missed": sorted(applicable - fired)[:10],
                 },
-                severity="critical" if risk > 0.5 else ("warning" if risk > 0 else "info"),
+                severity="critical"
+                if risk > 0.5
+                else ("warning" if risk > 0 else "info"),
             )
         )
         return risk
@@ -685,7 +715,19 @@ class PrivacyRiskEvaluator:
             detections.extend(ner_detections)
 
         entity_count = len(detections)
-        risk = min(1.0, entity_count * 0.15)
+        # F.24: weight each detection by its re-identification strength.  The
+        # score is dominated by the single strongest identifier (a leaked SSN
+        # → ~0.95) plus a small accumulation for additional detections, so one
+        # direct identifier trips the gate while many weak quasi-identifiers
+        # still aggregate toward 1.0.
+        if detections:
+            max_weight = max(
+                _PII_TYPE_WEIGHTS.get(d.get("type", ""), _DEFAULT_PII_WEIGHT)
+                for d in detections
+            )
+            risk = min(1.0, max_weight + 0.1 * (entity_count - 1))
+        else:
+            risk = 0.0
 
         if detections:
             evidence.append(

@@ -42,6 +42,7 @@ from api.routers import (
     analytics,
     api_keys,
     audit,
+    cda,
     configs,
     dashboard,
     dicom,
@@ -52,7 +53,10 @@ from api.routers import (
     process,
     processing_runs,
     scoring,
+    sql_source,
     synthetic,
+    tabular,
+    workflows,
 )
 from api.routers import fhir_subscriptions, smart
 
@@ -153,8 +157,17 @@ async def _startup() -> None:
 
     # Refuse to start with plain (un-keyed) hashing outside a dev environment.
     # Plain SHA3 is reversible via rainbow tables — must never reach production.
-    _allow_plain = os.environ.get("MEDANON_HASH_ALLOW_PLAIN", "").strip().lower() in ("1", "true", "yes")
-    _is_dev = os.environ.get("ENVIRONMENT", "").strip().lower() in ("dev", "development", "test", "testing")
+    _allow_plain = os.environ.get("MEDANON_HASH_ALLOW_PLAIN", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    _is_dev = os.environ.get("ENVIRONMENT", "").strip().lower() in (
+        "dev",
+        "development",
+        "test",
+        "testing",
+    )
     if _allow_plain and not _is_dev:
         raise RuntimeError(
             "MEDANON_HASH_ALLOW_PLAIN=true is set but ENVIRONMENT is not 'dev' or 'test'. "
@@ -199,7 +212,10 @@ async def _startup() -> None:
                     "redis_aof_disabled — durability at risk; set "
                     "appendonly=yes in redis.conf or MEDANON_REQUIRE_REDIS_AOF=false to silence"
                 )
-                if os.environ.get("MEDANON_REQUIRE_REDIS_AOF", "false").lower() == "true":
+                if (
+                    os.environ.get("MEDANON_REQUIRE_REDIS_AOF", "false").lower()
+                    == "true"
+                ):
                     raise RuntimeError(msg)
                 logger.warning(msg)
             else:
@@ -222,6 +238,7 @@ async def _startup() -> None:
         if redis_url:
             try:
                 from utils.redis_pool import get_redis
+
                 idem_client = get_redis(redis_url, decode_responses=True)
                 idem_client.ping()
             except Exception:
@@ -247,6 +264,7 @@ async def _startup() -> None:
         job_store, pg_pool = await select_job_store(redis_url, app_db_url)
         # C11 guard: refuse SQLite when MEDANON_REQUIRE_DURABLE_STORE=true.
         from pipeline.jobs.store_factory import assert_durable_store_or_exit
+
         assert_durable_store_or_exit(job_store, role="api")
         if pg_pool is not None:
             app.state.pg_pool = pg_pool
@@ -266,6 +284,7 @@ async def _startup() -> None:
         ).strip().lower() in ("true", "1", "yes")
         if worker_enabled:
             from utils.tasks import retain_task
+
             retain_task(_supervised_worker_loop(_worker), name="worker_loop")
             logger.info("job_worker started max_concurrent=%d", max_concurrent)
         else:
@@ -273,18 +292,39 @@ async def _startup() -> None:
     except Exception as exc:
         logger.warning("job_worker_start_failed: %s", exc)
 
+    # Ensure a shared PostgreSQL pool exists for app-state stores (config,
+    # subscriptions, processing runs, API keys, SQL source connections) whenever
+    # MEDANON_APP_DB_URL is set — even when Redis is the job store. Otherwise
+    # ``select_job_store`` only creates the pool when Postgres is the job-store
+    # backend, leaving these stores to fall back to SQLite or fail to initialise
+    # despite the app database being available. ``get_pool`` is an idempotent
+    # singleton, so this is a no-op when the pool already exists.
+    if pg_pool is None and app_db_url:
+        try:
+            from integrations.postgres.pool import get_pool
+
+            pg_pool = get_pool(app_db_url)
+            app.state.pg_pool = pg_pool
+            logger.info("app_db_pool=postgres (shared app-state pool)")
+        except Exception as exc:
+            logger.warning("app_db_pool_init_failed: %s", exc)
+
     # FHIR Subscription store — PostgreSQL when app-db available, else SQLite
     try:
         from pipeline.subscriptions import init_subscription_store
 
         if pg_pool:
-            from integrations.postgres.subscription_store import PostgresSubscriptionStore
+            from integrations.postgres.subscription_store import (
+                PostgresSubscriptionStore,
+            )
 
             sub_store = PostgresSubscriptionStore(pg_pool)
             init_subscription_store(store=sub_store)
             logger.info("subscription_store=postgres")
         else:
-            sub_db = os.environ.get("MEDANON_SUBSCRIPTION_DB", "/output/subscriptions.db")
+            sub_db = os.environ.get(
+                "MEDANON_SUBSCRIPTION_DB", "/output/subscriptions.db"
+            )
             init_subscription_store(sub_db)
             logger.info("subscription_store=sqlite path=%s", sub_db)
     except Exception as exc:
@@ -309,25 +349,71 @@ async def _startup() -> None:
     except Exception as exc:
         logger.warning("config_store_start_failed: %s", exc)
 
+    # SQL-source connection store — PostgreSQL only (saved encrypted credentials)
+    if pg_pool:
+        try:
+            from integrations.postgres.sql_connection_store import (
+                PostgresSqlConnectionStore,
+            )
+            from pipeline.sql_connection import init_sql_connection_store
+
+            init_sql_connection_store(PostgresSqlConnectionStore(pg_pool))
+            logger.info("sql_connection_store=postgres")
+        except Exception as exc:
+            logger.warning("sql_connection_store_start_failed: %s", exc)
+
+    # Workflow (DAG) engine — PostgreSQL only ("staging is the ledger"); the
+    # engine schedules steps through the same job store the worker drains.
+    workflows_enabled = os.environ.get(
+        "MEDANON_WORKFLOWS_ENABLED", "true"
+    ).strip().lower() in ("true", "1", "yes")
+    if pg_pool and workflows_enabled and store is not None:
+        try:
+            from integrations.postgres.workflow_store import PostgresWorkflowStore
+            from pipeline.workflows import init_workflow_engine
+
+            wf_store = PostgresWorkflowStore(pg_pool)
+            wf_store.ensure_schema()
+            init_workflow_engine(wf_store, store)
+            logger.info("workflow_engine=postgres")
+        except Exception as exc:
+            logger.warning("workflow_engine_start_failed: %s", exc)
+    elif workflows_enabled and not pg_pool:
+        logger.info(
+            "workflow_engine disabled — requires MEDANON_APP_DB_URL "
+            "(Postgres is the workflow ledger)"
+        )
+
     # Processing run store — PostgreSQL when app-db available, else SQLite
     try:
         from pipeline.processing_run import init_processing_run_store
 
         if pg_pool:
-            from integrations.postgres.processing_run_store import PostgresProcessingRunStore
+            from integrations.postgres.processing_run_store import (
+                PostgresProcessingRunStore,
+            )
 
             pr_store = PostgresProcessingRunStore(pg_pool)
             init_processing_run_store(store=pr_store)
             logger.info("processing_run_store=postgres")
         else:
-            pr_db = os.environ.get("MEDANON_PROCESSING_RUN_DB", "/output/processing_runs.db")
+            pr_db = os.environ.get(
+                "MEDANON_PROCESSING_RUN_DB", "/output/processing_runs.db"
+            )
             init_processing_run_store(pr_db)
             logger.info("processing_run_store=sqlite path=%s", pr_db)
     except Exception as exc:
         logger.warning("processing_run_store_start_failed: %s", exc)
 
-    # Per-client API key store — PostgreSQL only (no SQLite fallback for key management)
-    if pg_pool:
+    # Per-client API key store — PostgreSQL only (no SQLite fallback for key management).
+    # Wiring this store makes X-API-Key mandatory on protected endpoints. Set
+    # MEDANON_API_KEY_STORE_ENABLED=false to keep the app DB configured (jobs,
+    # configs, etc.) while running the API in keyless OPEN MODE for local dev.
+    key_store_enabled = os.environ.get(
+        "MEDANON_API_KEY_STORE_ENABLED",
+        "true",
+    ).strip().lower() not in ("false", "0", "no")
+    if pg_pool and key_store_enabled:
         try:
             from integrations.postgres.api_key_store import PostgresApiKeyStore
             from api.auth import init_api_key_store
@@ -337,6 +423,8 @@ async def _startup() -> None:
             logger.info("api_key_store=postgres")
         except Exception as exc:
             logger.warning("api_key_store_start_failed: %s", exc)
+    elif pg_pool:
+        logger.info("api_key_store=disabled (MEDANON_API_KEY_STORE_ENABLED=false)")
 
     # Job detail cache — PostgreSQL when app-db available, else SQLite
     try:
@@ -378,6 +466,7 @@ async def _startup() -> None:
                 logger.debug("nlp_prewarm skipped: %s", exc)
 
         from utils.tasks import retain_task
+
         retain_task(_prewarm_nlp(), name="nlp_prewarm")
 
 
@@ -425,6 +514,7 @@ async def _job_queue_full_handler(request: Request, exc: _JobQueueFull):
         },
         headers={"Retry-After": retry_after},
     )
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -623,6 +713,7 @@ app.include_router(fhir_server.router, prefix="/v1")
 app.include_router(analytics.router, prefix="/v1")
 app.include_router(synthetic.router, prefix="/v1")
 app.include_router(jobs.router, prefix="/v1")
+app.include_router(workflows.router, prefix="/v1")
 app.include_router(configs.router, prefix="/v1")
 app.include_router(scoring.router, prefix="/v1")
 app.include_router(processing_runs.router, prefix="/v1")
@@ -634,6 +725,9 @@ app.include_router(dashboard.router, prefix="/v1")
 
 app.include_router(dicom.router, prefix="/v1")
 app.include_router(hl7v2.router, prefix="/v1")
+app.include_router(cda.router, prefix="/v1")
+app.include_router(tabular.router, prefix="/v1")
+app.include_router(sql_source.router, prefix="/v1")
 app.include_router(fhir_bulk.router, prefix="/fhir")
 app.include_router(fhir_subscriptions.router)
 app.include_router(smart.router)

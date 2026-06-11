@@ -97,8 +97,16 @@ def _truncate_to_lines(path: str, line_count: int) -> int:
         # If we hit the requested count, truncate the remainder.
         # Otherwise truncate any partial trailing line (drop bytes after
         # the last observed '\n'); on a clean file this is a no-op.
+        #
+        # Compare against the real file size, not the scan position: the scan
+        # stops at the Nth newline, so ``pos == cut_pos`` there and a
+        # ``target < pos`` guard would never fire — surplus lines written after
+        # the last checkpoint (crash case 1) would survive and duplicate on
+        # resume.
         target = cut_pos if cut_pos is not None else last_complete_pos
-        if target < pos:
+        f.seek(0, 2)
+        size = f.tell()
+        if target < size:
             f.seek(target)
             f.truncate()
-    return seen if cut_pos is not None else seen
+    return seen

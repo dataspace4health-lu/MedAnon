@@ -10,6 +10,7 @@ Public API:
     error(msg, *args)             — raise FHIRPathError
     not_implemented(feature)      — raise NotImplementedError with context
 """
+
 from datetime import datetime
 import re
 

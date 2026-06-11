@@ -1,7 +1,7 @@
 """Admin operations — cache management and diagnostics.
 
-    POST /v1/admin/cache/flush     — flush all gPAS cache entries (admin role)
-    GET  /v1/admin/cache/canary    — cache coherence status (admin role)
+POST /v1/admin/cache/flush     — flush all gPAS cache entries (admin role)
+GET  /v1/admin/cache/canary    — cache coherence status (admin role)
 """
 
 import logging
@@ -88,4 +88,6 @@ def cache_canary_status(request: Request):
         }
     except Exception as exc:
         logger.error("cache_canary_check_failed: %s", exc, exc_info=False)
-        raise HTTPException(status_code=500, detail=f"Canary check failed: {exc}") from exc
+        raise HTTPException(
+            status_code=500, detail=f"Canary check failed: {exc}"
+        ) from exc

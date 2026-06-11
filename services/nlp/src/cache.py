@@ -27,6 +27,32 @@ logger = logging.getLogger("nlp.cache")
 _DEFAULT_TTL_SEC = int(os.environ.get("NLP_REDIS_TTL_SEC", "604800"))
 _KEY_PREFIX = os.environ.get("NLP_REDIS_KEY_PREFIX", "medanon:nlp:detect:")
 
+# Prometheus L2 cache effectiveness counters (E5.6) — optional, degrade to no-op
+# when prometheus_client is absent.  Exposed via the NLP service /metrics route.
+try:
+    from prometheus_client import Counter as _Counter
+
+    _L2_HITS = _Counter(
+        "medanon_nlp_l2_cache_hits_total",
+        "NLP L2 (Redis) detection cache hits",
+    )
+    _L2_MISSES = _Counter(
+        "medanon_nlp_l2_cache_misses_total",
+        "NLP L2 (Redis) detection cache misses",
+    )
+except Exception:  # pragma: no cover - prometheus optional
+    _L2_HITS = None
+    _L2_MISSES = None
+
+
+def _l2_inc(counter) -> None:
+    if counter is not None:
+        try:
+            counter.inc()
+        except Exception:
+            pass
+
+
 
 class RedisDetectionCache:
     """Thin Redis wrapper for ``_detect_entities_cached`` results.
@@ -65,10 +91,13 @@ class RedisDetectionCache:
             logger.warning("nlp_l2_get_error: %s", type(exc).__name__)
             return None
         if raw is None:
+            _l2_inc(_L2_MISSES)
             return None
         try:
             data = json.loads(raw)
-            return tuple((int(s), int(e), str(t)) for s, e, t in data)
+            result = tuple((int(s), int(e), str(t)) for s, e, t in data)
+            _l2_inc(_L2_HITS)
+            return result
         except Exception as exc:
             logger.warning("nlp_l2_decode_error: %s", type(exc).__name__)
             return None

@@ -24,7 +24,12 @@ def _scan(obj: object, *, _in_ext: bool) -> None:
         url = obj.get("url")
         if url in _GEO_COORD_URLS and isinstance(obj.get("valueDecimal"), (int, float)):
             obj["valueDecimal"] = 0.0
-        if _in_ext and url == "text" and isinstance(obj.get("valueString"), str) and obj["valueString"]:
+        if (
+            _in_ext
+            and url == "text"
+            and isinstance(obj.get("valueString"), str)
+            and obj["valueString"]
+        ):
             obj["valueString"] = "[REDACTED]"
         for k, v in obj.items():
             if isinstance(v, (dict, list)):

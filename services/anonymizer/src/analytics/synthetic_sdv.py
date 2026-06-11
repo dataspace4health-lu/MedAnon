@@ -19,6 +19,7 @@ Usage
         )
         patients = generate_synthetic_patients_sdv(input_patients, count=100, seed=42)
 """
+
 from __future__ import annotations
 
 import uuid
@@ -43,6 +44,7 @@ _SYN_TAG = {
 # ---------------------------------------------------------------------------
 # Flatten / unflatten helpers
 # ---------------------------------------------------------------------------
+
 
 def _flatten_patient(p: dict) -> dict[str, str]:
     """Extract key attributes from a FHIR Patient into a flat dict for SDV."""
@@ -105,16 +107,23 @@ def _unflatten_patient(row: dict, rng) -> dict[str, Any]:
     marital = str(row.get("marital_status", "")).strip()
     if marital:
         resource["maritalStatus"] = {
-            "coding": [{"system": "http://terminology.hl7.org/CodeSystem/v3-MaritalStatus", "code": marital}],
+            "coding": [
+                {
+                    "system": "http://terminology.hl7.org/CodeSystem/v3-MaritalStatus",
+                    "code": marital,
+                }
+            ],
         }
 
     language = str(row.get("language", "")).strip()
     if language:
-        resource["communication"] = [{
-            "language": {
-                "coding": [{"system": "urn:ietf:bcp:47", "code": language}],
-            },
-        }]
+        resource["communication"] = [
+            {
+                "language": {
+                    "coding": [{"system": "urn:ietf:bcp:47", "code": language}],
+                },
+            }
+        ]
 
     return resource
 
@@ -183,23 +192,30 @@ def _unflatten_condition(row: dict, patient_id: str, rng) -> dict[str, Any]:
         "subject": {"reference": f"Patient/{patient_id}"},
         "code": code_obj,
         "clinicalStatus": {
-            "coding": [{
-                "system": "http://terminology.hl7.org/CodeSystem/condition-clinical",
-                "code": clinical_status,
-            }],
+            "coding": [
+                {
+                    "system": "http://terminology.hl7.org/CodeSystem/condition-clinical",
+                    "code": clinical_status,
+                }
+            ],
         },
-        "category": [{
-            "coding": [{
-                "system": "http://terminology.hl7.org/CodeSystem/condition-category",
-                "code": category,
-            }],
-        }],
+        "category": [
+            {
+                "coding": [
+                    {
+                        "system": "http://terminology.hl7.org/CodeSystem/condition-category",
+                        "code": category,
+                    }
+                ],
+            }
+        ],
     }
 
 
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 def generate_synthetic_patients_sdv(
     patients: list[dict],
@@ -230,11 +246,14 @@ def generate_synthetic_patients_sdv(
             "SDV is not installed. Install with: pip install -r requirements-sdv.txt"
         )
     if not patients:
-        raise ValueError("patients list must not be empty — no distribution to sample from")
+        raise ValueError(
+            "patients list must not be empty — no distribution to sample from"
+        )
     if count < 1 or count > 10_000:
         raise ValueError(f"count must be between 1 and 10 000, got {count}")
 
     import random
+
     rng = random.Random(seed)
 
     rows = [_flatten_patient(p) for p in patients]
@@ -256,8 +275,7 @@ def generate_synthetic_patients_sdv(
     synthetic_df = synthesizer.sample(num_rows=count)
 
     return [
-        _unflatten_patient(row, rng)
-        for row in synthetic_df.to_dict(orient="records")
+        _unflatten_patient(row, rng) for row in synthetic_df.to_dict(orient="records")
     ]
 
 
@@ -292,6 +310,7 @@ def generate_synthetic_conditions_sdv(
         raise ValueError("synthetic_patients list must not be empty")
 
     import random
+
     rng = random.Random(seed)
 
     rows = [_flatten_condition(c) for c in conditions]

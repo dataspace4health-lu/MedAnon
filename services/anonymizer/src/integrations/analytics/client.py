@@ -32,9 +32,12 @@ _SYNTHETIC_READ_TIMEOUT_SEC = float(
     os.environ.get("ANALYTICS_SYNTHETIC_TIMEOUT_READ_SEC", "120")
 )
 
-_RISK_TIMEOUT = urllib3.Timeout(connect=_CONNECT_TIMEOUT_SEC, read=_RISK_READ_TIMEOUT_SEC)
+_RISK_TIMEOUT = urllib3.Timeout(
+    connect=_CONNECT_TIMEOUT_SEC, read=_RISK_READ_TIMEOUT_SEC
+)
 _SYNTHETIC_TIMEOUT = urllib3.Timeout(
-    connect=_CONNECT_TIMEOUT_SEC, read=_SYNTHETIC_READ_TIMEOUT_SEC,
+    connect=_CONNECT_TIMEOUT_SEC,
+    read=_SYNTHETIC_READ_TIMEOUT_SEC,
 )
 
 
@@ -53,9 +56,13 @@ def proxy_analyse_risk(body: bytes, content_type: str) -> dict:
         raise ValueError("Analytics service unavailable — circuit breaker OPEN")
     url = _analytics_url("/v1/analyse/risk")
     try:
-        result = proxy_post_json(url, body, content_type=content_type, timeout=_RISK_TIMEOUT)
+        result = proxy_post_json(
+            url, body, content_type=content_type, timeout=_RISK_TIMEOUT
+        )
         if not isinstance(result, dict):
-            raise ValueError(f"Analytics returned {type(result).__name__}, expected dict")
+            raise ValueError(
+                f"Analytics returned {type(result).__name__}, expected dict"
+            )
         _analytics_cb.record_success()
         return result
     except ProxyTimeoutError:
@@ -78,7 +85,10 @@ def proxy_generate_synthetic(body: bytes, content_type: str, params: dict) -> by
     url = _analytics_url(f"/v1/generate/synthetic?{qs}")
     try:
         result = proxy_post_raw(
-            url, body, content_type=content_type, timeout=_SYNTHETIC_TIMEOUT,
+            url,
+            body,
+            content_type=content_type,
+            timeout=_SYNTHETIC_TIMEOUT,
         )
         _analytics_cb.record_success()
         return result
