@@ -5,6 +5,15 @@
 
 import { fetchApi, getAuthHeaders } from "./client";
 
+export interface PiiEnforcementStatus {
+  configured: boolean;
+  model: string;
+  api_base: string;
+  require_local: boolean;
+  local_verified: boolean;
+  detail: string;
+}
+
 export interface AgentStatus {
   enabled: boolean;
   provider: string;
@@ -12,6 +21,7 @@ export interface AgentStatus {
   api_base: string;
   circuit_breaker: Record<string, unknown>;
   cache_size: number;
+  pii_enforcement?: PiiEnforcementStatus;
 }
 
 export interface ConfigGenRequest {
@@ -128,6 +138,66 @@ export async function* streamExplain(
           const parsed = JSON.parse(data);
           if (parsed.text) yield parsed.text;
         } catch {
+          /* skip malformed SSE chunks */
+        }
+      }
+    }
+    if (done) break;
+  }
+}
+
+export interface ChatTurn {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface ChatRequest {
+  question: string;
+  config_yaml?: string;
+  history?: ChatTurn[];
+  model?: string;
+}
+
+/**
+ * Stream a config-chat answer as SSE text chunks. Throws on a server-sent
+ * `error` event so the caller can surface it.
+ */
+export async function* streamChat(
+  req: ChatRequest,
+): AsyncGenerator<string, void, undefined> {
+  const response = await fetch("/api/v1/ai/chat", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "text/event-stream",
+      ...getAuthHeaders(),
+    },
+    body: JSON.stringify(req),
+  });
+  if (!response.ok) {
+    throw new Error(`Chat request failed (HTTP ${response.status})`);
+  }
+  const reader = response.body?.getReader();
+  if (!reader) return;
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (value) buffer += decoder.decode(value, { stream: true });
+    let idx: number;
+    while ((idx = buffer.indexOf("\n\n")) !== -1) {
+      const line = buffer.slice(0, idx).trim();
+      buffer = buffer.slice(idx + 2);
+      // Comment lines (": keep-alive") are ignored.
+      if (line.startsWith("data: ")) {
+        const data = line.slice(6);
+        if (data === "[DONE]") return;
+        try {
+          const parsed = JSON.parse(data);
+          if (parsed.error) throw new Error(parsed.error);
+          if (parsed.text) yield parsed.text;
+        } catch (e) {
+          if (e instanceof Error && e.message) throw e;
           /* skip malformed SSE chunks */
         }
       }

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { PageHeader } from '@/components/layout/PageHeader';
+import { ConfirmDialog } from '@/components/shared/ConfirmDialog';
 import { listConfigs, getConfigYaml, deleteConfig } from '@/api/medanon';
 import type { ConfigMeta } from '@/api/medanon';
 import { useAuth } from '@/context/AuthContext';
@@ -55,7 +56,8 @@ function ConfigCard({
   const [yamlOpen, setYamlOpen] = useState(false);
   const [yaml, setYaml] = useState<string | null>(null);
   const [yamlLoading, setYamlLoading] = useState(false);
-  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const handlePreview = useCallback(async () => {
     if (!yamlOpen && yaml === null) {
@@ -155,44 +157,34 @@ function ConfigCard({
           </Button>
         )}
         {hasRole('admin') && !config.is_system && (
-          <>
-            {confirmDelete ? (
-              <div className="flex items-center gap-1">
-                <span className="text-xs text-destructive">Delete?</span>
-                <Button
-                  variant="destructive"
-                  size="sm"
-                  className="h-7 text-xs"
-                  onClick={() => {
-                    setConfirmDelete(false);
-                    onDelete(config.name);
-                  }}
-                >
-                  Yes
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-7 text-xs"
-                  onClick={() => setConfirmDelete(false)}
-                >
-                  No
-                </Button>
-              </div>
-            ) : (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-7 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive"
-                onClick={() => setConfirmDelete(true)}
-              >
-                <Trash2 className="size-3" />
-                Delete
-              </Button>
-            )}
-          </>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive"
+            onClick={() => setDeleteOpen(true)}
+          >
+            <Trash2 className="size-3" />
+            Delete
+          </Button>
         )}
       </CardFooter>
+      <ConfirmDialog
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+        title={`Delete "${config.name}"?`}
+        description="This config profile will be permanently deleted and cannot be recovered."
+        confirmLabel="Delete"
+        loading={deleting}
+        onConfirm={async () => {
+          setDeleting(true);
+          try {
+            await onDelete(config.name);
+          } finally {
+            setDeleting(false);
+            setDeleteOpen(false);
+          }
+        }}
+      />
     </Card>
   );
 }
@@ -217,7 +209,9 @@ export default function ConfigsPage() {
       const data = await listConfigs();
       setConfigs(data);
     } catch (err) {
-      setError(String(err));
+      const msg = String(err);
+      setError(msg);
+      toast.error('Failed to load configs', { description: msg });
     } finally {
       setLoading(false);
     }

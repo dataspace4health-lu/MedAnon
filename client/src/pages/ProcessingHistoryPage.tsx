@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { ConfirmDialog } from '@/components/shared/ConfirmDialog';
+import { toast } from 'sonner';
 import { PageHeader } from '@/components/layout/PageHeader';
 import {
   listProcessingRuns,
@@ -29,6 +31,8 @@ import {
   ChevronLeft,
   ChevronRight,
   Loader2,
+  CheckCircle2,
+  ShieldAlert,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -73,6 +77,208 @@ function ScoreBadge({ score }: { score: Record<string, unknown> | null }) {
   );
 }
 
+// ── Expanded detail panel ────────────────────────────────────────────────────
+
+interface ScoreObj {
+  computed?: boolean;
+  total_scored?: number;
+  pass_count?: number;
+  fail_count?: number;
+  error_count?: number;
+  avg_composite?: number;
+  min_composite?: number;
+  avg_utility?: number;
+  avg_quality?: number;
+  identifier_risk_hits?: number;
+  text_risk_hits?: number;
+  batch_privacy?: {
+    passed: boolean;
+    risk_score: number;
+    threshold: number;
+    attacker_risk?: number;
+    identifier_risk?: number;
+    text_risk?: number;
+    evidence?: { check: string; value: number; details?: Record<string,unknown>; severity?: string }[];
+  } | null;
+}
+
+function Bar({ value, color }: { value: number; color: string }) {
+  const pct = Math.min(100, Math.max(0, Math.round(value)));
+  return (
+    <div className="flex items-center gap-2">
+      <div className="flex-1 h-1.5 rounded-full bg-muted overflow-hidden">
+        <div className={`h-full rounded-full ${color}`} style={{ width: `${pct}%` }} />
+      </div>
+      <span className="text-xs tabular-nums font-semibold w-9 text-right">{pct}%</span>
+    </div>
+  );
+}
+
+function KV({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="flex items-center justify-between gap-4 py-1.5 border-b last:border-0">
+      <span className="text-xs text-muted-foreground">{label}</span>
+      <span className="text-xs font-medium tabular-nums">{value}</span>
+    </div>
+  );
+}
+
+function RunDetailPanel({ run }: { run: ProcessingRun }) {
+  const score = run.score as ScoreObj | null;
+  const privacy = score?.batch_privacy;
+
+  // Collect scalar summary fields not already displayed elsewhere
+  const SUMMARY_SKIP = new Set(['total_resources', 'config_profile', 'error_count', 'completed_at']);
+  const summaryExtras = run.summary
+    ? Object.entries(run.summary).filter(([k, v]) =>
+        !SUMMARY_SKIP.has(k) && typeof v !== 'object'
+      )
+    : [];
+
+  const identifierHits = score?.identifier_risk_hits ?? 0;
+  const textHits       = score?.text_risk_hits       ?? 0;
+  const evidence       = privacy?.evidence ?? [];
+
+  return (
+    <div className="bg-muted/10 border-t px-4 py-4">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+
+        {/* 1 — Score breakdown */}
+        {score?.computed && (
+          <div className="space-y-2">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Score Breakdown</p>
+            {score.avg_composite != null && (
+              <div><p className="text-[10px] text-muted-foreground mb-0.5">Composite</p><Bar value={score.avg_composite} color="bg-primary" /></div>
+            )}
+            {score.avg_utility != null && (
+              <div><p className="text-[10px] text-muted-foreground mb-0.5">Utility (data preserved)</p><Bar value={score.avg_utility * 100} color="bg-sky-500" /></div>
+            )}
+            {score.avg_quality != null && (
+              <div><p className="text-[10px] text-muted-foreground mb-0.5">Quality (structure)</p><Bar value={score.avg_quality * 100} color="bg-amber-500" /></div>
+            )}
+            {score.min_composite != null && (
+              <p className="text-[10px] text-muted-foreground">Min: <span className="font-mono font-semibold">{score.min_composite.toFixed(1)}%</span></p>
+            )}
+          </div>
+        )}
+
+        {/* 2 — De-identification actions */}
+        <div className="space-y-1">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-2">De-identification Actions</p>
+
+          {/* Pseudonymization — 0 risk hits = successfully protected */}
+          <div className={cn(
+            'flex items-center justify-between rounded-lg border px-3 py-2 text-xs',
+            identifierHits === 0
+              ? 'border-emerald-200 bg-emerald-50/60 dark:border-emerald-800/30 dark:bg-emerald-950/20'
+              : 'border-amber-200 bg-amber-50/60 dark:border-amber-800/30 dark:bg-amber-950/20',
+          )}>
+            <span className="font-medium">Identifier pseudonymisation</span>
+            <span className={cn('font-semibold', identifierHits === 0 ? 'text-emerald-600' : 'text-amber-600')}>
+              {identifierHits === 0 ? '✓ Protected' : `${identifierHits} residual risks`}
+            </span>
+          </div>
+
+          {/* NLP text scrub — 0 hits = no PHI text found */}
+          <div className={cn(
+            'flex items-center justify-between rounded-lg border px-3 py-2 text-xs',
+            textHits === 0
+              ? 'border-emerald-200 bg-emerald-50/60 dark:border-emerald-800/30 dark:bg-emerald-950/20'
+              : 'border-amber-200 bg-amber-50/60 dark:border-amber-800/30 dark:bg-amber-950/20',
+          )}>
+            <span className="font-medium">NLP text scrubbing</span>
+            <span className={cn('font-semibold', textHits === 0 ? 'text-emerald-600' : 'text-amber-600')}>
+              {textHits === 0 ? '✓ Clean' : `${textHits} PHI hits`}
+            </span>
+          </div>
+
+          {score?.total_scored != null && (
+            <div className="flex items-center justify-between rounded-lg border border-muted bg-muted/30 px-3 py-2 text-xs">
+              <span className="font-medium">Resources scored</span>
+              <span className="font-mono font-bold tabular-nums">{score.total_scored.toLocaleString()}</span>
+            </div>
+          )}
+          {score?.pass_count != null && (
+            <div className="flex items-center justify-between rounded-lg border border-muted bg-muted/30 px-3 py-2 text-xs">
+              <span className="font-medium">Pass / fail</span>
+              <span className="font-mono font-bold tabular-nums">
+                <span className="text-emerald-600">{score.pass_count}</span>
+                {' / '}
+                <span className={score.fail_count ? 'text-destructive' : 'text-muted-foreground'}>{score.fail_count ?? 0}</span>
+              </span>
+            </div>
+          )}
+          {summaryExtras.map(([k, v]) => (
+            <div key={k} className="flex items-center justify-between rounded-lg border border-muted bg-muted/30 px-3 py-2 text-xs">
+              <span className="font-medium capitalize">{k.replace(/_/g, ' ')}</span>
+              <span className="font-mono tabular-nums">{String(v)}</span>
+            </div>
+          ))}
+        </div>
+
+        {/* 3 — Run details */}
+        <div className="space-y-1">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-2">Run Details</p>
+          <KV label="Resources" value={run.resource_count.toLocaleString()} />
+          <KV label="Errors" value={
+            run.error_count > 0
+              ? <span className="text-destructive font-semibold">{run.error_count}</span>
+              : <span className="text-emerald-600">0</span>
+          } />
+          <KV label="Duration" value={fmtDuration(run.duration_ms)} />
+          <KV label="Input type" value={run.input_type} />
+          <KV label="Config profile" value={
+            <span className="font-mono text-primary">{run.config_profile}</span>
+          } />
+        </div>
+
+        {/* 4 — Privacy gate */}
+        <div className="space-y-3">
+          {privacy != null && (
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-2">Privacy Gate</p>
+              <div className={cn(
+                'flex items-center gap-2.5 rounded-lg border px-3 py-2.5 mb-2',
+                privacy.passed
+                  ? 'border-emerald-200 bg-emerald-50 dark:border-emerald-800/30 dark:bg-emerald-950/20'
+                  : 'border-red-200 bg-red-50 dark:border-red-800/30 dark:bg-red-950/20',
+              )}>
+                {privacy.passed
+                  ? <CheckCircle2 className="size-4 text-emerald-600 shrink-0" />
+                  : <ShieldAlert className="size-4 text-destructive shrink-0" />
+                }
+                <div>
+                  <p className="text-xs font-bold">{privacy.passed ? 'PASSED' : 'FAILED'}</p>
+                  <p className="text-[10px] text-muted-foreground font-mono">
+                    Risk {privacy.risk_score.toFixed(3)} / threshold {privacy.threshold}
+                  </p>
+                </div>
+              </div>
+              {evidence.length > 0 && (
+                <div className="space-y-1">
+                  {evidence.map((ev, i) => (
+                    <div key={i} className="rounded border bg-muted/30 px-2.5 py-1.5 text-[10px]">
+                      <span className="font-semibold">{ev.check.replace(/_/g,' ')}</span>
+                      {ev.details && typeof ev.details.reason === 'string' && (
+                        <p className="text-muted-foreground mt-0.5">{ev.details.reason}</p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-1">Run ID</p>
+            <p className="font-mono text-[10px] text-muted-foreground break-all">{run.id}</p>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  );
+}
+
 function StatCard({ label, value, accent }: { label: string; value: string | number; accent: string }) {
   return (
     <Card className="relative overflow-hidden">
@@ -93,7 +299,9 @@ export default function ProcessingHistoryPage() {
   const [unavailable, setUnavailable] = useState<string | null>(null);
   const [page, setPage] = useState(0);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [endpointOpen, setEndpointOpen] = useState(false);
   const [purging, setPurging] = useState(false);
+  const [confirmPurge, setConfirmPurge] = useState(false);
 
   const refresh = useCallback(async (pg = page) => {
     setLoading(true);
@@ -107,9 +315,16 @@ export default function ProcessingHistoryPage() {
       setTotal(listRes.value.total);
     } else if (listRes.reason instanceof ApiError && listRes.reason.status === 503) {
       setUnavailable(listRes.reason.detail);
+    } else if (listRes.status === 'rejected') {
+      toast.error('Failed to load processing runs', {
+        description: (listRes.reason as Error)?.message,
+        id: 'history-load-error',
+      });
     }
     if (statsRes.status === 'fulfilled') {
       setStats(statsRes.value);
+    } else if (statsRes.status === 'rejected') {
+      toast.error('Failed to load stats', { id: 'history-stats-error' });
     }
     setLoading(false);
   }, [page]);
@@ -125,16 +340,17 @@ export default function ProcessingHistoryPage() {
   }, [stats]);
 
   const handlePurge = useCallback(async () => {
-    if (!confirm('Delete processing runs older than 30 days?')) return;
     setPurging(true);
     try {
-      await purgeProcessingRuns(30);
+      const result = await purgeProcessingRuns(30);
       await refresh(0);
       setPage(0);
-    } catch {
-      /* ignore */
+      toast.success(`Purged ${result.deleted} run${result.deleted !== 1 ? 's' : ''}`);
+    } catch (e) {
+      toast.error('Purge failed', { description: (e as Error).message });
     }
     setPurging(false);
+    setConfirmPurge(false);
   }, [refresh]);
 
   return (
@@ -175,9 +391,9 @@ export default function ProcessingHistoryPage() {
 
       {/* Endpoint breakdown */}
       {endpointCounts.length > 0 && (
-        <Collapsible>
+        <Collapsible open={endpointOpen} onOpenChange={setEndpointOpen}>
           <CollapsibleTrigger className="flex w-full items-center gap-2 rounded-lg border px-4 py-2.5 text-sm font-medium transition-colors hover:bg-muted/50">
-            <ChevronDown className="size-4 shrink-0 transition-transform [[data-panel-open]_&]:rotate-180" />
+            <ChevronDown className={cn('size-4 shrink-0 transition-transform', endpointOpen && 'rotate-180')} />
             Runs by Endpoint
           </CollapsibleTrigger>
           <CollapsibleContent className="pt-2">
@@ -199,7 +415,7 @@ export default function ProcessingHistoryPage() {
           {total} run{total !== 1 ? 's' : ''}
         </span>
         <div className="ml-auto flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={handlePurge} disabled={purging}>
+          <Button variant="outline" size="sm" onClick={() => setConfirmPurge(true)} disabled={purging}>
             <Trash2 className="size-3.5" />
             Purge
           </Button>
@@ -224,14 +440,14 @@ export default function ProcessingHistoryPage() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead className="w-40">Time</TableHead>
-                <TableHead>Endpoint</TableHead>
-                <TableHead>Profile</TableHead>
-                <TableHead className="text-right">Resources</TableHead>
-                <TableHead className="text-right">Errors</TableHead>
-                <TableHead className="text-right">Duration</TableHead>
-                <TableHead className="text-center">Score</TableHead>
-                <TableHead className="w-10" />
+                <TableHead className="min-w-[140px]">Time</TableHead>
+                <TableHead className="min-w-[160px]">Endpoint</TableHead>
+                <TableHead className="min-w-[120px]">Profile</TableHead>
+                <TableHead className="text-right min-w-[100px]">Resources</TableHead>
+                <TableHead className="text-right min-w-[60px]">Errors</TableHead>
+                <TableHead className="text-right min-w-[80px]">Duration</TableHead>
+                <TableHead className="text-center min-w-[70px]">Score</TableHead>
+                <TableHead className="w-8" />
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -241,10 +457,14 @@ export default function ProcessingHistoryPage() {
                     className="cursor-pointer hover:bg-muted/30"
                     onClick={() => setExpandedId(expandedId === run.id ? null : run.id)}
                   >
-                    <TableCell className="text-xs tabular-nums">{fmtDate(run.created_at)}</TableCell>
-                    <TableCell className="font-mono text-xs">{run.endpoint}</TableCell>
-                    <TableCell className="text-xs">{run.config_profile}</TableCell>
-                    <TableCell className="text-right tabular-nums">{run.resource_count}</TableCell>
+                    <TableCell className="text-xs tabular-nums whitespace-nowrap">{fmtDate(run.created_at)}</TableCell>
+                    <TableCell className="max-w-[180px]">
+                      <span className="block truncate font-mono text-xs" title={run.endpoint}>{run.endpoint}</span>
+                    </TableCell>
+                    <TableCell className="max-w-[120px]">
+                      <span className="block truncate text-xs" title={run.config_profile}>{run.config_profile}</span>
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">{run.resource_count.toLocaleString()}</TableCell>
                     <TableCell className={cn('text-right tabular-nums', run.error_count > 0 && 'text-red-600 font-semibold')}>
                       {run.error_count}
                     </TableCell>
@@ -256,28 +476,8 @@ export default function ProcessingHistoryPage() {
                   </TableRow>
                   {expandedId === run.id && (
                     <TableRow>
-                      <TableCell colSpan={8} className="bg-muted/20 p-4">
-                        <div className="grid gap-4 sm:grid-cols-2">
-                          {run.summary && (
-                            <div>
-                              <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Summary</p>
-                              <pre className="rounded border bg-background p-3 text-xs overflow-auto max-h-48">
-                                {JSON.stringify(run.summary, null, 2)}
-                              </pre>
-                            </div>
-                          )}
-                          {run.score && (
-                            <div>
-                              <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Score Details</p>
-                              <pre className="rounded border bg-background p-3 text-xs overflow-auto max-h-48">
-                                {JSON.stringify(run.score, null, 2)}
-                              </pre>
-                            </div>
-                          )}
-                        </div>
-                        <p className="mt-2 font-mono text-[10px] text-muted-foreground">
-                          ID: {run.id} | Type: {run.input_type}
-                        </p>
+                      <TableCell colSpan={8} className="p-0 border-0">
+                        <RunDetailPanel run={run} />
                       </TableCell>
                     </TableRow>
                   )}
@@ -287,6 +487,16 @@ export default function ProcessingHistoryPage() {
           </Table>
         </div>
       )}
+
+      <ConfirmDialog
+        open={confirmPurge}
+        onOpenChange={setConfirmPurge}
+        title="Purge old runs?"
+        description="All processing runs older than 30 days will be permanently deleted. This cannot be undone."
+        confirmLabel="Purge"
+        loading={purging}
+        onConfirm={handlePurge}
+      />
 
       {/* Pagination */}
       {totalPages > 1 && (

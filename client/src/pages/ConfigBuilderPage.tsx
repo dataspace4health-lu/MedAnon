@@ -43,6 +43,7 @@ import {
 import { RulesTable } from './config-builder/RulesTable';
 import { ImportPanel } from './config-builder/ImportPanel';
 import { AiGeneratePanel } from './config-builder/AiGeneratePanel';
+import { AiChatPanel } from './config-builder/AiChatPanel';
 import { ResourceExplorerPanel } from './config-builder/ResourceExplorerPanel';
 
 // ---------------------------------------------------------------------------
@@ -257,6 +258,7 @@ export default function ConfigBuilderPage() {
           </p>
           <ImportPanel onImport={(imported) => setRules((prev) => [...prev, ...imported])} />
           <AiGeneratePanel onImport={(imported) => setRules((prev) => [...prev, ...imported])} />
+          <AiChatPanel configYaml={yamlPreview} />
           <ResourceExplorerPanel
             onAddRule={(rule) => setRules((prev) => [...prev, rule])}
             rules={rules}

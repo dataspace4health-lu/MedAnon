@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { toast } from 'sonner';
-import { Play, ChevronDown, X, FileText, Loader2, Server, Upload, CheckCircle2 } from 'lucide-react';
+import { Play, ChevronDown, X, FileText, Loader2, Server, Upload, CheckCircle2, ShieldAlert } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { FileUploader } from '@/components/shared/FileUploader';
 import { StreamProgress } from '@/components/shared/StreamProgress';
@@ -30,6 +30,7 @@ import {
   processBatch,
   uploadToTarget,
 } from '@/api/medanon';
+import type { PiiLeakInfo } from '@/api/processing';
 import { AsyncExportPanel } from './batch/AsyncExportPanel.tsx';
 import {
   MAX_SIZE,
@@ -45,12 +46,60 @@ import {
 import type { FileInfo } from './batch/batchHelpers.ts';
 
 // ---------------------------------------------------------------------------
+// PII leak banner — mirrors ProcessResourcePage's blocked-output panel but
+// note that streaming output has already been sent; this is a warning only.
+// ---------------------------------------------------------------------------
+
+function PiiLeakBanner({ piiLeak }: { piiLeak: PiiLeakInfo }) {
+  return (
+    <div className="rounded-xl border-2 border-destructive bg-destructive/5">
+      <div className="flex items-center gap-3 px-5 py-4 border-b border-destructive/20">
+        <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-destructive text-white">
+          <ShieldAlert className="size-5" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="font-black text-destructive text-base uppercase tracking-wide">
+            PII Leak Detected in Output
+          </p>
+          <p className="text-sm text-destructive/80 mt-0.5">
+            Output was already streamed. <strong>Do not use this data</strong> — re-run after fixing the config.
+          </p>
+        </div>
+      </div>
+      <div className="px-5 py-4 space-y-3">
+        <p className="text-sm text-destructive/90">{piiLeak.message}</p>
+        <div className="grid grid-cols-2 gap-3">
+          {piiLeak.identifier_risk_hits > 0 && (
+            <div className="rounded-lg bg-destructive/10 border border-destructive/30 px-4 py-3">
+              <p className="text-xs font-bold text-destructive uppercase tracking-wide">Identifier fields exposed</p>
+              <p className="text-3xl font-black tabular-nums text-destructive mt-1">{piiLeak.identifier_risk_hits}</p>
+              <p className="text-[11px] text-destructive/70 mt-0.5">Patient.name · identifier · birthDate · address uncovered</p>
+            </div>
+          )}
+          {piiLeak.text_risk_hits > 0 && (
+            <div className="rounded-lg bg-amber-500/10 border border-amber-500/30 px-4 py-3">
+              <p className="text-xs font-bold text-amber-700 dark:text-amber-400 uppercase tracking-wide">Free-text PII found</p>
+              <p className="text-3xl font-black tabular-nums text-amber-700 dark:text-amber-400 mt-1">{piiLeak.text_risk_hits}</p>
+              <p className="text-[11px] text-amber-600/70 mt-0.5">NLP scrubbing rules missing for narrative fields</p>
+            </div>
+          )}
+        </div>
+        <div className="rounded-lg bg-muted/60 border px-4 py-3">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">How to fix</p>
+          <p className="text-sm text-foreground">{piiLeak.remediation}</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main BatchPage component
 // ---------------------------------------------------------------------------
 
 export default function BatchPage() {
   const { configProfile } = useConfig();
-  const { lines, errors, resourceCounts, isStreaming, progress, start, abort } =
+  const { lines, errors, resourceCounts, isStreaming, progress, piiLeak, start, abort } =
     useStreamingProcess();
 
   const [fileInfo, setFileInfo] = useState<FileInfo | null>(null);
@@ -72,6 +121,16 @@ export default function BatchPage() {
       abortRef.current();
     };
   }, []);
+
+  // Toast once when a PII leak is detected at stream completion
+  useEffect(() => {
+    if (piiLeak?.leaked) {
+      toast.error('PII leak detected in output', {
+        description: `${piiLeak.resources_affected} resource(s) contain uncovered HIPAA-sensitive fields. Review the details below.`,
+        duration: 10000,
+      });
+    }
+  }, [piiLeak]);
 
   // -- handlers -------------------------------------------------------------
 
@@ -345,6 +404,11 @@ export default function BatchPage() {
                       />
                     </CardContent>
                   </Card>
+
+                  {/* PII leak banner — shown when the stream trailer signals a leak */}
+                  {!isStreaming && piiLeak?.leaked && (
+                    <PiiLeakBanner piiLeak={piiLeak} />
+                  )}
 
                   {/* Errors list */}
                   {errors.length > 0 && (

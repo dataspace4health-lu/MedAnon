@@ -14,7 +14,7 @@ const TYPE_COLORS: Record<string, string> = {
   Patient: "bg-blue-500",
   Observation: "bg-emerald-500",
   Condition: "bg-amber-500",
-  MedicationRequest: "bg-purple-500",
+  MedicationRequest: "bg-teal-500",
   Encounter: "bg-orange-500",
   Procedure: "bg-pink-500",
   DiagnosticReport: "bg-teal-500",
@@ -27,9 +27,9 @@ function getBarColor(type: string, index: number): string {
   const FALLBACKS = [
     "bg-slate-400",
     "bg-cyan-500",
-    "bg-violet-500",
+    "bg-sky-600",
     "bg-rose-400",
-    "bg-indigo-400",
+    "bg-blue-500",
   ];
   return FALLBACKS[index % FALLBACKS.length];
 }
@@ -38,8 +38,8 @@ const ACTION_COLORS: Record<string, string> = {
   redact: "bg-red-100 text-red-800",
   cryptohash: "bg-blue-100 text-blue-800",
   generalize: "bg-amber-100 text-amber-800",
-  gpas_pseudonymize: "bg-purple-100 text-purple-800",
-  encrypt: "bg-indigo-100 text-indigo-800",
+  gpas_pseudonymize: "bg-teal-100 text-teal-800",
+  encrypt: "bg-blue-100 text-blue-800",
   perturb: "bg-teal-100 text-teal-800",
   substitute: "bg-orange-100 text-orange-800",
   scrub_text: "bg-pink-100 text-pink-800",

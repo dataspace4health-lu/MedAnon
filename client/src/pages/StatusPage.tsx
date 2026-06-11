@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { health, ready, listJobs } from '@/api/medanon';
 import { capabilityStatement, fetchResourceTypeCounts } from '@/api/fhir';
+import { getAgentStatus } from '@/api/agents';
+import type { AgentStatus } from '@/api/agents';
 import type { HealthResponse, ReadyResponse } from '@/api/types';
 import type { ResourceTypeCount } from '@/api/fhir';
 import type { JobResponse } from '@/api/medanon';
@@ -26,6 +28,8 @@ import {
   Clock,
   Loader2,
   ShieldCheck,
+  ShieldAlert,
+  Lock,
   Cpu,
   AlertTriangle,
   CheckCircle2,
@@ -39,20 +43,20 @@ import { cn } from '@/lib/utils';
 const AUTO_REFRESH_SEC = 30;
 
 const RESOURCE_TYPE_COLORS: Record<string, string> = {
-  Patient:              'bg-blue-500',
+  Patient:              'bg-[#0072bc]',
   Observation:          'bg-emerald-500',
   Condition:            'bg-amber-500',
-  MedicationRequest:    'bg-purple-500',
-  Encounter:            'bg-orange-500',
-  Procedure:            'bg-pink-500',
-  DiagnosticReport:     'bg-teal-500',
+  MedicationRequest:    'bg-teal-500',
+  Encounter:            'bg-orange-400',
+  Procedure:            'bg-[#0099d8]',
+  DiagnosticReport:     'bg-[#004d80]',
   AllergyIntolerance:   'bg-red-400',
-  Immunization:         'bg-lime-500',
-  Claim:                'bg-indigo-400',
+  Immunization:         'bg-emerald-400',
+  Claim:                'bg-[#0072bc]',
   ExplanationOfBenefit: 'bg-cyan-500',
-  CarePlan:             'bg-violet-400',
+  CarePlan:             'bg-sky-500',
 };
-const FALLBACK_COLORS = ['bg-slate-400', 'bg-sky-400', 'bg-rose-400', 'bg-fuchsia-400'];
+const FALLBACK_COLORS = ['bg-slate-400', 'bg-sky-400', 'bg-rose-400', 'bg-blue-400'];
 
 function barColor(type: string, idx: number) {
   return RESOURCE_TYPE_COLORS[type] ?? FALLBACK_COLORS[idx % FALLBACK_COLORS.length];
@@ -88,6 +92,7 @@ interface PageState {
   ready:          { ok: boolean; data: ReadyResponse  | null; error: string | null };
   resourceCounts: { data: ResourceTypeCount[] | null; error: string | null };
   jobs:           { data: JobResponse[] | null;       error: string | null };
+  ai:             { data: AgentStatus | null;          error: string | null };
 }
 
 const initialState: PageState = {
@@ -97,6 +102,7 @@ const initialState: PageState = {
   ready:          { ok: false, data: null, error: null },
   resourceCounts: { data: null, error: null },
   jobs:           { data: null, error: null },
+  ai:             { data: null, error: null },
 };
 
 // ---------------------------------------------------------------------------
@@ -258,6 +264,153 @@ function JobRow({ job }: { job: JobResponse }) {
   );
 }
 
+function AiSafetySection({
+  ai, error, loading,
+}: { ai: AgentStatus | null; error: string | null; loading: boolean }) {
+  // Hide the section entirely when the API call failed (older backend, or
+  // AI router unavailable) — nothing useful to show.
+  if (error) return null;
+
+  const enabled = ai?.enabled ?? false;
+  const pii = ai?.pii_enforcement;
+  // Enforcement posture for the data-touching PII path (C4).
+  const piiConfigured = pii?.configured ?? false;
+  const requireLocal = pii?.require_local ?? true;
+  const localVerified = pii?.local_verified ?? false;
+
+  // A "safe" data path = either no AI PII scan configured (regex+NER only),
+  // or the configured model is verified local.
+  const piiSafe = !piiConfigured || localVerified;
+  const piiState: 'off' | 'safe' | 'risk' =
+    !piiConfigured ? 'off' : localVerified ? 'safe' : 'risk';
+
+  return (
+    <section>
+      <h2 className="mb-3 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
+        AI &amp; PII Safety
+      </h2>
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        {/* AI provider card */}
+        <Card>
+          <div className={cn(
+            'h-0.5 w-full',
+            loading ? 'bg-muted/40' : enabled ? 'bg-[#0072bc]' : 'bg-muted/40',
+          )} />
+          <CardContent className="flex flex-col gap-2.5 pb-4 pt-4">
+            <div className="flex items-start justify-between gap-2">
+              <div className="flex items-center gap-2.5">
+                <span className={cn(
+                  'flex size-8 shrink-0 items-center justify-center rounded-lg',
+                  enabled ? 'bg-[#0072bc]/10 text-[#0072bc]' : 'bg-muted text-muted-foreground',
+                )}>
+                  <Brain className="size-4" />
+                </span>
+                <div>
+                  <p className="text-sm font-semibold leading-none">AI Provider</p>
+                  <p className="mt-0.5 text-[11px] text-muted-foreground">
+                    LLM-assisted agents
+                  </p>
+                </div>
+              </div>
+              <span className={cn(
+                'inline-block rounded-full border px-2 py-0.5 text-[11px] font-medium',
+                enabled
+                  ? 'border-[#0072bc]/30 bg-[#0072bc]/10 text-[#0072bc]'
+                  : 'border-muted bg-muted/30 text-muted-foreground',
+              )}>
+                {loading ? 'Checking' : enabled ? 'Enabled' : 'Disabled'}
+              </span>
+            </div>
+            {enabled && (
+              <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[11px]">
+                <dt className="text-muted-foreground">Model</dt>
+                <dd className="font-mono text-foreground">{ai?.model || '—'}</dd>
+                <dt className="text-muted-foreground">Endpoint</dt>
+                <dd className="font-mono truncate text-foreground" title={ai?.api_base}>
+                  {ai?.api_base || '—'}
+                </dd>
+              </dl>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* PII local-only enforcement card (C4) */}
+        <Card className={cn(
+          piiState === 'risk' && 'border-red-200/70',
+          piiState === 'safe' && 'border-emerald-200/70',
+        )}>
+          <div className={cn(
+            'h-0.5 w-full',
+            piiState === 'safe' ? 'bg-emerald-400'
+              : piiState === 'risk' ? 'bg-red-400'
+              : 'bg-muted/40',
+          )} />
+          <CardContent className="flex flex-col gap-2.5 pb-4 pt-4">
+            <div className="flex items-start justify-between gap-2">
+              <div className="flex items-center gap-2.5">
+                <span className={cn(
+                  'flex size-8 shrink-0 items-center justify-center rounded-lg',
+                  piiState === 'safe' ? 'bg-emerald-50 text-emerald-600'
+                    : piiState === 'risk' ? 'bg-red-50 text-red-500'
+                    : 'bg-muted text-muted-foreground',
+                )}>
+                  {piiState === 'risk'
+                    ? <ShieldAlert className="size-4" />
+                    : <Lock className="size-4" />}
+                </span>
+                <div>
+                  <p className="text-sm font-semibold leading-none">PII Model — Local-only</p>
+                  <p className="mt-0.5 text-[11px] text-muted-foreground">
+                    De-identified text never leaves a local model
+                  </p>
+                </div>
+              </div>
+              <span className={cn(
+                'inline-block rounded-full border px-2 py-0.5 text-[11px] font-medium',
+                piiState === 'safe' ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                  : piiState === 'risk' ? 'border-red-200 bg-red-50 text-red-700'
+                  : 'border-muted bg-muted/30 text-muted-foreground',
+              )}>
+                {piiState === 'safe' ? 'Verified local'
+                  : piiState === 'risk' ? 'At risk'
+                  : 'Not configured'}
+              </span>
+            </div>
+
+            <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[11px]">
+              <dt className="text-muted-foreground">Enforcement</dt>
+              <dd className="flex items-center gap-1 text-foreground">
+                {requireLocal
+                  ? <><ShieldCheck className="size-3 text-emerald-600" /> Enforced (fail-closed)</>
+                  : <><AlertTriangle className="size-3 text-amber-500" /> Disabled (opt-out)</>}
+              </dd>
+              {piiConfigured && (
+                <>
+                  <dt className="text-muted-foreground">PII model</dt>
+                  <dd className="font-mono text-foreground">{pii?.model || '—'}</dd>
+                  <dt className="text-muted-foreground">Endpoint</dt>
+                  <dd className="font-mono truncate text-foreground" title={pii?.api_base}>
+                    {pii?.api_base || '(provider default)'}
+                  </dd>
+                </>
+              )}
+            </dl>
+
+            {pii?.detail && (
+              <p className={cn(
+                'rounded-md px-2.5 py-1.5 text-[11px]',
+                piiSafe ? 'bg-muted/40 text-muted-foreground' : 'bg-red-50 text-red-700',
+              )}>
+                {pii.detail}
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+    </section>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // StatusPage
 // ---------------------------------------------------------------------------
@@ -286,13 +439,14 @@ export default function StatusPage() {
     setRefreshing(true);
     setCountdown(AUTO_REFRESH_SEC);
 
-    const [healthRes, readyRes, capRes, countsRes, jobsRes] =
+    const [healthRes, readyRes, capRes, countsRes, jobsRes, aiRes] =
       await Promise.allSettled([
         health(),
         ready(),
         capabilityStatement(),
         fetchResourceTypeCounts(),
         listJobs({ limit: 100 }),
+        getAgentStatus(),
       ]);
 
     if (!mountedRef.current) return;
@@ -319,6 +473,10 @@ export default function StatusPage() {
       next.jobs = jobsRes.status === 'fulfilled'
         ? { data: jobsRes.value, error: null }
         : { data: null, error: String(jobsRes.reason) };
+
+      next.ai = aiRes.status === 'fulfilled'
+        ? { data: aiRes.value, error: null }
+        : { data: null, error: String(aiRes.reason) };
 
       return next;
     });
@@ -447,6 +605,7 @@ export default function StatusPage() {
   const MAX_CAP_CHARS = 30_000;
   const healthJson     = useMemo(() => state.medanon.data ? JSON.stringify(state.medanon.data, null, 2) : '', [state.medanon.data]);
   const readyJson      = useMemo(() => state.ready.data   ? JSON.stringify(state.ready.data,   null, 2) : '', [state.ready.data]);
+  const aiJson         = useMemo(() => state.ai.data      ? JSON.stringify(state.ai.data,      null, 2) : '', [state.ai.data]);
   const capabilityJson = useMemo(() => {
     if (!state.fhir.data) return '';
     const full = JSON.stringify(state.fhir.data.raw, null, 2);
@@ -528,6 +687,9 @@ export default function StatusPage() {
         </div>
       </section>
 
+      {/* ── AI & PII Safety ── */}
+      <AiSafetySection ai={state.ai.data} error={state.ai.error} loading={state.loading} />
+
       {/* ── FHIR Resource Inventory ── */}
       <section>
         <div className="mb-3 flex items-center justify-between">
@@ -569,10 +731,10 @@ export default function StatusPage() {
                         />
                       </div>
                     </div>
-                    <span className="w-14 text-right text-xs text-muted-foreground tabular-nums">
+                    <span className="w-14 shrink-0 text-right text-xs text-muted-foreground tabular-nums">
                       {pct.toFixed(1)}%
                     </span>
-                    <span className="w-20 text-right text-sm font-semibold tabular-nums">
+                    <span className="w-24 shrink-0 text-right text-sm font-semibold tabular-nums">
                       {rc.count.toLocaleString()}
                     </span>
                   </div>
@@ -678,6 +840,7 @@ export default function StatusPage() {
           {([
             { label: 'MedAnon /health',    json: healthJson },
             { label: 'MedAnon /ready',     json: readyJson },
+            { label: 'MedAnon /v1/ai/status', json: aiJson },
             { label: 'HAPI FHIR /metadata', json: capabilityJson },
           ] as const).map(({ label, json }) => (
             <Collapsible key={label}>

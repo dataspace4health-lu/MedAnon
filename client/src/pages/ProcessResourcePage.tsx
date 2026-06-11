@@ -1,6 +1,6 @@
 import { useState, useCallback, useMemo } from 'react';
 import { toast } from 'sonner';
-import { Loader2, Play, FileCode, GitCompare, FileText, Maximize2, Minimize2, Wand2, Trash2 } from 'lucide-react';
+import { Loader2, Play, FileCode, GitCompare, FileText, Maximize2, Minimize2, Wand2, Trash2, ShieldAlert } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { FhirCodeViewer } from '@/components/shared/FhirCodeViewer';
 import { JsonDiffViewer } from '@/components/shared/JsonDiffViewer';
@@ -21,7 +21,8 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { useConfig } from '@/context/ConfigContext';
-import { processRaw } from '@/api/medanon';
+import { processRaw } from '@/api/processing';
+import type { PiiLeakInfo } from '@/api/processing';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -100,6 +101,7 @@ export default function ProcessResourcePage() {
   const [outputFormat, setOutputFormat] = useState<OutputFormat>('json');
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [piiLeak, setPiiLeak] = useState<PiiLeakInfo | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>('diff');
   const [fullView, setFullView] = useState(false);
 
@@ -169,22 +171,32 @@ export default function ProcessResourcePage() {
     setIsProcessing(true);
     setError(null);
     setOutput('');
+    setPiiLeak(null);
 
     try {
-      const result = await processRaw(trimmed, outputFormat, configProfile);
+      const { text, piiLeak: leak } = await processRaw(trimmed, outputFormat, configProfile);
 
-      // Pretty-print JSON output when the format is JSON
-      let formatted = result;
-      if (outputFormat === 'json') {
+      // Pretty-print JSON output when the format is JSON and not already formatted
+      let formatted = text;
+      if (outputFormat === 'json' && !leak) {
         try {
-          formatted = JSON.stringify(JSON.parse(result), null, 2);
+          formatted = JSON.stringify(JSON.parse(text), null, 2);
         } catch {
-          // If the response is not parseable JSON, use the raw string
+          // Non-JSON response — use raw string
         }
       }
 
       setOutput(formatted);
-      toast.success('Resource de-identified successfully.');
+      setPiiLeak(leak);
+
+      if (leak) {
+        toast.error('Output blocked — PII leak detected', {
+          description: `${leak.resources_affected} resource(s) contain uncovered HIPAA-sensitive fields. Output was not released.`,
+          duration: 10000,
+        });
+      } else {
+        toast.success('Resource de-identified successfully.');
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       setError(message);
@@ -300,9 +312,65 @@ export default function ProcessResourcePage() {
       </Card>
 
       {/* ------------------------------------------------------------------ */}
-      {/* Bottom: Result panel — Diff view or raw Output                     */}
+      {/* PII Leak banner — shown when scoring detects uncovered fields      */}
       {/* ------------------------------------------------------------------ */}
-      <Card className="flex flex-col">
+      {piiLeak && (
+        <div className="mb-5 rounded-xl border-2 border-destructive bg-destructive/5">
+          {/* Header */}
+          <div className="flex items-center gap-3 px-5 py-4 border-b border-destructive/20">
+            <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-destructive text-white">
+              <ShieldAlert className="size-5" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="font-black text-destructive text-base uppercase tracking-wide">
+                Output Blocked — PII Leak Detected
+              </p>
+              <p className="text-sm text-destructive/80 mt-0.5">
+                The de-identified output was <strong>not released</strong>.
+                Privacy score set to <strong>0%</strong>.
+              </p>
+            </div>
+          </div>
+
+          {/* Detail */}
+          <div className="px-5 py-4 space-y-3">
+            <p className="text-sm text-destructive/90">{piiLeak.message}</p>
+
+            <div className="grid grid-cols-2 gap-3">
+              {piiLeak.identifier_risk_hits > 0 && (
+                <div className="rounded-lg bg-destructive/10 border border-destructive/30 px-4 py-3">
+                  <p className="text-xs font-bold text-destructive uppercase tracking-wide">Identifier fields exposed</p>
+                  <p className="text-3xl font-black tabular-nums text-destructive mt-1">{piiLeak.identifier_risk_hits}</p>
+                  <p className="text-[11px] text-destructive/70 mt-0.5">Patient.name · identifier · birthDate · address uncovered</p>
+                </div>
+              )}
+              {piiLeak.text_risk_hits > 0 && (
+                <div className="rounded-lg bg-amber-500/10 border border-amber-500/30 px-4 py-3">
+                  <p className="text-xs font-bold text-amber-700 dark:text-amber-400 uppercase tracking-wide">Free-text PII found</p>
+                  <p className="text-3xl font-black tabular-nums text-amber-700 dark:text-amber-400 mt-1">{piiLeak.text_risk_hits}</p>
+                  <p className="text-[11px] text-amber-600/70 mt-0.5">NLP scrubbing rules missing for narrative fields</p>
+                </div>
+              )}
+              {/* Privacy score zero indicator */}
+              <div className="rounded-lg bg-destructive/10 border border-destructive/30 px-4 py-3">
+                <p className="text-xs font-bold text-destructive uppercase tracking-wide">Privacy Score</p>
+                <p className="text-3xl font-black tabular-nums text-destructive mt-1">0%</p>
+                <p className="text-[11px] text-destructive/70 mt-0.5">Forced to zero — any leak = automatic failure</p>
+              </div>
+            </div>
+
+            <div className="rounded-lg bg-muted/60 border px-4 py-3">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">How to fix</p>
+              <p className="text-sm text-foreground">{piiLeak.remediation}</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ------------------------------------------------------------------ */}
+      {/* Bottom: Result panel — hidden when output is blocked by PII gate  */}
+      {/* ------------------------------------------------------------------ */}
+      {!piiLeak && <Card className="flex flex-col">
         <CardHeader className="flex-row flex-wrap items-center justify-between gap-3 pb-3">
           <CardTitle className="text-base">Result</CardTitle>
           <div className="flex flex-wrap items-center gap-2">
@@ -399,7 +467,7 @@ export default function ProcessResourcePage() {
             <FhirCodeViewer code={output} language={language} maxHeight="560px" />
           )}
         </CardContent>
-      </Card>
+      </Card>}
     </div>
   );
 }

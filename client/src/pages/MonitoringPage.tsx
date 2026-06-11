@@ -312,7 +312,7 @@ function MetricsPanel() {
         title="Container Memory Usage"
         data={m.memory}
         format={fmtBytes}
-        color="#6366f1"
+        color="#0072bc"
       />
 
       {/* CPU */}
@@ -320,7 +320,7 @@ function MetricsPanel() {
         title="Container CPU Usage (2 min rate)"
         data={m.cpu}
         format={fmtCpu}
-        color="#10b981"
+        color="#0099d8"
       />
     </div>
   );
@@ -330,54 +330,88 @@ function MetricsPanel() {
 // Grafana iframe panel
 // ---------------------------------------------------------------------------
 
+type GrafanaStatus = 'checking' | 'ok' | 'error';
+
 function GrafanaPanel() {
-  const [loaded, setLoaded] = useState(false);
-  const [error, setError] = useState(false);
+  const [grafana, setGrafana] = useState<GrafanaStatus>('checking');
+  const [iframeLoaded, setIframeLoaded] = useState(false);
+
+  useEffect(() => {
+    fetch('/grafana/api/health', { signal: AbortSignal.timeout(5_000) })
+      .then((r) => setGrafana(r.ok ? 'ok' : 'error'))
+      .catch(() => setGrafana('error'));
+  }, []);
+
+  const openLink = (
+    <a
+      href="/grafana/"
+      target="_blank"
+      rel="noopener noreferrer"
+      className="inline-flex h-7 items-center gap-1.5 rounded-md border bg-background px-2.5 text-xs font-medium shadow-sm hover:bg-accent transition-colors"
+    >
+      <ExternalLink className="size-3" />
+      Open in new tab
+    </a>
+  );
+
+  if (grafana === 'checking') {
+    return (
+      <div className="flex items-center justify-center gap-2 rounded-lg border bg-muted/30 py-12 text-sm text-muted-foreground">
+        <Loader2 className="size-5 animate-spin" />
+        Connecting to Grafana…
+      </div>
+    );
+  }
+
+  if (grafana === 'error') {
+    return (
+      <div className="space-y-4">
+        <div className="rounded-xl border border-amber-200/60 bg-amber-50/40 dark:border-amber-800/30 dark:bg-amber-900/10 p-5">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="size-5 shrink-0 mt-0.5 text-amber-600" />
+            <div className="flex-1">
+              <p className="font-semibold text-sm">Grafana is not reachable</p>
+              <p className="text-xs text-muted-foreground mt-1">
+                Grafana is served at <code className="font-mono bg-muted px-1 rounded">/grafana/</code>.
+                If you started with the monitoring profile it may still be warming up.
+              </p>
+            </div>
+          </div>
+          <div className="mt-3 flex items-center gap-3">
+            <Button variant="outline" size="sm" className="gap-1.5"
+              onClick={() => { setGrafana('checking'); fetch('/grafana/api/health', { signal: AbortSignal.timeout(5_000) }).then((r) => setGrafana(r.ok ? 'ok' : 'error')).catch(() => setGrafana('error')); }}
+            >
+              <RefreshCw className="size-3.5" /> Retry
+            </Button>
+            {openLink}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
         <p className="text-xs text-muted-foreground">
-          Grafana is embedded below. Log in with admin credentials to create and save dashboards.
+          Grafana dashboards — log in with admin credentials to create and save views.
         </p>
-        <a
-          href="/grafana/"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex h-7 items-center gap-1.5 rounded-md border bg-background px-2.5 text-xs font-medium shadow-sm hover:bg-accent transition-colors"
-        >
-          <ExternalLink className="size-3" />
-          Open in new tab
-        </a>
+        {openLink}
       </div>
 
-      {!loaded && !error && (
+      {!iframeLoaded && (
         <div className="flex items-center justify-center gap-2 rounded-lg border bg-muted/30 py-12 text-sm text-muted-foreground">
           <Loader2 className="size-5 animate-spin" />
           Loading Grafana…
         </div>
       )}
 
-      {error && (
-        <div className="flex items-center gap-2 rounded-lg border border-destructive/40 bg-destructive/5 p-4 text-sm text-destructive">
-          <AlertTriangle className="size-4 shrink-0" />
-          Could not load Grafana. Make sure the monitoring profile is running:
-          <code className="ml-1 font-mono text-xs bg-muted px-1.5 py-0.5 rounded">
-            docker compose --profile monitoring up
-          </code>
-        </div>
-      )}
-
       <iframe
         src="/grafana/"
         title="Grafana"
-        className={cn(
-          'w-full rounded-lg border bg-background transition-opacity',
-          loaded ? 'opacity-100' : 'opacity-0 h-0',
-        )}
-        style={{ height: loaded ? 'calc(100vh - 260px)' : undefined, minHeight: '600px' }}
-        onLoad={() => setLoaded(true)}
-        onError={() => { setError(true); setLoaded(false); }}
+        className={cn('w-full rounded-xl border bg-background transition-opacity', iframeLoaded ? 'opacity-100' : 'opacity-0 absolute')}
+        style={{ height: 'calc(100vh - 260px)', minHeight: '600px' }}
+        onLoad={() => setIframeLoaded(true)}
         sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox"
       />
     </div>

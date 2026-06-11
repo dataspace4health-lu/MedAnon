@@ -7,6 +7,8 @@ const PatientBrowserPage = lazy(() => import('@/pages/PatientBrowserPage'));
 const ConditionBrowserPage = lazy(() => import('@/pages/ConditionBrowserPage'));
 const DeidentifyPage = lazy(() => import('@/pages/DeidentifyPage'));
 const ProcessResourcePage = lazy(() => import('@/pages/ProcessResourcePage'));
+const FormatProcessPage = lazy(() => import('@/pages/FormatProcessPage'));
+const SqlSourcePage = lazy(() => import('@/pages/SqlSourcePage'));
 const BatchPage = lazy(() => import('@/pages/BatchPage'));
 const RiskAssessmentPage = lazy(() => import('@/pages/RiskAssessmentPage'));
 const SyntheticDataPage = lazy(() => import('@/pages/SyntheticDataPage'));
@@ -17,6 +19,9 @@ const BulkDeidentifyPage = lazy(() => import('@/pages/BulkDeidentifyPage'));
 const TargetBrowserPage = lazy(() => import('@/pages/TargetBrowserPage'));
 const ProcessingHistoryPage = lazy(() => import('@/pages/ProcessingHistoryPage'));
 const MonitoringPage = lazy(() => import('@/pages/MonitoringPage'));
+const JobsPage = lazy(() => import('@/pages/JobsPage'));
+const AnalyticsPage = lazy(() => import('@/pages/AnalyticsPage'));
+const AuditPage = lazy(() => import('@/pages/AuditPage'));
 
 function PageLoader() {
   return (
@@ -36,6 +41,8 @@ export default function App() {
           <Route path="conditions" element={<ConditionBrowserPage />} />
           <Route path="deidentify/:patientId" element={<DeidentifyPage />} />
           <Route path="process" element={<ProcessResourcePage />} />
+          <Route path="formats" element={<FormatProcessPage />} />
+          <Route path="sql-source" element={<SqlSourcePage />} />
           <Route path="batch" element={<BatchPage />} />
           <Route path="risk" element={<RiskAssessmentPage />} />
           <Route path="synthetic" element={<SyntheticDataPage />} />
@@ -47,6 +54,9 @@ export default function App() {
           <Route path="target-browser" element={<TargetBrowserPage />} />
           <Route path="history" element={<ProcessingHistoryPage />} />
           <Route path="monitoring" element={<MonitoringPage />} />
+          <Route path="jobs" element={<JobsPage />} />
+          <Route path="analytics" element={<AnalyticsPage />} />
+          <Route path="audit" element={<AuditPage />} />
         </Route>
       </Routes>
     </Suspense>

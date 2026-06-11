@@ -6,17 +6,31 @@ import { getAuthHeaders } from "./client";
 import { streamNdjson } from "./streaming";
 import type { StreamLine } from "./types";
 
+export interface PiiLeakInfo {
+  leaked: true;
+  identifier_risk_hits: number;
+  text_risk_hits: number;
+  resources_affected: number;
+  message: string;
+  remediation: string;
+}
+
+export interface ProcessRawResult {
+  text: string;
+  piiLeak: PiiLeakInfo | null;
+}
+
 /**
  * POST /api/v1/process/raw -- black-box endpoint for any FHIR format.
  *
- * Sends the raw body string, returns the processed output as a string
- * (JSON, XML, or NDJSON depending on `outputFormat`).
+ * Returns { text, piiLeak } where piiLeak is non-null when the backend
+ * detected HIPAA-sensitive fields not covered by the config profile.
  */
 export async function processRaw(
   content: string,
   outputFormat: string = "json",
   configProfile: string = "auto",
-): Promise<string> {
+): Promise<ProcessRawResult> {
   const params = new URLSearchParams({
     output_format: outputFormat,
     config_profile: configProfile,
@@ -31,6 +45,23 @@ export async function processRaw(
     body: content,
   });
 
+  // 422 with pii_leak_detected code = output blocked by PII gate.
+  // Treat it as a structured result (not a thrown error) so the UI can
+  // show the blocked state and remediation banner.
+  if (response.status === 422) {
+    try {
+      const body = await response.json();
+      if (body?.detail?.code === "pii_leak_detected") {
+        return { text: "", piiLeak: body.detail.pii_leak as PiiLeakInfo };
+      }
+      // Other 422 (e.g. invalid input) — rethrow as normal error
+      throw new Error(`processRaw failed (422): ${body?.detail ?? response.statusText}`);
+    } catch (e) {
+      if (e instanceof Error && e.message.startsWith("processRaw")) throw e;
+      throw new Error(`processRaw failed (422): ${response.statusText}`);
+    }
+  }
+
   if (!response.ok) {
     let detail: string;
     try {
@@ -42,7 +73,16 @@ export async function processRaw(
     throw new Error(`processRaw failed (${response.status}): ${detail}`);
   }
 
-  return response.text();
+  const raw = await response.text();
+  let text = raw;
+
+  if (outputFormat === "json") {
+    try {
+      text = JSON.stringify(JSON.parse(raw), null, 2);
+    } catch { /* leave as-is */ }
+  }
+
+  return { text, piiLeak: null };
 }
 
 /**

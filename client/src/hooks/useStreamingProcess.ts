@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef } from 'react';
+import type { PiiLeakInfo } from '@/api/processing';
 
 interface StreamState {
   lines: Record<string, unknown>[];
@@ -6,6 +7,7 @@ interface StreamState {
   resourceCounts: Record<string, number>;
   isStreaming: boolean;
   progress: number;
+  piiLeak: PiiLeakInfo | null;
 }
 
 const initialState: StreamState = {
@@ -14,6 +16,7 @@ const initialState: StreamState = {
   resourceCounts: {},
   isStreaming: false,
   progress: 0,
+  piiLeak: null,
 };
 
 // Throttle UI updates during streaming to avoid excessive re-renders
@@ -35,6 +38,7 @@ export function useStreamingProcess() {
       const counts: Record<string, number> = {};
       let processed = 0;
       let lastUpdate = 0;
+      let piiLeakDetected: PiiLeakInfo | null = null;
 
       const flush = () => {
         lastUpdate = Date.now();
@@ -44,12 +48,23 @@ export function useStreamingProcess() {
           resourceCounts: { ...counts },
           isStreaming: true,
           progress: processed,
+          piiLeak: null,
         });
       };
 
       try {
         for await (const item of generator) {
           if (signal.aborted) break;
+
+          // Detect the stream completion trailer — extract pii_leak, skip the
+          // trailer itself so it doesn't appear as a resource in the output.
+          if (item.__stream_complete) {
+            const trailerLeak = item.pii_leak as PiiLeakInfo | undefined;
+            if (trailerLeak?.leaked) {
+              piiLeakDetected = trailerLeak;
+            }
+            continue;
+          }
 
           processed += 1;
 
@@ -78,6 +93,7 @@ export function useStreamingProcess() {
           resourceCounts: { ...counts },
           isStreaming: false,
           progress: processed,
+          piiLeak: piiLeakDetected,
         });
         abortRef.current = null;
       }
