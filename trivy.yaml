@@ -1,0 +1,77 @@
+# Trivy configuration for privacy-toolkit / MedAnon
+# https://aquasecurity.github.io/trivy/latest/docs/references/configuration/config-file/
+
+# ── Global ─────────────────────────────────────────────────────────────────
+severity:
+  - CRITICAL
+  - HIGH
+  - MEDIUM
+
+# Exit with code 1 when any finding at or above the threshold is found.
+# Override per-command with --exit-code 0 for non-blocking informational scans.
+exit-code: 1
+
+# Output format — table for humans locally, sarif for CI/GitHub Code Scanning
+format: table
+
+# ── Vulnerability scanning ─────────────────────────────────────────────────
+vulnerability:
+  # Include unfixed CVEs in the report (set to true to suppress unfixed noise)
+  ignore-unfixed: false
+
+# Package types to scan (replaces deprecated vulnerability.type)
+pkg:
+  types:
+    - os
+    - library
+
+# ── Secret scanning ────────────────────────────────────────────────────────
+secret: {}
+
+# ── Misconfiguration scanning ──────────────────────────────────────────────
+misconfiguration:
+  # Scan Helm charts, Dockerfiles, docker-compose files
+  include-non-failures: false
+
+# ── License scanning ───────────────────────────────────────────────────────
+license:
+  # Report licences that are not allowed (uncomment + extend as needed)
+  # forbidden:
+  #   - GPL-3.0
+  # allowed:
+  #   - MIT
+  #   - Apache-2.0
+  #   - BSD-2-Clause
+  #   - BSD-3-Clause
+  #   - ISC
+  ignore-unfixed: false
+
+# ── Filesystem / repo scan ─────────────────────────────────────────────────
+# Paths skipped during `trivy fs` scans (heavy, generated, or non-production).
+skip-dirs:
+  - .venv
+  - .venv-slides
+  - node_modules
+  - output
+  - .git
+  - .github
+  - .claude
+  - .pytest_cache
+  - .ruff_cache
+  - __pycache__
+  - "**/__pycache__"
+  - data
+
+skip-files:
+  - "**/*.pyc"
+  - "**/*.pyo"
+  - "output/**"
+  # NOTE: id_rsa is gitignored (not present in CI). Local scans pass --skip-files
+  # directly in the Makefile trivy-fs target to handle the secret scanner
+  # (which ignores skip-dirs in Trivy v0.71).
+
+# ── Cache ──────────────────────────────────────────────────────────────────
+cache:
+  # /tmp has ample free space; the project root filesystem is small.
+  # CI runners override this via TRIVY_CACHE_DIR if needed.
+  dir: /tmp/trivy-cache

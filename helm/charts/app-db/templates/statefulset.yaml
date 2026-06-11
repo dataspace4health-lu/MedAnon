@@ -19,10 +19,16 @@ spec:
     spec:
       securityContext:
         fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: postgres
           image: "{{ .Values.image }}:{{ .Values.tag }}"
           imagePullPolicy: {{ .Values.imagePullPolicy }}
+          securityContext:
+            # postgres:16-alpine starts as root and uses gosu to drop to UID 999;
+            # allowPrivilegeEscalation is still settable (gosu uses exec, not setuid).
+            allowPrivilegeEscalation: false
           ports:
             - name: postgres
               containerPort: {{ .Values.port }}

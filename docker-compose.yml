@@ -31,6 +31,7 @@ volumes:
   hapi-pg-data:
   hapi-target-pg-data:
   app-pg-data:
+  sql-source-test-data:
   redis-data:
   minio-data:
   ollama-data:
@@ -68,6 +69,10 @@ x-worker-env: &worker-env
   MEDANON_JOB_WORKERS: ${MEDANON_JOB_WORKERS:-3}
   MEDANON_STAGING_DB_URL: ${MEDANON_STAGING_DB_URL:-}
   MEDANON_APP_DB_URL: ${MEDANON_APP_DB_URL:-postgresql://${MEDANON_APP_DB_USER:-medanon}:${MEDANON_APP_DB_PASSWORD:-medanon_dev}@app-db:5432/medanon}
+  # SQL source de-identification (read-only ingest from external databases).
+  # Empty allow-list denies all connections; Fernet key required to save/use them.
+  MEDANON_SQL_SOURCE_ALLOWED_HOSTS: ${MEDANON_SQL_SOURCE_ALLOWED_HOSTS:-}
+  MEDANON_SQL_CRED_KEY: ${MEDANON_SQL_CRED_KEY:-}
   MEDANON_STAGING_RETENTION_DAYS: ${MEDANON_STAGING_RETENTION_DAYS:-30}
   # Bigger staging batches => fewer Pass-1/gPAS/NLP cycles, larger gPAS dedup
   # window (better cache hit-rate), and fewer Postgres round-trips. 5000 is
@@ -876,6 +881,49 @@ services:
       - ALL
 
   # MinIO object storage (opt-in: MEDANON_RESULT_STORAGE=s3) ──────────
+  # SQL-source TEST database (opt-in) ───────────────────────────────
+  # A throwaway PostgreSQL pre-seeded with SYNTHETIC PII across related
+  # tables (patients / encounters / lab_results, linked by mrn) so you can
+  # exercise the SQL source de-identification feature end-to-end.
+  # Usage:  docker compose --profile sqltest up -d sql-source-test-db
+  # Then add its hostname to the allow-list and connect from the UI:
+  #   MEDANON_SQL_SOURCE_ALLOWED_HOSTS=app-db,sql-source-test-db
+  #   host=sql-source-test-db port=5432 db=clinicdb user=clinic pass=clinic_dev
+  sql-source-test-db:
+    image: postgres:16-alpine
+    container_name: medanon-sql-source-test
+    profiles: [sqltest]
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: clinicdb
+      POSTGRES_USER: clinic
+      POSTGRES_PASSWORD: ${SQL_TEST_DB_PASSWORD:-clinic_dev}
+    volumes:
+      - sql-source-test-data:/var/lib/postgresql/data
+      - ./services/sql-source-test/init:/docker-entrypoint-initdb.d:ro
+    ports:
+      # Exposed for convenience (psql from the host); internal hostname is
+      # sql-source-test-db on processing-net. Override the host port if 55432 is taken.
+      - "${SQL_TEST_PORT:-55432}:5432"
+    networks:
+      - processing-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U clinic -d clinicdb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+        reservations:
+          cpus: "0.1"
+          memory: 32M
+
   minio:
     image: minio/minio:RELEASE.2024-11-07T00-52-20Z
     container_name: medanon-minio
@@ -920,6 +968,8 @@ services:
     container_name: medanon-ollama
     profiles: [ai]
     restart: unless-stopped
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
     volumes:
       - ollama-data:/root/.ollama
     networks:

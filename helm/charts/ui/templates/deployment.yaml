@@ -34,6 +34,8 @@ spec:
         runAsNonRoot: true
         runAsUser: 101
         fsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
       {{- with (coalesce .Values.imagePullSecrets .Values.global.imagePullSecrets) }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}

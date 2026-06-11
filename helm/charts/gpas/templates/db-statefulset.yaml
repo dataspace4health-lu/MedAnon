@@ -21,6 +21,8 @@ spec:
     spec:
       securityContext:
         {{- toYaml .Values.db.podSecurityContext | nindent 8 }}
+        seccompProfile:
+          type: RuntimeDefault
       {{- with (coalesce .Values.imagePullSecrets .Values.global.imagePullSecrets) }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}

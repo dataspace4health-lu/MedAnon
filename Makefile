@@ -22,10 +22,20 @@ HAPI_IMAGE     := hapiproject/hapi:v7.6.0
 HAPI_JAVA_VER  := 17
 HC_DIR      := services/fhir-server/healthcheck
 
+# AI model to pull into Ollama for the AI agents.  Read from .env
+# (MEDANON_AI_PROVIDER, e.g. "ollama/llama3.1"); the Ollama tag is the part
+# after "ollama/".  Defaults to llama3.1 when unset.
+AI_PROVIDER := $(shell grep -s '^MEDANON_AI_PROVIDER=' .env | cut -d= -f2 | tr -d '[:space:]')
+AI_PROVIDER := $(if $(AI_PROVIDER),$(AI_PROVIDER),ollama/llama3.1)
+AI_MODEL    := $(lastword $(subst /, ,$(AI_PROVIDER)))
+ANONYMIZER_PORT := $(shell grep -s '^ANONYMIZER_PORT=' .env | cut -d= -f2 | tr -d '[:space:]')
+ANONYMIZER_PORT := $(if $(ANONYMIZER_PORT),$(ANONYMIZER_PORT),8000)
+
 .PHONY: help setup test test-cov lint format batch fetch sync-check \
         up down down-wipe dev logs build build-ui build-sdv up-sdv build-healthcheck clean \
-        init-domains preflight verify _dirs \
-        helm-install helm-uninstall helm-lint helm-template helm-build-gpas
+        init-domains preflight verify _dirs ai-up ai-pull ai-status \
+        helm-install helm-uninstall helm-lint helm-template helm-build-gpas \
+        trivy-fs trivy-image-anonymizer trivy-image-ui trivy
 
 # ── Default target ────────────────────────────────────────────────────────────
 help:
@@ -55,11 +65,20 @@ help:
 	@echo "  make verify             Smoke-test a running stack (all 5 services)"
 	@echo "  make clean              Remove __pycache__ + .pytest_cache"
 	@echo ""
+	@echo "  make ai-up              Start stack + Ollama, pull the AI model, verify AI agents"
+	@echo "  make ai-pull            Pull MEDANON_AI_PROVIDER's model into the running Ollama"
+	@echo "  make ai-status          Check the /v1/ai/status endpoint"
+	@echo ""
 	@echo "  make helm-build-gpas    Build custom gPAS Docker image"
 	@echo "  make helm-lint          Validate Helm chart (no cluster needed)"
 	@echo "  make helm-template      Dry-run: print rendered Kubernetes YAML"
 	@echo "  make helm-install       Install / upgrade chart on the active cluster"
 	@echo "  make helm-uninstall     Remove the Helm release"
+	@echo ""
+	@echo "  make trivy              Run all Trivy scans (fs + built images)"
+	@echo "  make trivy-fs           Scan repo filesystem for vulns, secrets, misconfigs"
+	@echo "  make trivy-image-anonymizer  Scan the anonymizer Docker image"
+	@echo "  make trivy-image-ui     Scan the UI Docker image"
 	@echo ""
 
 # ── Python environment ────────────────────────────────────────────────────────
@@ -202,6 +221,37 @@ init-domains:
 verify:
 	@bash scripts/verify_deployment.sh
 
+# ── AI agents (local Ollama) ──────────────────────────────────────────────────
+# Bring up the stack WITH the AI profile (Ollama), pull the configured model,
+# and smoke-check the AI status endpoint.  This closes the gap where
+# `docker compose --profile ai up` starts an empty Ollama with no model, so
+# every AI call silently falls back.  Requires MEDANON_AI_ENABLED=true in .env.
+ai-up: _dirs preflight
+	$(COMPOSE) --profile nlp --profile ai up -d --scale worker=$(WORKER_REPLICAS)
+	@$(MAKE) --no-print-directory ai-pull
+	@echo ""
+	@echo "AI is enabled. Verifying agent status…"
+	@$(MAKE) --no-print-directory ai-status
+
+# Pull the configured model into the running Ollama container.  Idempotent —
+# Ollama skips the download if the model is already present.
+ai-pull:
+	@echo "Waiting for Ollama to become healthy…"
+	@for i in $$(seq 1 30); do \
+		if $(COMPOSE) exec -T ollama curl -sf http://localhost:11434/api/tags >/dev/null 2>&1; then \
+			break; \
+		fi; \
+		sleep 2; \
+	done
+	@echo "Pulling model '$(AI_MODEL)' into Ollama (this may take several minutes)…"
+	$(COMPOSE) exec -T ollama ollama pull $(AI_MODEL)
+	@echo "Model '$(AI_MODEL)' ready."
+
+# Smoke-check the AI status endpoint (enabled + provider reachable).
+ai-status:
+	@curl -sf http://localhost:$(ANONYMIZER_PORT)/v1/ai/status \
+		&& echo "" || echo "AI status check failed — is the stack up with MEDANON_AI_ENABLED=true?"
+
 # ── Helm (Kubernetes deployment) ─────────────────────────────────────────────
 # Build the custom gPAS image (bundles WAR/EAR deployments + CLI scripts).
 # Push this image to your registry before running helm-install.
@@ -236,3 +286,42 @@ clean:
 	find . -type d -name __pycache__ -not -path './.venv/*' -exec rm -rf {} + 2>/dev/null || true
 	find . -type d -name .pytest_cache -not -path './.venv/*' -exec rm -rf {} + 2>/dev/null || true
 	@echo "✓ caches cleared"
+
+# ── Security scanning (Trivy) ─────────────────────────────────────────────────
+# Requires trivy in PATH. Install: curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b ~/.local/bin
+
+# Scan the repository filesystem: dependencies, secrets, Dockerfiles, Helm charts, docker-compose.
+# Gitignored paths (.claude/, services/anonymizer/keys/id_rsa) are excluded explicitly
+# because Trivy's secret scanner does not honour skip-dirs in v0.71.
+trivy-fs:
+	trivy fs --config trivy.yaml \
+		--scanners vuln,secret,misconfig,license \
+		--skip-dirs .claude \
+		--skip-files services/anonymizer/keys/id_rsa \
+		.
+
+# Scan the anonymizer production image. Builds it first if not present.
+trivy-image-anonymizer:
+	@if ! docker image inspect medanon:latest >/dev/null 2>&1; then \
+		echo "Building medanon:latest before scanning..."; \
+		MEDANON_REDIS_PASSWORD=build-placeholder $(COMPOSE) build anonymizer; \
+		docker tag medanon-anonymizer:latest medanon:latest 2>/dev/null || true; \
+	fi
+	trivy image --config trivy.yaml \
+		--scanners vuln,secret \
+		medanon:latest
+
+# Scan the UI nginx image.
+trivy-image-ui:
+	@if ! docker image inspect medanon-ui:latest >/dev/null 2>&1; then \
+		echo "Building medanon-ui:latest before scanning..."; \
+		$(COMPOSE) build ui; \
+	fi
+	trivy image --config trivy.yaml \
+		--scanners vuln,secret \
+		medanon-ui:latest
+
+# Run all three scans in sequence.
+trivy: trivy-fs trivy-image-anonymizer trivy-image-ui
+	@echo "✓ All Trivy scans complete"
+
