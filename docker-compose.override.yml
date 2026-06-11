@@ -1,5 +1,0 @@
-services:
-  grafana:
-    environment:
-      GF_SERVER_ROOT_URL: "http://localhost:${GRAFANA_PORT:-3000}/"
-      GF_SERVER_SERVE_FROM_SUB_PATH: "false"
