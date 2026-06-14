@@ -185,6 +185,34 @@ class PostgresWorkflowStore:
             (status.value, workflow_id),
         )
 
+    def compare_and_set_workflow_status(
+        self,
+        workflow_id: str,
+        expected: WorkflowStatus,
+        new: WorkflowStatus,
+    ) -> bool:
+        """Atomically move a workflow expected→new. Returns True iff it changed.
+
+        Without this guard two concurrent worker callbacks (a final-step
+        completion settling the workflow DONE, racing a cancel() setting it
+        CANCELLED) would both issue unconditional UPDATEs and the last writer
+        would win — so a cancelled workflow could flip back to DONE. The CAS
+        precondition makes terminal transitions safe under multi-worker
+        (Redis/Postgres) job stores.
+        """
+        conn = self._get_conn()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE medanon.workflows SET status=%s, updated_at=NOW() "
+                        "WHERE id=%s AND status=%s",
+                        (new.value, workflow_id, expected.value),
+                    )
+                    return cur.rowcount > 0
+        finally:
+            self._put_conn(conn)
+
     def set_step_job(self, workflow_id: str, step_id: str, job_id: str) -> None:
         self._exec(
             "UPDATE medanon.workflow_steps SET job_id=%s, updated_at=NOW() "

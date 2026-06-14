@@ -22,20 +22,46 @@ _log = logging.getLogger("medanon.staged_worker")
 _OUTPUT_DIR = os.environ.get("MEDANON_OUTPUT_DIR", "/output")
 _BATCH_SIZE = int(os.environ.get("MEDANON_STAGING_BATCH_SIZE", "1000"))
 
+# Parallelism for the Phase-2 re-fetch of staged references (B1). Groups by
+# (source_url, resource_type) are fetched concurrently against the source FHIR
+# server. Reuses MEDANON_FHIR_FETCH_PARALLEL so re-fetch and Phase-1 fetch share
+# one tuning knob (default 4).
+_REFETCH_PARALLEL = max(1, int(os.environ.get("MEDANON_FHIR_FETCH_PARALLEL", "4")))
+
 # Depth of the PostgreSQL prefetch queue — mirrors MEDANON_PIPELINE_QUEUE_SIZE used by
 # the non-staged executor_stream path for consistent fetch-ahead behaviour.
 _PREFETCH_QUEUE_SIZE: int = int(os.environ.get("MEDANON_PIPELINE_QUEUE_SIZE", "4"))
 
-# Number of parallel compute threads in Phase 2 (default 1 = single-threaded).
+# Number of parallel compute threads in Phase 2.
 # When > 1, ``_run_staged_phase2`` runs gPAS + NLP I/O for up to N batches
 # concurrently via a ThreadPoolExecutor while file writes and DB mark_done
 # remain serialised on the calling (writer) thread, preserving NDJSON order.
 # Recommended N \u2264 MEDANON_JOB_WORKERS to stay within the global thread budget.
-# Counter-intuitively this gives the biggest single-process throughput win:
-# Pass 1 alone is GIL-bound, but each batch spends >50% of its time waiting
-# on gPAS/NLP HTTP, so overlapping multiple batches reclaims that time.
+#
+# Default raised 1 -> 4 based on tests/perf/bench_pipeline.py --scaling: the
+# match stage (FHIRPath rule_evaluation, ~99% of engine CPU) is only partially
+# GIL-bound and the thread driver scales ~3x before plateauing, even with
+# gPAS/NLP excluded. With real gPAS/NLP each batch also spends >50% of its time
+# waiting on HTTP, so overlap reclaims that too. 4 captures most of the measured
+# win while staying near MEDANON_JOB_WORKERS (default 3). For CPU-heavy jobs on
+# many-core hosts, set MEDANON_STAGING_EXECUTOR=process (see B2) to exceed the
+# thread plateau.
 _PROCESS_WORKERS: int = max(
-    1, int(os.environ.get("MEDANON_STAGING_PROCESS_WORKERS", "1"))
+    1, int(os.environ.get("MEDANON_STAGING_PROCESS_WORKERS", "4"))
+)
+
+# Phase-2 executor for the shards path: "thread" (default) overlaps gPAS/NLP I/O
+# and the partially-GIL-free FHIRPath work across threads in one process;
+# "process" runs partition-claim workers in separate processes to bypass the GIL
+# plateau entirely (measured ~3x higher absolute throughput on a 12-core box).
+# Processes pay startup + per-child FHIRPath compile, so they win on large,
+# CPU-heavy jobs and lose on tiny ones (see _PROCESS_MIN_PARTITIONS).
+_STAGING_EXECUTOR: str = os.environ.get("MEDANON_STAGING_EXECUTOR", "thread").lower()
+
+# Below this partition count the process executor's startup cost outweighs its
+# benefit, so the shards path falls back to threads even when executor=process.
+_PROCESS_MIN_PARTITIONS: int = max(
+    1, int(os.environ.get("MEDANON_STAGING_PROCESS_MIN_PARTITIONS", "4"))
 )
 
 # Output mode: "stream" (default) writes a single NDJSON file; "shards" writes
@@ -123,10 +149,27 @@ def _fetch_staged_resources(batch_rows: list[dict]) -> list[dict]:
     silently omitted.
     """
     from integrations.fhir.reader import fetch_resources_by_ids
+    from integrations.staging.blob_crypto import decrypt_resource
 
-    # Group refs by (fhir_source_url, resource_type) for batch HTTP calls.
-    groups: dict[tuple[str, str], list[str]] = {}
+    # A1: rows that carry an encrypted body are decrypted in-process — NO
+    # re-fetch. Only rows WITHOUT a blob fall through to the FHIR re-fetch path
+    # (the default refs-only behaviour). Plaintext exists only here, in memory.
+    resources_from_blob: list[dict] = []
+    rows_needing_refetch: list[dict] = []
     for row in batch_rows:
+        blob = row.get("resource_blob")
+        if blob is not None:
+            try:
+                resources_from_blob.append(decrypt_resource(bytes(blob)))
+                continue
+            except Exception as exc:
+                # Fail-soft: fall back to re-fetch for this row rather than drop it.
+                _log.warning("staged_blob_decrypt_failed: %s — re-fetching", exc)
+        rows_needing_refetch.append(row)
+
+    # Group remaining refs by (fhir_source_url, resource_type) for batch HTTP calls.
+    groups: dict[tuple[str, str], list[str]] = {}
+    for row in rows_needing_refetch:
         url = row.get("fhir_source_url", "")
         rtype = row.get("resource_type", "Unknown")
         rid = row.get("resource_id", "")
@@ -135,18 +178,41 @@ def _fetch_staged_resources(batch_rows: list[dict]) -> list[dict]:
         if url and logical_id:
             groups.setdefault((url, rtype), []).append(logical_id)
 
-    resources: list[dict] = []
-    for (url, rtype), ids in groups.items():
+    def _fetch_group(item):
+        (url, rtype), ids = item
         try:
-            fetched = fetch_resources_by_ids(url, rtype, ids)
-            resources.extend(fetched)
+            return fetch_resources_by_ids(url, rtype, ids)
         except Exception as exc:
+            # Per-group failure must not sink the batch: log and omit (same
+            # fail-soft behaviour as before, now per parallel task).
             _log.warning(
                 "staged_refetch_failed resource_type=%s count=%d: %s",
                 rtype,
                 len(ids),
                 exc,
             )
+            return []
+
+    items = list(groups.items())
+    # Start with bodies decrypted from staging (A1); add any re-fetched rows.
+    resources: list[dict] = list(resources_from_blob)
+    if not items:
+        return resources
+    # Parallelise across (url, type) groups — they hit disjoint FHIR endpoints
+    # and `fetch_resources_by_ids` uses the shared thread-safe transport pool.
+    if _REFETCH_PARALLEL <= 1 or len(items) <= 1:
+        for it in items:
+            resources.extend(_fetch_group(it))
+        return resources
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(
+        max_workers=min(_REFETCH_PARALLEL, len(items)),
+        thread_name_prefix="staged-refetch",
+    ) as pool:
+        for fetched in pool.map(_fetch_group, items):
+            resources.extend(fetched)
     return resources
 
 
@@ -566,6 +632,60 @@ def _run_staged_phase2(
     return processed
 
 
+def process_one_partition(
+    job,
+    staging,
+    settings,
+    pseudonymizer,
+    processing_mode: str,
+    output_dir: str,
+    label: str,
+    collector,
+    resource_type: str,
+    partition_id: int,
+) -> tuple[int, str]:
+    """De-identify ONE already-claimed partition into a shard file.
+
+    Shared by the in-process partition loop and the RabbitMQ stage consumer so
+    both paths run identical processing. The caller is responsible for the
+    claim (``claim_next_partition`` or targeted ``claim_partition``) and for the
+    terminal status transition (``mark_partition_done`` / ``complete_partition``
+    on success; ``release_partition`` / ``record_partition_error`` on failure).
+
+    Returns ``(resources_processed, shard_path)``. Raises on processing failure
+    after unlinking the partial shard — the caller decides retry vs dead-letter.
+    """
+    from contextlib import suppress
+
+    shard_path = os.path.join(output_dir, f"{job.id}_p{partition_id:06d}.ndjson")
+    shard_ok = shard_bad = 0
+    chunk: list[dict] = []
+    try:
+        with open(shard_path, "w", encoding="utf-8") as fh:
+            for row in staging.iter_partition(job.id, resource_type, partition_id):
+                chunk.append(row)
+                if len(chunk) >= _BATCH_SIZE:
+                    ok, bad = _process_batch_with_fallback(
+                        chunk, settings, pseudonymizer, processing_mode,
+                        fh, staging, job.id, label, summary=collector,
+                    )
+                    shard_ok += ok
+                    shard_bad += bad
+                    chunk = []
+            if chunk:
+                ok, bad = _process_batch_with_fallback(
+                    chunk, settings, pseudonymizer, processing_mode,
+                    fh, staging, job.id, label, summary=collector,
+                )
+                shard_ok += ok
+                shard_bad += bad
+        return shard_ok + shard_bad, shard_path
+    except Exception:
+        with suppress(Exception):
+            os.unlink(shard_path)
+        raise
+
+
 def _run_staged_phase2_partition_claim(
     job,
     store,
@@ -579,19 +699,18 @@ def _run_staged_phase2_partition_claim(
 ) -> int:
     """Run Phase 2 using the partition-claim API (``MEDANON_OUTPUT_MODE=shards``).
 
-    Calls ``plan_partitions`` once (idempotent), then loops through
-    ``claim_next_partition`` / ``iter_partition`` / ``mark_partition_done``
-    until no unclaimed partitions remain.  Each partition is written to an
-    independent shard file ``{job.id}_p{NNNNNN}.ndjson`` under *output_dir*.
-
-    On exception, the partition is released back to ``unclaimed`` via
-    ``release_partition`` so a sibling worker or an Argo retry pod reclaims it.
+    Calls ``plan_partitions`` once (idempotent).  When ``MEDANON_AMQP_URL`` is
+    set, publishes one ``wf.deid`` message per partition to RabbitMQ and returns
+    immediately — the stage consumers handle processing asynchronously.  Without
+    AMQP, falls through to the synchronous in-process partition-claim loop
+    (default, unchanged behaviour).
 
     This function is safe to call concurrently from multiple worker threads or
     pods: the ``FOR UPDATE SKIP LOCKED`` in ``claim_next_partition`` ensures
     each partition is processed by exactly one caller at a time.
 
-    Returns the total number of resources processed by *this* call.
+    Returns the total number of resources processed by *this* call (0 when the
+    work is handed off to AMQP consumers).
     """
     from contextlib import suppress
 
@@ -602,6 +721,56 @@ def _run_staged_phase2_partition_claim(
         job.id,
         partition_count,
     )
+
+    # ── AMQP producer path ────────────────────────────────────────────────
+    # When the broker is configured, publish one work-pointer per partition
+    # to the "deid" stage queue.  Stage consumers claim + process each
+    # partition independently.  No PHI leaves the Postgres ledger.
+    try:
+        from integrations.rabbitmq.client import amqp_enabled, get_amqp_client
+
+        if amqp_enabled() and partition_count > 0:
+            broker = get_amqp_client()
+            if broker is not None:
+                import asyncio
+
+                from integrations.rabbitmq.client import publish_partitions
+
+                workflow_id = (job.params or {}).get("__workflow", {}) or {}
+                if isinstance(workflow_id, dict):
+                    workflow_id = workflow_id.get("workflow_id", "")
+
+                loop = asyncio.new_event_loop()
+                try:
+                    published = loop.run_until_complete(
+                        publish_partitions(
+                            broker,
+                            workflow_id=str(workflow_id),
+                            job_id=job.id,
+                            partition_ids=list(range(partition_count)),
+                            stage="deid",
+                        )
+                    )
+                finally:
+                    loop.close()
+
+                _log.info(
+                    "%s_amqp_published job=%s partitions=%d published=%d",
+                    label,
+                    job.id,
+                    partition_count,
+                    published,
+                )
+                # Work handed off to consumers — return 0 (processed by them).
+                return 0
+    except Exception as exc:
+        # AMQP path failed — fall through to in-process loop as a safety net.
+        _log.warning(
+            "%s_amqp_publish_failed job=%s: %s — falling back to in-process loop",
+            label,
+            job.id,
+            exc,
+        )
 
     processed = 0
     _partitions_done = 0
@@ -615,50 +784,16 @@ def _run_staged_phase2_partition_claim(
             break
 
         resource_type, partition_id = claim
-        shard_path = os.path.join(output_dir, f"{job.id}_p{partition_id:06d}.ndjson")
 
-        # Stream the partition in _BATCH_SIZE chunks rather than buffering all
-        # rows at once.  A single 50 000-row partition processed as one batch
-        # would (a) spike RAM, (b) defer mark_done until the whole partition
-        # finished (no incremental progress), and (c) trigger a 50 000-resource
-        # per-resource fallback on a single failure.
-        shard_ok = shard_bad = 0
-        chunk: list[dict] = []
+        # Stream the partition in _BATCH_SIZE chunks (RAM + incremental progress)
+        # via the shared per-partition processor.
         try:
-            with open(shard_path, "w", encoding="utf-8") as fh:
-                for row in staging.iter_partition(job.id, resource_type, partition_id):
-                    chunk.append(row)
-                    if len(chunk) >= _BATCH_SIZE:
-                        ok, bad = _process_batch_with_fallback(
-                            chunk,
-                            settings,
-                            pseudonymizer,
-                            processing_mode,
-                            fh,
-                            staging,
-                            job.id,
-                            label,
-                            summary=collector,
-                        )
-                        shard_ok += ok
-                        shard_bad += bad
-                        chunk = []
-                if chunk:
-                    ok, bad = _process_batch_with_fallback(
-                        chunk,
-                        settings,
-                        pseudonymizer,
-                        processing_mode,
-                        fh,
-                        staging,
-                        job.id,
-                        label,
-                        summary=collector,
-                    )
-                    shard_ok += ok
-                    shard_bad += bad
+            part_processed, shard_path = process_one_partition(
+                job, staging, settings, pseudonymizer, processing_mode,
+                output_dir, label, collector, resource_type, partition_id,
+            )
             staging.mark_partition_done(job.id, resource_type, partition_id)
-            processed += shard_ok + shard_bad
+            processed += part_processed
             _partitions_done += 1
             # Log at INFO every ~5% to give visibility without flooding.
             if _partitions_done % _LOG_EVERY == 0:
@@ -672,12 +807,11 @@ def _run_staged_phase2_partition_claim(
                 )
             else:
                 _log.debug(
-                    "%s_partition_done job=%s partition=%d ok=%d bad=%d",
+                    "%s_partition_done job=%s partition=%d processed=%d",
                     label,
                     job.id,
                     partition_id,
-                    shard_ok,
-                    shard_bad,
+                    part_processed,
                 )
         except Exception as exc:
             _log.error(
@@ -688,15 +822,110 @@ def _run_staged_phase2_partition_claim(
                 exc,
                 exc_info=True,
             )
+            # process_one_partition already unlinked the partial shard; just
+            # release the claim so a sibling/retry pod reclaims it.
             with suppress(Exception):
                 staging.release_partition(job.id, resource_type, partition_id)
-            with suppress(Exception):
-                import os as _os
-
-                _os.unlink(shard_path)
             raise
 
     return processed
+
+
+def _partition_process_worker(
+    job,
+    config_profile: str,
+    processing_mode: str,
+    output_dir: str,
+    label: str,
+    staging_db_url: str,
+) -> int:
+    """Top-level ProcessPoolExecutor worker: drain partitions in a child process.
+
+    Runs in a freshly ``spawn``-ed process, so it rebuilds every resource that
+    holds a socket or is otherwise unsafe to inherit across the fork boundary:
+    the staging store (its own DB pool), the pseudonymizer (gPAS HTTP client),
+    the loaded Settings, and a private ``JobSummaryCollector``.
+
+    Mirrors the per-partition collector pattern already used by the RabbitMQ
+    stage consumer (``stage_consumer.py``): scoring is job-granular, so a private
+    collector per child is correct — only the processed-resource COUNT needs to
+    flow back, and counts sum cleanly. Partition claims are serialised across all
+    children by ``FOR UPDATE SKIP LOCKED`` in ``claim_next_partition``.
+
+    Returns the number of resources this child processed.
+    """
+    from integrations.staging.store import StagingStore
+    from pipeline.config.service import get_settings
+    from pipeline.jobs.summary import JobSummaryCollector
+    from pipeline.processor import _get_default_pseudonymizer
+
+    settings = get_settings(config_profile)
+    pseudonymizer = _get_default_pseudonymizer()
+    staging = StagingStore(staging_db_url)
+    # Child workers must NOT re-run schema DDL — the parent already did, and N
+    # concurrent ALTER TABLE/CREATE INDEX deadlock on staged_resources. Just
+    # open the pool (+ A1 fail-closed key check).
+    staging.ensure_pool()
+    collector = JobSummaryCollector(
+        config_profile=config_profile, settings=settings, job_id=job.id
+    )
+    # store is unused by the partition-claim loop (it only touches staging);
+    # pass None to avoid pickling a DB-backed job store into the child.
+    return _run_staged_phase2_partition_claim(
+        job,
+        None,
+        staging,
+        settings,
+        pseudonymizer,
+        processing_mode,
+        output_dir,
+        label,
+        collector,
+    )
+
+
+def _drain_partitions_in_processes(
+    job,
+    staging,
+    processing_mode: str,
+    output_dir: str,
+    label: str,
+    parallelism: int,
+) -> int:
+    """Fan partition-claim workers across ``parallelism`` child processes.
+
+    Uses a ``spawn`` context so children start with clean interpreter state (no
+    inherited sockets/locks). Each child runs :func:`_partition_process_worker`,
+    which rebuilds its own staging store + pseudonymizer + Settings and drains
+    partitions until the shared ``FOR UPDATE SKIP LOCKED`` queue is exhausted.
+    Returns the summed processed count.
+    """
+    import multiprocessing as mp
+    from concurrent.futures import ProcessPoolExecutor, as_completed
+
+    config_profile = (job.params or {}).get("config_profile", "auto")
+    staging_db_url = getattr(staging, "_db_url", "")
+    ctx = mp.get_context("spawn")
+    _log.info(
+        "%s_shards_process_pool job=%s workers=%d", label, job.id, parallelism
+    )
+    results: list[int] = []
+    with ProcessPoolExecutor(max_workers=parallelism, mp_context=ctx) as pool:
+        futures = [
+            pool.submit(
+                _partition_process_worker,
+                job,
+                config_profile,
+                processing_mode,
+                output_dir,
+                label,
+                staging_db_url,
+            )
+            for _ in range(parallelism)
+        ]
+        for fut in as_completed(futures):
+            results.append(fut.result())
+    return sum(results)
 
 
 def _run_staged_phase2_shards(
@@ -753,7 +982,7 @@ def _run_staged_phase2_shards(
             collector,
         )
     else:
-        # Plan once (idempotent) so all worker threads see the partition set.
+        # Plan once (idempotent) so all workers see the partition set.
         partition_count = staging.plan_partitions(job.id)
         _log.info(
             "%s_shards_planned job=%s partitions=%d",
@@ -762,28 +991,39 @@ def _run_staged_phase2_shards(
             partition_count,
         )
 
-        results: list[int] = []
-        with ThreadPoolExecutor(
-            max_workers=parallelism, thread_name_prefix="shards-claim"
-        ) as pool:
-            futures = [
-                pool.submit(
-                    _run_staged_phase2_partition_claim,
-                    job,
-                    store,
-                    staging,
-                    settings,
-                    pseudonymizer,
-                    processing_mode,
-                    output_dir,
-                    label,
-                    collector,
-                )
-                for _ in range(parallelism)
-            ]
-            for fut in as_completed(futures):
-                results.append(fut.result())
-        processed = sum(results)
+        # Process executor: bypass the FHIRPath GIL plateau on CPU-heavy jobs.
+        # Falls back to threads for small jobs where startup cost dominates.
+        use_processes = (
+            _STAGING_EXECUTOR == "process"
+            and partition_count >= _PROCESS_MIN_PARTITIONS
+        )
+        if use_processes:
+            processed = _drain_partitions_in_processes(
+                job, staging, processing_mode, output_dir, label, parallelism
+            )
+        else:
+            results: list[int] = []
+            with ThreadPoolExecutor(
+                max_workers=parallelism, thread_name_prefix="shards-claim"
+            ) as pool:
+                futures = [
+                    pool.submit(
+                        _run_staged_phase2_partition_claim,
+                        job,
+                        store,
+                        staging,
+                        settings,
+                        pseudonymizer,
+                        processing_mode,
+                        output_dir,
+                        label,
+                        collector,
+                    )
+                    for _ in range(parallelism)
+                ]
+                for fut in as_completed(futures):
+                    results.append(fut.result())
+            processed = sum(results)
 
     # Merge shards → final output_path so downstream code (store_result,
     # file_size_bytes, scoring) sees the conventional single-file output.

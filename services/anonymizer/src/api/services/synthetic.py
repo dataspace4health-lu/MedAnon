@@ -44,6 +44,7 @@ class SyntheticDataService:
         engine: str = "auto",
         include_conditions: bool = False,
         count_per_patient: int = 2,
+        output_format: str = "ndjson",
     ) -> SyntheticResult | bytes:
         """Generate synthetic FHIR data.
 
@@ -64,6 +65,7 @@ class SyntheticDataService:
                 "engine": engine,
                 "include_conditions": str(include_conditions).lower(),
                 "count_per_patient": count_per_patient,
+                "output_format": output_format,
             }
             return await asyncio.to_thread(
                 proxy_generate_synthetic, body, content_type, params

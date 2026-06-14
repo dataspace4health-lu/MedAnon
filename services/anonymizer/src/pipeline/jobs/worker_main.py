@@ -153,6 +153,40 @@ async def _main() -> None:
         except Exception as exc:
             logger.warning("workflow_engine_start_failed: %s", exc)
 
+    # RabbitMQ stage consumers — opt-in (MEDANON_AMQP_URL). Each configured
+    # stage gets its own consumer task; they drain partition messages and run
+    # the shared per-partition processor. No-op (and no aio-pika import) when
+    # AMQP is unset, so the default stack is unchanged.
+    stage_consumer_tasks: list = []
+    try:
+        from integrations.rabbitmq.client import (
+            amqp_enabled,
+            consumer_stages,
+            init_amqp_client,
+        )
+
+        if amqp_enabled() and staging_store is not None:
+            await init_amqp_client()
+            from pipeline.jobs.stage_consumer import run_stage_consumer
+
+            for stage in consumer_stages():
+                stage_consumer_tasks.append(
+                    asyncio.create_task(
+                        run_stage_consumer(stage, store, staging_store),
+                        name=f"stage_consumer_{stage}",
+                    )
+                )
+            logger.info(
+                "amqp_stage_consumers_started stages=%s", ",".join(consumer_stages())
+            )
+        elif amqp_enabled():
+            logger.warning(
+                "amqp_enabled but staging store is unavailable — stage "
+                "consumers not started (set MEDANON_APP_DB_URL/STAGING_DB_URL)"
+            )
+    except Exception as exc:
+        logger.warning("amqp_stage_consumer_start_failed: %s", exc)
+
     # Graceful shutdown: stop accepting new jobs on SIGTERM/SIGINT,
     # let in-progress jobs finish (up to graceful-timeout).
     stop_event = asyncio.Event()
@@ -202,6 +236,15 @@ async def _main() -> None:
             )
             await asyncio.sleep(backoff_restart)
             backoff_restart = min(backoff_restart * 2, max_backoff)
+
+    # Stop stage consumers on shutdown.
+    for t in stage_consumer_tasks:
+        t.cancel()
+    for t in stage_consumer_tasks:
+        try:
+            await t
+        except (asyncio.CancelledError, Exception):
+            pass
 
     logger.info("worker shutdown complete")
 

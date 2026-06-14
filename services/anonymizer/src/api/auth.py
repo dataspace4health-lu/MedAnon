@@ -69,6 +69,7 @@ OPEN_PATHS = frozenset(
         "/redoc",
         "/",
         "/.well-known/smart-configuration",
+        "/v1/auth/config",  # open: SPA fetches before login
     }
 )
 
@@ -199,12 +200,30 @@ class AuthContext:
 def get_auth_context(request: Request) -> AuthContext:
     """Resolve auth from the request; raises HTTPException(401) on failure.
 
-    Auth priority:
+    When ``MEDANON_AUTH_PROVIDER`` is not ``auto`` (the default), delegates to
+    the pluggable provider chain in ``api/auth_providers.py``.
+
+    Legacy priority (MEDANON_AUTH_PROVIDER=auto):
     1. Per-client DB key (when PostgresApiKeyStore is wired via init_api_key_store)
     2. Single env-var API key (MEDANON_API_KEY fallback)
-    3. Authorization: Bearer <token> (SMART bearer token)
+    3. Authorization: Bearer <token> (SMART bearer token / OIDC)
     4. Open access when no auth is configured
     """
+    # Pluggable provider chain (non-auto modes)
+    try:
+        from api.auth_providers import get_provider
+
+        provider = get_provider()
+        if provider is not None:
+            return provider.authenticate(request)
+    except Exception as exc:
+        # Never let a provider import error bypass auth.
+        from fastapi import HTTPException as _HTTPException
+
+        if isinstance(exc, _HTTPException):
+            raise
+        log.error("auth_provider_failed: %s — falling back to legacy mode", exc)
+
     api_key_header = request.headers.get("X-API-Key", "")
     bearer_token = _extract_bearer(request)
     _auth_required = (_api_key_store is not None) or bool(_API_KEY)

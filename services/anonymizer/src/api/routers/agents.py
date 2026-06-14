@@ -22,6 +22,8 @@ from api.schemas.agents import (
     ConfigGenerationRequest,
     ConfigGenerationResponse,
     ExplainRequest,
+    FieldScanRequest,
+    FieldScanResponse,
     PiiDetectionRequest,
     PiiDetectionResponse,
 )
@@ -53,7 +55,11 @@ async def generate_config(body: ConfigGenerationRequest, request: Request):
     Falls back to keyword-matching against bundled profiles when AI is disabled.
     """
     try:
-        result = await _service.generate_config(body.prompt, body.regulation)
+        result = await _service.generate_config(
+            body.prompt,
+            body.regulation,
+            include_source_context=body.include_source_context,
+        )
     except Exception as exc:
         logger.error("ai_generate_config_error: %s", exc)
         raise HTTPException(
@@ -80,6 +86,19 @@ async def detect_pii(body: PiiDetectionRequest, request: Request):
             detail=f"PII detection failed: {exc}",
         )
     return result
+
+
+@router.post("/scan-fields", response_model=FieldScanResponse)
+@limiter.limit("20/minute")
+async def scan_fields_endpoint(body: FieldScanRequest, request: Request):
+    """Classify a PHI-free field-path tree as PII and suggest per-field actions.
+
+    Input is field paths + JSON value types only (no patient values). Returns
+    structured results the UI overlays on its field tree. Degrades to an empty
+    result set with a ``detail`` string when AI is disabled/unreachable rather
+    than erroring, so the UI can show a soft warning.
+    """
+    return await _service.scan_fields(body.field_context, body.model)
 
 
 @router.post("/explain")
@@ -160,6 +179,13 @@ async def chat_config_endpoint(body: ChatRequest, request: Request):
 
     history = [m.model_dump() for m in body.history]
 
+    # Resolve the PHI-free source snapshot off the event loop BEFORE streaming
+    # so the per-token loop never blocks on FHIR I/O. Best-effort: empty on any
+    # failure or when the caller did not opt in.
+    source_context = ""
+    if body.include_source_context:
+        source_context = await _service.resolve_source_context_async()
+
     async def _sse_generator():
         # Produce chunks in a dedicated daemon thread (litellm's streaming
         # generator is synchronous and blocking). The drain loop polls the
@@ -180,6 +206,9 @@ async def chat_config_endpoint(body: ChatRequest, request: Request):
                     history=history,
                     model=body.model,
                     streaming=True,
+                    source_context=source_context,
+                    field_context=body.field_context,
+                    intake=body.intake.model_dump() if body.intake else None,
                 )
                 if hasattr(gen, "__iter__") or hasattr(gen, "__next__"):
                     for chunk in gen:

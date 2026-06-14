@@ -84,6 +84,15 @@ _max_concurrent: int = 3
 _semaphore: asyncio.Semaphore | None = None
 _shutdown_event: asyncio.Event | None = None
 _active_tasks: set = set()
+# Redis Stream message-ids for jobs currently executing on THIS worker. The
+# claim-heartbeat loop refreshes their idle timers so long-running jobs are not
+# reclaimed as stale (by the periodic loop or a sibling's startup recovery).
+_inflight_messages: set[str] = set()
+# How often to refresh in-flight claims. Must be comfortably below the stale
+# timeout so a running job's idle timer never crosses it.
+_CLAIM_HEARTBEAT_SEC: int = int(
+    os.environ.get("MEDANON_CLAIM_HEARTBEAT_SEC", "30")
+)
 _DRAIN_TIMEOUT_SEC: int = int(os.environ.get("MEDANON_DRAIN_TIMEOUT_SEC", "300"))
 _STAGING_CLEANUP_INTERVAL_SEC: int = int(
     os.environ.get("MEDANON_STAGING_CLEANUP_INTERVAL_SEC", "3600")
@@ -186,6 +195,33 @@ _STALE_RECOVERY_INTERVAL_SEC: int = int(
 _STALE_RECOVERY_TIMEOUT_MIN: int = int(
     os.environ.get("MEDANON_STALE_RECOVERY_TIMEOUT_MIN", "10")
 )
+
+
+async def _claim_heartbeat_loop() -> None:
+    """Refresh Redis Stream claims for jobs running on THIS worker.
+
+    Every ``_CLAIM_HEARTBEAT_SEC`` seconds, re-claims each in-flight message to
+    self (``refresh_claim`` → XCLAIM min_idle=0), resetting its idle timer. This
+    keeps a genuinely-running long job from ever crossing the stale-recovery
+    timeout, so neither the periodic loop nor a sibling's startup recovery
+    reclaims and re-runs it. No-op for non-Redis stores (no ``refresh_claim``).
+    """
+    if _CLAIM_HEARTBEAT_SEC <= 0 or _store is None:
+        return
+    if not hasattr(_store, "refresh_claim"):
+        return  # SQLite / Postgres stores don't use stream claims
+    while True:
+        await asyncio.sleep(_CLAIM_HEARTBEAT_SEC)
+        if _shutdown_event is not None and _shutdown_event.is_set():
+            return
+        # Snapshot to avoid mutation during iteration.
+        for message_id in list(_inflight_messages):
+            try:
+                await asyncio.to_thread(_store.refresh_claim, message_id)
+            except Exception as exc:
+                _worker_log.debug(
+                    "claim_heartbeat_failed message_id=%s: %s", message_id, exc
+                )
 
 
 async def _stale_recovery_loop() -> None:
@@ -494,10 +530,16 @@ async def _run_and_release(job: Job, message_id: str | None = None) -> None:
     """Run a job, release the semaphore, and ACK the stream message when done."""
     task = asyncio.current_task()
     _active_tasks.add(task)
+    # Track the message so the claim-heartbeat keeps its idle timer fresh while
+    # this job runs (prevents stale-reclaim → double-run of long jobs).
+    if message_id:
+        _inflight_messages.add(message_id)
     try:
         await _run_job(job)
     finally:
         _active_tasks.discard(task)
+        if message_id:
+            _inflight_messages.discard(message_id)
         if _semaphore is not None:
             _semaphore.release()
         # ACK the Redis Streams message so it's removed from the Pending Entry List.
@@ -606,12 +648,19 @@ def _check_retry_limit(job) -> bool:
 
 
 def _recover_running_jobs() -> int:
-    """Reset RUNNING jobs from a crashed process back to PENDING.
+    """Reset abandoned RUNNING jobs back to PENDING after a crash.
 
-    For Redis Streams, claims ALL pending PEL messages at startup (min_idle_ms=0
-    is safe here because no other worker is running — we just started).  Also
-    scans the job-status index for any RUNNING jobs not covered by the stream
-    (e.g. migrated from BLPOP).
+    For Redis Streams, reclaims only PEL messages idle longer than the stale
+    timeout. We must NOT use ``min_idle_ms=0`` here: this worker may be ONE of
+    several replicas (``--scale worker=N`` / HPA), and a freshly-started worker
+    grabbing every in-flight message would steal jobs actively running on
+    siblings — re-queuing them and causing concurrent double-runs (observed: a
+    long staged export reclaimed by a late-booting worker → racing shard writes
+    → empty output). Messages idle < the timeout are presumed alive elsewhere
+    and are left to their owner (whose heartbeat keeps refreshing the claim).
+
+    Also scans the job-status index for any RUNNING jobs not covered by the
+    stream (e.g. migrated from BLPOP).
 
     Jobs that have exceeded ``_MAX_JOB_RETRIES`` are moved to ERROR instead.
 
@@ -620,11 +669,13 @@ def _recover_running_jobs() -> int:
     if _store is None or not hasattr(_store, "list_jobs"):
         return 0
     recovered = 0
-    # Redis Streams: at startup, claim ALL pending messages (idle ≥ 0 ms).
-    # This reclaims work from any previous worker that crashed without ACKing.
+    # Redis Streams: at startup, reclaim only messages idle past the stale
+    # timeout (genuinely abandoned), never min_idle_ms=0 (would steal siblings'
+    # running jobs).
+    _startup_min_idle_ms = max(1, _STALE_RECOVERY_TIMEOUT_MIN) * 60_000
     if hasattr(_store, "claim_stale_jobs"):
         try:
-            stale_pairs = _store.claim_stale_jobs(min_idle_ms=0)
+            stale_pairs = _store.claim_stale_jobs(min_idle_ms=_startup_min_idle_ms)
             _TERMINAL = frozenset(
                 {
                     JobStatus.DONE,
@@ -799,6 +850,16 @@ async def worker_loop() -> None:
     else:
         _worker_log.warning(
             "result_cleanup disabled (MEDANON_RESULT_TTL_SEC=0) — NDJSON files will accumulate"
+        )
+
+    # Claim heartbeat — refresh in-flight stream claims so long jobs aren't
+    # reclaimed as stale (no-op for non-Redis backends).
+    if _store is not None and hasattr(_store, "refresh_claim"):
+        from utils.tasks import retain_task
+
+        retain_task(_claim_heartbeat_loop(), name="claim_heartbeat")
+        _worker_log.info(
+            "claim_heartbeat scheduled interval_sec=%d", _CLAIM_HEARTBEAT_SEC
         )
 
     # Periodic Redis index orphan sweep — no-op for non-Redis backends.

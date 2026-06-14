@@ -199,10 +199,16 @@ class LLMProvider:
             raise ProviderUnavailableError("AI provider circuit breaker is OPEN")
 
         model = model_override or self._model
+        # A bare model_override (e.g. config-gen switching to gemma3:4b) still
+        # targets the SAME local Ollama host, so the configured api_base must be
+        # preserved — dropping it to None makes litellm fall back to its default
+        # http://localhost:11434, which inside the container is nothing and fails
+        # with "Connection refused". Only an explicit api_base_override changes
+        # the endpoint. (Mirrors complete_streaming, which already did this.)
         if api_base_override is not None:
             api_base = api_base_override
         else:
-            api_base = None if model_override else self._api_base
+            api_base = self._api_base
 
         # C4: enforce before any cache/network activity so misconfiguration
         # surfaces immediately and deterministically.

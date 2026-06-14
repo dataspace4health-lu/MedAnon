@@ -44,12 +44,16 @@ async def generate_synthetic(
         le=10,
         description="Max Conditions per Patient (when include_conditions=true)",
     ),
+    output_format: str = Query(
+        "ndjson",
+        description="Output format: 'ndjson' (default), 'json' (Bundle), or 'xml'",
+    ),
 ):
     """Generate synthetic FHIR Patient resources from a de-identified input dataset.
 
     Accepts de-identified FHIR resources (NDJSON, JSON Bundle, or XML),
     extracts statistical distributions, and returns *count* synthetic Patient
-    resources (plus optional Conditions) as NDJSON.
+    resources (plus optional Conditions) in the requested output format.
 
     Engine choices:
     - **auto** (default): Use SDV if installed, otherwise fall back to stdlib.
@@ -78,6 +82,7 @@ async def generate_synthetic(
             engine=engine,
             include_conditions=include_conditions,
             count_per_patient=count_per_patient,
+            output_format=output_format,
         )
     except ValueError as exc:
         msg = str(exc)
@@ -94,20 +99,60 @@ async def generate_synthetic(
             status_code=500, detail="Synthetic generation error"
         ) from exc
 
-    # Proxy returns raw bytes
+    # Proxy returns raw bytes — pass through with correct content-type
     if isinstance(result, bytes):
+        fmt = output_format.lower()
+        if fmt == "json":
+            proxy_ct = "application/json"
+        elif fmt == "xml":
+            proxy_ct = "application/fhir+xml"
+        else:
+            proxy_ct = "application/x-ndjson"
 
         async def _passthrough():
             yield result
 
-        return StreamingResponse(_passthrough(), media_type="application/x-ndjson")
+        return StreamingResponse(_passthrough(), media_type=proxy_ct)
 
     # Local generation returns SyntheticResult
+    from fastapi.responses import Response as _Response
+
+    all_resources = list(result.patients) + list(result.conditions)
+    fmt = output_format.lower()
+
+    if fmt == "json":
+        bundle = {
+            "resourceType": "Bundle",
+            "type": "collection",
+            "entry": [{"resource": r} for r in all_resources],
+        }
+        return _Response(
+            content=_json_dumps(bundle),
+            media_type="application/json",
+            headers={"X-Synthetic-Engine": result.engine_used},
+        )
+    elif fmt == "xml":
+        lines = ['<?xml version="1.0" encoding="UTF-8"?>',
+                 '<Bundle xmlns="http://hl7.org/fhir"><type><value value="collection"/></type>']
+        for r in all_resources:
+            rt = r.get("resourceType", "Resource")
+            lines.append(f'<entry><resource><{rt}>')
+            for k, v in r.items():
+                if k == "resourceType":
+                    continue
+                safe_v = str(v).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                lines.append(f'<{k}><value value="{safe_v}"/></{k}>')
+            lines.append(f'</{rt}></resource></entry>')
+        lines.append('</Bundle>')
+        return _Response(
+            content="\n".join(lines),
+            media_type="application/fhir+xml",
+            headers={"X-Synthetic-Engine": result.engine_used},
+        )
+
     async def _stream():
-        for patient in result.patients:
-            yield _json_dumps(patient) + "\n"
-        for condition in result.conditions:
-            yield _json_dumps(condition) + "\n"
+        for r in all_resources:
+            yield _json_dumps(r) + "\n"
 
     return StreamingResponse(
         _stream(),

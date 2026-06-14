@@ -14,6 +14,62 @@ from typing import Any
 
 from pipeline.scoring.models import Evidence, ModuleScore
 
+# Redaction sentinels that count as "still populated / conformant" for DQ —
+# a field replaced with one of these is acceptable (not over-scrubbed).
+_DQ_REDACTED: frozenset[str] = frozenset(
+    {"", "[redacted]", "redacted", "unknown", "masked", "removed", "anonymous"}
+)
+
+# Minimal field set each resource type should RETAIN after de-id. These are
+# analytically essential, non-PII (or sentinel-replaced) fields; nulling them
+# entirely is over-scrubbing and hurts data quality. Dotted paths allowed.
+_DQ_EXPECTED_FIELDS: dict[str, tuple[str, ...]] = {
+    "Patient": ("gender",),
+    "Observation": ("status", "code"),
+    "Condition": ("code",),
+    "Procedure": ("status", "code"),
+    "MedicationRequest": ("status", "intent"),
+    "Encounter": ("status", "class"),
+    "DiagnosticReport": ("status", "code"),
+    "Immunization": ("status", "vaccineCode"),
+    "AllergyIntolerance": ("code",),
+}
+
+# Keys whose string value is treated as a date for temporal-plausibility.
+_DQ_DATE_KEYS: frozenset[str] = frozenset(
+    {
+        "birthDate",
+        "date",
+        "issued",
+        "authoredOn",
+        "recordedDate",
+        "onsetDateTime",
+        "effectiveDateTime",
+        "deceasedDateTime",
+        "start",
+        "end",
+    }
+)
+
+
+def _parse_date(val):
+    """Parse a FHIR date / dateTime string to a ``datetime.date``; None if bad.
+
+    FHIR allows ``YYYY``, ``YYYY-MM``, ``YYYY-MM-DD`` and full dateTimes; we take
+    the leading date and try progressively shorter precisions.
+    """
+    if not isinstance(val, str) or len(val) < 4:
+        return None
+    import datetime as _dt
+
+    head = val[:10]
+    for length, fmt in ((10, "%Y-%m-%d"), (7, "%Y-%m"), (4, "%Y")):
+        try:
+            return _dt.datetime.strptime(head[:length], fmt).date()
+        except ValueError:
+            continue
+    return None
+
 
 class QualityEvaluator:
     """Evaluate pipeline execution quality."""
@@ -35,8 +91,21 @@ class QualityEvaluator:
         )
         validation = self._schema_validation(deidentified, evidence)
         integrity = self._reference_integrity(deidentified, evidence)
+        data_quality = self._data_quality(deidentified, evidence)
 
-        raw = success * 0.40 + coverage * 0.30 + validation * 0.15 + integrity * 0.15
+        # Re-weighted to make room for the intrinsic real-world data-quality
+        # sub-metric (conformance + completeness + temporal plausibility +
+        # value plausibility). Transformation correctness (success/coverage)
+        # still dominates; DQ is a meaningful 20% so a broken transformation
+        # that produces out-of-range / future-dated / over-scrubbed output is
+        # penalised even when the pipeline "succeeded".
+        raw = (
+            success * 0.35
+            + coverage * 0.25
+            + validation * 0.10
+            + integrity * 0.10
+            + data_quality * 0.20
+        )
 
         # Apply error-rate gates (non-compensatory)
         error_rate = error_count / max(total_count, 1)
@@ -277,6 +346,132 @@ class QualityEvaluator:
         )
         return max(0.0, score)
 
+    # ----- 3e: Real-world data quality (intrinsic, Kahn/OHDSI dimensions) ----
+
+    def _data_quality(self, deidentified: dict, evidence: list[Evidence]) -> float:
+        """Intrinsic data-quality score from the de-identified resource alone.
+
+        Four output-only dimensions (no original needed → works on every path,
+        incl. refs-only staging), each in [0,1]:
+
+        * conformance     — values within valid ranges / value-sets
+        * completeness     — expected fields still populated (not over-scrubbed)
+        * temporal         — dates plausible (no future, birth ≤ death, +ve spans)
+        * value_plausible  — numeric values within plausible clinical bounds
+
+        Dimensions that don't apply to a resource return 1.0 (neutral) so a
+        Patient isn't penalised for lacking Observation value ranges.
+        """
+        conformance = self._dq_conformance(deidentified)
+        completeness = self._dq_completeness(deidentified)
+        temporal = self._dq_temporal_plausibility(deidentified)
+        plausible = self._dq_value_plausibility(deidentified)
+
+        score = (conformance + completeness + temporal + plausible) / 4.0
+        worst = min(conformance, completeness, temporal, plausible)
+        evidence.append(
+            Evidence(
+                check="data_quality",
+                value=score,
+                details={
+                    "conformance": round(conformance, 3),
+                    "completeness": round(completeness, 3),
+                    "temporal_plausibility": round(temporal, 3),
+                    "value_plausibility": round(plausible, 3),
+                },
+                severity="warning" if worst < 0.7 else "info",
+            )
+        )
+        return score
+
+    def _dq_conformance(self, r: dict) -> float:
+        """Fraction of conformance checks passed (valid codes / ranges)."""
+        checks: list[bool] = []
+        rtype = r.get("resourceType", "")
+
+        # Patient.gender ∈ FHIR AdministrativeGender (or a redaction sentinel).
+        if rtype == "Patient" and "gender" in r:
+            g = r.get("gender")
+            checks.append(
+                g in ("male", "female", "other", "unknown")
+                or (isinstance(g, str) and g.strip().lower() in _DQ_REDACTED)
+            )
+
+        # Status fields, when present, should be non-empty strings.
+        for sf in ("status", "clinicalStatus", "verificationStatus"):
+            if sf in r:
+                v = r.get(sf)
+                checks.append(isinstance(v, (str, dict)) and bool(v))
+
+        # Coded fields should still carry a system+code (de-id must not strip
+        # clinical codes — they're not PII). Checks any CodeableConcept.coding.
+        codings = self._collect_codings(r)
+        if codings:
+            valid = sum(1 for c in codings if c.get("system") and c.get("code"))
+            checks.append(valid / len(codings) >= 0.9)
+
+        return sum(checks) / len(checks) if checks else 1.0
+
+    def _dq_completeness(self, r: dict) -> float:
+        """Expected-present fields still populated after de-id (not nulled).
+
+        Over-scrubbing (deleting a field instead of replacing with a sentinel)
+        destroys analytic value. We check the minimal field set each resource
+        type should retain post-de-id.
+        """
+        rtype = r.get("resourceType", "")
+        expected = _DQ_EXPECTED_FIELDS.get(rtype)
+        if not expected:
+            return 1.0
+        present = sum(1 for f in expected if self._field_populated(r, f))
+        return present / len(expected)
+
+    def _dq_temporal_plausibility(self, r: dict) -> float:
+        """Dates must be plausible: no future dates, birth ≤ death, +ve spans."""
+        import datetime as _dt
+
+        checks: list[bool] = []
+        today = _dt.date.today()
+
+        for val in self._collect_dates(r):
+            d = _parse_date(val)
+            if d is None:
+                continue
+            # No future dates (allow small clock skew → today+1).
+            checks.append(d <= today + _dt.timedelta(days=1))
+
+        # birthDate ≤ deceasedDateTime when both present.
+        bd = _parse_date(r.get("birthDate"))
+        dd = _parse_date(r.get("deceasedDateTime"))
+        if bd and dd:
+            checks.append(bd <= dd)
+
+        # Period.start ≤ Period.end across all periods.
+        for start, end in self._collect_periods(r):
+            ds, de = _parse_date(start), _parse_date(end)
+            if ds and de:
+                checks.append(ds <= de)
+
+        return sum(checks) / len(checks) if checks else 1.0
+
+    def _dq_value_plausibility(self, r: dict) -> float:
+        """Numeric Quantity values within broad clinically-plausible bounds.
+
+        Catches perturbation/transformation bugs that push values to absurd
+        magnitudes. Bounds are deliberately wide (we flag impossible, not
+        merely unusual) and unit-aware only loosely.
+        """
+        checks: list[bool] = []
+        for qty in self._collect_quantities(r):
+            v = qty.get("value")
+            if not isinstance(v, (int, float)):
+                continue
+            # Reject NaN/inf and absurd magnitudes; clinical values are finite
+            # and within ~[-1e6, 1e6] across virtually all UCUM units.
+            ok = (v == v) and abs(v) < 1_000_000  # v==v rejects NaN
+            checks.append(ok)
+        return sum(checks) / len(checks) if checks else 1.0
+
     # ----- Helpers ----------------------------------------------------------
 
     def _has_empty_required_arrays(self, resource: dict) -> bool:
@@ -327,3 +522,80 @@ class QualityEvaluator:
             return True
         parts = ref.split("/", 1)
         return len(parts) == 2 and bool(parts[0]) and bool(parts[1])
+
+    # ----- DQ tree collectors (bounded-depth walks) -------------------------
+
+    def _field_populated(self, r: dict, dotted: str) -> bool:
+        """True if a (possibly dotted) field path resolves to a non-empty value."""
+        cur: Any = r
+        for part in dotted.split("."):
+            if isinstance(cur, dict):
+                cur = cur.get(part)
+            elif isinstance(cur, list) and cur:
+                cur = cur[0].get(part) if isinstance(cur[0], dict) else None
+            else:
+                return False
+        if cur is None:
+            return False
+        if isinstance(cur, (str, list, dict)):
+            return len(cur) > 0
+        return True
+
+    def _collect_codings(self, obj: Any, depth: int = 0) -> list[dict]:
+        if depth > 8:
+            return []
+        out: list[dict] = []
+        if isinstance(obj, dict):
+            coding = obj.get("coding")
+            if isinstance(coding, list):
+                out.extend(c for c in coding if isinstance(c, dict))
+            for v in obj.values():
+                out.extend(self._collect_codings(v, depth + 1))
+        elif isinstance(obj, list):
+            for item in obj:
+                out.extend(self._collect_codings(item, depth + 1))
+        return out
+
+    def _collect_dates(self, obj: Any, depth: int = 0) -> list[str]:
+        if depth > 8:
+            return []
+        out: list[str] = []
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                if isinstance(v, str) and (k in _DQ_DATE_KEYS or k.endswith("DateTime")):
+                    out.append(v)
+                else:
+                    out.extend(self._collect_dates(v, depth + 1))
+        elif isinstance(obj, list):
+            for item in obj:
+                out.extend(self._collect_dates(item, depth + 1))
+        return out
+
+    def _collect_periods(self, obj: Any, depth: int = 0) -> list[tuple]:
+        if depth > 8:
+            return []
+        out: list[tuple] = []
+        if isinstance(obj, dict):
+            if "start" in obj and "end" in obj:
+                out.append((obj.get("start"), obj.get("end")))
+            for v in obj.values():
+                out.extend(self._collect_periods(v, depth + 1))
+        elif isinstance(obj, list):
+            for item in obj:
+                out.extend(self._collect_periods(item, depth + 1))
+        return out
+
+    def _collect_quantities(self, obj: Any, depth: int = 0) -> list[dict]:
+        if depth > 8:
+            return []
+        out: list[dict] = []
+        if isinstance(obj, dict):
+            # A Quantity-shaped dict has a numeric `value` (+ usually unit/code).
+            if "value" in obj and isinstance(obj.get("value"), (int, float)):
+                out.append(obj)
+            for v in obj.values():
+                out.extend(self._collect_quantities(v, depth + 1))
+        elif isinstance(obj, list):
+            for item in obj:
+                out.extend(self._collect_quantities(item, depth + 1))
+        return out

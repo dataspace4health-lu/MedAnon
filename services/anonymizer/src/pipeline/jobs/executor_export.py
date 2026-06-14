@@ -116,10 +116,29 @@ def _cleanup_blocked_output(
     _worker_log.info("score_gate_cleanup job=%s output_deleted=True", job.id)
 
 
+def _export_mode() -> str:
+    """C1 routing override: 'auto' (default) | 'staged' | 'stream'.
+
+    - auto:   size-threshold heuristic (historical behaviour).
+    - staged: always use the staged/partitioned path (crash-resume + multi-pod
+              scale-out, at the cost of the Phase-2 re-fetch).
+    - stream: always use the single-fetch streaming path (fetch once, process
+              once, cursor-checkpoint resume) — best single-pod throughput.
+    """
+    return os.environ.get("MEDANON_EXPORT_MODE", "auto").strip().lower()
+
+
 def _use_staged(staging, estimated_rows: int | None) -> bool:
     """Return True when the staged path should be used for this job."""
     if staging is None:
         return False
+    mode = _export_mode()
+    if mode == "stream":
+        _worker_log.info("export_mode=stream — forcing single-fetch stream path")
+        return False
+    if mode == "staged":
+        return True
+    # auto: size-threshold heuristic.
     if _STAGED_THRESHOLD_ROWS <= 0:
         return True  # always staged if threshold explicitly disabled
     if estimated_rows is not None and estimated_rows < _STAGED_THRESHOLD_ROWS:
@@ -164,27 +183,57 @@ def _execute_bulk_export(job: Job, store, staging) -> None:
     """Run a bulk-export job synchronously, resuming from checkpoint when available."""
     estimated_rows = job.params.get("estimated_rows")
     if staging is not None and estimated_rows is None:
-        # Fast preflight: GET /Patient?_summary=count&_count=0 as a proxy for
-        # total job size.  Takes ~100 ms and avoids staging overhead for small
-        # servers.  Multiply by a conservative factor (15×) to account for
-        # Observation/Condition/Procedure/etc. resources per patient.
+        # Size preflight to route staged vs stream. Prefer a TRUE count over the
+        # old ``patient_count × 15`` proxy, which under-counts dense datasets by
+        # ~70× (e.g. ~1,065 resources/patient) and wrongly skips the staged path.
         try:
-            from integrations.fhir.reader import preflight_resource_count
+            from integrations.fhir.reader import (
+                preflight_resource_count,
+                preflight_system_count,
+            )
 
             _token = job.params.get("token") or os.environ.get("FHIR_SOURCE_TOKEN")
-            _patient_count = preflight_resource_count(
-                job.params["server_url"],
-                resource_type="Patient",
-                token=_token,
-                timeout=5,
-            )
-            if _patient_count > 0:
-                estimated_rows = _patient_count * 15
+            _server = job.params["server_url"]
+            _rt = job.params.get("resource_type")
+            _type_filter = job.params.get("type_filter")
+
+            _method = "none"
+            if _rt and not _type_filter:
+                # Single explicit type → exact count for that type.
+                _c = preflight_resource_count(
+                    _server, resource_type=_rt, token=_token, timeout=5
+                )
+                if _c > 0:
+                    estimated_rows = _c
+                    _method = "type"
+            else:
+                # System / multi-type export → real total by summing per-type.
+                _types = (
+                    [t.strip() for t in _type_filter.split(",") if t.strip()]
+                    if _type_filter
+                    else None
+                )
+                _sys = preflight_system_count(
+                    _server, resource_types=_types, token=_token, timeout=8
+                )
+                if _sys > 0:
+                    estimated_rows = _sys
+                    _method = "system-sum"
+                else:
+                    # No usable count → fall back to the Patient proxy.
+                    _patient_count = preflight_resource_count(
+                        _server, resource_type="Patient", token=_token, timeout=5
+                    )
+                    if _patient_count > 0:
+                        estimated_rows = _patient_count * 15
+                        _method = "patient-proxy"
+
+            if estimated_rows is not None:
                 _worker_log.info(
-                    "bulk_export_estimated_rows job=%s patients=%d estimated=%d",
+                    "bulk_export_estimated_rows job=%s estimated=%d (method=%s)",
                     job.id,
-                    _patient_count,
                     estimated_rows,
+                    _method,
                 )
         except Exception:
             pass  # preflight failure → _use_staged will default to True (safe)

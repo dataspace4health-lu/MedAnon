@@ -82,6 +82,14 @@ END $$;
 ALTER TABLE medanon.staged_resources
     ADD COLUMN IF NOT EXISTS fhir_source_url TEXT NOT NULL DEFAULT '';
 
+-- Migration: add resource_blob for OPT-IN encrypted body staging (A1).
+-- This is NULL by default (refs-only, no PHI at rest). It is populated ONLY when
+-- MEDANON_STAGE_BODIES=encrypted, and then holds a gzip+Fernet (AES-128-CBC+HMAC)
+-- encrypted body — NOT the plaintext resource_json that was removed above.
+-- Lets Phase 2 decrypt in-process instead of re-fetching from FHIR.
+ALTER TABLE medanon.staged_resources
+    ADD COLUMN IF NOT EXISTS resource_blob BYTEA;
+
 CREATE INDEX IF NOT EXISTS idx_staged_job_status
     ON medanon.staged_resources (job_id, status);
 
@@ -125,6 +133,40 @@ CREATE TABLE IF NOT EXISTS medanon.staged_partitions (
 
 ALTER TABLE medanon.staged_partitions
     ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ;
+
+-- Batch-ledger extensions (roadmap P1): attempt accounting, idempotency
+-- stamping, and output provenance per partition. All additive + nullable so
+-- existing rows are unaffected.
+ALTER TABLE medanon.staged_partitions
+    ADD COLUMN IF NOT EXISTS attempt_count     INT NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS max_attempts      INT NOT NULL DEFAULT 5,
+    ADD COLUMN IF NOT EXISTS last_error_code    TEXT,
+    ADD COLUMN IF NOT EXISTS last_error_message TEXT,
+    ADD COLUMN IF NOT EXISTS input_checksum     TEXT,
+    ADD COLUMN IF NOT EXISTS output_uri         TEXT,
+    ADD COLUMN IF NOT EXISTS output_checksum    TEXT,
+    ADD COLUMN IF NOT EXISTS config_hash        TEXT,
+    ADD COLUMN IF NOT EXISTS processor_version  TEXT,
+    ADD COLUMN IF NOT EXISTS locked_by          TEXT,
+    ADD COLUMN IF NOT EXISTS locked_until       TIMESTAMPTZ;
+
+-- Dead-letter ledger (roadmap P1): partitions that exhausted max_attempts.
+-- Separate table so the DLQ survives even if the partition row is later purged,
+-- and so operator triage queries don't scan the live partition table.
+CREATE TABLE IF NOT EXISTS medanon.dead_letter_partitions (
+    id             BIGSERIAL PRIMARY KEY,
+    job_id         TEXT NOT NULL,
+    partition_id   INT  NOT NULL,
+    stage          TEXT NOT NULL DEFAULT 'deid',
+    attempt_count  INT  NOT NULL DEFAULT 0,
+    error_code     TEXT,
+    error_message  TEXT,
+    config_hash    TEXT,
+    dead_lettered_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_dlp_job_partition_stage UNIQUE (job_id, partition_id, stage)
+);
+
+CREATE INDEX IF NOT EXISTS idx_dlp_job ON medanon.dead_letter_partitions (job_id);
 
 CREATE INDEX IF NOT EXISTS idx_staged_partition_id
     ON medanon.staged_resources (job_id, partition_id)
@@ -177,8 +219,39 @@ class StagingStore:
     # Lifecycle
     # ------------------------------------------------------------------
 
+    def ensure_pool(self) -> None:
+        """Create the connection pool WITHOUT running schema DDL.
+
+        Used by process-executor child workers: the parent already ran
+        ``ensure_schema`` before fanning out, so children must NOT re-run the
+        ``ALTER TABLE`` / ``CREATE INDEX`` migrations — N concurrent DDL
+        statements take ``AccessExclusiveLock`` on ``staged_resources`` and
+        deadlock (observed with 8 children). This sets up only what a child
+        needs to read/claim partitions, plus the A1 fail-closed key check.
+        """
+        from integrations.staging.blob_crypto import _fernet, stage_bodies_enabled
+
+        if stage_bodies_enabled():
+            _fernet()  # raises StageBlobKeyError if key missing/invalid
+        if self._pool is None:
+            from utils.pool_budget import pg_staging_budget
+
+            self._pool = ThreadedConnectionPool(2, pg_staging_budget(), self._db_url)
+            self._owns_pool = True
+
     def ensure_schema(self) -> None:
         """Create schema + table + indexes if they don't already exist."""
+        # Fail-closed at setup: if encrypted body staging is requested, validate
+        # the key NOW rather than discovering it mid-fetch (A1). A bad/missing
+        # key raises StageBlobKeyError so the job fails fast and loud.
+        from integrations.staging.blob_crypto import (
+            _fernet,
+            stage_bodies_enabled,
+        )
+
+        if stage_bodies_enabled():
+            _fernet()  # raises StageBlobKeyError if key missing/invalid
+
         if self._pool is None:
             from utils.pool_budget import pg_staging_budget
 
@@ -241,12 +314,26 @@ class StagingStore:
             else "NULL"
         )
 
+        # A1: optionally persist an ENCRYPTED body so Phase 2 decrypts in-process
+        # instead of re-fetching. Default OFF → blob is NULL and behaviour is the
+        # historical refs-only path (no PHI at rest). Fail-closed if enabled
+        # without a key (encrypt_resource raises StageBlobKeyError).
+        from integrations.staging.blob_crypto import (
+            encrypt_resource,
+            stage_bodies_enabled,
+        )
+
+        _stage_bodies = stage_bodies_enabled()
+
         rows = []
         for idx, resource in enumerate(resources):
             rtype = resource.get("resourceType", "Unknown")
             rid = resource.get("id")
             resource_id = f"{rtype}/{rid}" if rid else f"{rtype}/auto-{idx}"
-            rows.append((job_id, resource_id, rtype, fhir_source_url))
+            blob = (
+                psycopg2.Binary(encrypt_resource(resource)) if _stage_bodies else None
+            )
+            rows.append((job_id, resource_id, rtype, fhir_source_url, blob))
 
         conn = self._get_conn()
         try:
@@ -256,12 +343,13 @@ class StagingStore:
                         cur,
                         """
                         INSERT INTO medanon.staged_resources
-                            (job_id, resource_id, resource_type, fhir_source_url, expires_at)
+                            (job_id, resource_id, resource_type, fhir_source_url,
+                             resource_blob, expires_at)
                         VALUES %s
                         ON CONFLICT (job_id, resource_id) DO NOTHING
                         """,
                         rows,
-                        template=f"(%s, %s, %s, %s, {expires_sql})",
+                        template=f"(%s, %s, %s, %s, %s, {expires_sql})",
                         page_size=len(rows),
                     )
                     return cur.rowcount
@@ -515,8 +603,45 @@ class StagingStore:
         n = target_rows or _PARTITION_TARGET_ROWS
         conn = self._get_conn()
         try:
+            # Fast idempotency guard: when partitions already exist for this job,
+            # return the count WITHOUT re-running the heavy UPDATE. The shards
+            # dispatcher pre-plans once, then N partition-claim workers each call
+            # plan_partitions again; without this guard those N concurrent
+            # ``UPDATE staged_resources ... FROM (SELECT staged_resources)``
+            # statements deadlock on the same rows. This makes the later calls
+            # cheap no-ops so only the first does the bucketing work.
             with conn:
                 with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT COUNT(*) FROM medanon.staged_partitions "
+                        "WHERE job_id = %s",
+                        (job_id,),
+                    )
+                    existing = cur.fetchone()[0]
+            if existing:
+                return existing
+            with conn:
+                with conn.cursor() as cur:
+                    # Serialize the heavy bucketing UPDATE across any concurrent
+                    # first-callers (workers/pods that all saw 0 partitions at the
+                    # same instant) with a transaction-scoped advisory lock keyed
+                    # on the job. This converts a deadlock into an ordered wait;
+                    # the second caller then finds partitions present and the
+                    # guard above (re-checked below) makes it a no-op.
+                    cur.execute(
+                        "SELECT pg_advisory_xact_lock(hashtext(%s))",
+                        (f"plan_partitions:{job_id}",),
+                    )
+                    cur.execute(
+                        "SELECT COUNT(*) FROM medanon.staged_partitions "
+                        "WHERE job_id = %s",
+                        (job_id,),
+                    )
+                    _already = cur.fetchone()[0]
+                    if _already:
+                        # A concurrent first-caller won the lock and planned;
+                        # nothing to do — return the partition count it created.
+                        return _already
                     cur.execute(
                         """
                         UPDATE medanon.staged_resources AS sr
@@ -619,14 +744,20 @@ class StagingStore:
         never starved during large partitions (same pattern as
         ``get_all_resources``).
         """
+        from integrations.staging.blob_crypto import stage_bodies_enabled
+
+        # Only pull the (large) BYTEA blob when body-staging is on, so the
+        # default refs-only path keeps its lean SELECT.
+        _blob_col = ", resource_blob" if stage_bodies_enabled() else ""
+
         after_id = 0
         while True:
             conn = self._get_conn()
             try:
                 with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                     cur.execute(
-                        """
-                        SELECT id, resource_id, resource_type, fhir_source_url
+                        f"""
+                        SELECT id, resource_id, resource_type, fhir_source_url{_blob_col}
                           FROM medanon.staged_resources
                          WHERE job_id = %s
                            AND partition_id = %s
@@ -723,6 +854,278 @@ class StagingStore:
                     timeout_minutes,
                 )
             return recovered
+        finally:
+            self._put_conn(conn)
+
+    # ------------------------------------------------------------------
+    # Targeted partition CAS + dead-letter (RabbitMQ stage streaming, P1)
+    # ------------------------------------------------------------------
+    # The AMQP consumer already knows which partition a message refers to, so
+    # it claims THAT partition (not "the next one"). The CAS guard absorbs
+    # at-least-once duplicate deliveries: a second delivery for an already-
+    # claimed/done partition simply fails to claim → the consumer acks+skips.
+
+    def claim_partition(
+        self, job_id: str, partition_id: int, worker_id: str = ""
+    ) -> bool:
+        """Atomically claim a specific unclaimed partition. True iff claimed.
+
+        Returns False when the partition is already claimed/done (duplicate
+        delivery) or does not exist — the caller acks and skips.
+        """
+        conn = self._get_conn()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE medanon.staged_partitions
+                           SET status = 'claimed',
+                               claimed_at = NOW(),
+                               locked_by = %s,
+                               attempt_count = attempt_count + 1
+                         WHERE job_id = %s
+                           AND partition_id = %s
+                           AND status = 'unclaimed'
+                        """,
+                        (worker_id or None, job_id, partition_id),
+                    )
+                    return cur.rowcount > 0
+        finally:
+            self._put_conn(conn)
+
+    def is_partition_done(
+        self, job_id: str, partition_id: int, *, input_checksum: str = "",
+        config_hash: str = "", processor_version: str = "",
+    ) -> bool:
+        """Idempotency stamp check: True if this partition was already processed
+        with the SAME (input_checksum, config_hash, processor_version).
+
+        Lets a re-delivered or replayed message short-circuit recompute (zero
+        gPAS/NLP calls) when nothing relevant changed. When the stamp args are
+        empty, only the terminal ``done`` status is checked.
+        """
+        conn = self._get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT status, input_checksum, config_hash, processor_version
+                      FROM medanon.staged_partitions
+                     WHERE job_id = %s AND partition_id = %s
+                    """,
+                    (job_id, partition_id),
+                )
+                row = cur.fetchone()
+            if not row or row[0] != "done":
+                return False
+            if not (input_checksum or config_hash or processor_version):
+                return True
+            return (
+                row[1] == (input_checksum or None)
+                and row[2] == (config_hash or None)
+                and row[3] == (processor_version or None)
+            )
+        finally:
+            self._put_conn(conn)
+
+    def complete_partition(
+        self,
+        job_id: str,
+        partition_id: int,
+        *,
+        output_uri: str = "",
+        output_checksum: str = "",
+        input_checksum: str = "",
+        config_hash: str = "",
+        processor_version: str = "",
+    ) -> None:
+        """Mark a partition ``done`` and stamp idempotency + output provenance."""
+        conn = self._get_conn()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE medanon.staged_partitions
+                           SET status = 'done',
+                               output_uri = %s,
+                               output_checksum = %s,
+                               input_checksum = %s,
+                               config_hash = %s,
+                               processor_version = %s,
+                               last_error_code = NULL,
+                               last_error_message = NULL
+                         WHERE job_id = %s AND partition_id = %s
+                        """,
+                        (
+                            output_uri or None,
+                            output_checksum or None,
+                            input_checksum or None,
+                            config_hash or None,
+                            processor_version or None,
+                            job_id,
+                            partition_id,
+                        ),
+                    )
+        finally:
+            self._put_conn(conn)
+
+    def record_partition_error(
+        self,
+        job_id: str,
+        partition_id: int,
+        *,
+        error_code: str = "",
+        error_message: str = "",
+    ) -> int:
+        """Release a failed partition for retry and record the error.
+
+        Returns the partition's current ``attempt_count`` so the caller can
+        decide whether to retry or dead-letter.
+        """
+        conn = self._get_conn()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE medanon.staged_partitions
+                           SET status = 'unclaimed',
+                               claimed_at = NULL,
+                               locked_by = NULL,
+                               last_error_code = %s,
+                               last_error_message = %s
+                         WHERE job_id = %s AND partition_id = %s
+                        RETURNING attempt_count, max_attempts
+                        """,
+                        (error_code or None, error_message or None, job_id, partition_id),
+                    )
+                    row = cur.fetchone()
+                    return int(row[0]) if row else 0
+        finally:
+            self._put_conn(conn)
+
+    def dead_letter_partition(
+        self,
+        job_id: str,
+        partition_id: int,
+        *,
+        stage: str = "deid",
+        error_code: str = "",
+        error_message: str = "",
+        config_hash: str = "",
+    ) -> None:
+        """Route a partition to the dead-letter ledger and mark it ``error``."""
+        conn = self._get_conn()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE medanon.staged_partitions
+                           SET status = 'error', locked_by = NULL
+                         WHERE job_id = %s AND partition_id = %s
+                        """,
+                        (job_id, partition_id),
+                    )
+                    cur.execute(
+                        """
+                        INSERT INTO medanon.dead_letter_partitions
+                            (job_id, partition_id, stage, attempt_count,
+                             error_code, error_message, config_hash)
+                        VALUES (
+                            %s, %s, %s,
+                            COALESCE((SELECT attempt_count FROM medanon.staged_partitions
+                                       WHERE job_id = %s AND partition_id = %s), 0),
+                            %s, %s, %s)
+                        ON CONFLICT (job_id, partition_id, stage) DO UPDATE
+                           SET attempt_count = EXCLUDED.attempt_count,
+                               error_code = EXCLUDED.error_code,
+                               error_message = EXCLUDED.error_message,
+                               dead_lettered_at = NOW()
+                        """,
+                        (
+                            job_id, partition_id, stage,
+                            job_id, partition_id,
+                            error_code or None, error_message or None,
+                            config_hash or None,
+                        ),
+                    )
+        finally:
+            self._put_conn(conn)
+
+    def count_open_partitions(self, job_id: str) -> int:
+        """Number of partitions not yet ``done`` — the stage-join condition.
+
+        When this hits zero, all partitions of the stage are complete and the
+        winner publishes the next-stage message.
+        """
+        conn = self._get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT count(*) FROM medanon.staged_partitions
+                     WHERE job_id = %s AND status <> 'done'
+                    """,
+                    (job_id,),
+                )
+                return int(cur.fetchone()[0])
+        finally:
+            self._put_conn(conn)
+
+    def list_dead_letter_partitions(self, job_id: str) -> list[dict]:
+        """Return the dead-letter ledger rows for a job (operator triage)."""
+        conn = self._get_conn()
+        try:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT job_id, partition_id, stage, attempt_count,
+                           error_code, error_message, config_hash, dead_lettered_at
+                      FROM medanon.dead_letter_partitions
+                     WHERE job_id = %s
+                     ORDER BY partition_id
+                    """,
+                    (job_id,),
+                )
+                return [dict(r) for r in cur.fetchall()]
+        finally:
+            self._put_conn(conn)
+
+    def retry_dead_letter_partition(self, job_id: str, partition_id: int) -> bool:
+        """Reset a dead-lettered partition to ``unclaimed`` for a fresh attempt.
+
+        Clears the attempt counter and removes the DLQ ledger row. Returns True
+        if a partition row was reset.
+        """
+        conn = self._get_conn()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE medanon.staged_partitions
+                           SET status = 'unclaimed',
+                               attempt_count = 0,
+                               claimed_at = NULL,
+                               locked_by = NULL,
+                               last_error_code = NULL,
+                               last_error_message = NULL
+                         WHERE job_id = %s AND partition_id = %s
+                        """,
+                        (job_id, partition_id),
+                    )
+                    reset = cur.rowcount > 0
+                    cur.execute(
+                        """
+                        DELETE FROM medanon.dead_letter_partitions
+                         WHERE job_id = %s AND partition_id = %s
+                        """,
+                        (job_id, partition_id),
+                    )
+            return reset
         finally:
             self._put_conn(conn)
 

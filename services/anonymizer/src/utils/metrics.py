@@ -289,3 +289,29 @@ SCORE_DURATION = Histogram(
     ["resource_type"],
     buckets=(0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0),
 )
+
+# ── RabbitMQ macro-stage streaming (opt-in: MEDANON_AMQP_URL) ─────────────────
+AMQP_PUBLISHED = Counter(
+    "medanon_amqp_published_total",
+    "Stage messages published to RabbitMQ",
+    ["stage"],
+)
+AMQP_CONSUMED = Counter(
+    "medanon_amqp_consumed_total",
+    "Stage messages consumed from RabbitMQ, by outcome",
+    ["stage", "outcome"],  # outcome: done | skip | retry | dead
+)
+AMQP_REDELIVERED = Counter(
+    "medanon_amqp_redelivered_total",
+    "Stage messages redelivered (retry queue → main)",
+    ["stage"],
+)
+AMQP_PUBLISH_FAILURES = Counter(
+    "medanon_amqp_publish_failures_total",
+    "Publish attempts that failed confirm/timed out",
+)
+AMQP_DLQ = Counter(
+    "medanon_amqp_dlq_total",
+    "Stage messages routed to a dead-letter queue",
+    ["stage"],
+)

@@ -76,6 +76,11 @@ def _resolve_profile(profile: str) -> str:
     Raises:
         ValueError: If *profile* is unknown and no user config file exists.
     """
+    # Re-read from env at call time so test overrides (monkeypatch.setenv,
+    # os.environ.setdefault) take effect even after module import.
+    config_dir = os.environ.get("MEDANON_CONFIG_DIR", _CONFIG_DIR)
+    user_config_dir = os.environ.get("MEDANON_USER_CONFIG_DIR", _USER_CONFIG_DIR)
+
     # System profile?
     if profile in _PROFILE_MAP:
         filename = _PROFILE_MAP[profile]
@@ -83,7 +88,7 @@ def _resolve_profile(profile: str) -> str:
             filename = (
                 "config_gpas.yaml" if os.environ.get("GPAS_URL") else "config.yaml"
             )
-        return os.path.join(_CONFIG_DIR, filename)
+        return os.path.join(config_dir, filename)
 
     # User-defined profile?
     # Reject path-traversal characters early as defence-in-depth before
@@ -93,10 +98,10 @@ def _resolve_profile(profile: str) -> str:
         raise ValueError(
             f"Invalid profile name '{profile}': must not contain path separators."
         )
-    user_path = os.path.join(_USER_CONFIG_DIR, f"{profile}.yaml")
+    user_path = os.path.join(user_config_dir, f"{profile}.yaml")
     # Guard against path traversal: resolved path must stay inside the user config dir.
     resolved = os.path.realpath(user_path)
-    allowed_dir = os.path.realpath(_USER_CONFIG_DIR)
+    allowed_dir = os.path.realpath(user_config_dir)
     if not resolved.startswith(allowed_dir + os.sep) and resolved != allowed_dir:
         raise ValueError(
             f"Invalid profile name '{profile}': resolves outside the user config directory."

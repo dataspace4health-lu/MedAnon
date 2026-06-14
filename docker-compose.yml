@@ -85,6 +85,17 @@ x-worker-env: &worker-env
   # total CPU usage = PROCESS_WORKERS * PARALLEL_WORKERS. Default 4 leaves
   # 2 CPUs of the 8-CPU worker free for I/O.
   MEDANON_STAGING_PROCESS_WORKERS: ${MEDANON_STAGING_PROCESS_WORKERS:-4}
+  # Phase-2 executor: "thread" (default; overlaps I/O + partial-GIL FHIRPath) or
+  # "process" (separate processes, bypasses the GIL plateau — ~2x faster on
+  # warm-cache CPU-bound jobs). Process children rebuild their own store +
+  # pseudonymizer and drain partitions via FOR UPDATE SKIP LOCKED.
+  MEDANON_STAGING_EXECUTOR: ${MEDANON_STAGING_EXECUTOR:-thread}
+  # With EXECUTOR=process, jobs below this partition count fall back to threads.
+  MEDANON_STAGING_PROCESS_MIN_PARTITIONS: ${MEDANON_STAGING_PROCESS_MIN_PARTITIONS:-4}
+  # Phase-2 re-fetch _id batch size (B2): larger = fewer round-trips per group.
+  MEDANON_FHIR_REFETCH_CHUNK: ${MEDANON_FHIR_REFETCH_CHUNK:-200}
+  # Claim heartbeat interval (s) — refresh Redis-Streams claims for running jobs.
+  MEDANON_CLAIM_HEARTBEAT_SEC: ${MEDANON_CLAIM_HEARTBEAT_SEC:-30}
   # Rows per partition for shards mode. Smaller = better load balance.
   MEDANON_PARTITION_TARGET_ROWS: ${MEDANON_PARTITION_TARGET_ROWS:-10000}
   MEDANON_FHIR_FETCH_PARALLEL: ${MEDANON_FHIR_FETCH_PARALLEL:-4}

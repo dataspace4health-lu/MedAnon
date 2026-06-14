@@ -42,6 +42,7 @@ from api.routers import (
     analytics,
     api_keys,
     audit,
+    auth as auth_router,
     cda,
     configs,
     dashboard,
@@ -426,6 +427,17 @@ async def _startup() -> None:
     elif pg_pool:
         logger.info("api_key_store=disabled (MEDANON_API_KEY_STORE_ENABLED=false)")
 
+    # OIDC JWKS warmup — eagerly fetch public keys so first JWT validation is fast.
+    # Non-fatal: if Keycloak is not yet up the warmup logs a warning and continues;
+    # the JWKS client will retry on the first real request.
+    try:
+        from integrations.oidc.validator import oidc_enabled, warmup as _oidc_warmup
+
+        if oidc_enabled():
+            await asyncio.to_thread(_oidc_warmup)
+    except Exception as exc:
+        logger.warning("oidc_warmup_failed: %s", exc)
+
     # Job detail cache — PostgreSQL when app-db available, else SQLite
     try:
         from pipeline.job_detail import init_job_detail_store
@@ -708,6 +720,7 @@ def metrics():
 # Router registration
 # ---------------------------------------------------------------------------
 
+app.include_router(auth_router.router)
 app.include_router(process.router, prefix="/v1")
 app.include_router(fhir_server.router, prefix="/v1")
 app.include_router(analytics.router, prefix="/v1")

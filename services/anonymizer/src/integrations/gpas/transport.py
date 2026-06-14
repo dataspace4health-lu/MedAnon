@@ -140,9 +140,21 @@ def _resolve_gpas_headers(params):
 # ---------------------------------------------------------------------------
 
 # HMAC-SHA256 key used to blind original identifiers in cache keys.
-# If MEDANON_HASH_KEY is not set we fall back to plain SHA256 (still one-way,
-# but without the secrecy guarantee — set the key in production).
+# Without MEDANON_HASH_KEY the blinding degrades to plain SHA-256, which is
+# brute-forceable for low-entropy PHI (DOB, MRN, ZIP). We therefore refuse the
+# plain fallback unless MEDANON_HASH_ALLOW_PLAIN=true (same gate as the
+# ``cryptohash`` action); when refused, caching is disabled rather than storing
+# weakly-blinded PHI — gPAS is still called, just without the cache layer.
 _HASH_KEY_BYTES: bytes = os.environ.get("MEDANON_HASH_KEY", "").strip().encode()
+
+
+def _plain_blind_allowed() -> bool:
+    return os.environ.get("MEDANON_HASH_ALLOW_PLAIN", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
 
 
 def _blind_identifier(value: str) -> str:
@@ -155,7 +167,9 @@ def _blind_identifier(value: str) -> str:
     The hash is HMAC-SHA256 keyed with ``MEDANON_HASH_KEY`` — deterministic
     (same input always maps to the same key) but not reversible without the
     secret.  This preserves cache hit rates while ensuring no PHI is stored
-    in any cache backend.
+    in any cache backend.  Without the key, blinding is only attempted when
+    ``MEDANON_HASH_ALLOW_PLAIN=true``; otherwise ``_is_cache_enabled`` has
+    already turned caching off and this function is not reached for storage.
 
     De-pseudonymize results are **never** cached because the cache value
     would be the original PHI value — see ``_cache_set`` usage.
@@ -170,7 +184,13 @@ def _blind_identifier(value: str) -> str:
 
 def _is_cache_enabled(params):
     raw = params.get("gpas_cache_enabled", os.environ.get("GPAS_CACHE_ENABLED", "true"))
-    return str(raw).strip().lower() not in ("false", "0", "no", "off")
+    if str(raw).strip().lower() in ("false", "0", "no", "off"):
+        return False
+    # Fail safe: never cache PHID-derived keys blinded with plain SHA-256
+    # (brute-forceable for low-entropy identifiers) unless explicitly allowed.
+    if not _HASH_KEY_BYTES and not _plain_blind_allowed():
+        return False
+    return True
 
 
 def _cache_get(cache_key):

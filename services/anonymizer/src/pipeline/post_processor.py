@@ -366,20 +366,13 @@ def _deep_rewrite_references_gpas(obj, gpas_params: dict, pseudonymizer) -> dict
     return ref_mapping
 
 
-def _collect_gpas_reference_mapping(obj, gpas_params: dict, pseudonymizer) -> dict:
-    """Pass 1 of split gPAS reference rewriting: collect IDs and round-trip gPAS.
-
-    Same as ``_deep_rewrite_references_gpas`` but stops short of applying the
-    mapping to *obj*.  Returned mapping should be passed into the next merged
-    tree walk (e.g. via ``_post_process_resource(ref_mapping=..., id_map=...)``)
-    so that reference rewriting and text-ID replacement share a single walk.
-    Returns ``{}`` when nothing needs to be pseudonymized.
-    """
-    ref_ids: set[str] = set()
-    _collect_reference_ids(obj, ref_ids)
-    if not ref_ids:
-        return {}
-    return pseudonymizer.pseudonymize_batch(list(ref_ids), gpas_params)
+# NOTE: a former ``_collect_gpas_reference_mapping`` helper (a SEPARATE gPAS
+# round-trip for reference IDs) was removed — the batch path
+# (``processor._finalize_batch``) already folds reference IDs into the PRIMARY
+# ``_pseudonymize`` call via ``_extra_values_by_domain``, so references are
+# pseudonymized in the same HTTP batch as structured identifiers (no second
+# gPAS pass). ``_collect_reference_ids`` below remains; it feeds that single
+# consolidated call.
 
 
 # ---------------------------------------------------------------------------

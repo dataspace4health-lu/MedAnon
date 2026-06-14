@@ -77,70 +77,61 @@ VALID_ACTIONS = _load_valid_actions()
 
 _SYSTEM_PROMPT = """\
 You are an expert FHIR de-identification configuration generator for the \
-MedAnon privacy toolkit.
+MedAnon privacy toolkit. Output a valid YAML config profile and NOTHING else.
 
-Your task: Generate a valid YAML configuration profile based on the user's \
-requirements.
+## CRITICAL SYNTAX RULES (follow exactly — wrong syntax is rejected)
+- `match:` MUST be a FHIRPath expression using DOTS, never slashes.
+  CORRECT: `Patient.name`, `Patient.birthDate`, `*.id`, `Observation.valueString`
+  WRONG:   `Patient/name`, `Patient.name.given` (too deep), `patient_name`
+- `action:` MUST be EXACTLY one of: {actions}
+- `params:` keys are action-specific — use ONLY the parameters listed below.
+  Never invent parameter names (no `precision:`, no `mode: strict`).
 
-## YAML Schema
+## ACTIONS AND THEIR PARAMS
+- redact            — remove the value. No params.
+- cryptohash        — one-way HMAC hash (keeps linkage). No params.
+- gpas_pseudonymize — reversible TTP pseudonym (best for IDs). No params.
+- encrypt           — RSA-reversible. No params.
+- generalize        — reduce precision. REQUIRED param `strategy:` one of
+                      `date_year`, `date_year_month`, `zip_prefix`, `age_bracket`.
+- substitute        — fixed replacement. REQUIRED param `substitute_with: "<value>"`.
+- scrub_text        — regex PII scrub for free text. params: `mode`, `patterns`.
+- nlp_scrub         — NER/LLM PHI scrub for narratives. params: `threshold`.
 
-The config YAML has two sections:
-1. `general:` — metadata and global settings (appname, hash_type, \
-rewrite_references, rewrite_text_ids)
-2. `rules:` — ordered list of match/action rules
+## CANONICAL RULE EXAMPLES (copy this exact shape)
+rules:
+  - name: pseudonymize patient id
+    match: "*.id"
+    action: gpas_pseudonymize
+  - name: redact names
+    match: Patient.name
+    action: redact
+  - name: birth date to year only
+    match: Patient.birthDate
+    action: generalize
+    params:
+      strategy: date_year
+  - name: zip to 3-digit prefix
+    match: Patient.address.postalCode
+    action: generalize
+    params:
+      strategy: zip_prefix
+  - name: scrub narrative text
+    match: "*.text.div"
+    action: nlp_scrub
+    params:
+      threshold: 0.4
 
-Each rule has:
-- `match:` — FHIRPath expression (e.g., "Patient.name", "*.id", \
-"*.effectiveDateTime")
-- `action:` — one of: {actions}
-- `params:` — optional action-specific parameters
-- `name:` — optional human-readable description
+## STRUCTURE
+Top-level keys: `general:` (appname, rewrite_references) and `rules:` (a list).
+Rules are evaluated in order; first match wins.
 
-## Valid Actions
-- redact: Replace with [REDACTED] or empty
-- cryptohash: HMAC-SHA3-256 one-way hash (deterministic, unlinkable without \
-key)
-- encrypt: RSA-encrypt (reversible with private key)
-- perturb: Random offset for numeric/date values
-- substitute: Replace with static value (REQUIRED param: substitute_with: "<value>")
-- generalize: Reduce precision (date_year, date_year_month, zip_prefix, \
-age_bracket)
-- scrub_text: Regex-based PII scrubbing (params: mode, patterns)
-- nlp_scrub: NLP-based PHI detection and replacement (params: mode, \
-threshold, html)
-- gpas_pseudonymize: External gPAS pseudonymization server
+{profiles_context}{source_context}
 
-## FHIRPath Conventions
-- "*.field" — wildcard matches all resource types
-- "ResourceType.field" — type-specific match
-- "ResourceType.field.subfield" — nested path
-- Rules are evaluated in order; first match wins
-
-## Key FHIR PHI Fields
-- Patient: name, telecom, address, birthDate, identifier, photo, gender, \
-extension
-- Practitioner: name, telecom, address, identifier, birthDate, photo
-- All: *.id, *.text, *.meta.lastUpdated, *.performer, *.author, \
-*.subject.reference
-
-## Compliance Considerations
-- HIPAA Safe Harbor (18 identifiers): redact/generalize all 18 PHI categories
-- GDPR Art. 4(5): pseudonymization requires key-based separation
-- Research (IRB): often needs date_year_month + cryptohash for longitudinal \
-linkage
-
-## Reference Profiles
-Below are abbreviated versions of the 7 bundled profiles for reference:
-
-{profiles_context}
-
-## Output Requirements
-1. Output ONLY valid YAML (no markdown fences, no explanation outside the YAML)
-2. Include both `general:` and `rules:` sections
-3. Use appropriate actions for the stated compliance/use-case requirements
-4. Cover ALL relevant FHIR resource types (Patient, Practitioner, Organization)
-5. Always include text scrubbing rules (scrub_text + nlp_scrub for narratives)
-6. Always include *.id handling (cryptohash or gpas_pseudonymize)
+## OUTPUT
+Output ONLY the YAML document. No markdown fences, no prose before or after.
+Always cover the resource types the user asked about (and Patient if unsure),
+always handle `*.id`, and always scrub free-text narrative (`*.text.div`).
 """
 
 _FALLBACK_KEYWORD_MAP = {
@@ -175,8 +166,14 @@ def _load_profile_context() -> str:
     examples — minimal, GDPR pseudonymization, and HIPAA Safe Harbor.
     """
     config_dir = os.environ.get("MEDANON_CONFIG_DIR", "/code/config")
-    max_profiles = int(os.environ.get("MEDANON_AI_FEWSHOT_PROFILES", "3"))
-    max_lines = int(os.environ.get("MEDANON_AI_FEWSHOT_LINES", "60"))
+    # The canonical rule examples in the system prompt now carry the syntax, so
+    # one short reference profile is enough grounding. Fewer/shorter few-shot
+    # examples = much faster prompt-eval on CPU (the old 3×60-line default was a
+    # major cause of the 180s timeouts). Tunable for GPU deployments.
+    max_profiles = int(os.environ.get("MEDANON_AI_FEWSHOT_PROFILES", "1"))
+    max_lines = int(os.environ.get("MEDANON_AI_FEWSHOT_LINES", "40"))
+    if max_profiles <= 0:
+        return ""
     parts: list[str] = []
     for fname in _PROFILE_FILES[:max_profiles]:
         path = os.path.join(config_dir, fname)
@@ -188,7 +185,9 @@ def _load_profile_context() -> str:
             parts.append(f"### {fname}\n```yaml\n{truncated}\n```\n")
         except FileNotFoundError:
             continue
-    return "\n".join(parts)
+    if not parts:
+        return ""
+    return "## Reference profile (for style)\n" + "\n".join(parts)
 
 
 def _load_fallback_profile(prompt: str) -> str | None:
@@ -433,8 +432,26 @@ def _fallback_result(prompt: str, regulation: str, empty_error: str) -> dict:
     }
 
 
-def generate_config(prompt: str, regulation: str = "") -> dict:
+def _config_model_override() -> str | None:
+    """Dedicated model for config generation.
+
+    Config-gen needs stronger YAML/FHIRPath reasoning than the tiny default
+    chat model. ``MEDANON_AI_CONFIG_MODEL`` selects it (e.g. ``ollama/gemma3:4b``);
+    empty falls back to the provider default.
+    """
+    return os.environ.get("MEDANON_AI_CONFIG_MODEL", "").strip() or None
+
+
+def generate_config(
+    prompt: str,
+    regulation: str = "",
+    source_context: str = "",
+) -> dict:
     """Generate a config profile from natural-language intent.
+
+    ``source_context`` is an optional, PHI-free summary of the resource types
+    present on the source FHIR server (see ``integrations.ai.source_context``).
+    When provided, the model grounds its rules in the actual dataset.
 
     Returns dict with keys: yaml, valid, validation_error, source
     """
@@ -464,10 +481,19 @@ def generate_config(prompt: str, regulation: str = "") -> dict:
     safe_regulation = clean_label(regulation)
 
     profiles_context = _load_profile_context()
+    source_block = ""
+    if source_context.strip():
+        # Server-derived facts (type list + counts), not user input — safe to
+        # embed directly. Sanitised defensively in case of an unusual server.
+        source_block = (
+            "\n\n## ACTUAL SOURCE DATA\n"
+            + sanitize_untrusted(source_context.strip())
+        )
     system_msg = (
         _SYSTEM_PROMPT.format(
             actions=", ".join(sorted(VALID_ACTIONS)),
             profiles_context=profiles_context,
+            source_context=source_block,
         )
         + DATA_ONLY_INSTRUCTION
     )
@@ -484,12 +510,14 @@ def generate_config(prompt: str, regulation: str = "") -> dict:
         f"{safe_prompt}:{safe_regulation}".encode(),
     ).hexdigest()
 
+    config_model = _config_model_override()
     try:
         response_text = provider.complete(
             messages=[
                 {"role": "system", "content": system_msg},
                 {"role": "user", "content": user_msg},
             ],
+            model_override=config_model,
             temperature=0.2,
             cache_key=cache_key,
             # User intent text, not resource content — no PHI expected.
@@ -524,6 +552,7 @@ def generate_config(prompt: str, regulation: str = "") -> dict:
                     {"role": "assistant", "content": yaml_text},
                     {"role": "user", "content": retry_msg},
                 ],
+                model_override=config_model,
                 temperature=0.1,
                 phi_payload=False,
             )

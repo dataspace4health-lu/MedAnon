@@ -155,7 +155,7 @@ class FhirServerService:
                         if line is GPAS_FATAL_JSON:
                             fatal = True
                     if fatal:
-                        producer_task.cancel()
+                        # `finally` cancels + awaits the producer on this exit.
                         return
                     chunk = []
 

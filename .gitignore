@@ -107,6 +107,17 @@ output/
 *_score_audit.md
 worker_healthy
 
+# ── Large test datasets (regenerable) ─────────────────────────────────────────
+services/anonymizer/tests/data/sample_fhir_data/synthea_sample_fhir_data/
+services/anonymizer/tests/data/TestBase*/
+
+# ── gPAS deployment archives (downloaded at build time) ───────────────────────
+services/gpas/deployments/
+
+# ── Frontend build artefacts ──────────────────────────────────────────────────
+client/node_modules/
+client/dist/
+
 # ── SQLite job / config databases ─────────────────────────────────────────────
 *.db
 *.db-journal
@@ -162,3 +173,9 @@ docs/internal/
 scripts/
 
 services/anonymizer/MagicMock
+
+# Local safety-net snapshots of the local-only dirs (tests, docs/internal, scripts).
+.local-backups/
+
+# Quarantined incomplete UI auth/AI WIP (does not compile yet — kept for later).
+client/.wip-auth/

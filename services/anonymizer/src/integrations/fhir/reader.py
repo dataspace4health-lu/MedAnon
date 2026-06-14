@@ -30,6 +30,9 @@ __all__ = [
 
 _FHIR_FETCH_PARALLEL = int(os.environ.get("MEDANON_FHIR_FETCH_PARALLEL", "4"))
 _COHORT_PARALLEL = int(os.environ.get("MEDANON_COHORT_PARALLEL", "4"))
+# Phase-2 re-fetch ``_id`` batch size. Larger = fewer round-trips per group;
+# bounded to keep the query string under server URL-length limits.
+_REFETCH_CHUNK = max(1, int(os.environ.get("MEDANON_FHIR_REFETCH_CHUNK", "200")))
 
 # Timeout for queue.get() in parallel consumer loops.  Prevents permanent
 # thread hangs when a producer thread crashes without pushing its sentinel.
@@ -75,6 +78,44 @@ def preflight_resource_count(base_url, resource_type=None, token=None, timeout=1
     except Exception as exc:
         log.warning("preflight_resource_count failed (%s), skipping pre-check", exc)
         # If the pre-check fails, don't block — let the real export run.
+        return -1
+
+
+def preflight_system_count(base_url, resource_types=None, token=None, timeout=10):
+    """True total resource count by summing ``_summary=count`` across types.
+
+    Many FHIR servers (incl. HAPI) reject a bare ``GET {base}?_summary=count``
+    (system-wide) with HTTP 400, so we sum per-type counts instead. Unlike
+    :func:`preflight_resource_count` (which proxies system size by Patient count ×
+    a fixed factor), this returns the *actual* total — used to route bulk exports
+    to the staged path correctly for dense datasets where ``patient_count × 15``
+    badly under-counts (~70× on real data).
+
+    *resource_types*: explicit list to count; when ``None``, discovers types from
+    the server CapabilityStatement (minus infrastructure types).
+
+    Returns the summed total, or ``-1`` if discovery/counting fails entirely
+    (caller falls back to the Patient-proxy estimate).
+    """
+    base = base_url.rstrip("/")
+    try:
+        if resource_types is None:
+            from pipeline.jobs.staged_worker._core import _INFRA
+
+            all_types = get_capability_statement(base, token=token, timeout=timeout)
+            resource_types = [t for t in all_types if t not in _INFRA]
+        total = 0
+        counted = False
+        for rt in resource_types:
+            c = preflight_resource_count(
+                base, resource_type=rt, token=token, timeout=timeout
+            )
+            if c > 0:
+                total += c
+                counted = True
+        return total if counted else -1
+    except Exception as exc:
+        log.warning("preflight_system_count failed (%s), using fallback", exc)
         return -1
 
 
@@ -193,8 +234,8 @@ def fetch_resources_by_ids(
         return []
 
     _validate_resource_type(resource_type)
-    # Chunk into groups of 100 to avoid oversized query strings.
-    _CHUNK_SIZE = 100
+    # Chunk to avoid oversized query strings; size via MEDANON_FHIR_REFETCH_CHUNK.
+    _CHUNK_SIZE = _REFETCH_CHUNK
     resources: list[dict] = []
     _pinned_origin: list = [None]
 

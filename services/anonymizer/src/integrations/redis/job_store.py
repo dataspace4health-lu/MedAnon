@@ -433,6 +433,35 @@ class RedisJobStore:
         except Exception as exc:
             _log.warning("xack_error message_id=%s: %s", message_id, exc)
 
+    def refresh_claim(self, message_id: str) -> bool:
+        """Reset a message's idle timer so a long-running job isn't reclaimed.
+
+        Re-claims the message to THIS consumer with ``min_idle_time=0``, which
+        resets its idle clock in the Pending Entry List. The worker calls this
+        on a heartbeat while a job runs, so neither the periodic stale-recovery
+        loop nor a sibling worker's startup recovery mistakes an actively
+        running long job for a crashed one (the redelivery/double-run hazard).
+
+        Returns True if the claim was refreshed (we still own it), False
+        otherwise (e.g. another consumer already reclaimed it — the job will be
+        re-run there and this worker's eventual XACK is a harmless no-op).
+        """
+        try:
+            # XCLAIM with min_idle_time=0 + JUSTID: cheap, returns the ids we
+            # still hold. Owning consumer re-claiming itself just resets idle.
+            held = self._client.xclaim(
+                _STREAM_KEY,
+                _STREAM_GROUP,
+                self._consumer_id,
+                min_idle_time=0,
+                message_ids=[message_id],
+                justid=True,
+            )
+            return bool(held)
+        except Exception as exc:
+            _log.debug("refresh_claim_error message_id=%s: %s", message_id, exc)
+            return False
+
     def claim_stale_jobs(self, min_idle_ms: int = 90_000) -> list[tuple[str, str]]:
         """Claim stream messages idle for more than *min_idle_ms* milliseconds.
 

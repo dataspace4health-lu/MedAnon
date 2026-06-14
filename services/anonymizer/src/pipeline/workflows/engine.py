@@ -122,7 +122,10 @@ class WorkflowEngine:
             return
         # Skip every step that transitively depends on the failed one.
         self._skip_descendants(workflow, step_id)
-        self._wstore.set_workflow_status(workflow_id, WorkflowStatus.ERROR)
+        # CAS RUNNING→ERROR so a concurrent cancel() (CANCELLED) is not clobbered.
+        self._wstore.compare_and_set_workflow_status(
+            workflow_id, WorkflowStatus.RUNNING, WorkflowStatus.ERROR
+        )
         logger.warning(
             "workflow_step_failed workflow=%s step=%s -> workflow ERROR",
             workflow_id,
@@ -223,11 +226,17 @@ class WorkflowEngine:
         if workflow is None or workflow.status != WorkflowStatus.RUNNING:
             return
         statuses = {s.status for s in workflow.steps}
+        # CAS RUNNING→terminal: if a concurrent cancel() already moved the
+        # workflow out of RUNNING, the guard no-ops and CANCELLED stays sticky.
         if statuses <= {StepStatus.DONE}:
-            self._wstore.set_workflow_status(workflow_id, WorkflowStatus.DONE)
-            logger.info("workflow_done workflow=%s", workflow_id)
+            if self._wstore.compare_and_set_workflow_status(
+                workflow_id, WorkflowStatus.RUNNING, WorkflowStatus.DONE
+            ):
+                logger.info("workflow_done workflow=%s", workflow_id)
         elif statuses & {StepStatus.ERROR}:
-            self._wstore.set_workflow_status(workflow_id, WorkflowStatus.ERROR)
+            self._wstore.compare_and_set_workflow_status(
+                workflow_id, WorkflowStatus.RUNNING, WorkflowStatus.ERROR
+            )
 
     # ------------------------------------------------------------------
     # Cancellation + reconciliation
@@ -237,6 +246,18 @@ class WorkflowEngine:
         """Cancel a workflow: cancel in-flight step jobs, mark the rest cancelled."""
         workflow = self._wstore.get(workflow_id)
         if workflow is None:
+            return False
+        # Claim the terminal transition FIRST so a concurrent _settle_workflow
+        # (driven by a final step completing at the same instant) sees a
+        # non-RUNNING workflow and its RUNNING→DONE/ERROR CAS no-ops. Cover
+        # both RUNNING and the not-yet-started PENDING state.
+        claimed = self._wstore.compare_and_set_workflow_status(
+            workflow_id, WorkflowStatus.RUNNING, WorkflowStatus.CANCELLED
+        ) or self._wstore.compare_and_set_workflow_status(
+            workflow_id, WorkflowStatus.PENDING, WorkflowStatus.CANCELLED
+        )
+        if not claimed and workflow.status != WorkflowStatus.CANCELLED:
+            # Already terminal (DONE/ERROR) — nothing to cancel.
             return False
         for step in workflow.steps:
             if step.status in (StepStatus.RUNNING, StepStatus.READY) and step.job_id:
@@ -254,7 +275,6 @@ class WorkflowEngine:
                     workflow_id, step.id, expected, StepStatus.CANCELLED
                 ):
                     break
-        self._wstore.set_workflow_status(workflow_id, WorkflowStatus.CANCELLED)
         return True
 
     def reconcile(self) -> None:

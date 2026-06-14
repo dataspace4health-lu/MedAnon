@@ -51,7 +51,12 @@ class AgentService:
                 "pii_enforcement": pii_enforcement_status(),
             }
 
-    async def generate_config(self, prompt: str, regulation: str = "") -> dict:
+    async def generate_config(
+        self,
+        prompt: str,
+        regulation: str = "",
+        include_source_context: bool = False,
+    ) -> dict:
         """Proxy or local — follows the ANALYTICS_SERVICE_URL pattern."""
         ai_service_url = self._ai_service_url()
         if ai_service_url:
@@ -63,7 +68,28 @@ class AgentService:
             )
         from integrations.ai.agents.config_generator import generate_config
 
-        return await asyncio.to_thread(generate_config, prompt, regulation)
+        source_context = ""
+        if include_source_context:
+            source_context = await asyncio.to_thread(self._resolve_source_context)
+
+        return await asyncio.to_thread(
+            generate_config, prompt, regulation, source_context
+        )
+
+    @staticmethod
+    def _resolve_source_context() -> str:
+        """Fetch the PHI-free source-server resource snapshot (never raises)."""
+        try:
+            from integrations.ai.source_context import get_source_resource_context
+
+            return get_source_resource_context()
+        except Exception as exc:  # noqa: BLE001 — context is best-effort
+            _log.info("source_context_resolve_failed: %s", exc)
+            return ""
+
+    async def resolve_source_context_async(self) -> str:
+        """Async wrapper around the source snapshot (runs off the event loop)."""
+        return await asyncio.to_thread(self._resolve_source_context)
 
     async def detect_pii(
         self,
@@ -81,6 +107,16 @@ class AgentService:
         from integrations.ai.agents.pii_detector import detect_pii_leaks
 
         return await asyncio.to_thread(detect_pii_leaks, resources, use_ai=use_ai)
+
+    async def scan_fields(self, field_context: str, model: str = "") -> dict:
+        """Classify a PHI-free field tree as PII and suggest actions.
+
+        Runs the synchronous scanner agent off the event loop. Never raises —
+        the agent returns a structured error result on failure.
+        """
+        from integrations.ai.agents.field_scanner import scan_fields
+
+        return await asyncio.to_thread(scan_fields, field_context, model=model)
 
     async def explain_config(
         self,

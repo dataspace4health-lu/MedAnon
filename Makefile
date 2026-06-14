@@ -35,7 +35,7 @@ ANONYMIZER_PORT := $(if $(ANONYMIZER_PORT),$(ANONYMIZER_PORT),8000)
         up down down-wipe dev logs build build-ui build-sdv up-sdv build-healthcheck clean \
         init-domains preflight verify _dirs ai-up ai-pull ai-status \
         helm-install helm-uninstall helm-lint helm-template helm-build-gpas \
-        trivy-fs trivy-image-anonymizer trivy-image-ui trivy
+        trivy-fs trivy-image-anonymizer trivy-image-ui trivy cold-reset
 
 # ── Default target ────────────────────────────────────────────────────────────
 help:
@@ -286,6 +286,31 @@ clean:
 	find . -type d -name __pycache__ -not -path './.venv/*' -exec rm -rf {} + 2>/dev/null || true
 	find . -type d -name .pytest_cache -not -path './.venv/*' -exec rm -rf {} + 2>/dev/null || true
 	@echo "✓ caches cleared"
+
+# ── Cold-run reset ────────────────────────────────────────────────────────────
+# Wipe ALL pseudonyms from gPAS + flush the gPAS/NLP caches in Redis so the next
+# bulk export runs fully COLD (re-creates every pseudonym, re-detects all NLP).
+# Keeps gPAS domain definitions and the Redis job queue intact. IRREVERSIBLE:
+# data already exported can no longer be re-linked to future exports.
+# NOTE: for a TRUE cold run also restart the worker (drops its in-process L1 LRU):
+#   make cold-reset && docker compose restart worker
+GPAS_DB_USER ?= gpas_user
+GPAS_DB_NAME ?= gpas
+cold-reset:
+	@echo "⚠  Cold reset: deleting ALL gPAS pseudonyms + flushing Redis gPAS/NLP caches…"
+	@docker exec gpas-postgres psql -U $(GPAS_DB_USER) -d $(GPAS_DB_NAME) \
+		-c "DELETE FROM mpsn; DELETE FROM psn;" \
+		>/dev/null && echo "  ✓ gPAS psn/mpsn cleared (domains kept)"
+	@RP=$$(grep -E '^MEDANON_REDIS_PASSWORD' .env 2>/dev/null | cut -d= -f2); \
+	LUA='local c="0" local n=0 repeat local r=redis.call("SCAN",c,"MATCH",ARGV[1],"COUNT",1000) c=r[1] for _,k in ipairs(r[2]) do redis.call("UNLINK",k) n=n+1 end until c=="0" return n'; \
+	for pat in "medanon:gpas:*" "medanon:nlp:*"; do \
+		removed=$$(docker exec medanon-redis redis-cli -a "$$RP" -n 0 EVAL "$$LUA" 0 "$$pat" 2>/dev/null | tail -1); \
+		echo "  ✓ Redis DB0 $$pat removed: $$removed"; \
+	done; \
+	docker exec medanon-redis redis-cli -a "$$RP" -n 2 FLUSHDB >/dev/null 2>&1 && echo "  ✓ Redis DB2 (NLP L2) flushed"; \
+	kept=$$(docker exec medanon-redis sh -c "redis-cli -a '$$RP' -n 0 --scan --pattern 'medanon:job*' --count 5000 2>/dev/null | wc -l"); \
+	echo "  ✓ job-queue keys preserved: $$kept"
+	@echo "✓ cold-reset complete — next export runs fully cold (restart worker to drop L1)"
 
 # ── Security scanning (Trivy) ─────────────────────────────────────────────────
 # Requires trivy in PATH. Install: curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b ~/.local/bin
