@@ -44,6 +44,26 @@ _RATE_BATCH = os.environ.get("MEDANON_RATE_BATCH", "60/minute")
 _service = ProcessingService()
 
 
+def _attach_pii_warning(result, pii_leak: dict) -> None:
+    """Embed a non-blocking coverage warning into a JSON result for the client.
+
+    Used when ``MEDANON_GATE_IDENTIFIER_MODE=warn`` and the only finding is a
+    config-coverage gap (no detected PII). The output is released; the warning
+    rides along under ``meta.tag`` so the UI can surface "weak config" without
+    a 422 block. Mutates dict resources only — Bundles attach to the Bundle root.
+    """
+    if not isinstance(result, dict):
+        return
+    tag = {
+        "system": "https://medanon/coverage-warning",
+        "code": "weak-config",
+        "display": pii_leak.get("message", "")[:1000],
+    }
+    meta = result.setdefault("meta", {})
+    if isinstance(meta, dict):
+        meta.setdefault("tag", []).append(tag)
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -97,12 +117,16 @@ async def process(
             result, "/v1/process", runtime_settings, t0
         )
 
-    if pii_leak:
-        # PII detected — block output entirely, return 422 with leak info.
+    if pii_leak and pii_leak.get("leaked"):
+        # Real PII detected — block output entirely, return 422 with leak info.
         raise HTTPException(
             status_code=422,
             detail={"code": "pii_leak_detected", "pii_leak": pii_leak},
         )
+    if pii_leak:
+        # Warning-only (weak config, no detected PII): release output, but attach
+        # the coverage warning so the client can surface it without blocking.
+        _attach_pii_warning(result, pii_leak)
 
     if idem_key:
         _idem.remember("/v1/process", idem_key, body_hash, 200, result)
@@ -215,15 +239,20 @@ async def process_raw(
                 result, "/v1/process/raw", runtime_settings, t0
             )
 
-        if pii_leak:
-            # Block output — return 422 with structured pii_leak payload.
+        if pii_leak and pii_leak.get("leaked"):
+            # Real PII detected — block output, return 422 with pii_leak payload.
             raise HTTPException(
                 status_code=422,
                 detail={"code": "pii_leak_detected", "pii_leak": pii_leak},
             )
 
         text, media_type = serialize_payload(result, out_format=output_format)
-        return Response(content=text, media_type=media_type)
+        headers = {}
+        if pii_leak:
+            # Warning-only (weak config): release output, signal via header so the
+            # serialized body (which may be XML/NDJSON) is not mutated.
+            headers["X-Medanon-Coverage-Warning"] = pii_leak.get("message", "")[:500]
+        return Response(content=text, media_type=media_type, headers=headers)
     except HTTPException:
         raise  # let our 422 pii_leak_detected (and others) pass through
     except ProcessingError as exc:

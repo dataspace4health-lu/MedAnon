@@ -74,7 +74,7 @@ const COLUMN_ACTIONS: { value: string; label: string; toRule: (col: string) => C
   },
   {
     value: 'pseudonymize_gpas',
-    label: 'Pseudonymize (gPAS)',
+    label: 'Pseudonymize',
     toRule: (col) => ({ column: col, action: 'gpas_pseudonymize' }),
   },
   {

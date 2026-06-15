@@ -119,6 +119,19 @@ class NlpParams(ParamsBase):
     language: str | None = None
     entity_actions: dict[str, str] | None = None
     default_action: str | None = None
+    # Replacement mode for nlp_scrub (tokenize vs redact).
+    mode: str | None = None
+    # Treat the matched text as XHTML and scrub text nodes only.
+    html: bool | None = None
+    # Decode a Base64-encoded attachment payload before scrubbing, then
+    # re-encode on write-back (used for content.attachment.data text payloads).
+    base64_encoded: bool | None = None
+    # Per-entity overlap-resolution priorities (entity name → int).
+    entity_priorities: dict[str, int] | None = None
+    # Behaviour when the NLP service is unavailable: "raise" or "redact".
+    fail_mode: str | None = None
+    # Scope for the token map reuse (e.g. per-resource vs global).
+    mapping_scope: str | None = None
 
 
 class GpasParams(ParamsBase):

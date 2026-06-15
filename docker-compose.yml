@@ -559,6 +559,25 @@ services:
     environment:
       MOS_WAIT_FOR_PORTS: gpas-db:5432:120
       TZ: Europe/Berlin
+      # Datasource MUST target the PostgreSQL backend (gpas-db). Without these
+      # the WildFly CLI (configure_wildfly_*.cli) defaults the gPAS datasource to
+      # mysql/host=mysql:3306 and the gras/noti datasources to host=postgresql,
+      # all of which fail to resolve (UnknownHostException). gpasDS then can't
+      # connect, the AnonymDomainBean/Cache EJBs never start, and every
+      # $pseudonymize* call hangs until timeout.
+      #
+      # Global host/port — inherited by the gras (auth) and noti datasources,
+      # which all share the single `gpas` database on gpas-db (gras/noti use
+      # dedicated schemas; see services/gpas/sqls_pg/).
+      TTP_DB_HOST: gpas-db
+      TTP_DB_PORT: "5432"
+      TTP_DB_USER: ${GPAS_DB_USER:-gpas_user}
+      TTP_DB_PASS: ${GPAS_DB_PASSWORD:-gpas_password}
+      # gPAS pseudonymization datasource — must be postgresql, not the mysql default.
+      TTP_GPAS_DB_DBMS: postgresql
+      TTP_GPAS_DB_HOST: gpas-db
+      TTP_GPAS_DB_PORT: "5432"
+      TTP_GPAS_DB_NAME: gpas
       TTP_GPAS_DB_USER: ${GPAS_DB_USER:-gpas_user}
       TTP_GPAS_DB_PASS: ${GPAS_DB_PASSWORD:-gpas_password}
     depends_on:
@@ -985,6 +1004,21 @@ services:
       - ollama-data:/root/.ollama
     networks:
       - processing-net
+    environment:
+      # CPU inference tuning — without these Ollama grabs every core and runs
+      # multiple model copies, saturating the host. Cap threads to a sane
+      # subset and serialise requests so the AI never starves the pipeline.
+      OLLAMA_NUM_THREADS: ${OLLAMA_NUM_THREADS:-4}
+      OLLAMA_NUM_PARALLEL: ${OLLAMA_NUM_PARALLEL:-1}
+      OLLAMA_MAX_LOADED_MODELS: ${OLLAMA_MAX_LOADED_MODELS:-1}
+      # Keep the model resident so we pay model-load cost once, not per request.
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-30m}
+      # Flash attention stabilises Gemma 3's sliding-window attention (SWA) on
+      # multi-turn chats. Without it, the SWA context-checkpoint cache gets
+      # invalidated on follow-up turns and the llama runner dies mid-stream with
+      # "unexpected EOF" (a known Ollama/llama.cpp Gemma 3 bug). With FA on, the
+      # KV cache uses a stable layout and the runner survives multi-turn.
+      OLLAMA_FLASH_ATTENTION: ${OLLAMA_FLASH_ATTENTION:-1}
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:11434/api/tags"]
       interval: 30s
@@ -994,6 +1028,7 @@ services:
     deploy:
       resources:
         limits:
+          cpus: "${OLLAMA_CPU_LIMIT:-4.0}"
           memory: 8G
     security_opt:
       - no-new-privileges:true

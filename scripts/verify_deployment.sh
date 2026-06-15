@@ -7,8 +7,20 @@ set -euo pipefail
 # Source .env so we pick up MEDANON_API_KEY and port overrides.
 # Use grep to skip comments and empty lines, then export.
 if [ -f .env ]; then
+    # Use grep+sed to safely export vars — quote values containing spaces so
+    # multi-word values like OIDC_SCOPE="openid profile email" don't get
+    # interpreted as shell commands by eval.
     set -a
-    eval "$(grep -v '^\s*#' .env | grep -v '^\s*$')"
+    while IFS= read -r line; do
+        # Skip comments and blank lines
+        [[ "$line" =~ ^\s*# ]] && continue
+        [[ "$line" =~ ^\s*$ ]] && continue
+        # Strip inline comments (# after value) and export
+        key="${line%%=*}"
+        val="${line#*=}"
+        val="${val%%  #*}"   # strip trailing comment with double-space
+        export "$key"="$val"
+    done < .env
     set +a
 fi
 
@@ -78,17 +90,20 @@ fi
 
 # Process endpoint (simple Patient resource)
 API_KEY="${MEDANON_API_KEY:-}"
-AUTH_HEADER=""
+AUTH_PROVIDER="${MEDANON_AUTH_PROVIDER:-auto}"
+CURL_AUTH_ARGS=()
 if [ -n "$API_KEY" ]; then
-    AUTH_HEADER="-H X-API-Key:${API_KEY}"
+    CURL_AUTH_ARGS=(-H "X-API-Key: ${API_KEY}")
 fi
 HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' \
-    $AUTH_HEADER \
+    "${CURL_AUTH_ARGS[@]}" \
     -H "Content-Type: application/json" \
     -d '{"resourceType":"Patient","id":"smoke-test","name":[{"family":"Test"}]}' \
     "http://localhost:${ANON_PORT}/v1/process" 2>/dev/null || echo "000")
 if [ "$HTTP_CODE" = "200" ]; then
     pass "/process -> 200 (de-identification works)"
+elif [ "$HTTP_CODE" = "401" ] && [ "$AUTH_PROVIDER" = "oidc" ] && [ -z "$API_KEY" ]; then
+    warn "/process -> 401 (expected — OIDC auth active, no token in verify script)"
 else
     fail "/process -> $HTTP_CODE"
 fi

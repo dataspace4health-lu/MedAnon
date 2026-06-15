@@ -56,6 +56,33 @@ def _extract_gpas_params(settings) -> dict | None:
     for rule in rules:
         if isinstance(rule, dict) and rule.get("action") == "gpas_pseudonymize":
             result = _resolve_rule_params(rule, settings)
+            # A bare `gpas_pseudonymize` rule (no params:) resolves to an empty
+            # dict. Downstream guards test ``if not gpas_params`` and would then
+            # treat the profile as having NO gPAS rules at all — skipping the
+            # batch pre-fetch entirely, so write-back finds an empty mapping and
+            # raises "gPAS did not return a pseudonym". Seed the domain/operation
+            # from the environment (mirrors the low-level client's own fallback)
+            # so a rule with no explicit params still works. The per-resource
+            # domain_map routing still overrides this default per resource type.
+            if not result or not result.get("gpas_domain"):
+                import os
+
+                result = dict(result or {})
+                env_domain = os.environ.get("GPAS_DOMAIN", "").strip()
+                if env_domain and not result.get("gpas_domain"):
+                    result["gpas_domain"] = env_domain
+                env_op = os.environ.get("GPAS_OPERATION", "").strip()
+                if env_op and not result.get("gpas_operation"):
+                    result["gpas_operation"] = env_op
+                # When neither rule params nor env supply a default domain but the
+                # profile has a domain_map, the actual domain is resolved
+                # per-resource-type by the dispatcher. Mark the params non-empty
+                # with a sentinel so the downstream ``if not gpas_params`` guards
+                # don't mistake this for "no gPAS rules" and skip the pre-fetch.
+                if not result.get("gpas_domain") and getattr(
+                    settings, "domain_map", None
+                ):
+                    result["_gpas_rule_present"] = True
             break
     if rules_key is not None:
         with _gpas_params_lock:

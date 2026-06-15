@@ -108,6 +108,10 @@ class JobService:
             "staged_count": checkpoint.get("staged_count"),
             "phase": checkpoint.get("phase", "queued"),
             "summary": checkpoint.get("summary"),
+            # Structured score-gate block report (None unless the job was blocked):
+            # what leaked (leaked_fields), what to fix (fixes), score/grade. Lets
+            # the UI render the verdict instead of parsing the ``error`` text.
+            "block_report": checkpoint.get("block_report"),
             "config_profile": params.get("config_profile", "auto"),
             "upload_errors": checkpoint.get("errors", 0),
             "upload_error_details": checkpoint.get("error_details", []),

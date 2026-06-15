@@ -2,6 +2,7 @@ import { useState } from "react";
 import { ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { PiiDetectionMap, FieldSummaryMap } from "@/lib/piiDetection";
+import { actionLabel } from "@/pages/config-builder/configConstants";
 
 interface ResourceTypeSummaryProps {
   counts: Record<string, number>;
@@ -252,7 +253,7 @@ export function ResourceTypeSummary({
                                         actionBadgeClass(entry.action),
                                       )}
                                     >
-                                      {entry.action}
+                                      {actionLabel(entry.action)}
                                     </span>
                                   ) : (
                                     <span className="text-muted-foreground/40">
@@ -300,7 +301,7 @@ export function ResourceTypeSummary({
                                       actionBadgeClass(group.dominantAction),
                                     )}
                                   >
-                                    {group.dominantAction}
+                                    {actionLabel(group.dominantAction)}
                                   </span>
                                 ) : (
                                   <span className="text-muted-foreground/40">
@@ -339,7 +340,7 @@ export function ResourceTypeSummary({
                                               actionBadgeClass(entry.action),
                                             )}
                                           >
-                                            {entry.action}
+                                            {actionLabel(entry.action)}
                                           </span>
                                         ) : (
                                           <span className="text-muted-foreground/40">

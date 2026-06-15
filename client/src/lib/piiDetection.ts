@@ -134,11 +134,14 @@ export function buildPiiDetectionMap(
     const typeAgg = agg.get(resourceType)!;
 
     for (const field of changedFields) {
-      const action =
-        resolveAction(manifestByField, field) ??
-        classifyValue(deidMap.get(field) ?? "") ??
-        (origMap.has(field) && !deidMap.has(field) ? "redact" : null) ??
-        "modified";
+      // The manifest is the ONLY authoritative source of a named action. We do
+      // NOT guess actions from the output value's shape — a coding.display that
+      // happens to be 64-hex, or a code that looks like a year, must never be
+      // mislabelled "cryptohash"/"generalize" when no rule touched it. A field
+      // that genuinely changed but has no manifest entry is labelled the neutral
+      // "modified" (e.g. a post-processing reference rewrite), never a concrete
+      // de-identification action it didn't receive.
+      const action = resolveAction(manifestByField, field) ?? "modified";
       const key = `${field}::${action}`;
       typeAgg.set(key, (typeAgg.get(key) ?? 0) + 1);
     }
@@ -162,30 +165,6 @@ export function buildPiiDetectionMap(
   return result;
 }
 
-// ---------------------------------------------------------------------------
-// Heuristic action classifier — used when no manifest is available and
-// there are no original resources to diff against (bulk export results).
-// Also supplements manifest data for post-processing changes not tracked.
-// ---------------------------------------------------------------------------
-
-const HEX_64 = /^[0-9a-f]{64}$/;
-const TOKEN_PATTERN = /\[\[[A-Z_]+_\d+]]/;
-const YEAR_MONTH = /^\d{4}-\d{2}$/;
-const REDACTED_RE = /^\[REDACTED]$/;
-
-function classifyValue(value: string): string | null {
-  if (!value) return null;
-  // Handle comma-joined array values like "[REDACTED], [REDACTED]"
-  const parts = value.split(", ");
-  if (parts.every((p) => REDACTED_RE.test(p.trim()) || p.trim() === "REDACTED"))
-    return "redact";
-  if (HEX_64.test(value)) return "cryptohash";
-  if (TOKEN_PATTERN.test(value)) return "scrub_text";
-  if (/^\d{4}$/.test(value)) return "generalize";
-  if (YEAR_MONTH.test(value)) return "generalize";
-  return null;
-}
-
 /**
  * Build a PII detection map from **only** de-identified resources (no originals).
  *
@@ -206,33 +185,20 @@ export function buildPiiFromDeidentifiedOnly(
     if (!agg.has(resourceType)) agg.set(resourceType, new Map());
     const typeAgg = agg.get(resourceType)!;
 
+    // Manifest-only: with no original resources to diff against, the
+    // transformation manifest (meta.tag) is the SOLE authoritative record of
+    // what was de-identified. We intentionally do NOT scan output values for
+    // "PII-looking" patterns — that mislabelled untouched fields (a 64-hex
+    // coding.display as "cryptohash", a year-like code as "generalize"). When
+    // the manifest is disabled (MEDANON_MANIFEST_ENABLED=false) this yields an
+    // empty map, which is correct: we cannot truthfully claim any action.
     const manifestEntries = parseManifestEntries(resource);
-    const manifestFields = new Set<string>();
-    if (manifestEntries.length > 0) {
-      const seen = new Set<string>();
-      for (const entry of manifestEntries) {
-        const field = simplifyPath(entry.path);
-        manifestFields.add(field);
-        const key = `${field}::${entry.action}`;
-        if (!seen.has(key)) {
-          seen.add(key);
-          typeAgg.set(key, (typeAgg.get(key) ?? 0) + 1);
-        }
-      }
-    }
-
-    // Heuristic scan on deep fields not covered by manifest or their parent
-    const fields = extractFieldsDeep(resource);
-    for (const { field, value } of fields) {
-      if (field === "resourceType") continue;
-      if (
-        manifestFields.has(field) ||
-        manifestFields.has(parentKey(field))
-      )
-        continue;
-      const action = classifyValue(value);
-      if (action) {
-        const key = `${field}::${action}`;
+    const seen = new Set<string>();
+    for (const entry of manifestEntries) {
+      const field = simplifyPath(entry.path);
+      const key = `${field}::${entry.action}`;
+      if (!seen.has(key)) {
+        seen.add(key);
         typeAgg.set(key, (typeAgg.get(key) ?? 0) + 1);
       }
     }

@@ -9,13 +9,19 @@ import {
 import { Upload, ChevronDown, AlertCircle } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
-import { type LocalRule, parseYamlIntoRules } from './configConstants';
+import { type LocalRule, parseYamlIntoRules, deduplicateIncoming } from './configConstants';
 
 // ---------------------------------------------------------------------------
 // ImportPanel -- paste YAML to populate rule table
 // ---------------------------------------------------------------------------
 
-export function ImportPanel({ onImport }: { onImport: (rules: LocalRule[]) => void }) {
+export function ImportPanel({
+  onImport,
+  existingRules = [],
+}: {
+  onImport: (rules: LocalRule[]) => void;
+  existingRules?: LocalRule[];
+}) {
   const [open, setOpen] = useState(false);
   const [text, setText] = useState('');
   const [err, setErr] = useState<string | null>(null);
@@ -28,10 +34,19 @@ export function ImportPanel({ onImport }: { onImport: (rules: LocalRule[]) => vo
         setErr(parseErr);
         return;
       }
-      onImport(parsed);
+      const { added, skipped } = deduplicateIncoming(parsed, existingRules);
+      if (added.length === 0) {
+        setErr('All pasted rules duplicate existing match expressions — nothing imported.');
+        return;
+      }
+      onImport(added);
       setText('');
       setOpen(false);
-      toast.success(`Imported ${parsed.length} rule${parsed.length !== 1 ? 's' : ''}.`);
+      toast.success(
+        skipped.length > 0
+          ? `Imported ${added.length} rule${added.length !== 1 ? 's' : ''}; skipped ${skipped.length} duplicate${skipped.length !== 1 ? 's' : ''}.`
+          : `Imported ${added.length} rule${added.length !== 1 ? 's' : ''}.`,
+      );
     } catch (e) {
       setErr(String(e));
     }

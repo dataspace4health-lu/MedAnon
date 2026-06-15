@@ -97,17 +97,20 @@ _BATCH_SIZE = int(os.environ.get("MEDANON_BATCH_SIZE", "1000"))
 # Set to 0 to disable parallelism (sequential processing).
 _PARALLEL_WORKERS = int(os.environ.get("MEDANON_PARALLEL_WORKERS", "8"))
 
-# When true (default) the heuristic attachment scanner in detect_phi_batch runs
-# on every batch even when no config nlp_* rule is present.  This ensures that
-# Attachment.data / *Base64Binary fields with embedded PHI are always scrubbed.
-# Set MEDANON_ATTACHMENT_SCAN=false to disable for throughput-sensitive pipelines
-# that guarantee no embedded PHI in attachment fields.
+# Heuristic attachment scanner in detect_phi_batch — finds Attachment.data /
+# *Base64Binary fields anywhere in a resource and scrubs embedded PHI, even when
+# no config nlp_* rule targets them.  OFF by default so the config rules are the
+# single source of truth: nothing is transformed without a matching rule.  The
+# Config Builder's Resource Explorer flags `base64` fields with a recommended
+# treatment so users add an explicit nlp_scrub rule (with base64_encoded).
+# Opt in with MEDANON_ATTACHMENT_SCAN=true for a config-independent safety net.
 _ATTACHMENT_SCAN = os.environ.get(
-    "MEDANON_ATTACHMENT_SCAN", "true"
-).strip().lower() not in (
-    "false",
-    "0",
-    "no",
+    "MEDANON_ATTACHMENT_SCAN", "false"
+).strip().lower() in (
+    "true",
+    "1",
+    "yes",
+    "on",
 )
 
 # When set, forces sequential processing and clears all rule caches at the

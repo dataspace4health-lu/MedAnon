@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import os
 
 from utils.fhirpath import find_nodes  # noqa: F401  (re-exported for test patch targets)
 from pipeline.manifest import _MANIFEST_ENABLED
@@ -29,6 +30,21 @@ from pipeline.nlp_extract import (
 )
 
 _log = logging.getLogger("medanon.nlp_batch")
+
+
+def _attachment_scan_enabled() -> bool:
+    """Whether the heuristic Base64/attachment scanner should run.
+
+    OFF by default (MEDANON_ATTACHMENT_SCAN). Read lazily so a process that sets
+    the env var sees it without depending on processor import order, and so tests
+    can toggle it via monkeypatched os.environ.
+    """
+    return os.environ.get("MEDANON_ATTACHMENT_SCAN", "false").strip().lower() in (
+        "true",
+        "1",
+        "yes",
+        "on",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -273,23 +289,29 @@ def detect_phi_batch(
     # Pre-filter: only recurse into resources that have at least one of the three
     # attachment signal tokens.  False positives are safe (they walk and find
     # nothing); false negatives are impossible for the three patterns.
-    _ATTACH_SIGNALS = ("\"data\"", "data:", "Base64Binary")
-    claimed: set[tuple] = {(id(f.owner), f.key) for f in all_fields}
-    heuristic_fields: list[_FieldText] = []
-    for i, resource in enumerate(resources):
-        if resource is None:
-            continue
-        import json as _json
-        _serialized = _json.dumps(resource, separators=(",", ":"))
-        if not any(sig in _serialized for sig in _ATTACH_SIGNALS):
-            continue
-        _discover_text_attachments(resource, i, claimed, heuristic_fields)
-    if heuristic_fields:
-        _log.debug(
-            "heuristic_attachment_scan: found %d text attachment(s)",
-            len(heuristic_fields),
-        )
-    all_fields.extend(heuristic_fields)
+    #
+    # Gated on MEDANON_ATTACHMENT_SCAN (default OFF): without this guard the scan
+    # would scrub attachment data even when no config rule targets it, mutating
+    # fields the user never asked to transform. Read lazily so the env var is
+    # respected per process without import-order coupling.
+    if _attachment_scan_enabled():
+        _ATTACH_SIGNALS = ("\"data\"", "data:", "Base64Binary")
+        claimed: set[tuple] = {(id(f.owner), f.key) for f in all_fields}
+        heuristic_fields: list[_FieldText] = []
+        for i, resource in enumerate(resources):
+            if resource is None:
+                continue
+            import json as _json
+            _serialized = _json.dumps(resource, separators=(",", ":"))
+            if not any(sig in _serialized for sig in _ATTACH_SIGNALS):
+                continue
+            _discover_text_attachments(resource, i, claimed, heuristic_fields)
+        if heuristic_fields:
+            _log.debug(
+                "heuristic_attachment_scan: found %d text attachment(s)",
+                len(heuristic_fields),
+            )
+        all_fields.extend(heuristic_fields)
 
     if not all_fields:
         return

@@ -488,6 +488,14 @@ async def _run_job(job: Job) -> None:
             # Quality gate block — output is intentionally deleted.  Do NOT
             # increment the retry counter: the input data hasn't changed, so
             # re-running without config changes would produce the same result.
+            # Persist the structured block report so the job record can show the
+            # UI *what leaked and what to fix* (download stays blocked, output
+            # stays deleted — only the explanation is now machine-readable).
+            report = getattr(exc, "report", None)
+            if report:
+                cp = (job.checkpoint_data or {}) if hasattr(job, "checkpoint_data") else {}
+                cp["block_report"] = report
+                save_checkpoint(_store, job, cp)
             _worker_log.warning("job_score_gate_blocked id=%s", job.id)
             WORKER_JOBS_TOTAL.labels(job_type=job.type, status="blocked").inc()
             audit.emit(

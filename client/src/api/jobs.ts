@@ -35,6 +35,32 @@ export interface JobResponse {
     compressed: boolean;
     file_size_bytes: number;
   } | null;
+  /**
+   * Structured score-gate block report. Present only when the job was blocked
+   * by the privacy gate (status "error", output deleted, download blocked).
+   * Lets the UI render *what leaked* + *what to fix* instead of parsing `error`.
+   */
+  block_report?: BlockReport | null;
+}
+
+export interface BlockReport {
+  blocked: boolean;
+  /** true when actual PII was detected (text_risk) or coverage hard-blocked. */
+  critical_pii: boolean;
+  score: number;
+  grade: string;
+  min_required: number;
+  min_grade: string;
+  resources_total: number;
+  profile: string;
+  text_risk_hits: number;
+  identifier_risk_hits: number;
+  /** Exact HIPAA paths left uncovered, most frequent first. */
+  leaked_fields: Array<{ path: string; resource_count: number }>;
+  issues: string[];
+  fixes: string[];
+  /** Full plain-language message (same as `error`). */
+  message: string;
 }
 
 export interface BatchPrivacy {

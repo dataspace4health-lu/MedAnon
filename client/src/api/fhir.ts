@@ -81,8 +81,28 @@ const EXCLUDED_TYPES = new Set([
   "OperationOutcome", "Bundle",
 ]);
 
+// Clinically relevant types first — so a capped field-tree (top N) gets the
+// PII-heavy resources, and the explorer's type list reads naturally.
+const TYPE_PRIORITY = [
+  "Patient", "Practitioner", "RelatedPerson", "Observation", "Condition",
+  "Encounter", "MedicationRequest", "Procedure", "AllergyIntolerance",
+  "DiagnosticReport", "Immunization", "CarePlan", "Organization", "Location",
+];
+
+function prioritySort(types: string[]): string[] {
+  return [...types].sort((a, b) => {
+    const pa = TYPE_PRIORITY.indexOf(a);
+    const pb = TYPE_PRIORITY.indexOf(b);
+    if (pa !== -1 && pb !== -1) return pa - pb;
+    if (pa !== -1) return -1;
+    if (pb !== -1) return 1;
+    return a.localeCompare(b);
+  });
+}
+
 /**
- * Read supported resource types from the server's CapabilityStatement.
+ * Read supported resource types from the server's CapabilityStatement,
+ * priority-sorted (clinical/PII-heavy types first).
  *
  * Falls back to a minimal list if the metadata request fails.
  */
@@ -93,7 +113,7 @@ async function discoverResourceTypes(): Promise<string[]> {
     const types = rest?.[0]?.resource
       ?.map((r) => r.type)
       .filter((t): t is string => typeof t === "string" && !EXCLUDED_TYPES.has(t));
-    if (types && types.length > 0) return types;
+    if (types && types.length > 0) return prioritySort(types);
   } catch {
     // metadata unavailable — fall through to fallback
   }
@@ -109,16 +129,134 @@ export interface ResourceTypeCount {
 let _typesCache: string[] | null = null;
 
 /**
- * Return all clinical resource types supported by the FHIR server.
- *
- * Reads the CapabilityStatement once (cached for the browser session) —
- * a single request instead of one probe per type.
+ * Return only resource types that actually have data on the server (count > 0),
+ * priority-sorted (clinical/PII-heavy types first). Probes each
+ * CapabilityStatement type with `?_summary=count` so types the server merely
+ * *supports* but holds no data for are excluded. Cached for the browser session.
  */
 export async function listResourceTypes(): Promise<string[]> {
   if (_typesCache) return _typesCache;
-  const types = await discoverResourceTypes();
+  // fetchResourceTypeCounts probes every CapabilityStatement type and filters
+  // to count > 0 — exactly what we want for the field-tree and type picker.
+  const counts = await fetchResourceTypeCounts();
+  const types = prioritySort(counts.map((c) => c.type));
   _typesCache = types;
   return types;
+}
+
+/**
+ * Fetch a small sample of raw resources for a given type (default 5).
+ * Returns the raw resource objects — callers are responsible for PHI handling.
+ * Used by the AI assistant field-tree builder which extracts paths/types only.
+ */
+export async function sampleResources(
+  type: string,
+  count: number = 5,
+): Promise<Record<string, unknown>[]> {
+  try {
+    const bundle = await fetchFhir<FhirBundle>(`/${type}`, {
+      _count: String(count),
+    });
+    return (bundle.entry ?? [])
+      .map((e) => e.resource)
+      .filter((r): r is Record<string, unknown> => r != null);
+  } catch {
+    return [];
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Server field-tree (PHI-free) — sampled paths/types for AI grounding.
+//
+// Cached at module level so reopening the AI Assistant panel (or navigating
+// away and back) reuses the tree instead of re-sampling every resource type.
+// The cache stores ONLY the extracted summary — never raw resources.
+// ---------------------------------------------------------------------------
+
+export interface ServerFieldTree {
+  summary: string;          // PHI-free `path : <type>` lines
+  resourceTypes: string[];
+  pathCount: number;
+}
+
+const _FIELD_TREE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+let _fieldTreeCache: ServerFieldTree | null = null;
+let _fieldTreeCacheAt = 0;
+let _fieldTreeInflight: Promise<ServerFieldTree> | null = null;
+
+/** Clear the cached field tree and type list (call after the user refreshes). */
+export function clearServerFieldTreeCache(): void {
+  _fieldTreeCache = null;
+  _fieldTreeCacheAt = 0;
+  _typesCache = null;
+  _countsCache = null;
+  _countsCacheAt = 0;
+}
+
+/**
+ * Build a PHI-free field-tree by sampling `samplePerType` resources of every
+ * server type, extracting paths+types only via `extractFn` (injected to avoid a
+ * cross-module import cycle with the config-builder fieldTree util).
+ *
+ * Cached for 5 minutes. Concurrent callers share one in-flight request.
+ */
+export async function buildServerFieldTree(
+  extractFn: (resources: Record<string, unknown>[]) => ServerFieldTree,
+  opts?: {
+    samplePerType?: number;
+    onProgress?: (loaded: number, total: number) => void;
+    force?: boolean;
+    /** Only sample these resource types (default: all data-bearing types).
+     * Scoping to a few types keeps the prompt small and focused — a smaller
+     * field tree means lower CPU on CPU-only LLMs and better answers (small
+     * models lose focus in a 40-type wall of paths). */
+    onlyTypes?: string[];
+    /** Cap the number of types sampled when onlyTypes is not given. When
+     * omitted, ALL data-bearing types are sampled. */
+    maxTypes?: number;
+  },
+): Promise<ServerFieldTree> {
+  const samplePerType = opts?.samplePerType ?? 3;
+  const onProgress = opts?.onProgress;
+
+  if (!opts?.force && _fieldTreeCache && Date.now() - _fieldTreeCacheAt < _FIELD_TREE_TTL_MS) {
+    onProgress?.(1, 1);
+    return _fieldTreeCache;
+  }
+  if (_fieldTreeInflight) return _fieldTreeInflight;
+
+  _fieldTreeInflight = (async () => {
+    const allTypes = await listResourceTypes();
+    const types = opts?.onlyTypes?.length
+      ? allTypes.filter((t) => opts.onlyTypes!.includes(t))
+      : opts?.maxTypes != null
+        ? allTypes.slice(0, opts.maxTypes)
+        : allTypes;
+    const all: Record<string, unknown>[] = [];
+    let loaded = 0;
+    const BATCH = 8;
+    for (let i = 0; i < types.length; i += BATCH) {
+      const batch = types.slice(i, i + BATCH);
+      const results = await Promise.allSettled(
+        batch.map((t) => sampleResources(t, samplePerType)),
+      );
+      for (const r of results) {
+        if (r.status === "fulfilled") all.push(...r.value);
+      }
+      loaded += batch.length;
+      onProgress?.(Math.min(loaded, types.length), types.length);
+    }
+    const tree = extractFn(all);
+    _fieldTreeCache = tree;
+    _fieldTreeCacheAt = Date.now();
+    return tree;
+  })();
+
+  try {
+    return await _fieldTreeInflight;
+  } finally {
+    _fieldTreeInflight = null;
+  }
 }
 
 // Module-level cache — survives SPA navigation, lives for the browser session.

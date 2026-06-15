@@ -9,6 +9,7 @@ export default defineConfig(({ mode }) => {
   const hapiPort = env.HAPI_PORT || "8081"
   const hapiTargetPort = env.HAPI_TARGET_PORT || "8082"
   const uiPort = env.UI_PORT || "8501"
+  const keycloakPort = env.KEYCLOAK_PORT || "8180"
 
   return {
     plugins: [react(), tailwindcss()],
@@ -34,6 +35,12 @@ export default defineConfig(({ mode }) => {
           target: `http://localhost:${hapiPort}/fhir`,
           changeOrigin: true,
           rewrite: (p) => p.replace(/^\/fhir/, ""),
+        },
+        // Keycloak OIDC — only used in dev when OIDC_ISSUER points at a
+        // /auth-relative path. In production nginx proxies /auth/ directly.
+        "/auth": {
+          target: `http://localhost:${keycloakPort}`,
+          changeOrigin: true,
         },
       },
     },
