@@ -151,11 +151,23 @@ export interface ChatTurn {
   content: string;
 }
 
+/**
+ * How structured (object) PII fields are treated when proposing rules.
+ * - "values" (default): one rule per identifying leaf sub-field
+ *   (Patient.name.family) — keeps the FHIR skeleton, blanks only the values.
+ * - "whole": one rule on the parent path (Patient.name) — removes the element.
+ */
+export type FieldGranularity = "values" | "whole";
+
 export interface ChatRequest {
   question: string;
   config_yaml?: string;
   history?: ChatTurn[];
   model?: string;
+  /** PHI-free field-path tree (path: type only) from uploaded examples or server samples. */
+  field_context?: string;
+  /** Leaf-vs-whole treatment of structured PII fields. */
+  granularity?: FieldGranularity;
 }
 
 /**
@@ -204,6 +216,47 @@ export async function* streamChat(
     }
     if (done) break;
   }
+}
+
+export interface PiiScanResult {
+  path: string;
+  is_pii: boolean;
+  reason: string;
+  suggested_action: string;
+}
+
+interface FieldScanResponse {
+  results: PiiScanResult[];
+  source: "ai" | "error";
+  detail: string;
+}
+
+/**
+ * Ask the AI to classify every field path in `fieldContext` as PII or not, and
+ * suggest an action for each PII field. Uses the dedicated /v1/ai/scan-fields
+ * endpoint which returns validated, structured JSON (no fragile prose parsing).
+ *
+ * Throws when the backend reports `source: "error"` (AI disabled/unreachable)
+ * so the caller can surface the `detail` message.
+ */
+export async function scanFieldsForPii(
+  fieldContext: string,
+  model?: string,
+  granularity: FieldGranularity = "values",
+): Promise<PiiScanResult[]> {
+  const res = await fetchApi<FieldScanResponse>("/v1/ai/scan-fields", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      field_context: fieldContext,
+      model: model ?? "",
+      granularity,
+    }),
+  });
+  if (res.source === "error") {
+    throw new Error(res.detail || "PII scan failed");
+  }
+  return res.results;
 }
 
 export async function analyseCompliance(

@@ -108,15 +108,21 @@ class AgentService:
 
         return await asyncio.to_thread(detect_pii_leaks, resources, use_ai=use_ai)
 
-    async def scan_fields(self, field_context: str, model: str = "") -> dict:
+    async def scan_fields(
+        self, field_context: str, model: str = "", *, granularity: str = "values"
+    ) -> dict:
         """Classify a PHI-free field tree as PII and suggest actions.
 
         Runs the synchronous scanner agent off the event loop. Never raises —
-        the agent returns a structured error result on failure.
+        the agent returns a structured error result on failure. ``granularity``
+        ('values' | 'whole') controls leaf-vs-parent classification of
+        structured fields.
         """
         from integrations.ai.agents.field_scanner import scan_fields
 
-        return await asyncio.to_thread(scan_fields, field_context, model=model)
+        return await asyncio.to_thread(
+            scan_fields, field_context, model=model, granularity=granularity
+        )
 
     async def explain_config(
         self,

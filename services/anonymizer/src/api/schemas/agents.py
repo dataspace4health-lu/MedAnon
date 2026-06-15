@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -102,6 +104,13 @@ class FieldScanRequest(BaseModel):
         default="",
         description="Optional local model override (e.g. 'ollama/gemma3:1b').",
     )
+    granularity: Literal["values", "whole"] = Field(
+        default="values",
+        description="How structured (object) fields are treated. 'values' "
+        "(default) classifies leaf sub-fields (Patient.name.family) so the FHIR "
+        "skeleton is kept and only values are blanked; 'whole' classifies the "
+        "parent container (Patient.name) as a single row.",
+    )
 
 
 class FieldScanResult(BaseModel):
@@ -195,4 +204,12 @@ class ChatRequest(BaseModel):
         "the user actually has. Server-derived, so treated as untrusted DATA "
         "(sanitized + tag-wrapped before prompt injection). Must NOT contain "
         "patient values. Truncated to 16k chars of whole lines if larger.",
+    )
+    granularity: Literal["values", "whole"] = Field(
+        default="values",
+        description="How structured (object) PII fields are treated when "
+        "proposing rules. 'values' (default) emits one rule per identifying "
+        "leaf sub-field (Patient.name.family) so the FHIR skeleton is preserved "
+        "and only values are blanked; 'whole' emits one rule on the parent path "
+        "(Patient.name) that removes the entire element.",
     )

@@ -98,7 +98,9 @@ async def scan_fields_endpoint(body: FieldScanRequest, request: Request):
     result set with a ``detail`` string when AI is disabled/unreachable rather
     than erroring, so the UI can show a soft warning.
     """
-    return await _service.scan_fields(body.field_context, body.model)
+    return await _service.scan_fields(
+        body.field_context, body.model, granularity=body.granularity
+    )
 
 
 @router.post("/explain")
@@ -209,6 +211,7 @@ async def chat_config_endpoint(body: ChatRequest, request: Request):
                     source_context=source_context,
                     field_context=body.field_context,
                     intake=body.intake.model_dump() if body.intake else None,
+                    granularity=body.granularity,
                 )
                 if hasattr(gen, "__iter__") or hasattr(gen, "__next__"):
                     for chunk in gen:

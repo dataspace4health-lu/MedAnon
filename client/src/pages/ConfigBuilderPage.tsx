@@ -42,8 +42,7 @@ import {
 } from './config-builder/configConstants';
 import { RulesTable } from './config-builder/RulesTable';
 import { ImportPanel } from './config-builder/ImportPanel';
-import { AiGeneratePanel } from './config-builder/AiGeneratePanel';
-import { AiChatPanel } from './config-builder/AiChatPanel';
+import { AiAssistantPanel } from './config-builder/AiAssistantPanel';
 import { ResourceExplorerPanel } from './config-builder/ResourceExplorerPanel';
 
 // ---------------------------------------------------------------------------
@@ -67,6 +66,10 @@ export default function ConfigBuilderPage() {
   const [configDescription, setConfigDescription] = useState('');
   const [rules, setRules] = useState<LocalRule[]>([]);
   const [yamlPreviewOpen, setYamlPreviewOpen] = useState(false);
+  // PHI-free field-path summary from uploaded example resources (Resource
+  // Explorer) → grounds the AI assistant when no live server tree is loaded.
+  // TODO: wire ResourceExplorerPanel to populate this; empty until then.
+  const fieldContext = '';
 
   // UI state
   const [loading, setLoading] = useState(isEdit || Boolean(fromName));
@@ -256,9 +259,16 @@ export default function ConfigBuilderPage() {
           <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             Rules
           </p>
-          <ImportPanel onImport={(imported) => setRules((prev) => [...prev, ...imported])} />
-          <AiGeneratePanel onImport={(imported) => setRules((prev) => [...prev, ...imported])} />
-          <AiChatPanel configYaml={yamlPreview} />
+          <ImportPanel
+            onImport={(imported) => setRules((prev) => [...prev, ...imported])}
+            existingRules={rules}
+          />
+          <AiAssistantPanel
+            configYaml={yamlPreview}
+            fieldContext={fieldContext}
+            existingRules={rules}
+            onImport={(imported) => setRules((prev) => [...prev, ...imported])}
+          />
           <ResourceExplorerPanel
             onAddRule={(rule) => setRules((prev) => [...prev, rule])}
             rules={rules}

@@ -116,6 +116,16 @@ class LLMProvider:
         # clips it), which silently truncates the prompt and yields empty
         # output. 16384 fits the full prompt plus the response budget.
         self._num_ctx = int(os.environ.get("MEDANON_AI_NUM_CTX", "16384"))
+        # Chat/scan paths use a smaller window than config-gen's big few-shot
+        # prompt. On CPU, num_ctx dominates inference cost (KV-cache + attention
+        # scale with it), so we keep this tighter than _num_ctx. BUT it must be
+        # large enough to hold the ~1.2k-token system prompt + the injected
+        # field-tree context (capped at _FIELD_CONTEXT_MAX ≈ 4k tokens) + the
+        # conversation + a response budget. At 4096 the field tree alone
+        # overflowed the window; Ollama then silently truncated the system
+        # prompt from the front, and small models (gemma3:1b) replied with a
+        # filler token like "Okay". 8192 fits the full prompt plus the answer.
+        self._chat_num_ctx = int(os.environ.get("MEDANON_AI_CHAT_NUM_CTX", "8192"))
         self._timeout = float(os.environ.get("MEDANON_AI_TIMEOUT_SEC", "60"))
         self._cb = CircuitBreaker(
             name="ai-provider",
@@ -135,6 +145,11 @@ class LLMProvider:
             max_entries=int(os.environ.get("MEDANON_AI_CACHE_MAX_ENTRIES", "256")),
             ttl_sec=self._cache_ttl,
         )
+
+    @property
+    def chat_num_ctx(self) -> int:
+        """Smaller context window for chat/scan paths (CPU-friendly)."""
+        return self._chat_num_ctx
 
     @property
     def stats(self) -> dict[str, Any]:
@@ -180,6 +195,7 @@ class LLMProvider:
         api_base_override: str | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        num_ctx: int | None = None,
         cache_key: str | None = None,
         phi_payload: bool = True,
     ) -> str:
@@ -232,7 +248,7 @@ class LLMProvider:
                     temperature if temperature is not None else self._temperature
                 ),
                 max_tokens=max_tokens or self._max_tokens,
-                num_ctx=self._num_ctx,
+                num_ctx=num_ctx or self._num_ctx,
                 timeout=self._timeout,
             )
             text = response.choices[0].message.content or ""
@@ -254,6 +270,8 @@ class LLMProvider:
         model_override: str | None = None,
         api_base_override: str | None = None,
         temperature: float | None = None,
+        max_tokens: int | None = None,
+        num_ctx: int | None = None,
         phi_payload: bool = True,
     ) -> Generator[str, None, None]:
         """Generator yielding streaming chunks. For SSE endpoints.
@@ -275,9 +293,14 @@ class LLMProvider:
         )
         self._enforce_local(model, api_base, phi_payload)
 
-        try:
-            import litellm
+        import litellm
 
+        # Track whether any content reached the client. Once we have yielded a
+        # chunk we CANNOT raise a clean error to the SSE consumer (the HTTP body
+        # has already started), so a mid-stream runner death is surfaced as a
+        # final readable sentence instead of a litellm/ollama stack trace.
+        yielded_any = False
+        try:
             response = litellm.completion(
                 model=model,
                 messages=messages,
@@ -286,17 +309,28 @@ class LLMProvider:
                 temperature=(
                     temperature if temperature is not None else self._temperature
                 ),
-                max_tokens=self._max_tokens,
-                num_ctx=self._num_ctx,
+                max_tokens=max_tokens or self._max_tokens,
+                num_ctx=num_ctx or self._num_ctx,
                 timeout=self._timeout,
                 stream=True,
             )
             for chunk in response:
                 delta = chunk.choices[0].delta.content
                 if delta:
+                    yielded_any = True
                     yield delta
         except Exception as exc:
             self._cb.record_failure()
+            _log.warning("ai_provider_stream_error model=%s: %s", model, exc)
+            if yielded_any:
+                # Partial answer already sent — append a graceful note rather
+                # than raising (the consumer can't recover a half-sent body).
+                yield (
+                    "\n\n_[The model stopped unexpectedly mid-response. "
+                    "The answer above may be incomplete — try resending, or "
+                    "switch to a different model.]_"
+                )
+                return
             raise ProviderUnavailableError(
                 f"LLM streaming failed: {exc}",
             ) from exc

@@ -10,16 +10,21 @@ provider is unavailable.
 """
 
 import logging
+import os
 import re
 from collections.abc import Generator
 
 _log = logging.getLogger("medanon.ai.config_chat")
 
-# Max characters of field-tree context injected into the prompt. Larger than
-# the old 8000 so a multi-resource-type server tree fits; bounded so a huge
-# server can't blow the context window. Truncation drops WHOLE lines so the
-# model never sees a half-path.
-_FIELD_CONTEXT_MAX = 16000
+# Max characters of field-tree context injected into the prompt. Must leave
+# headroom in the chat context window (MEDANON_AI_CHAT_NUM_CTX, default 8192
+# tokens) for the ~1.2k-token system prompt, the conversation, and the response.
+# At 16000 chars (~4k tokens) the tree alone could overflow the window, causing
+# Ollama to silently truncate the system prompt from the front and small models
+# to reply with a filler token ("Okay"). ~7000 chars ≈ 1.8k tokens leaves room.
+# The user narrows the resource scope when they need a specific type covered in
+# full; truncation drops WHOLE lines so the model never sees a half-path.
+_FIELD_CONTEXT_MAX = int(os.environ.get("MEDANON_AI_FIELD_CONTEXT_MAX", "7000"))
 
 
 def _truncate_field_lines(text: str, max_len: int) -> str:
@@ -150,70 +155,50 @@ def _is_on_topic(question: str) -> bool:
 
 
 _CHAT_SYSTEM_PROMPT = """\
-You are a healthcare data-privacy engineer helping a user build and reason \
-about FHIR de-identification configuration profiles for the SPE FHIR BlackBox \
-engine. Answer the user's questions clearly and concisely in markdown.
+You are a healthcare data-privacy engineer helping a user build FHIR \
+de-identification configuration profiles for the SPE FHIR BlackBox engine.
+
+RESPONSE STYLE:
+- Answer as thoroughly as needed — short for simple questions, detailed for \
+complex ones. Explain your choices.
+- If the user asks which fields are PII, list them inside a YAML block \
+(not as prose bullets). One rule per field.
+- When proposing rules always use a YAML block so the user can approve them.
 
 SCOPE:
-Your job is to help with FHIR de-identification configuration. This INCLUDES \
-anything about: which action to use for a field (redact, hash, encrypt, \
-generalize, scrub, pseudonymize, etc.), FHIRPath match expressions, action \
-parameters, choosing or comparing config profiles, what a rule does, whether a \
-config is privacy-safe, and how rules map to HIPAA or GDPR. Answer all such \
-questions fully and helpfully — this is your normal job, so do it.
+Answer ALL questions about FHIR de-identification: which action to use, \
+FHIRPath expressions, action parameters, profile choice, PII/PHI field \
+identification, compliance (HIPAA, GDPR). Anything mentioning FHIR, a field, \
+an action, a rule, PII, PHI, or compliance IS on-topic.
 
-ONLY refuse when the request is clearly unrelated to building a config — for \
-example creative writing, general medical/clinical advice, unrelated coding \
-help, or general trivia. In that narrow case, reply with EXACTLY this sentence \
-and nothing else:
-"I can only help with FHIR de-identification configuration — rules, actions, \
-FHIRPath expressions, and compliance mapping. Please ask about your config."
-When in doubt, assume the question IS about the config and answer it.
+Only decline requests that are obviously off-topic (poem, joke, unrelated \
+software). In that case, one sentence saying you focus on FHIR de-id.
 
-You understand these rule actions:
-- redact: permanently remove the value (irreversible)
-- cryptohash: one-way HMAC hash — preserves linkage within a dataset
-- encrypt / decrypt: reversible with an RSA key — use when re-identification \
-is required
-- perturb: add bounded random noise to a numeric/date value
-- substitute: replace with a fixed or mapped value
-- generalize: reduce precision (e.g. exact date -> year, zip -> 3-digit prefix)
-- scrub_text: regex-based text replacement in free-text fields
-- nlp_scrub / nlp_detect_act: AI/NER-based PHI removal in free text
-- gpas_pseudonymize: external TTP pseudonym service (reversible pseudonyms)
+Actions available: redact, cryptohash, encrypt, decrypt, perturb, substitute, \
+generalize, scrub_text, nlp_scrub, nlp_detect_act, gpas_pseudonymize.
 
-Rules match FHIR elements with FHIRPath expressions (e.g. ``Patient.name``,
-``Observation.note.text``). A rule has: name, match (FHIRPath), action, and
-optional action-specific params.
+Regulatory anchors: HIPAA Safe Harbor 45 CFR 164.514(b); GDPR Art. 4(5).
 
-Regulatory anchors you can cite:
-- HIPAA Safe Harbor 45 CFR 164.514(b): 18 PHI identifier categories; dates to \
-year only; zip to 3-digit prefix.
-- GDPR Art. 4(5): pseudonymization; Art. 89: research derogation.
+PROPOSING RULES — ALWAYS USE YAML:
+Whenever you propose, list, suggest, or generate rules (even for a single \
+field), emit them as a ```yaml code block with a ``rules:`` key. Do NOT list \
+rules as prose bullets or markdown tables — always use YAML so the user can \
+approve them with one click. After the YAML block write ONE sentence summarising \
+what the rules do.
 
-Guidance:
-- When the user shares a config, ground your answer in their actual rules.
-- Recommend the most privacy-preserving action that still meets their stated \
-use case; explain the trade-off briefly.
-- If something in their config looks risky (e.g. free-text left unscrubbed, \
-reversible action on a direct identifier), say so.
-- Keep answers focused — a few short paragraphs or a tight list, not an essay.
+Format:
+```yaml
+rules:
+  - name: <short name>
+    match: "<FHIRPath>"
+    action: <action>
+    params:          # only when needed
+      key: value
+```
 
-PROPOSING A CONFIG:
-When the user asks you to generate, build, create, draft, or update a config \
-(or add/change rules), include a COMPLETE, ready-to-apply YAML config in a \
-fenced ```yaml code block, in ADDITION to a one- or two-sentence plain-language \
-summary of what it does. The user will review the YAML, edit it if needed, and \
-approve it into their profile — so emit the whole ``rules:`` list, not a diff.
-- Use ONLY these actions: redact, cryptohash, encrypt, decrypt, perturb, \
-substitute, generalize, scrub_text, nlp_scrub, nlp_detect_act, \
-gpas_pseudonymize.
-- Each rule needs ``match`` (a FHIRPath expression) and ``action``; add \
-``name`` and ``params`` when helpful.
-- If field paths from the user's uploaded example resources are provided as \
-context, prefer ``match`` expressions that target those real paths.
-- For a pure question (no request to build/change a config) do NOT emit a YAML \
-block — just answer in prose.
+NESTED FIELDS: For structured objects (address, name, telecom, identifier), \
+target PII leaf sub-fields, not the parent. E.g. Patient.address.line → redact, \
+Patient.address.postalCode → generalize (zip_prefix).
 
 NESTED / STRUCTURED PII FIELDS:
 When a field contains PII inside a structured object (e.g. ``address``, \
@@ -245,6 +230,40 @@ rules:
       strategy: date_year
 ```
 """
+
+
+# Granularity directive injected as a dedicated system turn. Controls whether
+# the assistant targets a structured PII field as ONE rule on the parent path
+# ("whole") or one rule per identifying LEAF sub-field ("values", the default).
+# The leaf list is enumerated from the field tree the model already receives, so
+# no FHIR schema dependency is needed.
+_GRANULARITY_DIRECTIVE = {
+    "values": (
+        "FIELD GRANULARITY — VALUES-ONLY (STRICT). Follow these rules exactly:\n"
+        "1. Use ONLY paths that appear verbatim in the field tree above. NEVER "
+        "invent a path. (Patient.name.family exists; Patient.family does NOT.)\n"
+        "2. A line marked `(container)` is a structural parent — NEVER emit a "
+        "rule whose match is a `(container)` path. Skip it entirely.\n"
+        "3. For each `(container)` that holds PII, emit one rule per identifying "
+        "LEAF path under it (the non-container lines). E.g. for the container "
+        "Patient.name emit rules ONLY for Patient.name.family, "
+        "Patient.name.given, Patient.name.text — and DO NOT emit a rule for "
+        "Patient.name itself.\n"
+        "4. Primitive scalar fields with no children (e.g. Patient.birthDate) "
+        "get a single rule.\n"
+        "Emitting a `(container)` rule alongside its leaves is WRONG."
+    ),
+    "whole": (
+        "FIELD GRANULARITY — WHOLE FIELD. Follow these rules exactly:\n"
+        "1. Use ONLY paths that appear verbatim in the field tree above. NEVER "
+        "invent a path.\n"
+        "2. For a structured field marked `(container)` that holds PII, emit ONE "
+        "rule on that `(container)` path and DO NOT emit rules for its leaf "
+        "sub-fields. E.g. for Patient.name emit a single rule on Patient.name — "
+        "NOT separate rules on Patient.name.family / .given.\n"
+        "3. Primitive scalar fields get a single rule."
+    ),
+}
 
 
 def _format_intake(intake: dict | None) -> str:
@@ -284,6 +303,7 @@ def _build_messages(
     source_context: str = "",
     field_context: str = "",
     intake: dict | None = None,
+    granularity: str = "values",
 ) -> list[dict]:
     from integrations.ai.prompt_guard import sanitize_untrusted, wrap_untrusted
 
@@ -327,6 +347,24 @@ def _build_messages(
                 ),
             },
         )
+    # Field granularity directive — placed after the field tree so the
+    # "leaf paths above" reference resolves. Falls back to the values-only
+    # directive for any unrecognised value.
+    directive = _GRANULARITY_DIRECTIVE.get(granularity, _GRANULARITY_DIRECTIVE["values"])
+    messages.append({"role": "system", "content": directive})
+
+    # Action-selection policy — tells the model to pick the action that fits the
+    # field class (pseudonymise IDs, generalise dates, NLP-scrub free text, leave
+    # coded data) instead of redacting everything. Single source of truth shared
+    # with the field scanner. Identifier action adapts to gPAS availability.
+    from integrations.ai.agents.action_policy import (
+        action_policy_block,
+        gpas_is_available,
+    )
+
+    messages.append(
+        {"role": "system", "content": action_policy_block(gpas_is_available())}
+    )
     if source_context.strip():
         # PHI-free resource-type/count snapshot of the source server. Lets the
         # assistant ground suggestions in the user's actual data ("you have 47
@@ -372,6 +410,7 @@ def chat_config(
     source_context: str = "",
     field_context: str = "",
     intake: dict | None = None,
+    granularity: str = "values",
 ):
     """Answer a config question.
 
@@ -386,7 +425,10 @@ def chat_config(
     have. ``intake`` is an optional structured dict (``resource_types``,
     ``regulation``, ``intent``) from the UI's guided intake step, injected as a
     dedicated system instruction so the model honours the user's stated scope
-    and compliance target across every turn.
+    and compliance target across every turn. ``granularity`` controls how
+    structured PII fields are treated: ``"values"`` (default) emits one rule per
+    identifying leaf sub-field (keeps the FHIR skeleton, blanks values);
+    ``"whole"`` emits one rule on the parent path that removes the whole element.
     """
     from integrations.ai.provider import (
         NotAvailableError,
@@ -402,7 +444,13 @@ def chat_config(
         return iter([_OFF_TOPIC_REPLY]) if streaming else _OFF_TOPIC_REPLY
 
     messages = _build_messages(
-        question, config_yaml, history, source_context, field_context, intake
+        question,
+        config_yaml,
+        history,
+        source_context,
+        field_context,
+        intake,
+        granularity,
     )
     model_override = model or None
 
@@ -424,12 +472,14 @@ def chat_config(
                 messages,
                 model_override=model_override,
                 temperature=0.3,
+                num_ctx=provider.chat_num_ctx,
                 phi_payload=False,
             )
         return provider.complete(
             messages,
             model_override=model_override,
             temperature=0.3,
+            num_ctx=provider.chat_num_ctx,
             phi_payload=False,
         )
     except ProviderUnavailableError as exc:
