@@ -1,15 +1,21 @@
 """Privacy Risk Evaluator — hard constraint gate.
 
 Evaluates residual re-identification risk on de-identified FHIR resources
-using three sub-evaluators:
+using five sub-evaluators:
 
-1. Attacker model analysis (prosecutor / journalist / marketer)
+1. Attacker model analysis (prosecutor / journalist / marketer) — k-anonymity
+   (Samarati & Sweeney 1998)
 2. Direct identifier detection (manifest coverage of HIPAA-sensitive paths)
 3. Text risk detection (NER + regex residual PII scan)
+4. (batch) Distinct l-diversity (Machanavajjhala et al. 2007) + t-closeness via
+   categorical EMD (Li et al. 2007) over QI equivalence classes
+5. (batch) Cross-resource linkage attack surface — WP216 linkability/inference
+   (Art. 29 WP Opinion 05/2014)
 
-The overall privacy risk is ``max(attacker, identifier, text)`` — the worst
-dimension determines the risk.  Risk above the configured threshold FAILs
-the resource.
+The per-resource privacy risk is ``max(attacker, identifier, text)`` — the
+worst dimension determines the risk; the batch path additionally maxes in the
+population metrics (4, 5). Risk above the configured threshold FAILs the
+resource/cohort.
 """
 
 from __future__ import annotations
@@ -195,7 +201,15 @@ class PrivacyRiskEvaluator:
             )
         )
 
-        risk_score = max(attacker_risk, identifier_risk, text_risk)
+        # Population-level disclosure metrics (Machanavajjhala 2007; Li 2007;
+        # WP216). These are meaningful only across a cohort, so they live on the
+        # batch path alongside k-anonymity.
+        diversity_risk = self._diversity_and_closeness_risk(patients, evidence)
+        linkage_risk = self._cross_resource_linkage_risk(patients, evidence)
+
+        risk_score = max(
+            attacker_risk, identifier_risk, text_risk, diversity_risk, linkage_risk
+        )
         passed = risk_score <= RISK_THRESHOLD
 
         return PrivacyDecision(
@@ -499,6 +513,239 @@ class PrivacyRiskEvaluator:
             )
         )
         return max(risk, attacker_max)
+
+    # ----- Sub-evaluator 1e: L-diversity + T-closeness ----------------------
+
+    def _build_equivalence_classes(
+        self, resources: list[dict]
+    ) -> dict[tuple, list[str]]:
+        """Group sensitive-attribute values by quasi-identifier equivalence class.
+
+        Resolves clinical resources back to their patient's QI within the same
+        batch (per the chosen within-batch resolution strategy). The sensitive
+        attribute is the primary diagnosis / observation code; the QI tuple is
+        the de-identified ``(gender, birth_year, zip3)`` — the same QI the
+        attacker model uses. Returns ``{qi_tuple: [sensitive_value, ...]}`` so
+        callers can compute the *value frequency* per class (required for the
+        canonical distinct-l / t-closeness definitions, which depend on counts,
+        not just the set of distinct values).
+        """
+        # 1. Map Patient/<id> → QI tuple from the de-identified Patient resources.
+        patient_qi: dict[str, tuple] = {}
+        for r in resources:
+            if r.get("resourceType") != "Patient":
+                continue
+            rid = r.get("id")
+            if not rid:
+                continue
+            gender = r.get("gender", "") or ""
+            birth_year = (r.get("birthDate") or "")[:4]
+            zip3 = ""
+            address = r.get("address")
+            if isinstance(address, list) and address and isinstance(address[0], dict):
+                zip3 = (address[0].get("postalCode", "") or "")[:3]
+            patient_qi[f"Patient/{rid}"] = (gender, birth_year, zip3)
+
+        # 2. Attribute each clinical resource's sensitive code to its patient's QI.
+        classes: dict[tuple, list[str]] = {}
+        for r in resources:
+            rtype = r.get("resourceType", "")
+            if rtype == "Patient":
+                continue
+            code_obj = r.get("code")
+            if not isinstance(code_obj, dict):
+                continue
+            codings = code_obj.get("coding")
+            if not isinstance(codings, list) or not codings:
+                continue
+            first = codings[0]
+            code = first.get("code", "")
+            if not code:
+                continue
+            sensitive_val = f"{first.get('system', '')}|{code}"
+
+            subject = r.get("subject") or r.get("patient") or {}
+            ref = subject.get("reference", "") if isinstance(subject, dict) else ""
+            qi = patient_qi.get(ref)
+            if qi is None:
+                # Reference does not resolve to a Patient in this batch — cannot
+                # attribute to an equivalence class, so skip (not-applicable),
+                # rather than collapsing all unresolved refs into one fake class.
+                continue
+            classes.setdefault(qi, []).append(sensitive_val)
+        return classes
+
+    def _diversity_and_closeness_risk(
+        self,
+        resources: list[dict],
+        evidence: list[Evidence],
+    ) -> float:
+        """Distinct l-diversity (Machanavajjhala 2007) + t-closeness (Li 2007).
+
+        **Distinct l-diversity** — an equivalence class is l-diverse iff the
+        most frequent sensitive value occupies at most a 1/l fraction of the
+        class; equivalently l = floor(1 / max_value_frequency). A class where
+        every member shares one diagnosis has l=1 and is fully vulnerable to a
+        homogeneity attack even if k-anonymity holds.
+
+        **T-closeness** — the distribution of the sensitive attribute within
+        each class must be close to its distribution over the whole cohort. For
+        a *categorical* attribute (diagnosis codes) with equal ground distance,
+        the Earth Mover's Distance reduces to the variational distance
+        ``EMD = ½·Σ|p_i − q_i|`` between the class distribution p and the global
+        distribution q (Li et al. 2007, §IV-B), bounded in [0,1]. A high EMD
+        means a class is skewed relative to the population — a skewness attack.
+
+        Risk is the worse of the two, mapped to the [0,1] gate scale.
+        """
+        classes = self._build_equivalence_classes(resources)
+        if not classes:
+            evidence.append(
+                Evidence(
+                    check="l_diversity_t_closeness",
+                    value=0.0,
+                    details={
+                        "reason": "no QI-resolvable sensitive attributes in batch"
+                    },
+                )
+            )
+            return 0.0
+
+        from collections import Counter
+
+        # Global distribution q over all sensitive values in the cohort.
+        global_counts: Counter = Counter()
+        for vals in classes.values():
+            global_counts.update(vals)
+        global_total = sum(global_counts.values())
+        global_dist = {k: v / global_total for k, v in global_counts.items()}
+
+        min_l = None  # smallest l (distinct l-diversity) across classes
+        max_emd = 0.0  # largest t-closeness EMD across classes
+        for vals in classes.values():
+            counts = Counter(vals)
+            n = len(vals)
+            # Distinct l-diversity: floor(1 / freq of most common value).
+            top_freq = max(counts.values()) / n
+            l_div = int(1.0 / top_freq) if top_freq > 0 else 1
+            min_l = l_div if min_l is None else min(min_l, l_div)
+
+            # T-closeness EMD (categorical, equal ground distance).
+            all_keys = set(global_dist) | set(counts)
+            emd = 0.5 * sum(
+                abs((counts.get(k, 0) / n) - global_dist.get(k, 0.0))
+                for k in all_keys
+            )
+            max_emd = max(max_emd, emd)
+
+        min_l = min_l or 1
+
+        # l-diversity risk: l=1 → 0.50 (homogeneity), l=2 → 0.15, l≥3 → 0.0.
+        if min_l >= 3:
+            l_risk = 0.0
+        elif min_l == 2:
+            l_risk = 0.15
+        else:
+            l_risk = 0.50
+
+        # t-closeness risk: scale EMD against a 0.30 closeness threshold (a class
+        # at the gate's RISK_THRESHOLD distance is treated as fully risky).
+        t_risk = min(1.0, max_emd / RISK_THRESHOLD) * RISK_THRESHOLD
+
+        risk = max(l_risk, t_risk)
+        evidence.append(
+            Evidence(
+                check="l_diversity_t_closeness",
+                value=risk,
+                details={
+                    "min_distinct_l": min_l,
+                    "max_emd": round(max_emd, 4),
+                    "l_diversity_risk": round(l_risk, 4),
+                    "t_closeness_risk": round(t_risk, 4),
+                    "equivalence_classes": len(classes),
+                    "distinct_sensitive_values": len(global_counts),
+                },
+                severity="critical"
+                if risk >= RISK_THRESHOLD
+                else ("warning" if risk > 0 else "info"),
+            )
+        )
+        return risk
+
+    # ----- Sub-evaluator 1f: Cross-resource linkage attack surface -----------
+
+    def _cross_resource_linkage_risk(
+        self,
+        resources: list[dict],
+        evidence: list[Evidence],
+    ) -> float:
+        """Linkability/inference risk from combining multiple resource types.
+
+        Maps to the Article 29 WP216 (Opinion 05/2014) risk of *linkability* —
+        the ability to link records concerning the same individual across data
+        sets — and *inference*. A single Patient with generalized QIs may be
+        safe in isolation; paired with Condition, Observation, Encounter, etc.
+        sharing the same (pseudonymized) patient reference, an attacker gains
+        multiple correlated axes that narrow the population. We score by the
+        maximum number of distinct PHI-bearing resource types linked to one
+        patient reference.
+
+        The cut-offs (2/3/5 axes) are a deliberately conservative heuristic —
+        WP216 gives no numeric threshold — capped at RISK_THRESHOLD so this
+        dimension flags linkability for review without unilaterally failing the
+        gate (k-anonymity/l-diversity remain the hard population gates).
+        """
+        from pipeline.scoring.constants import PHI_RESOURCE_TYPES
+
+        # Map patient reference → set of distinct clinical resource types.
+        ref_to_rtypes: dict[str, set] = {}
+
+        for r in resources:
+            rtype = r.get("resourceType", "")
+            if rtype not in PHI_RESOURCE_TYPES or rtype == "Patient":
+                continue
+            subject = r.get("subject") or r.get("patient") or {}
+            ref = subject.get("reference", "") if isinstance(subject, dict) else ""
+            if not ref:
+                continue
+            ref_to_rtypes.setdefault(ref, set()).add(rtype)
+
+        if not ref_to_rtypes:
+            evidence.append(
+                Evidence(
+                    check="cross_resource_linkage",
+                    value=0.0,
+                    details={"reason": "no linked clinical resources found"},
+                )
+            )
+            return 0.0
+
+        axis_counts = [len(rtypes) for rtypes in ref_to_rtypes.values()]
+        max_axes = max(axis_counts)
+        avg_axes = sum(axis_counts) / len(axis_counts)
+
+        if max_axes >= 5:
+            risk = 0.30
+        elif max_axes >= 3:
+            risk = 0.15
+        elif max_axes == 2:
+            risk = 0.05
+        else:
+            risk = 0.0
+
+        evidence.append(
+            Evidence(
+                check="cross_resource_linkage",
+                value=risk,
+                details={
+                    "max_axes_per_patient": max_axes,
+                    "avg_axes_per_patient": round(avg_axes, 2),
+                    "patient_refs": len(ref_to_rtypes),
+                },
+                severity="warning" if risk >= 0.15 else "info",
+            )
+        )
+        return risk
 
     # ----- Sub-evaluator 1b: Direct identifier detection --------------------
 

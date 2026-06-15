@@ -8,6 +8,7 @@ accumulates gPAS work items for the batch Pass 2.
 from __future__ import annotations
 
 import logging
+import os
 from utils.json_fast import dumps as _json_dumps, dumps_sorted as _json_dumps_sorted
 from dataclasses import dataclass, field
 
@@ -36,6 +37,16 @@ from pipeline.structural_phi import (
 )
 
 audit_log = logging.getLogger("medanon.audit")
+
+# Config-independent "structural PHI" pass (geo coordinate zeroing + extension
+# text redaction). OFF by default: the config rules are the single source of
+# truth, so nothing is transformed without a matching rule. The Resource
+# Explorer flags geo/base64 fields so users can add explicit rules instead.
+# Opt in with MEDANON_STRUCTURAL_PHI_ENABLED=true for a config-independent safety
+# net; when enabled it records each change in the manifest (no longer silent).
+_STRUCTURAL_PHI_ENABLED = os.environ.get(
+    "MEDANON_STRUCTURAL_PHI_ENABLED", "false"
+).strip().lower() in ("1", "true", "yes", "on")
 
 # ---------------------------------------------------------------------------
 # Action category sets
@@ -127,7 +138,20 @@ def evaluate_and_dispatch(
     # rule with a *different* action on the same path is a config conflict.
     path_action_seen: dict[str, str] = {}
 
-    _apply_structural_heuristics(resource)
+    # Config-independent structural PHI pass — OFF by default so nothing is
+    # transformed without a matching config rule. When enabled, the changes it
+    # makes are recorded in the manifest (no longer a silent mutation).
+    if _STRUCTURAL_PHI_ENABLED:
+        structural_changes = _apply_structural_heuristics(resource)
+        if _MANIFEST_ENABLED and manifest_entries is not None:
+            for ch in structural_changes:
+                manifest_entries.append(
+                    {
+                        "rule": "structural_phi",
+                        "action": ch["action"],
+                        "path": ch["path"],
+                    }
+                )
 
     for rule in applicable_rules:
         action = rule["action"]

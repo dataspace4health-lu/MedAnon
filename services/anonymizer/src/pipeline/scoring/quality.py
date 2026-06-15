@@ -1,11 +1,22 @@
 """Quality Evaluator — continuous pipeline execution metric.
 
-Measures correctness of the transformation process via four sub-evaluators:
+Measures correctness of the transformation process. Several sub-evaluators map
+to the Kahn et al. 2016 harmonized DQ framework (conformance / completeness /
+plausibility), the framework named in the project's article:
 
-1. Transformation success rate (with error-rate gates)
-2. Rule coverage completeness
-3. Lightweight FHIR schema validation
-4. Reference integrity
+1. Transformation success rate (with error-rate gates) — pipeline execution
+2. Rule coverage completeness — policy coverage
+3. Lightweight FHIR schema validation — FHIR StructureDefinition conformance
+4. Reference integrity — Kahn *relational conformance* (refs resolve to a
+   valid Type/id target; cross-resource version in ``evaluate_batch_refs``)
+5. Real-world data quality (Kahn conformance + completeness + temporal &
+   value plausibility)
+6. Terminology binding — Kahn *value conformance*: SNOMED/LOINC/RxNorm codes
+   not corrupted or sentinel-replaced by scrubbing
+7. FHIR cardinality constraints — *conformance*: required (cardinality-1)
+   fields intact after de-id
+8. Structural diff — information-loss signal (NCP/discernibility family):
+   element-count shift vs. original flags over-scrubbing
 """
 
 from __future__ import annotations
@@ -81,6 +92,7 @@ class QualityEvaluator:
         error_count: int,
         total_count: int,
         settings: Any = None,
+        original: dict | None = None,
     ) -> ModuleScore:
         evidence: list[Evidence] = []
         gates: list[str] = []
@@ -92,19 +104,21 @@ class QualityEvaluator:
         validation = self._schema_validation(deidentified, evidence)
         integrity = self._reference_integrity(deidentified, evidence)
         data_quality = self._data_quality(deidentified, evidence)
+        terminology = self._terminology_binding(deidentified, evidence)
+        cardinality = self._cardinality_constraints(deidentified, evidence)
+        structural = self._structural_diff(original, deidentified, evidence)
 
-        # Re-weighted to make room for the intrinsic real-world data-quality
-        # sub-metric (conformance + completeness + temporal plausibility +
-        # value plausibility). Transformation correctness (success/coverage)
-        # still dominates; DQ is a meaningful 20% so a broken transformation
-        # that produces out-of-range / future-dated / over-scrubbed output is
-        # penalised even when the pipeline "succeeded".
+        # Weights: correctness (success/coverage) still dominates; new metrics
+        # share 0.20 that was previously split between validation+integrity.
         raw = (
-            success * 0.35
-            + coverage * 0.25
-            + validation * 0.10
-            + integrity * 0.10
-            + data_quality * 0.20
+            success * 0.30
+            + coverage * 0.20
+            + validation * 0.05
+            + integrity * 0.05
+            + data_quality * 0.15
+            + terminology * 0.10
+            + cardinality * 0.10
+            + structural * 0.05
         )
 
         # Apply error-rate gates (non-compensatory)
@@ -471,6 +485,237 @@ class QualityEvaluator:
             ok = (v == v) and abs(v) < 1_000_000  # v==v rejects NaN
             checks.append(ok)
         return sum(checks) / len(checks) if checks else 1.0
+
+    # ----- 3f: Terminology binding ------------------------------------------
+
+    def _terminology_binding(self, r: dict, evidence: list[Evidence]) -> float:
+        """Check that clinical terminology codes are not corrupted by scrubbing.
+
+        Scrubbing rules applied to free-text fields sometimes accidentally strip
+        coding arrays or corrupt the system URI.  We verify:
+        - Every coding still has a non-empty ``system`` URI.
+        - Every coding still has a non-empty ``code`` value.
+        - ``system`` URIs that were originally from a known vocabulary
+          (LOINC, SNOMED, RxNorm, ICD-10, UCUM) still carry that URI prefix —
+          de-id must not have replaced it with a sentinel.
+
+        Returns 1.0 when no codings are present (not applicable).
+        """
+        from pipeline.scoring.constants import CLINICAL_CODE_SYSTEMS
+
+        codings = self._collect_codings(r)
+        if not codings:
+            evidence.append(
+                Evidence(check="terminology_binding", value=1.0, details={"codings": 0})
+            )
+            return 1.0
+
+        checks: list[bool] = []
+        for c in codings:
+            system = c.get("system") or ""
+            code = c.get("code") or ""
+            # Basic presence.
+            checks.append(bool(system) and bool(code))
+            # Known vocabulary systems must not be sentinel-replaced.
+            if system in CLINICAL_CODE_SYSTEMS:
+                # The system URI must still be the original vocabulary URI,
+                # not a redaction sentinel like "[REDACTED]".
+                checks.append(
+                    not system.startswith("[") and system.upper() not in {"REDACTED", "UNKNOWN"}
+                )
+                # Code must look like a code (non-empty, not a sentinel).
+                checks.append(
+                    bool(code)
+                    and not code.startswith("[")
+                    and code.upper() not in {"REDACTED", "UNKNOWN", "MASKED"}
+                )
+
+        score = sum(checks) / len(checks) if checks else 1.0
+        evidence.append(
+            Evidence(
+                check="terminology_binding",
+                value=score,
+                details={
+                    "coding_count": len(codings),
+                    "checks_total": len(checks),
+                    "checks_pass": sum(checks),
+                },
+                severity="warning" if score < 0.9 else "info",
+            )
+        )
+        return score
+
+    # ----- 3g: FHIR cardinality constraints ---------------------------------
+
+    # Per-resource required fields: (field, min_cardinality, is_array)
+    # Only the most analytically critical constraints are listed — a full
+    # StructureDefinition validator is out of scope here.
+    _CARDINALITY_RULES: dict[str, list[tuple[str, int, bool]]] = {
+        "Patient": [
+            ("resourceType", 1, False),
+            ("id", 1, False),
+        ],
+        "Observation": [
+            ("resourceType", 1, False),
+            ("status", 1, False),
+            ("code", 1, False),
+            ("subject", 1, False),
+        ],
+        "Condition": [
+            ("resourceType", 1, False),
+            ("code", 1, False),
+            ("subject", 1, False),
+        ],
+        "Procedure": [
+            ("resourceType", 1, False),
+            ("status", 1, False),
+            ("code", 1, False),
+            ("subject", 1, False),
+        ],
+        "MedicationRequest": [
+            ("resourceType", 1, False),
+            ("status", 1, False),
+            ("intent", 1, False),
+            ("subject", 1, False),
+        ],
+        "Encounter": [
+            ("resourceType", 1, False),
+            ("status", 1, False),
+            ("class", 1, False),
+            ("subject", 1, False),
+        ],
+        "DiagnosticReport": [
+            ("resourceType", 1, False),
+            ("status", 1, False),
+            ("code", 1, False),
+        ],
+        "Immunization": [
+            ("resourceType", 1, False),
+            ("status", 1, False),
+            ("vaccineCode", 1, False),
+            ("patient", 1, False),
+        ],
+        "AllergyIntolerance": [
+            ("resourceType", 1, False),
+            ("patient", 1, False),
+        ],
+    }
+
+    def _cardinality_constraints(self, r: dict, evidence: list[Evidence]) -> float:
+        """Verify required FHIR fields were not removed by over-scrubbing.
+
+        Checks a curated set of FHIR R4 cardinality-1 fields per resource type.
+        A missing required field means de-identification destroyed structural
+        validity (e.g. redacting ``Observation.status`` instead of replacing it
+        with a sentinel).
+        """
+        rtype = r.get("resourceType", "")
+        rules = self._CARDINALITY_RULES.get(rtype, [("resourceType", 1, False), ("id", 1, False)])
+
+        checks: list[bool] = []
+        for field, _min_card, is_array in rules:
+            val = r.get(field)
+            if is_array:
+                checks.append(isinstance(val, list) and len(val) >= _min_card)
+            else:
+                checks.append(val is not None and val != "" and val != [])
+
+        score = sum(checks) / len(checks) if checks else 1.0
+        failed = [
+            rules[i][0] for i, ok in enumerate(checks) if not ok
+        ]
+        evidence.append(
+            Evidence(
+                check="cardinality_constraints",
+                value=score,
+                details={
+                    "resource_type": rtype,
+                    "checks": len(checks),
+                    "failed_fields": failed,
+                },
+                severity="warning" if failed else "info",
+            )
+        )
+        return score
+
+    # ----- 3h: Structural diff (element count shift) ------------------------
+
+    def _structural_diff(
+        self,
+        original: dict | None,
+        deidentified: dict,
+        evidence: list[Evidence],
+    ) -> float:
+        """Detect over-scrubbing via element-count comparison (information loss).
+
+        A coarse, resource-local information-loss signal in the spirit of the
+        suppression component of de-identification utility metrics such as the
+        Normalized Certainty Penalty (Xu et al. 2006) and discernibility
+        (LeFevre et al. 2006): de-identification should *transform* values, not
+        delete whole sub-trees. We count leaf values in the tree before and
+        after; a large drop means elements were removed rather than
+        sentinel-replaced.
+
+        The cut-offs below are a **heuristic operating point**, not a published
+        threshold — a small drop is expected (e.g. collapsing a multi-entry
+        ``identifier`` array to one pseudonym), while a large drop indicates the
+        config nulls fields instead of replacing them. Tune per profile.
+
+          drop ≤ 5%   → 1.0  (expected pseudonymization shrinkage)
+          drop 5–20%  → linear decay from 1.0 → 0.5
+          drop > 20%  → 0.0  (severe over-scrubbing)
+          no original → 1.0  (not measurable)
+        """
+        if original is None:
+            evidence.append(
+                Evidence(
+                    check="structural_diff",
+                    value=1.0,
+                    details={"reason": "no original — not measurable"},
+                )
+            )
+            return 1.0
+
+        def _count_leaves(obj: Any, depth: int = 0) -> int:
+            if depth > 20:
+                return 0
+            if isinstance(obj, dict):
+                return sum(_count_leaves(v, depth + 1) for v in obj.values())
+            if isinstance(obj, list):
+                return sum(_count_leaves(item, depth + 1) for item in obj)
+            return 1  # scalar leaf
+
+        orig_count = _count_leaves(original)
+        deid_count = _count_leaves(deidentified)
+
+        if orig_count == 0:
+            evidence.append(
+                Evidence(check="structural_diff", value=1.0, details={"reason": "empty original"})
+            )
+            return 1.0
+
+        drop_ratio = max(0.0, (orig_count - deid_count) / orig_count)
+
+        if drop_ratio <= 0.05:
+            score = 1.0
+        elif drop_ratio <= 0.20:
+            score = 1.0 - ((drop_ratio - 0.05) / 0.15) * 0.5
+        else:
+            score = 0.0
+
+        evidence.append(
+            Evidence(
+                check="structural_diff",
+                value=score,
+                details={
+                    "original_leaves": orig_count,
+                    "deidentified_leaves": deid_count,
+                    "drop_ratio": round(drop_ratio, 4),
+                },
+                severity="warning" if drop_ratio > 0.05 else "info",
+            )
+        )
+        return score
 
     # ----- Helpers ----------------------------------------------------------
 

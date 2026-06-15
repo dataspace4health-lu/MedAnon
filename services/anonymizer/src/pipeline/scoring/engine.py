@@ -243,6 +243,7 @@ class ScoreCollector:
         "_identifier_risk_hits",
         "_config_risk_sum",
         "_config_risk_count",
+        "_uncovered_paths",
         "_lock",
     )
 
@@ -273,6 +274,13 @@ class ScoreCollector:
         # settings was passed and rules were found — tracked via _config_risk_count).
         self._config_risk_sum: float = 0.0
         self._config_risk_count: int = 0
+        # Frequency of each uncovered HIPAA-sensitive path across the batch, so
+        # the score gate's structured block report can name the *exact* paths
+        # that leaked (not just a count). Bounded by the small fixed set of
+        # HIPAA_SENSITIVE_PATHS, so unbounded growth is not a concern.
+        import collections
+
+        self._uncovered_paths: collections.Counter = collections.Counter()
         # Guards all mutable accumulators below.  ``record_resource`` and
         # ``aggregate`` may run concurrently from the parallel finalize stage
         # in the pipeline; without this lock, increments and the reservoir
@@ -374,6 +382,13 @@ class ScoreCollector:
                     self._text_risk_hits += 1
                 if result.privacy.identifier_risk > 0:
                     self._identifier_risk_hits += 1
+                    # Harvest the exact uncovered paths from the coverage
+                    # evidence so the gate report can name them. ``unmatched``
+                    # is already truncated to 10 per resource in privacy.py.
+                    for ev in result.privacy.evidence or []:
+                        if getattr(ev, "check", "") == "identifier_coverage":
+                            for path in (ev.details or {}).get("unmatched", []):
+                                self._uncovered_paths[path] += 1
                 # Accumulate config_identifier_risk when settings was available.
                 # _config_coverage() returns 0.0 both when settings=None AND when
                 # all rules fired — use config_risk_count to track only cases
@@ -461,4 +476,7 @@ class ScoreCollector:
             # hard block independent of the composite score.
             "text_risk_hits": self._text_risk_hits,
             "identifier_risk_hits": self._identifier_risk_hits,
+            # Exact HIPAA paths left uncovered, most frequent first — drives the
+            # gate's structured "what leaked" block. [(path, resource_count), …]
+            "uncovered_paths": self._uncovered_paths.most_common(20),
         }

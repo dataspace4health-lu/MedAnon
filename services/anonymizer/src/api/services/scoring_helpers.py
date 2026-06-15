@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 import uuid
 from collections import Counter
@@ -237,6 +238,11 @@ def apply_pii_leak_override(score: dict) -> "dict | None":
     pii_leak = extract_pii_leak_info(score)
     if not pii_leak:
         return None
+    if not pii_leak.get("leaked"):
+        # Warning-only verdict (weak config, no detected PII): surface it in the
+        # score/trailer but do NOT zero the score or withhold output.
+        score["pii_leak_warning"] = True
+        return pii_leak
     if isinstance(score.get("batch_privacy"), dict):
         score["batch_privacy"]["passed"] = False
         score["batch_privacy"]["risk_score"] = 1.0
@@ -257,28 +263,74 @@ def apply_pii_leak_override(score: dict) -> "dict | None":
     return pii_leak
 
 
+def _identifier_coverage_blocks() -> bool:
+    """Whether a HIPAA-coverage gap (identifier_risk) hard-blocks output.
+
+    ``text_risk`` is *detected* PII in the output text (a real leak) and always
+    blocks.  ``identifier_risk`` is a *coverage* signal — a HIPAA-sensitive field
+    is present but no rule named it, so its value passes through unchanged.  In
+    strict mode (default) that is also a hard block.  Operators who want a weak
+    config to *warn* rather than block — surfacing the gap without withholding
+    output — set ``MEDANON_GATE_IDENTIFIER_MODE=warn``.
+
+        block (default) — uncovered HIPAA fields block output (current behaviour)
+        warn            — uncovered HIPAA fields warn only; only detected PII
+                          (text_risk) in the output blocks
+    """
+    mode = os.environ.get("MEDANON_GATE_IDENTIFIER_MODE", "block").strip().lower()
+    return mode != "warn"
+
+
 def extract_pii_leak_info(score: dict | None) -> "dict | None":
-    """Return a pii_leak block if identifier or text risk hits are > 0, else None."""
+    """Return a verdict block when identifier or text risk hits are > 0, else None.
+
+    The returned dict distinguishes a *blocking* leak from a *non-blocking*
+    warning via the ``leaked`` flag:
+
+      - ``text_risk_hits`` > 0  → real PII detected in output → ``leaked=True``.
+      - ``identifier_risk_hits`` > 0 → HIPAA field present but uncovered by any
+        rule. Blocks (``leaked=True``) in strict mode; warns (``leaked=False``,
+        ``warning=True``) when ``MEDANON_GATE_IDENTIFIER_MODE=warn``.
+
+    Callers hard-block only when ``leaked`` is True; a warning-only verdict is
+    surfaced in the score/stream trailer for display but does not withhold output.
+    """
     if not score or not score.get("computed"):
         return None
     id_hits = score.get("identifier_risk_hits", 0) or 0
     txt_hits = score.get("text_risk_hits", 0) or 0
     if id_hits == 0 and txt_hits == 0:
         return None
+
+    id_blocks = id_hits > 0 and _identifier_coverage_blocks()
+    leaked = txt_hits > 0 or id_blocks
+
     msgs: list[str] = []
-    if id_hits > 0:
-        msgs.append(
-            f"{id_hits} resource(s) still contain HIPAA-sensitive fields "
-            "(Patient.name, identifier, birthDate, address, telecom) "
-            "that are NOT covered by any de-identification rule"
-        )
     if txt_hits > 0:
         msgs.append(
             f"{txt_hits} resource(s) contain PII patterns in free-text fields "
             "not scrubbed by an NLP rule (phone, email, SSN, dates)"
         )
+    if id_hits > 0:
+        # Phrase the coverage gap as a leak when it blocks, as a warning when it
+        # only warns — the wording drives what the UI shows the operator.
+        if id_blocks:
+            msgs.append(
+                f"{id_hits} resource(s) still contain HIPAA-sensitive fields "
+                "(Patient.name, identifier, birthDate, address, telecom) "
+                "that are NOT covered by any de-identification rule"
+            )
+        else:
+            msgs.append(
+                f"Weak config: {id_hits} resource(s) have HIPAA-sensitive fields "
+                "(Patient.name, identifier, birthDate, address, telecom) not "
+                "covered by any rule. Output was released because no actual PII "
+                "pattern was detected in the data, but coverage is incomplete"
+            )
+
     return {
-        "leaked": True,
+        "leaked": leaked,
+        "warning": not leaked,
         "identifier_risk_hits": id_hits,
         "text_risk_hits": txt_hits,
         "resources_affected": max(id_hits, txt_hits),

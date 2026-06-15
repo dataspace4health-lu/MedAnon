@@ -61,6 +61,20 @@ def _require_privacy() -> bool:
     )
 
 
+def _identifier_coverage_blocks() -> bool:
+    """Whether a HIPAA-coverage gap (identifier_risk) hard-blocks output.
+
+    ``text_risk`` (detected PII in output) always blocks. ``identifier_risk`` is
+    a coverage gap — set ``MEDANON_GATE_IDENTIFIER_MODE=warn`` to release output
+    with a warning when the only finding is uncovered HIPAA fields and no actual
+    PII pattern was detected. Mirrors the sync-path knob in ``scoring_helpers``.
+    """
+    return (
+        os.environ.get("MEDANON_GATE_IDENTIFIER_MODE", "block").strip().lower()
+        != "warn"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Exception
 # ---------------------------------------------------------------------------
@@ -70,7 +84,16 @@ class ScoreGateBlocked(Exception):
     """Raised by check_score_gate() when output is blocked.
 
     ``str(exc)`` is the complete plain-language feedback for ``job.error``.
+    ``.report`` carries the same verdict as a structured dict (issues, fixes,
+    leaked-field counts, score, grade) so the job record can surface *what
+    leaked and what to fix* to the UI without parsing the text blob. The output
+    is still deleted and the download still blocked — only the explanation is
+    machine-readable.
     """
+
+    def __init__(self, message: str, report: dict | None = None) -> None:
+        super().__init__(message)
+        self.report = report or {}
 
 
 # ---------------------------------------------------------------------------
@@ -123,9 +146,11 @@ def check_score_gate(score_summary: dict | None, config_profile: str = "auto") -
     profile = score_summary.get("config_profile", config_profile)
     text_risk_hits = score_summary.get("text_risk_hits", 0)
     identifier_risk_hits = score_summary.get("identifier_risk_hits", 0)
+    uncovered_paths = score_summary.get("uncovered_paths", []) or []
 
     issues: list[str] = []
     fixes: list[str] = []
+    warnings: list[str] = []
 
     # ── 1. HARD PII LEAK GATE (zero-tolerance, independent of score) ─────────
     # This fires even when composite = 100%.  Detected PII in the output means
@@ -155,23 +180,33 @@ def check_score_gate(score_summary: dict | None, config_profile: str = "auto") -
 
     if identifier_risk_hits > 0 and req_privacy:
         pct = round(identifier_risk_hits / max(total, 1) * 100, 2)
-        issues.append(
-            f"{identifier_risk_hits:,} resource(s) ({pct}%) contain "
-            "HIPAA-sensitive fields (name, identifier, address, contact, "
-            "birth date, SSN) that were NOT covered by any "
-            "de-identification rule — those values are in the output unchanged"
-        )
-        fixes.append(
-            f"Open the config profile '{profile}' and verify rules exist "
-            "for every HIPAA-sensitive field present in your FHIR data. "
-            "Check the audit report (identifier_coverage section) for the "
-            "exact paths that are missing rules."
-        )
-        fixes.append(
-            "Common missed fields: Patient.identifier.value, "
-            "Patient.contact.telecom.value, Practitioner.identifier.value, "
-            "and Organization.contact.name. Add explicit rules for each."
-        )
+        if _identifier_coverage_blocks():
+            issues.append(
+                f"{identifier_risk_hits:,} resource(s) ({pct}%) contain "
+                "HIPAA-sensitive fields (name, identifier, address, contact, "
+                "birth date, SSN) that were NOT covered by any "
+                "de-identification rule — those values are in the output unchanged"
+            )
+            fixes.append(
+                f"Open the config profile '{profile}' and verify rules exist "
+                "for every HIPAA-sensitive field present in your FHIR data. "
+                "Check the audit report (identifier_coverage section) for the "
+                "exact paths that are missing rules."
+            )
+            fixes.append(
+                "Common missed fields: Patient.identifier.value, "
+                "Patient.contact.telecom.value, Practitioner.identifier.value, "
+                "and Organization.contact.name. Add explicit rules for each."
+            )
+        else:
+            # warn mode: surface the coverage gap but do not block output. Only
+            # detected PII (text_risk) withholds release.
+            warnings.append(
+                f"Weak config: {identifier_risk_hits:,} resource(s) ({pct}%) have "
+                "HIPAA-sensitive fields not covered by any rule. Output was "
+                "released because no actual PII pattern was detected, but "
+                f"coverage is incomplete — review profile '{profile}'."
+            )
 
     # ── 2. COMPOSITE SCORE GATE ──────────────────────────────────────────────
     composite_blocked = avg_composite < min_comp
@@ -244,10 +279,22 @@ def check_score_gate(score_summary: dict | None, config_profile: str = "auto") -
         )
 
     if not issues:
-        return  # All gates passed
+        # No blocking issues. In warn mode an uncovered-HIPAA gap surfaces here
+        # as a warning so operators still see the weak-config signal in the logs
+        # / job record without the output being withheld.
+        if warnings:
+            _log.warning(
+                "score_gate_warn profile=%s identifier_risk_hits=%d: %s",
+                profile,
+                identifier_risk_hits,
+                " ".join(warnings),
+            )
+        return  # All blocking gates passed
 
     # ── Build the feedback message ───────────────────────────────────────────
-    hard_pii = text_risk_hits > 0 or identifier_risk_hits > 0
+    hard_pii = text_risk_hits > 0 or (
+        identifier_risk_hits > 0 and _identifier_coverage_blocks()
+    )
     grade_str = _grade(avg_composite)
 
     lines: list[str] = [
@@ -284,6 +331,31 @@ def check_score_gate(score_summary: dict | None, config_profile: str = "auto") -
     )
 
     message = "\n".join(lines)
+
+    # Structured report — same verdict, machine-readable. The job record carries
+    # this so the UI can render "what leaked" + "what to fix" without parsing the
+    # text blob. Output is still deleted and download still blocked.
+    report = {
+        "blocked": True,
+        "critical_pii": hard_pii,
+        "score": round(float(avg_composite), 1),
+        "grade": grade_str,
+        "min_required": min_comp,
+        "min_grade": _grade(min_comp),
+        "resources_total": total,
+        "profile": profile,
+        "text_risk_hits": text_risk_hits,
+        "identifier_risk_hits": identifier_risk_hits,
+        # [{"path": "Patient.name", "resource_count": 120}, …] — the exact
+        # HIPAA-sensitive paths left uncovered, most frequent first.
+        "leaked_fields": [
+            {"path": p, "resource_count": c} for p, c in uncovered_paths
+        ],
+        "issues": issues,
+        "fixes": fixes,
+        "message": message,
+    }
+
     _log.warning(
         "score_gate_blocked profile=%s composite=%.1f "
         "text_risk_hits=%d identifier_risk_hits=%d fail_count=%d",
@@ -293,4 +365,4 @@ def check_score_gate(score_summary: dict | None, config_profile: str = "auto") -
         identifier_risk_hits,
         fail_count,
     )
-    raise ScoreGateBlocked(message)
+    raise ScoreGateBlocked(message, report=report)
