@@ -30,6 +30,9 @@ general:
   rewrite_references: true
   rewrite_text_ids: true
 
+nlp:
+  fail_mode: redact
+
 rules:
 
 # ==============================================================

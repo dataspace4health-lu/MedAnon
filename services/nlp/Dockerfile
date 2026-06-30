@@ -6,8 +6,11 @@ WORKDIR /code
 COPY requirements.txt /code/requirements.txt
 RUN pip install --no-cache-dir -r /code/requirements.txt
 
-# Download spaCy model (heavy step — ~560 MB)
-RUN python -m spacy download en_core_web_lg --quiet
+# Download spaCy models.  English is always required (~560 MB).
+# French (fr_core_news_lg, ~545 MB) is opt-in: set NLP_LANG_FR=true at build time.
+ARG NLP_LANG_FR=false
+RUN python -m spacy download en_core_web_lg --quiet && \
+    if [ "$NLP_LANG_FR" = "true" ]; then python -m spacy download fr_core_news_lg --quiet; fi
 
 # NLP service entry point
 COPY src/ /code/

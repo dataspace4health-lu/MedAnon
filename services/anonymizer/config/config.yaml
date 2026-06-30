@@ -17,6 +17,11 @@ general:
   appname: SPE-FHIR-BlackBox
   hash_type: sha3_256
 
+nlp:
+  # Default profile: safe fallback when NLP is unavailable (replaces with [REDACTED]).
+  # Change to 'raise' in compliance profiles where silent redact is unacceptable.
+  fail_mode: redact
+
 rules:
 
   # ===========================================================================

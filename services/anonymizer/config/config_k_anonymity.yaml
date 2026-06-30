@@ -49,6 +49,11 @@ general:
   rewrite_references: true
   rewrite_text_ids: false
 
+nlp:
+  # k-anonymity pipeline: NLP unavailability would silently leave QI text intact,
+  # corrupting the suppression logic — fail hard.
+  fail_mode: raise
+
 rules:
   # -- Direct identifiers (always pseudonymize / redact) --------------------
 

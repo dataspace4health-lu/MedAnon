@@ -107,6 +107,10 @@ HEALTHCARE_ENTITIES = [
 # Presidio engine singleton (lazy, thread-safe)
 # ---------------------------------------------------------------------------
 
+# Languages for which custom recognizers are registered.
+# Extended to ["en", "fr"] at engine init when fr_core_news_lg is installed.
+_SUPPORTED_LANGS: list[str] = ["en"]
+
 _ENGINE_LOCK = threading.Lock()
 _ANALYZER = None
 
@@ -118,13 +122,17 @@ def _build_custom_recognizers():
     recognizers = []
 
     def _add(entity, name, patterns, context=None):
-        recognizers.append(PatternRecognizer(
-            supported_entity=entity,
-            name=name,
-            patterns=[Pattern(name=n, regex=r, score=s) for n, r, s in patterns],
-            supported_language="en",
-            context=context or [],
-        ))
+        # Register one recognizer instance per supported language so that
+        # Presidio's per-language filter doesn't discard regex matches when
+        # language="fr" (or any future lang) is passed by the caller.
+        for lang in _SUPPORTED_LANGS:
+            recognizers.append(PatternRecognizer(
+                supported_entity=entity,
+                name=f"{name}_{lang}",
+                patterns=[Pattern(name=n, regex=r, score=s) for n, r, s in patterns],
+                supported_language=lang,
+                context=context or [],
+            ))
 
     # --- Addresses ---
     _add("STREET_ADDRESS", "us_address_recognizer", [
@@ -708,21 +716,38 @@ def _build_custom_recognizers():
 
 def _get_analyzer():
     """Return the process-level Presidio AnalyzerEngine, initializing once."""
-    global _ANALYZER
+    global _ANALYZER, _SUPPORTED_LANGS
     if _ANALYZER is not None:
         return _ANALYZER
     with _ENGINE_LOCK:
         if _ANALYZER is not None:
             return _ANALYZER
         try:
+            import spacy.util
             from presidio_analyzer import AnalyzerEngine
             from presidio_analyzer.nlp_engine import NlpEngineProvider
 
-            log.info("Initializing Presidio AnalyzerEngine with en_core_web_lg …")
+            models = [{"lang_code": "en", "model_name": "en_core_web_lg"}]
+            _fr_available = spacy.util.is_package("fr_core_news_lg")
+            if _fr_available:
+                models.append({"lang_code": "fr", "model_name": "fr_core_news_lg"})
+                if "fr" not in _SUPPORTED_LANGS:
+                    _SUPPORTED_LANGS.append("fr")
+                log.info("fr_core_news_lg detected — enabling French NER")
+            else:
+                log.info(
+                    "fr_core_news_lg not installed — French NER unavailable; "
+                    "rebuild with NLP_LANG_FR=true to enable"
+                )
+
+            log.info(
+                "Initializing Presidio AnalyzerEngine — languages: %s",
+                ", ".join(_SUPPORTED_LANGS),
+            )
             provider = NlpEngineProvider(
                 nlp_configuration={
                     "nlp_engine_name": "spacy",
-                    "models": [{"lang_code": "en", "model_name": "en_core_web_lg"}],
+                    "models": models,
                     "ner_model_configuration": {
                         "labels_to_ignore": [
                             "CARDINAL",
@@ -740,14 +765,18 @@ def _get_analyzer():
                     },
                 }
             )
-            _ANALYZER = AnalyzerEngine(nlp_engine=provider.create_engine())
+            _ANALYZER = AnalyzerEngine(
+                nlp_engine=provider.create_engine(),
+                supported_languages=list(_SUPPORTED_LANGS),
+            )
             custom = _build_custom_recognizers()
             for rec in custom:
                 _ANALYZER.registry.add_recognizer(rec)
             log.info(
-                "Presidio ready — %d entity types, %d custom recognizers",
+                "Presidio ready — %d entity types, %d custom recognizers across %d language(s)",
                 len(HEALTHCARE_ENTITIES),
                 len(custom),
+                len(_SUPPORTED_LANGS),
             )
         except Exception as exc:
             raise RuntimeError(

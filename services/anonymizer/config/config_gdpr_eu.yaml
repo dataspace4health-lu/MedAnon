@@ -43,6 +43,11 @@ general:
 #     secret_key_env: MEDANON_HASH_KEY   # read key from env (recommended)
 # Then reference with:  params: *hmac_params
 
+nlp:
+  # Under GDPR Art. 89 pseudonymisation requirements, NLP unavailability must
+  # be a hard failure — silent redact fallback would leave personal data in text.
+  fail_mode: raise
+
 rules:
 
   # ---------------------------------------------------------------------------

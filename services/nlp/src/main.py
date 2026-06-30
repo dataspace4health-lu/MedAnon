@@ -142,7 +142,12 @@ def _verify_detector_import():
         entities = tuple(_resolve_entities("healthcare"))
         # Minimal real detection — exercises the full Presidio + spaCy stack.
         _detect_entities_cached("John Smith DOB 1980-01-01", entities, 0.4, "en")
-        logger.info("detector warm-up complete — Presidio/spaCy ready")
+        from recognizers import _SUPPORTED_LANGS
+        if "fr" in _SUPPORTED_LANGS:
+            _detect_entities_cached("Jean Dupont né le 01/01/1980", entities, 0.4, "fr")
+            logger.info("detector warm-up complete — Presidio/spaCy ready (en + fr)")
+        else:
+            logger.info("detector warm-up complete — Presidio/spaCy ready (en)")
     except Exception as exc:
         logger.error("detector warm-up failed: %s", exc, exc_info=True)
         app.state.detector_ok = False

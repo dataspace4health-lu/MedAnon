@@ -105,6 +105,11 @@ general:
 
     # Any resource type NOT listed above falls back to ${GPAS_DOMAIN}
 
+nlp:
+  # gPAS profile: structured IDs are pseudonymized by gPAS; NLP handles free text.
+  # Redact fallback is acceptable here since gPAS protects the primary identifiers.
+  fail_mode: redact
+
 rules:
 
 # ==========================================================

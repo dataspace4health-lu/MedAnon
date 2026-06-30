@@ -37,6 +37,9 @@ volumes:
   ollama-data:
   prometheus-data:
   grafana-data:
+  ui-certs:
+  keycloak-pg-data:
+  fhir-validator-cache:
 
 # ── Shared environment (anonymizer + worker) ──────────────────────────────────
 # Both services run the same image; this anchor eliminates the ~40-line duplication.
@@ -157,6 +160,13 @@ x-worker-env: &worker-env
   MEDANON_AI_PII_PROVIDER: ${MEDANON_AI_PII_PROVIDER:-}
   MEDANON_PII_GATE: ${MEDANON_PII_GATE:-false}
   AI_SERVICE_URL: ${AI_SERVICE_URL:-}
+  # Trust Gate microservice — pre-privacy data-quality / trust assessment.
+  # Opt-in: start the stack with `--profile trust` AND set
+  # TRUST_GATE_SERVICE_URL=http://trust-gate:8400 to activate the intake
+  # barrier. Empty (default) = the intake gate is a no-op. TRUST_GATE_MODE is
+  # warn (advisory passport, never blocks) | block (refuse BLOCK datasets) | off.
+  TRUST_GATE_SERVICE_URL: ${TRUST_GATE_SERVICE_URL:-}
+  TRUST_GATE_MODE: ${TRUST_GATE_MODE:-warn}
 
 # ── Services ──────────────────────────────────────────────────────────────────
 services:
@@ -692,6 +702,162 @@ services:
     cap_drop:
       - ALL
 
+  # Trust Gate microservice (opt-in `trust` profile) ─────────────────────────
+  # Pre-privacy data-quality / trust assessment → Quality Passport.
+  # Activate with: docker compose --profile trust up  AND set
+  # TRUST_GATE_SERVICE_URL=http://trust-gate:8400 in .env (see env anchor above).
+  # Terminology validation is fail-soft: leave TRUST_GATE_TERMINOLOGY_URL empty
+  # to skip it, or point it at an operator-provided server (e.g. Snowstorm —
+  # requires Elasticsearch + a licensed SNOMED CT import; see docs/trust-gate.md).
+  trust-gate:
+    build:
+      context: services/trust-gate
+      dockerfile: Dockerfile
+    image: medanon-trust-gate:latest
+    container_name: medanon-trust-gate
+    profiles: ["trust"]
+    restart: unless-stopped
+    # Expose port to other services on the network and publish to host
+    expose:
+      - "8400"
+    ports:
+      - "8400:8400"
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      # Validator: the bundled sidecar is the HL7/Inferno fhir-validator-wrapper
+      # (purpose-built Java validator, POST /validate?profile=, returns an
+      # OperationOutcome envelope). To fall back to a HAPI $validate sidecar set
+      # URL=http://fhir-validator:8080/fhir and ENDPOINT=/{type}/$validate.
+      TRUST_GATE_VALIDATOR_URL: ${TRUST_GATE_VALIDATOR_URL:-http://fhir-validator:4567}
+      TRUST_GATE_VALIDATOR_ENDPOINT: ${TRUST_GATE_VALIDATOR_ENDPOINT:-/validate}
+      # Per-call + wrapper timeouts for the validator. The default 15s per-call
+      # read timeout fired during a cold IG-package load and forced conformance
+      # (Structural/Profile) to NA; 60s/90s absorb the cold start.
+      TRUST_GATE_VALIDATOR_TIMEOUT_SEC: ${TRUST_GATE_VALIDATOR_TIMEOUT_SEC:-60}
+      TRUST_GATE_VALIDATOR_ASYNC_TIMEOUT_SEC: ${TRUST_GATE_VALIDATOR_ASYNC_TIMEOUT_SEC:-90}
+      TRUST_GATE_TERMINOLOGY_URL: ${TRUST_GATE_TERMINOLOGY_URL:-}
+      # Decision-policy cut-offs (% checks passing) — OHDSI-DQD style, tunable.
+      TRUST_GATE_PASS_MIN_RATE: ${TRUST_GATE_PASS_MIN_RATE:-90}
+      TRUST_GATE_CATEGORY_MIN_RATE: ${TRUST_GATE_CATEGORY_MIN_RATE:-80}
+      # Stateful QC platform: retain passports + findings + ALCOA++ audit trail so
+      # the UI's history/trend/findings/audit views are populated. SQLite at a
+      # writable path persists for the container's lifetime (single-instance). For
+      # durable, cross-replica history set TRUST_GATE_STORE_DB_URL to a Postgres DSN.
+      TRUST_GATE_STORE_DB: ${TRUST_GATE_STORE_DB:-/tmp/trust_gate.db}
+      TRUST_GATE_STORE_DB_URL: ${TRUST_GATE_STORE_DB_URL:-}
+      # Seed the statistical-advisory sampler so QC runs are reproducible.
+      TRUST_GATE_SAMPLER_SEED: ${TRUST_GATE_SAMPLER_SEED:-1337}
+      # uvicorn worker processes. The assess path is CPU-bound under concurrent
+      # load (terminology results cached process-wide), so throughput scales with
+      # workers up to the cpu limit. Keep TRUST_GATE_WORKERS == TRUST_GATE_CPUS.
+      TRUST_GATE_WORKERS: ${TRUST_GATE_WORKERS:-2}
+    networks:
+      - processing-net
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8400/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          # Match TRUST_GATE_WORKERS: the assess path is CPU-bound under load, so
+          # 1.0 here throttled both workers onto a single core. Scale together.
+          cpus: "${TRUST_GATE_CPUS:-2.0}"
+          memory: ${TRUST_GATE_MEMORY:-512M}
+        reservations:
+          cpus: "0.2"
+          memory: 128M
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  # Trust Gate UI (opt-in `trust` profile) ───────────────────────────────────
+  # Standalone single-page frontend for the Trust Gate service. Runs separately
+  # from the main MedAnon SPA: paste FHIR → Quality Passport. nginx serves the
+  # static page and proxies /v1/* + /health to trust-gate:8400.
+  trust-gate-ui:
+    build:
+      context: services/trust-gate/ui
+      dockerfile: Dockerfile
+    image: medanon-trust-gate-ui:latest
+    container_name: medanon-trust-gate-ui
+    profiles: ["trust"]
+    restart: unless-stopped
+    ports:
+      - "${TRUST_GATE_UI_PORT:-8401}:8401"
+    depends_on:
+      - trust-gate
+    networks:
+      - processing-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8401/healthz || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128M
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  # HL7 FHIR Validator sidecar (opt-in `trust` profile) ──────────────────────
+  # The HL7/Inferno fhir-validator-wrapper: the purpose-built Java FHIR validator
+  # (org.hl7.fhir.validation) behind an HTTP API (POST /validate?profile=, port
+  # 4567, https://github.com/inferno-framework/fhir-validator-wrapper). It does
+  # real base-spec + IG/profile structural validation and is far faster than a
+  # HAPI $validate sidecar. Returns an OperationOutcome envelope. To fall back to
+  # HAPI set image=hapiproject/hapi:latest + TRUST_GATE_VALIDATOR_URL/ENDPOINT.
+  fhir-validator:
+    image: infernocommunity/fhir-validator-service:latest
+    container_name: medanon-fhir-validator
+    profiles: ["trust"]
+    restart: unless-stopped
+    expose:
+      - "4567"
+    environment:
+      # The validator loads FHIR definitions + IG packages into the heap; cap the
+      # JVM to the container limit so it does not OOM-kill under the 3G ceiling.
+      JAVA_OPTS: ${TRUST_GATE_VALIDATOR_JAVA_OPTS:--XX:MaxRAMPercentage=75.0}
+      # Terminology server wiring.
+      # Tier 0 (default): DISABLE_TX=true → structural/profile validate OFFLINE
+      # against loaded IG value sets — no tx.fhir.org round-trips, no cold-load
+      # latency; conformance.terminology reports NA honestly.
+      # Tier 1/2: stand up a self-hosted tx server, then in .env set
+      # TRUST_GATE_VALIDATOR_DISABLE_TX=false and TRUST_GATE_VALIDATOR_TX_URL to it
+      # (e.g. http://hapi-tx:8080/fhir).
+      DISABLE_TX: ${TRUST_GATE_VALIDATOR_DISABLE_TX:-true}
+      TX_SERVER_URL: ${TRUST_GATE_VALIDATOR_TX_URL:-}
+    networks:
+      - processing-net
+    volumes:
+      # Persist the FHIR package cache (~/.fhir) so IG packages auto-fetched on
+      # first use survive restarts: the one-time cold download (tens of seconds)
+      # is paid once, not on every container start.
+      - fhir-validator-cache:/root/.fhir
+    healthcheck:
+      # /version returns the validator build once definitions have loaded (the
+      # slow part of startup), so this doubles as a warm-up gate.
+      test: ["CMD-SHELL", "curl -sf http://localhost:4567/version || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 180s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.5"
+          # The Java validator holds the full FHIR definition graph + loaded IG
+          # packages in heap; 1.5G OOM-kills it mid-load. 3G is the safe floor.
+          memory: 3072M
+
   # NLP microservice ────────────────────────────────────────
   # Scale with: docker compose up --scale nlp=2
   # External access goes through the Traefik gateway under the legacy
@@ -799,6 +965,17 @@ services:
     restart: unless-stopped
     ports:
       - "${UI_PORT:-8501}:8501"
+    environment:
+      # Hosts the self-signed TLS cert should be valid for. MUST include the
+      # public IP/hostname users reach the UI on (space- or comma-separated),
+      # e.g. TLS_SAN="10.168.192.22". Mount a real cert into /etc/nginx/certs
+      # to override the self-signed one in production.
+      TLS_SAN: ${TLS_SAN:-localhost 127.0.0.1}
+    volumes:
+      # Persist the self-signed cert so its fingerprint is stable across
+      # restarts (users accept the browser warning only once). Drop a
+      # CA-signed tls.crt/tls.key here to use a real cert instead.
+      - ui-certs:/etc/nginx/certs
     networks:
       - processing-net
       - source-net
@@ -807,7 +984,8 @@ services:
       anonymizer:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8501/healthz"]
+      # Probes the internal plain-HTTP health port (8500), not the TLS port.
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8500/healthz"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -862,6 +1040,105 @@ services:
         reservations:
           cpus: "0.25"
           memory: 64M
+
+  # ── Keycloak OIDC identity provider (processing-net) ──────────────────────
+  # Opt-in: docker compose --profile auth up -d keycloak
+  #
+  # Reached ONLY through the UI's TLS nginx at https://<host>:8501/auth/ — there
+  # is intentionally NO published host port. Keycloak's own admin console is a
+  # PKCE public client and therefore also needs an HTTPS secure context, so it
+  # must be served via the same TLS edge (a plain-HTTP host port would hit the
+  # exact "crypto.subtle requires HTTPS" error). One URL, no split-brain.
+  #
+  # Admin console: https://<host>:8501/auth/admin/   (master realm,
+  #                KEYCLOAK_ADMIN_USER / KEYCLOAK_ADMIN_PASSWORD)
+  keycloak-db:
+    image: postgres:16-alpine
+    container_name: medanon-keycloak-db
+    profiles: ["auth"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: ${KEYCLOAK_DB_USER:-keycloak}
+      POSTGRES_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?KEYCLOAK_DB_PASSWORD must be set in .env}
+    volumes:
+      - keycloak-pg-data:/var/lib/postgresql/data
+    networks:
+      - processing-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${KEYCLOAK_DB_USER:-keycloak} -d keycloak"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.1
+    container_name: medanon-keycloak
+    profiles: ["auth"]
+    restart: unless-stopped
+    # `start` (production mode). No --optimized: the stock image is not pre-built
+    # for postgres, so Keycloak auto-augments on first boot. hostname-strict=false
+    # lets it run behind the proxy without a baked hostname.
+    command: ["start", "--import-realm"]
+    environment:
+      # ── Bootstrap admin (master realm) ──────────────────────────────────
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USER:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?KEYCLOAK_ADMIN_PASSWORD must be set in .env}
+      # ── Database ────────────────────────────────────────────────────────
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://keycloak-db:5432/keycloak
+      KC_DB_USERNAME: ${KEYCLOAK_DB_USER:-keycloak}
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?}
+      # ── Reverse-proxy / hostname (served under /auth on the UI TLS edge) ──
+      # TLS is terminated at nginx; Keycloak speaks plain HTTP internally and
+      # trusts X-Forwarded-* so it builds correct https:// public URLs.
+      KC_HTTP_ENABLED: "true"
+      KC_HTTP_RELATIVE_PATH: /auth
+      KC_PROXY_HEADERS: xforwarded
+      # Public browser-facing base URL INCLUDING /auth (KC 26 uses this path
+      # verbatim for issued URLs; same path as KC_HTTP_RELATIVE_PATH, not
+      # concatenated → no /auth/auth). Must be HTTPS and match OIDC_ISSUER's base.
+      # e.g. KEYCLOAK_PUBLIC_URL=https://10.168.192.22:8501/auth
+      KC_HOSTNAME: ${KEYCLOAK_PUBLIC_URL:-}
+      # Lenient: when KC_HOSTNAME is empty, derive URLs from forwarded headers.
+      KC_HOSTNAME_STRICT: "false"
+      KC_HEALTH_ENABLED: "true"
+    volumes:
+      - ./services/keycloak/realm-export.json:/opt/keycloak/data/import/medanon-realm.json:ro
+      # Branded login/reset theme (the realm sets loginTheme: medanon).
+      - ./services/keycloak/themes/medanon:/opt/keycloak/themes/medanon:ro
+    networks:
+      - processing-net
+    depends_on:
+      keycloak-db:
+        condition: service_healthy
+    healthcheck:
+      # The stock Keycloak image has no curl/wget; use bash /dev/tcp against the
+      # master-realm discovery doc (path is known: /auth relative path) — 200
+      # once the server is fully up and the realm is served.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8080 && printf 'GET /auth/realms/master/.well-known/openid-configuration HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && grep -qm1 '200' <&3"]
+      interval: 15s
+      timeout: 10s
+      retries: 15
+      start_period: 90s
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1024M
+        reservations:
+          cpus: "0.25"
+          memory: 256M
 
   # Redis (processing-net) ────────────────────────────────────────────
   # Note: Redis logs "WARNING Memory overcommit must be enabled!" on Linux VMs.

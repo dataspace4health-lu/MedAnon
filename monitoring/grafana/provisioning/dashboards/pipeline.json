@@ -432,7 +432,7 @@
           "refId": "A"
         }
       ],
-      "title": "Circuit Breaker States (0=CLOSED ✓, 1=HALF-OPEN, 2=OPEN ✗)",
+      "title": "Circuit Breaker States (0=CLOSED, 1=HALF-OPEN, 2=OPEN)",
       "description": "OPEN means all calls to that upstream are blocked and failing fast. HALF-OPEN means recovery is being probed.",
       "type": "stat"
     },

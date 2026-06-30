@@ -35,6 +35,9 @@ general:
   # domain_map omitted — inherits _DEFAULT_DOMAIN_MAP from loader.py
   # Add domain_map: here to override specific resource types for this profile.
 
+nlp:
+  fail_mode: redact
+
 rules:
 
 # ==========================================================

@@ -54,6 +54,11 @@ general:
   rewrite_references: true
   rewrite_text_ids: true
 
+nlp:
+  # NLP unavailability on a HIPAA Safe Harbor profile must hard-stop: a silent
+  # redact fallback would leave free-text PHI intact without the operator knowing.
+  fail_mode: raise
+
 rules:
 
   # ===========================================================================

@@ -6,16 +6,17 @@ A rule-driven FHIR R4 de-identification engine that transforms patient data for 
 
 ## Overview
 
-MedAnon accepts FHIR resources (JSON, NDJSON, XML), applies configurable match-action rules, and returns de-identified output. It supports GDPR, HIPAA Safe Harbor, and IRB research profiles out of the box.
+MedAnon accepts FHIR resources (JSON, NDJSON, XML), applies the `match → action` rules you author in a YAML config, and returns de-identified output. You write the rules; the bundled GDPR, HIPAA Safe Harbor, and research profiles are starting examples, not the product.
 
-**Why it exists:** Clinical data must be de-identified before secondary use. MedAnon automates this with auditable, reversible, and compliance-mapped transformations  without manual scripting.
+**Why it exists:** Clinical data must be de-identified before secondary use. MedAnon automates this with auditable, reversible, compliance-mapped transformations instead of one-off scripts.
 
 **Key capabilities:**
+- Author your own FHIRPath `match → action` rules, with AI assistance to draft and explain them
+- Multi-format intake: FHIR JSON / NDJSON / XML (plus CDA, DICOM, HL7 v2 via the formats package)
 - Reversible pseudonymization via gPAS TTP
-- NLP-based free-text scrubbing (Presidio + spaCy)
+- NLP free-text scrubbing (Presidio + spaCy), fail-closed
 - Async bulk export for large cohorts
 - Privacy × utility × quality scoring
-- AI-assisted config generation (Phase 4)
 
 ---
 
@@ -41,7 +42,7 @@ open http://localhost:8501           # browser UI
 **De-identify a resource:**
 
 ```bash
-curl -s -X POST http://localhost:8000/process?config_profile=gdpr \
+curl -s -X POST "http://localhost:8000/v1/process?config_profile=gdpr" \
   -H "Content-Type: application/json" \
   -H "X-API-Key: $MEDANON_API_KEY" \
   -d '{"resourceType":"Patient","id":"p1","name":[{"family":"Müller"}],"birthDate":"1951-08-14"}' \
@@ -64,18 +65,18 @@ Browser
               ├── PostgreSQL (app-db)        jobs, configs, staging
               └── Redis                      job queue + cache
 
-Source FHIR server (no host port  isolated network, accessed only via anonymizer)
-Target FHIR server (:8082)  de-identified output
+Source FHIR server (no host port; isolated network, reached only via anonymizer)
+Target FHIR server (:8082): de-identified output
 ```
 
-**4-pass pipeline per resource:**
+**Four-stage pipeline per batch** (`pipeline/processor.py`). Stages 2a and 2b run on disjoint paths concurrently:
 
-| Pass | What happens |
+| Stage | What happens |
 |---|---|
-| Pass 1 | FHIRPath rule matching + action dispatch (redact, hash, generalize…) |
-| Pass 1.5 | Batch NLP entity detection → token replacement |
-| Pass 2 | Batch gPAS pseudonymization |
-| Pass 3+4 | Cross-resource reference rewriting + manifest tagging |
+| 1. match | FHIRPath rule matching + action dispatch (redact, hash, generalize, ...) |
+| 2a. phi_detection | Batch NLP entity detection then token replacement (concurrent with 2b) |
+| 2b. pseudonymize | Batch gPAS pseudonym lookup (concurrent with 2a) |
+| 3. finalize | gPAS write-back + cross-resource reference rewrite + optional manifest tag |
 
 ---
 
@@ -83,8 +84,8 @@ Target FHIR server (:8082)  de-identified output
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `POST` | `/process` | De-identify a single resource or Bundle |
-| `POST` | `/process/ndjson` | Stream de-identify NDJSON |
+| `POST` | `/v1/process` | De-identify a single resource or Bundle |
+| `POST` | `/v1/process/ndjson` | Stream de-identify NDJSON |
 | `POST` | `/v1/jobs/bulk-export` | Start async bulk export job |
 | `GET` | `/v1/jobs/{id}` | Poll job status |
 | `GET` | `/v1/jobs/{id}/result` | Download NDJSON result |
@@ -94,7 +95,7 @@ Target FHIR server (:8082)  de-identified output
 | `GET` | `/health` | Liveness check |
 | `GET` | `/ready` | Readiness check (probes all upstreams) |
 
-Select a profile per request: `?config_profile=gdpr`  values: `gdpr`, `hipaa`, `gpas`, `research`, `structural`, `value-masking`, `minimal`.
+Select a built-in profile per request with `?config_profile=<name>`: `gdpr`, `hipaa`, `gpas`, `research`, `structural`, `value-masking`, `minimal` (or `auto`). User-defined profiles created via `POST /v1/configs` are selected by their own name.
 
 Full reference: [docs/api-reference.md](docs/api-reference.md)
 
@@ -102,11 +103,11 @@ Full reference: [docs/api-reference.md](docs/api-reference.md)
 
 ## Configuration
 
-Copy `.env.example` to `.env`. All secrets stay in `.env`  never committed.
+Copy `.env.example` to `.env`. Secrets stay in `.env` and are never committed.
 
 | Variable | Required | Description |
 |---|---|---|
-| `MEDANON_API_KEY` | Production | API auth key  blank = open mode (dev only) |
+| `MEDANON_API_KEY` | Production | API auth key; blank = open mode (dev only) |
 | `MEDANON_HASH_KEY` | Production | HMAC key for pseudonymization: `openssl rand -hex 32` |
 | `GPAS_URL` | gPAS profile | gPAS gateway URL |
 | `GPAS_DOMAIN` | gPAS profile | Pseudonymization domain name |
@@ -145,15 +146,12 @@ make format        # ruff format
 # Run tests
 make test          # full pytest suite
 make test-cov      # with coverage report
-
-# Hot-reload stack (source mounted into container)
-make dev
 ```
 
 **Test notes:**
-- Most tests run locally without Docker
-- `test_processor.py`, `test_deidentify.py`, `test_pseudonymize.py` require Python 3.12 (`fhirpathpy` incompatibility with 3.13)
-- `test_agents.py` requires AI provider env vars
+- Run the suite from `services/anonymizer/`; it works locally without Docker.
+- FHIRPath-dependent tests (`test_golden.py`, `test_postgres_stores.py`, `test_processing_runs.py`, `test_staging_store.py`, `test_executor_tabular.py`, `test_scoring_sparse_fp.py`) lazy-import `fhirpathpy`, which pulls in `typing.io` (removed in Python 3.13). Each self-bootstraps a shim, so they run on both 3.12 (the Docker image) and a 3.13 local venv.
+- AI tests (`test_agents.py`, `test_ai_local_guard.py`) skip when no AI provider is configured.
 
 ---
 
@@ -199,7 +197,7 @@ More: [docs/RUNBOOK.md](docs/RUNBOOK.md)
 
 | Document | Description |
 |---|---|
-| [docs/INDEX.md](docs/INDEX.md) | Full documentation index  start here |
+| [docs/INDEX.md](docs/INDEX.md) | Full documentation index; start here |
 | [docs/architecture.md](docs/architecture.md) | System design, pipeline, config profiles |
 | [docs/data-flow.md](docs/data-flow.md) | Request traces, network layout, NLP/gPAS/AI flows |
 | [docs/api-reference.md](docs/api-reference.md) | All REST endpoints with request/response examples |

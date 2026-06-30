@@ -47,6 +47,11 @@ general:
   rewrite_references: true
   rewrite_text_ids: true
 
+nlp:
+  # Research pseudonymisation: NLP unavailability must fail loudly so the
+  # researcher knows the text scrubbing step did not run.
+  fail_mode: raise
+
 rules:
 
   # ===========================================================================

@@ -21,11 +21,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install ruff
+      - run: pip install ruff pyyaml
       - name: ruff check
         run: ruff check services/anonymizer/src
       - name: ruff format --check
         run: ruff format --check services/anonymizer/src
+      - name: Trust Gate id sync (phases + use-cases)
+        run: python3 scripts/check_trust_ids.py
 
   lint-typescript:
     name: Lint TypeScript

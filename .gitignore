@@ -111,13 +111,14 @@ worker_healthy
 services/anonymizer/tests/data/sample_fhir_data/synthea_sample_fhir_data/
 services/anonymizer/tests/data/TestBase*/
 
-# ── gPAS deployment archives (downloaded at build time) ───────────────────────
-services/gpas/deployments/
-
 # ── Frontend build artefacts ──────────────────────────────────────────────────
 client/node_modules/
 client/dist/
 
+# ── Website (Docusaurus) ──────────────────────────────────────────────────────
+website/node_modules/
+website/build/
+website/.docusaurus/
 # ── SQLite job / config databases ─────────────────────────────────────────────
 *.db
 *.db-journal
@@ -148,8 +149,8 @@ services/anonymizer/src/**/*.whl
 services/nlp/models/
 
 # ── gPAS third-party service ──────────────────────────────────────────────────
-# Managed separately; not part of this repository
-services/gpas/
+# Only the deployment archives are large/regenerable; config files are tracked.
+services/gpas/deployments/
 
 # ── Claude Code session memory ────────────────────────────────────────────────
 CLAUDE.md

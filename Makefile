@@ -5,10 +5,8 @@
 VENV        := .venv
 PY          := $(VENV)/bin/python3
 PIP         := $(VENV)/bin/pip
-ANONYMIZER  := services/anonymizer			
-TEST_DIR    := $(ANONYMIZER)/tests
+ANONYMIZER  := services/anonymizer
 COMPOSE     := docker compose
-DEV_COMPOSE := $(COMPOSE) -f docker-compose.yml -f docker-compose.dev.yml
 
 # Worker replica count — read from .env (default 2 if not set or .env absent).
 # gPAS and NLP always run as a single instance (scaling them does not improve
@@ -32,7 +30,7 @@ ANONYMIZER_PORT := $(shell grep -s '^ANONYMIZER_PORT=' .env | cut -d= -f2 | tr -
 ANONYMIZER_PORT := $(if $(ANONYMIZER_PORT),$(ANONYMIZER_PORT),8000)
 
 .PHONY: help setup test test-cov lint format batch fetch sync-check \
-        up down down-wipe dev logs build build-ui build-sdv up-sdv build-healthcheck clean \
+        up down down-wipe logs build build-ui build-sdv up-sdv build-healthcheck clean \
         init-domains preflight verify _dirs ai-up ai-pull ai-status \
         helm-install helm-uninstall helm-lint helm-template helm-build-gpas \
         trivy-fs trivy-image-anonymizer trivy-image-ui trivy cold-reset
@@ -51,7 +49,6 @@ help:
 	@echo "  make fetch              Pull resources from HAPI FHIR, anonymize, write NDJSON"
 	@echo ""
 	@echo "  make up                 Start full stack (preflight + docker compose + verify)"
-	@echo "  make dev                Start stack with hot-reload (dev overrides)"
 	@echo "  make down               Stop and remove containers (data volumes are preserved)"
 	@echo "  make down-wipe          Stop + remove containers AND all volumes (full reset)"
 	@echo "  make build              (Re)build all images"
@@ -60,9 +57,9 @@ help:
 	@echo "  make up-sdv             Build SDV image and start full stack with SDV engine"
 	@echo "  make build-healthcheck  Compile HAPI FHIR health check for correct Java version"
 	@echo "  make logs               Tail container logs"
-	@echo "  make init-domains       Import SPE domain template into running gPAS (restarts gpas)"
+	@echo "  make init-domains       Import gPAS domain template into running gPAS (restarts gpas)"
 	@echo "  make preflight          Validate prerequisites before starting the stack"
-	@echo "  make verify             Smoke-test a running stack (all 5 services)"
+	@echo "  make verify             Smoke-test a running stack (core services)"
 	@echo "  make clean              Remove __pycache__ + .pytest_cache"
 	@echo ""
 	@echo "  make ai-up              Start stack + Ollama, pull the AI model, verify AI agents"
@@ -86,7 +83,7 @@ setup:
 	python3 -m venv $(VENV)
 	$(PIP) install --upgrade pip
 	$(PIP) install -r services/anonymizer/requirements.txt
-	@echo "✓ virtualenv ready — activate with: source $(VENV)/bin/activate"
+	@echo "virtualenv ready — activate with: source $(VENV)/bin/activate"
 
 # ── Testing ───────────────────────────────────────────────────────────────────
 test:
@@ -104,6 +101,13 @@ format:
 
 sync-check:
 	bash scripts/sync_shared_code.sh
+
+# Narrow, CI-friendly gate for just the Trust Gate id vocabularies (phases +
+# use-cases) shared between the anonymizer trust-profile model and the
+# trust-gate service. Independent of the broader (manually-synced) scoring
+# comparison so it can fail the build on its own contract drift.
+trust-id-sync:
+	python3 scripts/check_trust_ids.py
 
 # ── Batch processing ──────────────────────────────────────────────────────────
 batch:
@@ -177,7 +181,7 @@ build-ui:
 
 build-sdv:
 	docker build -t medanon-sdv:latest --target sdv services/anonymizer
-	@echo "✓ medanon-sdv:latest built — activate with: make up-sdv"
+	@echo "medanon-sdv:latest built — activate with: make up-sdv"
 
 up-sdv: _dirs preflight build-sdv
 	ANONYMIZER_IMAGE=medanon-sdv:latest $(COMPOSE) --profile nlp up -d \
@@ -200,9 +204,6 @@ up: _dirs preflight
 	@echo ""
 	@echo "Waiting for services to become healthy..."
 	@bash scripts/verify_deployment.sh || true
-
-dev: build-healthcheck
-	$(DEV_COMPOSE) up
 
 down:
 	$(COMPOSE) --profile analytics --profile nlp --profile monitoring --profile ha --profile s3 down --remove-orphans
@@ -285,7 +286,7 @@ helm-uninstall:
 clean:
 	find . -type d -name __pycache__ -not -path './.venv/*' -exec rm -rf {} + 2>/dev/null || true
 	find . -type d -name .pytest_cache -not -path './.venv/*' -exec rm -rf {} + 2>/dev/null || true
-	@echo "✓ caches cleared"
+	@echo "caches cleared"
 
 # ── Cold-run reset ────────────────────────────────────────────────────────────
 # Wipe ALL pseudonyms from gPAS + flush the gPAS/NLP caches in Redis so the next
@@ -297,20 +298,20 @@ clean:
 GPAS_DB_USER ?= gpas_user
 GPAS_DB_NAME ?= gpas
 cold-reset:
-	@echo "⚠  Cold reset: deleting ALL gPAS pseudonyms + flushing Redis gPAS/NLP caches…"
+	@echo "Cold reset: deleting ALL gPAS pseudonyms + flushing Redis gPAS/NLP caches…"
 	@docker exec gpas-postgres psql -U $(GPAS_DB_USER) -d $(GPAS_DB_NAME) \
 		-c "DELETE FROM mpsn; DELETE FROM psn;" \
-		>/dev/null && echo "  ✓ gPAS psn/mpsn cleared (domains kept)"
+		>/dev/null && echo "  gPAS psn/mpsn cleared (domains kept)"
 	@RP=$$(grep -E '^MEDANON_REDIS_PASSWORD' .env 2>/dev/null | cut -d= -f2); \
 	LUA='local c="0" local n=0 repeat local r=redis.call("SCAN",c,"MATCH",ARGV[1],"COUNT",1000) c=r[1] for _,k in ipairs(r[2]) do redis.call("UNLINK",k) n=n+1 end until c=="0" return n'; \
 	for pat in "medanon:gpas:*" "medanon:nlp:*"; do \
 		removed=$$(docker exec medanon-redis redis-cli -a "$$RP" -n 0 EVAL "$$LUA" 0 "$$pat" 2>/dev/null | tail -1); \
-		echo "  ✓ Redis DB0 $$pat removed: $$removed"; \
+		echo "  Redis DB0 $$pat removed: $$removed"; \
 	done; \
-	docker exec medanon-redis redis-cli -a "$$RP" -n 2 FLUSHDB >/dev/null 2>&1 && echo "  ✓ Redis DB2 (NLP L2) flushed"; \
+	docker exec medanon-redis redis-cli -a "$$RP" -n 2 FLUSHDB >/dev/null 2>&1 && echo "  Redis DB2 (NLP L2) flushed"; \
 	kept=$$(docker exec medanon-redis sh -c "redis-cli -a '$$RP' -n 0 --scan --pattern 'medanon:job*' --count 5000 2>/dev/null | wc -l"); \
-	echo "  ✓ job-queue keys preserved: $$kept"
-	@echo "✓ cold-reset complete — next export runs fully cold (restart worker to drop L1)"
+	echo "  job-queue keys preserved: $$kept"
+	@echo "cold-reset complete — next export runs fully cold (restart worker to drop L1)"
 
 # ── Security scanning (Trivy) ─────────────────────────────────────────────────
 # Requires trivy in PATH. Install: curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b ~/.local/bin
@@ -348,5 +349,5 @@ trivy-image-ui:
 
 # Run all three scans in sequence.
 trivy: trivy-fs trivy-image-anonymizer trivy-image-ui
-	@echo "✓ All Trivy scans complete"
+	@echo "All Trivy scans complete"
 
