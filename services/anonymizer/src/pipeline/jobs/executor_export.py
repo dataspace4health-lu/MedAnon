@@ -385,7 +385,8 @@ def _execute_bulk_export(job: Job, store, staging) -> None:
         _worker_log.info(
             "bulk_export_empty job=%s — no resource types to export", job.id
         )
-        _secure_open(output_path, "w").close()
+        with _secure_open(output_path, "w"):
+            pass  # touch an empty result file
         from integrations.storage import store_result
 
         job.result_path = store_result(job.id, output_path)
@@ -606,7 +607,8 @@ def _execute_cohort(job: Job, store, staging) -> None:
                 job.id,
                 search_type,
             )
-            _secure_open(output_path, "w").close()
+            with _secure_open(output_path, "w"):
+                pass  # touch an empty result file
             from integrations.storage import store_result
 
             job.result_path = store_result(job.id, output_path)

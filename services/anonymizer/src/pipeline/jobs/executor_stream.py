@@ -312,7 +312,7 @@ class _PipelineProgressDisplay:
                     "chunk": chunk_idx + 1,
                     "count": resource_count,
                     "duration": duration,
-                    "status": "✓" if ok else "⚠ fallback",
+                    "status": "ok" if ok else "fallback",
                 }
             )
             if len(self._rows) > self._MAX_ROWS:
@@ -348,7 +348,7 @@ class _PipelineProgressDisplay:
                 f"{row['duration']:.1f}s",
                 f"{tp:,.0f}/s",
                 f"[green]{row['status']}[/green]"
-                if row["status"] == "✓"
+                if row["status"] == "ok"
                 else f"[yellow]{row['status']}[/yellow]",
             )
 

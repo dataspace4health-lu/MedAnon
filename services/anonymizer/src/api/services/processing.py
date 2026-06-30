@@ -203,6 +203,23 @@ class ProcessingService:
                                 break
                         yield GPAS_FATAL_JSON
                         return
+                    except PiiLeakError as pexc:
+                        # The output barrier blocked this resource. Withhold the
+                        # leaking bytes (fail closed) and emit a clear, explicit
+                        # leak placeholder in its slot so the offender is never
+                        # streamed and the client sees *why* it was dropped —
+                        # rather than masking it as a generic "processing error".
+                        logger.warning(
+                            "ndjson_stream: pii_leak_blocked detections=%d",
+                            len(getattr(pexc, "detections", [])),
+                        )
+                        valid_results[vi] = _json_dumps(
+                            {
+                                "error": "pii_leak_detected",
+                                "detail": "output withheld by the de-identification "
+                                "validation barrier",
+                            }
+                        )
                     except Exception as exc2:
                         logger.error(
                             "NDJSON resource: processing error: %s",
@@ -286,6 +303,23 @@ class ProcessingService:
                         )
                         yield GPAS_FATAL_JSON
                         return
+                    except PiiLeakError as pexc:
+                        # Fail closed: withhold the leaking resource and emit an
+                        # explicit, counted leak placeholder rather than masking
+                        # it as a generic "processing error".
+                        logger.warning(
+                            "batch_stream: pii_leak_blocked resource=%d detections=%d",
+                            chunk_start + idx,
+                            len(getattr(pexc, "detections", [])),
+                        )
+                        yield _json_dumps(
+                            {
+                                "error": "pii_leak_detected",
+                                "resource_index": chunk_start + idx,
+                                "detail": "output withheld by the de-identification "
+                                "validation barrier",
+                            }
+                        )
                     except Exception as exc2:
                         logger.error(
                             "process_batch resource %d: %s",

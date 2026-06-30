@@ -63,10 +63,12 @@ async def list_processing_runs(
 
 
 @router.get("/stats", response_model=ProcessingRunStatsResponse)
-async def processing_run_stats():
-    """Aggregate statistics across all processing runs."""
+async def processing_run_stats(
+    config_profile: str | None = Query(None, description="Filter statistics to a specific config profile"),
+):
+    """Aggregate statistics across all processing runs, optionally filtered by config profile."""
     store = _get_store()
-    stats = await asyncio.to_thread(store.get_stats)
+    stats = await asyncio.to_thread(store.get_stats, config_profile=config_profile)
     return stats
 
 
@@ -87,6 +89,28 @@ async def get_processing_run_score_report(run_id: str):
         raise HTTPException(
             status_code=404,
             detail="No audit report for this run. Enable MEDANON_SCORING_ENABLED=true and re-process.",
+        )
+    return PlainTextResponse(content=report, media_type="text/markdown")
+
+
+@router.get("/{run_id}/passport", response_class=PlainTextResponse)
+async def get_processing_run_passport(run_id: str):
+    """Return the Markdown Quality Passport for a processing run.
+
+    The passport is stored in the ``trust_passport`` JSON column when the Trust
+    Gate runs (``TRUST_GATE_SERVICE_URL`` set). Returns 404 if the run does not
+    exist or was processed without the Trust Gate.
+    """
+    store = _get_store()
+    run = await asyncio.to_thread(store.get, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Processing run not found")
+    passport = run.get("trust_passport") or {}
+    report = passport.get("report")
+    if not report:
+        raise HTTPException(
+            status_code=404,
+            detail="No Quality Passport for this run. Set TRUST_GATE_SERVICE_URL and re-process.",
         )
     return PlainTextResponse(content=report, media_type="text/markdown")
 

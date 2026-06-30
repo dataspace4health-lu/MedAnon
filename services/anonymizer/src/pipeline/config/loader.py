@@ -136,6 +136,7 @@ class Settings:
                         "general",
                         "config_hash",
                         "privacy_model",
+                        "nlp",
                     }
                 )
 
@@ -197,6 +198,15 @@ class Settings:
                     )
                 else:
                     self.privacy_model = None
+
+                # Optional NLP configuration block (E3.1/E3.3).
+                # Sets entity→action policy + fail mode at profile level so
+                # operators don't have to repeat them on every NLP rule.
+                raw_nlp = cfg.get("nlp")
+                if raw_nlp is not None:
+                    self.nlp: dict = self._validate_nlp(raw_nlp)
+                else:
+                    self.nlp = {}
 
                 _config_log.info(
                     "Settings loaded: %d rules from %s%s",
@@ -351,6 +361,76 @@ class Settings:
                         break
             else:
                 seen[match_expr] = (action, name, idx)
+
+    @staticmethod
+    def _validate_nlp(nlp_cfg) -> dict:
+        """Validate the optional ``nlp:`` profile block (E3.1/E3.3).
+
+        Accepted shape::
+
+            nlp:
+              fail_mode: redact          # redact (safe fallback) | raise (hard fail)
+              entity_actions:
+                PERSON: redact
+                DATE_TIME:
+                  action: generalize
+                  params:
+                    strategy: date_year
+              entity_priorities:
+                PERSON: 90
+                DATE_TIME: 80
+
+        All fields are optional — an absent ``nlp:`` block means the hard-coded
+        defaults in ``deidentify.py`` apply unchanged.
+        """
+        if not isinstance(nlp_cfg, dict):
+            raise ValueError("nlp must be a mapping")
+
+        validated: dict = {}
+
+        fail_mode = nlp_cfg.get("fail_mode")
+        if fail_mode is not None:
+            if fail_mode not in ("redact", "raise"):
+                raise ValueError(
+                    f"nlp.fail_mode must be 'redact' or 'raise' (got {fail_mode!r})"
+                )
+            validated["fail_mode"] = fail_mode
+
+        entity_actions = nlp_cfg.get("entity_actions")
+        if entity_actions is not None:
+            if not isinstance(entity_actions, dict):
+                raise ValueError("nlp.entity_actions must be a mapping")
+            for entity, action_cfg in entity_actions.items():
+                if isinstance(action_cfg, str):
+                    pass
+                elif isinstance(action_cfg, dict):
+                    if "action" not in action_cfg:
+                        raise ValueError(
+                            f"nlp.entity_actions.{entity}: dict form requires an 'action' key"
+                        )
+                else:
+                    raise ValueError(
+                        f"nlp.entity_actions.{entity}: must be a string action name "
+                        f"or {{action, params}} mapping (got {type(action_cfg).__name__})"
+                    )
+            validated["entity_actions"] = entity_actions
+
+        entity_priorities = nlp_cfg.get("entity_priorities")
+        if entity_priorities is not None:
+            if not isinstance(entity_priorities, dict):
+                raise ValueError("nlp.entity_priorities must be a mapping")
+            coerced = {}
+            for entity, pri in entity_priorities.items():
+                try:
+                    coerced[entity] = int(pri)
+                except (TypeError, ValueError):
+                    raise ValueError(
+                        f"nlp.entity_priorities.{entity}: priority must be an integer "
+                        f"(got {pri!r})"
+                    )
+            validated["entity_priorities"] = coerced
+
+        return validated
 
     @staticmethod
     def _validate_privacy_model(pm: dict) -> dict:

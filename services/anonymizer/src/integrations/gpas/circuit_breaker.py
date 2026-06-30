@@ -42,11 +42,6 @@ def _build_gpas_cb() -> CircuitBreaker:
             r = get_redis(redis_url, decode_responses=True)
             if r is not None:
                 r.ping()
-                from utils.redis_pool import get_redis
-
-            r = get_redis(redis_url, decode_responses=True)
-            if r is not None:
-                r.ping()
                 return RedisCircuitBreaker(redis_client=r, **kwargs)
         except Exception:
             pass  # Redis unavailable — fall through to in-process breaker

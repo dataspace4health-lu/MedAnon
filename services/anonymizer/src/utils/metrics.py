@@ -67,6 +67,17 @@ RULE_CONFLICT_TOTAL = Counter(
     ["path", "action_a", "action_b"],
 )
 
+# ── k-anonymity suppression (E1.4) ──────────────────────────────────────────
+# Incremented once per suppressed resource in the privacy/apply.py path.
+# ``resource_type`` lets operators see whether Patients or their linked
+# clinical resources are being suppressed (linked suppression fires separately).
+RESOURCES_SUPPRESSED = Counter(
+    "medanon_resources_suppressed_total",
+    "Resources dropped by k-anonymity suppression before de-identification",
+    ["resource_type", "reason"],
+)
+
+
 # ── Action fallback (E1.1) ───────────────────────────────────────────────────
 # Incremented when an action handler raises a recoverable error and the
 # dispatcher falls back to redaction in "skip" mode.  ``reason`` is the
@@ -288,6 +299,46 @@ SCORE_DURATION = Histogram(
     "Time spent scoring a single resource",
     ["resource_type"],
     buckets=(0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0),
+)
+
+# ── Output-barrier / QC quality observability ────────────────────────────────
+# De-identification *quality* signals, distinct from latency/throughput. Before
+# these, gate blocks and quarantines were observable only by grepping
+# log.warning — you could not alert on or graph "leak rate spiked".
+
+# Every output-gate verdict. ``gate``: "raw_pii" (always-on raw-resource scan)
+# | "score_summary" (opt-in scoring gate). ``decision``: "pass" | "block".
+GATE_DECISIONS = Counter(
+    "medanon_gate_decisions_total",
+    "Output-barrier verdicts by gate and decision",
+    ["gate", "decision"],
+)
+
+# Residual personal identifiers detected in de-identified output, by category
+# and severity. A non-zero rate means PHI is slipping past the rules into the
+# gate — a precision/recall signal for the de-identification config itself.
+PHI_LEAK_DETECTED = Counter(
+    "medanon_phi_leak_detected_total",
+    "Residual personal-identifier detections in output, by type and severity",
+    ["type", "severity"],
+)
+
+# Resources quarantined (emitted as a __quarantined marker, never unprocessed).
+# ``stage``: where the failure was caught; ``reason``: exception type name.
+QUARANTINE_TOTAL = Counter(
+    "medanon_quarantine_total",
+    "Resources quarantined after a processing failure (never emitted unprocessed)",
+    ["stage", "reason"],
+)
+
+# NLP fail-closed events — when PHI detection could not run and the pipeline
+# redacted instead of leaking. ``reason``: "adapter_unavailable" (no NLP
+# configured) | "unavailable_token" (remote call failed → [NLP_UNAVAILABLE]).
+# A rising rate means PHI-bearing text is being mass-redacted, not scrubbed.
+NLP_FALLBACK_TOTAL = Counter(
+    "medanon_nlp_fallback_total",
+    "NLP fail-closed redaction events by reason",
+    ["reason"],
 )
 
 # ── RabbitMQ macro-stage streaming (opt-in: MEDANON_AMQP_URL) ─────────────────

@@ -157,6 +157,7 @@ def persist_run_sync(
     score: dict | None = None,
     run_id: str | None = None,
     config_hash: str | None = None,
+    trust_passport: dict | None = None,
 ) -> None:
     """Synchronous variant of persist_run for use inside worker threads."""
     from pipeline.processing_run import get_processing_run_store
@@ -177,6 +178,7 @@ def persist_run_sync(
         "input_type": input_type,
         "summary": summary,
         "score": score,
+        "trust_passport": trust_passport,
     }
     try:
         store.create(run)
@@ -195,6 +197,7 @@ async def persist_run(
     score: dict | None = None,
     run_id: str | None = None,
     config_hash: str | None = None,
+    trust_passport: dict | None = None,
 ) -> None:
     """Persist a processing run to the database (fire-and-forget)."""
     from pipeline.processing_run import get_processing_run_store
@@ -215,6 +218,7 @@ async def persist_run(
         "input_type": input_type,
         "summary": summary,
         "score": score,
+        "trust_passport": trust_passport,
     }
     try:
         await asyncio.to_thread(store.create, run)
@@ -348,11 +352,15 @@ async def check_and_persist_with_leak(
     endpoint: str,
     settings,
     t0: float,
+    trust_passport: dict | None = None,
 ) -> "dict | None":
     """Score synchronously (awaited), persist the run, and return the pii_leak block.
 
     Unlike score_and_persist (fire-and-forget), this awaits scoring so the
     caller can inspect the leak signal BEFORE returning the HTTP response.
+
+    ``trust_passport`` (the pre-privacy Trust Gate verdict, if any) is persisted
+    with the run so every gated ingest path keeps its Quality Passport.
     """
     if not _is_scoring_enabled():
         return None
@@ -387,6 +395,7 @@ async def check_and_persist_with_leak(
             input_type=input_type,
             summary=summary,
             score=score,
+            trust_passport=trust_passport,
         )
         pii_leak_info = apply_pii_leak_override(score)
         return pii_leak_info

@@ -13,10 +13,26 @@ Historically the engine had *two* asymmetric, opt-in safety gates:
 The sync ``/process`` path could only *flag* a leak after the bytes were
 already streamed.  Three paths, three behaviours, none mandatory.
 
-This module merges both into one barrier, ``validate_output``, that every
-caller invokes from the single ``_finalize_batch`` choke point.  It raises
-:class:`OutputBlocked` when the output must not be released.  Both the
-raw-resource scan and the score-summary gate are inputs to one verdict.
+This module exposes ``validate_output`` / ``enforce_output``, which combine
+*both* checks into one verdict (raising :class:`OutputBlocked`).  How the two
+checks reach output in practice:
+
+- **Raw-resource PII scan — always on, at the choke point.**  Every caller of
+  ``process_data_batch`` runs the raw scan in ``_finalize_batch`` via
+  ``pipeline.gate.run_pii_gate`` (raising :class:`pipeline.gate.PiiLeakError`,
+  which the whole API layer already handles).  Post-C1 it blocks both
+  ``critical`` (names/SSN/MRN) and ``high`` (phone/email/street address) HIPAA
+  direct identifiers — see ``pii_detector.block_severities``.
+- **Score-summary gate — opt-in.**  The richer ``text_risk`` / ``identifier_risk``
+  / composite-score checks need an aggregated ``score_summary``, which is only
+  computed when scoring is enabled (``MEDANON_SCORING_ENABLED``).  It runs in the
+  API service layer (``scoring_helpers``) and, bundled with the raw scan, in
+  ``enforce_output`` on the connector source-pull and bulk-export paths
+  (``pipeline.sources.run`` / ``routers.fhir_bulk``) where a ``score_summary``
+  is available.
+
+So ``text_risk`` blocking is guaranteed only when scoring is enabled; the raw
+scan is the unconditional safety net and now covers the same direct identifiers.
 """
 
 from __future__ import annotations
@@ -78,20 +94,23 @@ def _run_raw_pii_scan(results: list[dict]) -> list[str]:
         return []
 
     try:
-        from integrations.ai.agents.pii_detector import detect_pii_fast
-    except Exception:
+        from integrations.ai.agents.pii_detector import (
+            blocking_detections,
+            detect_pii_fast,
+        )
+    except ImportError:
         # The detector is optional; absence must not crash the pipeline.
         _log.debug("pii_detector_unavailable — skipping raw PII scan")
         return []
 
     detections = detect_pii_fast(valid)
-    critical = [d for d in detections if d.get("severity") == "critical"]
-    if not critical:
+    blocking = blocking_detections(detections)
+    if not blocking:
         return []
 
-    n = len(critical)
+    n = len(blocking)
     return [
-        f"{n} critical personal-identifier leak(s) detected in the output "
+        f"{n} personal-identifier leak(s) detected in the output "
         "by the raw-resource PII scan"
     ]
 

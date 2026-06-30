@@ -53,15 +53,20 @@ class SqliteProcessingRunStore:
                     duration_ms     INTEGER NOT NULL DEFAULT 0,
                     input_type      TEXT NOT NULL DEFAULT '',
                     summary         TEXT,
-                    score           TEXT
+                    score           TEXT,
+                    trust_passport  TEXT
                 )
             """)
-            # Backfill: add column on pre-existing databases.  SQLite ignores
+            # Backfill: add columns on pre-existing databases.  SQLite ignores
             # the duplicate-column error when the column already exists.
-            try:
-                conn.execute("ALTER TABLE processing_runs ADD COLUMN config_hash TEXT")
-            except sqlite3.OperationalError:
-                pass
+            for ddl in (
+                "ALTER TABLE processing_runs ADD COLUMN config_hash TEXT",
+                "ALTER TABLE processing_runs ADD COLUMN trust_passport TEXT",
+            ):
+                try:
+                    conn.execute(ddl)
+                except sqlite3.OperationalError:
+                    pass
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_pr_created"
                 " ON processing_runs(created_at)"
@@ -75,14 +80,15 @@ class SqliteProcessingRunStore:
         """Insert a processing run record (idempotent on duplicate id)."""
         summary = run.get("summary")
         score = run.get("score")
+        trust_passport = run.get("trust_passport")
         with self._connect() as conn:
             conn.execute(
                 """
                 INSERT OR IGNORE INTO processing_runs
                     (id, created_at, endpoint, config_profile, config_hash,
                      resource_count, error_count, duration_ms,
-                     input_type, summary, score)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                     input_type, summary, score, trust_passport)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     run["id"],
@@ -96,6 +102,7 @@ class SqliteProcessingRunStore:
                     run.get("input_type", ""),
                     json.dumps(summary) if summary is not None else None,
                     json.dumps(score) if score is not None else None,
+                    json.dumps(trust_passport) if trust_passport is not None else None,
                 ),
             )
 
@@ -216,17 +223,21 @@ class SqliteProcessingRunStore:
 def _row_to_dict(row: sqlite3.Row) -> dict:
     summary = row["summary"]
     score = row["score"]
+    keys = row.keys()
+    trust_passport = row["trust_passport"] if "trust_passport" in keys else None
     return {
         "id": row["id"],
         "created_at": row["created_at"],
         "endpoint": row["endpoint"],
         "config_profile": row["config_profile"],
+        "config_hash": row["config_hash"] if "config_hash" in keys else None,
         "resource_count": row["resource_count"],
         "error_count": row["error_count"],
         "duration_ms": row["duration_ms"],
         "input_type": row["input_type"],
         "summary": json.loads(summary) if summary else None,
         "score": json.loads(score) if score else None,
+        "trust_passport": json.loads(trust_passport) if trust_passport else None,
     }
 
 

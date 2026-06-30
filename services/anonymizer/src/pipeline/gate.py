@@ -23,13 +23,17 @@ audit_log = logging.getLogger("medanon.audit")
 
 
 class PiiLeakError(Exception):
-    """Raised when the PII blocking gate detects critical PII in output."""
+    """Raised when the PII blocking gate detects blocking-severity PII in output.
+
+    ``detections`` is already the filtered blocking set (see
+    :func:`pii_detector.blocking_detections`); every entry tripped the gate.
+    """
 
     def __init__(self, detections: list[dict]):
         self.detections = detections
-        critical = [d for d in detections if d.get("severity") == "critical"]
         super().__init__(
-            f"PII gate blocked: {len(critical)} critical PII leak(s) detected"
+            f"PII gate blocked: {len(detections)} personal-identifier leak(s) "
+            "detected in output"
         )
 
 
@@ -48,20 +52,34 @@ def run_pii_gate(results: list[dict]) -> None:
         return
     if os.environ.get("MEDANON_PII_GATE", "").strip().lower() in ("false", "0", "no"):
         return
-    from integrations.ai.agents.pii_detector import detect_pii_fast
+    from integrations.ai.agents.pii_detector import (
+        blocking_detections,
+        detect_pii_fast,
+    )
 
     valid_resources = [r for r in results if isinstance(r, dict) and "error" not in r]
     if not valid_resources:
         return
     detections = detect_pii_fast(valid_resources)
-    critical = [d for d in detections if d.get("severity") == "critical"]
-    if critical:
+    blocking = blocking_detections(detections)
+
+    from utils.metrics import GATE_DECISIONS, PHI_LEAK_DETECTED
+
+    for d in detections:
+        PHI_LEAK_DETECTED.labels(
+            type=str(d.get("type", "unknown")),
+            severity=str(d.get("severity", "unknown")),
+        ).inc()
+
+    if blocking:
+        GATE_DECISIONS.labels(gate="raw_pii", decision="block").inc()
         audit_log.warning(
-            "pii_gate_blocked count=%d critical=%d",
+            "pii_gate_blocked count=%d blocking=%d",
             len(detections),
-            len(critical),
+            len(blocking),
         )
-        raise PiiLeakError(critical)
+        raise PiiLeakError(blocking)
+    GATE_DECISIONS.labels(gate="raw_pii", decision="pass").inc()
 
 
 def quarantine_info_for(resource, exc: BaseException) -> dict:

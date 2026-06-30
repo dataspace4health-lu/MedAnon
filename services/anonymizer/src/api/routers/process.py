@@ -1,5 +1,7 @@
 """Core processing endpoints: /process, /process/ndjson, /process/raw, /process/batch."""
 
+import asyncio
+import json
 import logging
 import os
 import time
@@ -16,10 +18,12 @@ from api.deps import (
     get_settings_dep,
     limiter,
     _runtime_settings,
+    _extract_full_urls,
     _unwrap_to_resources,
     _unwrap_parameters_payload,
     _validate_dynamic_settings,
 )
+from pipeline.intake_gate import IntakeBlocked, enforce_intake
 from api.services import stream_trailer
 from api.services.processing import ProcessingError, ProcessingService
 from api.services.scoring_helpers import (
@@ -64,6 +68,40 @@ def _attach_pii_warning(result, pii_leak: dict) -> None:
         meta.setdefault("tag", []).append(tag)
 
 
+def _run_intake_gate(
+    resources_list, profile, dataset_id, trust_profile=None, full_urls=None
+):
+    """Run the pre-privacy Trust Gate barrier before de-identification.
+
+    No-op unless ``TRUST_GATE_SERVICE_URL`` is set. In ``TRUST_GATE_MODE=block``
+    a BLOCK verdict raises HTTP 422; otherwise the passport is advisory. Returns
+    the Quality Passport dict so callers can persist it with the processing run.
+
+    ``trust_profile`` (the ``?trust_profile=`` query param) names a stored audit
+    profile whose phase selection scopes what the Trust Gate measures.
+    ``full_urls`` are Bundle entry.fullUrl values forwarded so the gate can
+    resolve intra-bundle urn:uuid / absolute references.
+    """
+    try:
+        return enforce_intake(
+            resources_list,
+            profile,
+            dataset_id=dataset_id,
+            source_types=["fhir"],
+            trust_profile=trust_profile,
+            full_urls=full_urls,
+        )
+    except IntakeBlocked as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "intake_blocked",
+                "message": str(exc),
+                "passport": exc.passport,
+            },
+        ) from exc
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -105,6 +143,18 @@ async def process(
         if cached is not None:
             return cached["body"]
 
+    # Pre-privacy Trust Gate barrier (no-op unless TRUST_GATE_SERVICE_URL set).
+    profile = _get_config_profile(runtime_settings)
+    gate_resources = _unwrap_to_resources(resource)
+    passport = await asyncio.to_thread(
+        _run_intake_gate,
+        gate_resources,
+        profile,
+        "/v1/process",
+        request.query_params.get("trust_profile"),
+        _extract_full_urls(resource),
+    )
+
     t0 = time.monotonic()
     try:
         result = await _service.process_resource(resource, runtime_settings)
@@ -114,7 +164,26 @@ async def process(
     pii_leak = None
     if _is_scoring_enabled():
         pii_leak = await check_and_persist_with_leak(
-            result, "/v1/process", runtime_settings, t0
+            result, "/v1/process", runtime_settings, t0, trust_passport=passport or None
+        )
+    elif passport:
+        # Scoring off but the gate produced a passport — persist it on its own so
+        # every gated path keeps its Quality Passport (mirrors /process/batch).
+        retain_task(
+            persist_run(
+                endpoint="/v1/process",
+                config_profile=profile,
+                resource_count=len(gate_resources),
+                error_count=0,
+                duration_ms=int((time.monotonic() - t0) * 1000),
+                input_type=(
+                    "Bundle"
+                    if isinstance(resource, dict)
+                    and resource.get("resourceType") == "Bundle"
+                    else "array"
+                ),
+                trust_passport=passport,
+            )
         )
 
     if pii_leak and pii_leak.get("leaked"):
@@ -156,6 +225,28 @@ async def process_ndjson(
     runtime_settings = _runtime_settings(settings)
     profile = _get_config_profile(runtime_settings)
 
+    # Pre-privacy Trust Gate barrier. Runs before streaming starts so a BLOCK
+    # (in block mode) returns 422 before any bytes are sent. No-op unless
+    # TRUST_GATE_SERVICE_URL is set; the passport is persisted with the run.
+    gate_resources: list[dict] = []
+    for _ln in lines:
+        _s = _ln.strip()
+        if not _s or _s.startswith("//"):
+            continue
+        try:
+            _obj = json.loads(_s)
+        except ValueError:
+            continue
+        if isinstance(_obj, dict):
+            gate_resources.append(_obj)
+    passport = await asyncio.to_thread(
+        _run_intake_gate,
+        gate_resources,
+        profile,
+        "/v1/process/ndjson",
+        request.query_params.get("trust_profile"),
+    )
+
     async def _generate():
         collector = make_collector(profile)
         count = 0
@@ -173,17 +264,18 @@ async def process_ndjson(
         pii_leak = apply_pii_leak_override(score) if score else None
         if not disconnected:
             yield stream_trailer(count, score, pii_leak=pii_leak) + "\n"
-        if score is not None:
+        if score is not None or passport:
             retain_task(
                 persist_run(
                     endpoint="/v1/process/ndjson",
                     config_profile=profile,
                     resource_count=count,
-                    error_count=score.get("error_count", 0),
+                    error_count=score.get("error_count", 0) if score else 0,
                     duration_ms=int((time.monotonic() - t0) * 1000),
                     input_type="ndjson",
                     summary={"total_resources": count},
                     score=score,
+                    trust_passport=passport or None,
                 )
             )
 
@@ -230,13 +322,39 @@ async def process_raw(
             await _validate_dynamic_settings(dynamic_settings)
         runtime_settings = _runtime_settings(settings, dynamic_settings)
 
+        # Pre-privacy Trust Gate barrier (no-op unless TRUST_GATE_SERVICE_URL set).
+        # A BLOCK (in block mode) raises HTTP 422, caught by the HTTPException
+        # re-raise below before any output is serialized.
+        profile = _get_config_profile(runtime_settings)
+        gate_resources = _unwrap_to_resources(payload)
+        passport = await asyncio.to_thread(
+            _run_intake_gate,
+            gate_resources,
+            profile,
+            "/v1/process/raw",
+            request.query_params.get("trust_profile"),
+            _extract_full_urls(payload),
+        )
+
         t0 = time.monotonic()
         result = await _service.process_resource(payload, runtime_settings)
 
         pii_leak = None
         if _is_scoring_enabled():
             pii_leak = await check_and_persist_with_leak(
-                result, "/v1/process/raw", runtime_settings, t0
+                result, "/v1/process/raw", runtime_settings, t0, trust_passport=passport or None
+            )
+        elif passport:
+            retain_task(
+                persist_run(
+                    endpoint="/v1/process/raw",
+                    config_profile=profile,
+                    resource_count=len(gate_resources),
+                    error_count=0,
+                    duration_ms=int((time.monotonic() - t0) * 1000),
+                    input_type="raw",
+                    trust_passport=passport,
+                )
             )
 
         if pii_leak and pii_leak.get("leaked"):
@@ -310,6 +428,26 @@ async def process_batch(
     # (pre/post ID snapshot + _rewrite_references) is preserved.
     is_bundle = isinstance(payload, dict) and payload.get("resourceType") == "Bundle"
 
+    # Pre-privacy Trust Gate barrier. Runs before streaming begins so a BLOCK
+    # (in block mode) can return HTTP 422 before any bytes are sent. No-op unless
+    # TRUST_GATE_SERVICE_URL is set. The passport is persisted with the run.
+    if is_bundle:
+        gate_resources = [
+            e["resource"]
+            for e in payload.get("entry", [])
+            if isinstance(e, dict) and isinstance(e.get("resource"), dict)
+        ]
+    else:
+        gate_resources = _unwrap_to_resources(payload)
+    passport = await asyncio.to_thread(
+        _run_intake_gate,
+        gate_resources,
+        profile,
+        "/v1/process/batch",
+        request.query_params.get("trust_profile"),
+        _extract_full_urls(payload),
+    )
+
     async def _generate():
         collector = make_collector(profile)
         count = 0
@@ -340,17 +478,18 @@ async def process_batch(
         pii_leak = apply_pii_leak_override(score) if score else None
         if not disconnected:
             yield stream_trailer(count, score, pii_leak=pii_leak) + "\n"
-        if score is not None:
+        if score is not None or passport:
             retain_task(
                 persist_run(
                     endpoint="/v1/process/batch",
                     config_profile=profile,
                     resource_count=count,
-                    error_count=score.get("error_count", 0),
+                    error_count=score.get("error_count", 0) if score else 0,
                     duration_ms=int((time.monotonic() - t0) * 1000),
                     input_type="Bundle" if is_bundle else "batch",
                     summary={"total_resources": count},
                     score=score,
+                    trust_passport=passport or None,
                 )
             )
 

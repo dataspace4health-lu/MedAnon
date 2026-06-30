@@ -33,6 +33,7 @@ Public API
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from typing import TYPE_CHECKING
 
@@ -91,11 +92,7 @@ def _get_subject_patient_id(resource: dict) -> str:
 
 
 def _attach_suppressed_tag(resource: dict) -> None:
-    """Add a meta.tag marker to a resource indicating it was suppressed.
-
-    This function is not called on suppressed resources (they are dropped),
-    but is available for manifest tagging in audit logs if needed.
-    """
+    """Add a meta.tag marker to a resource indicating it was suppressed."""
     meta = resource.setdefault("meta", {})
     tags = meta.setdefault("tag", [])
     tags.append(
@@ -105,6 +102,46 @@ def _attach_suppressed_tag(resource: dict) -> None:
             "display": "Suppressed for k-anonymity guarantee",
         }
     )
+
+
+def _emit_suppression_audit(resource: dict, patient_id: str, reason: str) -> None:
+    """Emit a Prometheus counter + INFO log for one suppressed resource.
+
+    The patient ID is one-way hashed (SHA-256, first 16 hex chars) so audit
+    events carry a stable correlation key without embedding raw identifiers.
+    """
+    rtype = resource.get("resourceType", "unknown")
+    rid = resource.get("id", "")
+    pid_hash = hashlib.sha256(patient_id.encode()).hexdigest()[:16]
+
+    _log.info(
+        "k_anonymity_suppress rtype=%s id=%s patient_sha256_prefix=%s reason=%s",
+        rtype,
+        rid,
+        pid_hash,
+        reason,
+    )
+
+    try:
+        from utils.metrics import RESOURCES_SUPPRESSED
+
+        RESOURCES_SUPPRESSED.labels(resource_type=rtype, reason=reason).inc()
+    except Exception:  # noqa: BLE001 — metrics must never break the pipeline
+        pass
+
+    try:
+        from utils.audit import emit as audit_emit
+
+        audit_emit(
+            "privacy.suppress",
+            resource_type=rtype,
+            resource_id=rid,
+            action=reason,
+            outcome="success",
+            detail={"patient_id_sha256_prefix": pid_hash},
+        )
+    except Exception:  # noqa: BLE001 — audit must never break the pipeline
+        pass
 
 
 def apply_plan(
@@ -126,7 +163,8 @@ def apply_plan(
     if rtype == "Patient":
         pid = _get_patient_id(resource)
         if pid and pid in plan.suppressed_ids:
-            _log.debug("apply_plan suppress Patient id=%s", pid)
+            _attach_suppressed_tag(resource)
+            _emit_suppression_audit(resource, pid, "k_anonymity")
             return None
         # Overwrite QI fields with the solver-chosen generalization level.
         from pipeline.privacy.hierarchies import level_value
@@ -147,7 +185,8 @@ def apply_plan(
         # Check if this non-Patient resource is linked to a suppressed Patient.
         pid = _get_subject_patient_id(resource)
         if pid and pid in plan.suppressed_ids:
-            _log.debug("apply_plan suppress linked %s for patient=%s", rtype, pid)
+            _attach_suppressed_tag(resource)
+            _emit_suppression_audit(resource, pid, "k_anonymity_linked")
             return None
 
     return resource

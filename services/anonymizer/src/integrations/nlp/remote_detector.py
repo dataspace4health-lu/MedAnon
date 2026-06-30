@@ -84,6 +84,9 @@ def _nlp_fallback_token(text: str | None = None, entity_type: str = "ANY") -> st
     The token is a short blake2b hash of (entity_type, text).  When *text* is
     None (legacy callers / aggregate failures), a static placeholder is used.
     """
+    from utils.metrics import NLP_FALLBACK_TOTAL
+
+    NLP_FALLBACK_TOTAL.labels(reason="unavailable_token").inc()
     if text is None:
         return "[NLP_UNAVAILABLE]"
     import hashlib

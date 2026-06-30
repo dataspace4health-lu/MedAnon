@@ -1050,6 +1050,51 @@ def _process_bundle(
 # ---------------------------------------------------------------------------
 
 
+def _rewrite_list_references(pre_ids, results, settings) -> None:
+    """Map-based cross-resource reference rewriting for a flat LIST/array input.
+
+    ``process_data_batch`` only rewrites references via the gPAS shared mapping
+    (``_need_refs = rewrite_references and gpas_params``). For non-gPAS, in-place
+    actions (tokenize, cryptohash, …) on a plain array, references to sibling
+    resources are otherwise left pointing at the original IDs. This mirrors what
+    ``_process_bundle`` already does for Bundle input: build a ``Type/old →
+    Type/new`` map from each resource's id change and rewrite every reference.
+
+    Skipped when ``rewrite_references`` is off, or when gPAS is configured (the
+    batch path already folded reference IDs into the pseudonym call — doing it
+    again here would be redundant). Mutates *results* in place.
+    """
+    if not getattr(settings, "rewrite_references", False):
+        return
+    if _extract_gpas_params(settings):
+        return  # gPAS path already handled references in the same batch call
+
+    bare_id_map: dict[str, str] = {}
+    for (old_type, old_id), r in zip(pre_ids, results):
+        if not old_type or old_id is None or not isinstance(r, dict):
+            continue
+        new_id = r.get("id")
+        if isinstance(new_id, str) and new_id and new_id != old_id:
+            bare_id_map[old_id] = new_id
+    if not bare_id_map:
+        return
+
+    audit_log.info("rewriting_references count=%d (list path)", len(bare_id_map))
+    do_text_ids = getattr(settings, "rewrite_text_ids", False)
+    automaton = compiled = None
+    if do_text_ids:
+        automaton, compiled = _build_text_id_matcher(bare_id_map)
+    for r in results:
+        if isinstance(r, dict):
+            _post_process_resource(
+                r,
+                ref_mapping=bare_id_map,
+                id_map=bare_id_map if do_text_ids else None,
+                automaton=automaton,
+                compiled=compiled,
+            )
+
+
 def process_data(resource, settings, pseudonymizer=None, attach_manifest: bool = False):
     """De-identify / pseudonymize *resource* according to *settings*.
 
@@ -1067,9 +1112,18 @@ def process_data(resource, settings, pseudonymizer=None, attach_manifest: bool =
     if pseudonymizer is None:
         pseudonymizer = _get_default_pseudonymizer()
     if isinstance(resource, list):
-        return process_data_batch(
+        # Capture original (type, id) BEFORE processing so cross-resource
+        # references can be rewritten for non-gPAS actions (tokenize/cryptohash)
+        # the same way Bundle input is handled.
+        _pre_ids = [
+            (r.get("resourceType"), r.get("id")) if isinstance(r, dict) else (None, None)
+            for r in resource
+        ]
+        results = process_data_batch(
             resource, settings, pseudonymizer, attach_manifest=attach_manifest
         )
+        _rewrite_list_references(_pre_ids, results, settings)
+        return results
     if isinstance(resource, dict) and resource.get("resourceType") == "Bundle":
         return _process_bundle(
             resource, settings, pseudonymizer, attach_manifest=attach_manifest

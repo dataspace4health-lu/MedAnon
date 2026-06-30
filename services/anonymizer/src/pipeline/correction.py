@@ -59,6 +59,14 @@ def quarantine_record(
         record["stage"] = stage
     if error_type is not None:
         record["error_type"] = error_type
+
+    # Single instrumentation point for every quarantine path. Labels are
+    # bounded (stage names + exception type names), never raw/PHI values.
+    from utils.metrics import QUARANTINE_TOTAL
+
+    QUARANTINE_TOTAL.labels(
+        stage=stage or "unknown", reason=error_type or "unknown"
+    ).inc()
     return record
 
 

@@ -30,6 +30,24 @@ class PostgresProcessingRunStore:
 
         safe_putconn(self._pool, conn)
 
+    def ensure_schema(self) -> None:
+        """Idempotently add the ``trust_passport`` column to an existing table.
+
+        The ``medanon.processing_runs`` table is created by the app-db init; this
+        only backfills the Trust Gate column for deployments that predate it.
+        ``ADD COLUMN IF NOT EXISTS`` is a no-op when the column already exists.
+        """
+        conn = self._get_conn()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "ALTER TABLE medanon.processing_runs "
+                        "ADD COLUMN IF NOT EXISTS trust_passport JSONB"
+                    )
+        finally:
+            self._put_conn(conn)
+
     def create(self, run: dict) -> None:
         """Insert a processing run record."""
         conn = self._get_conn()
@@ -41,8 +59,8 @@ class PostgresProcessingRunStore:
                         INSERT INTO medanon.processing_runs
                             (id, created_at, endpoint, config_profile, config_hash,
                              resource_count, error_count, duration_ms,
-                             input_type, summary, score)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                             input_type, summary, score, trust_passport)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         ON CONFLICT (id) DO NOTHING
                         """,
                         (
@@ -57,6 +75,7 @@ class PostgresProcessingRunStore:
                             run.get("input_type", ""),
                             psycopg2.extras.Json(run.get("summary")),
                             psycopg2.extras.Json(run.get("score")),
+                            psycopg2.extras.Json(run.get("trust_passport")),
                         ),
                     )
         finally:
@@ -120,41 +139,55 @@ class PostgresProcessingRunStore:
         finally:
             self._put_conn(conn)
 
-    def get_stats(self, window_days: int = 90) -> dict:
+    def get_stats(self, window_days: int = 90, config_profile: str | None = None) -> dict:
         """Aggregate statistics across recent runs.
 
-        ``window_days`` limits the look-back window (default 90 days) so the
-        three aggregate queries stay within the ``idx_processing_runs_created``
-        index range and avoid sequential scans as history grows.
-        All-time totals (total_runs, total_resources) include rows outside the
-        window; the composite score average and breakdown tables use the window
-        to reflect recent activity on the dashboard.
+        ``window_days`` limits the look-back window (default 90 days).
+        ``config_profile`` restricts all aggregates to a single profile when set.
+        All-time totals include rows outside the window; score averages and
+        breakdown tables use the window to reflect recent activity.
         """
         conn = self._get_conn()
         try:
             with conn:
                 with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                    # All-time totals — kept cheap via a small covering query.
+                    profile_filter = ""
+                    profile_params: list = []
+                    if config_profile:
+                        profile_filter = "AND config_profile = %s"
+                        profile_params = [config_profile]
+
+                    # All-time totals.
                     cur.execute(
-                        """
+                        f"""
                         SELECT
-                            COUNT(*)                        AS total_runs,
+                            COUNT(*)                         AS total_runs,
                             COALESCE(SUM(resource_count), 0) AS total_resources
                         FROM medanon.processing_runs
-                        """
+                        WHERE 1=1 {profile_filter}
+                        """,
+                        profile_params,
                     )
                     totals = cur.fetchone()
 
-                    # Recent window — uses idx_processing_runs_created.
+                    # Recent window aggregates.
                     window_cutoff = f"NOW() - INTERVAL '{window_days} days'"
                     cur.execute(
                         f"""
                         SELECT
-                            COUNT(*) FILTER (WHERE score IS NOT NULL)  AS scored_runs,
-                            AVG((score->>'avg_composite')::float)       AS avg_composite
+                            COUNT(*) FILTER (WHERE score IS NOT NULL)   AS scored_runs,
+                            COUNT(*) FILTER (
+                                WHERE score IS NOT NULL
+                                AND (score->>'blocked')::boolean = true
+                            )                                            AS blocked_runs,
+                            AVG((score->>'avg_composite')::float)        AS avg_composite,
+                            AVG((score->>'privacy_score')::float)        AS avg_privacy,
+                            AVG((score->>'utility_score')::float)        AS avg_utility,
+                            AVG((score->>'quality_score')::float)        AS avg_quality
                         FROM medanon.processing_runs
-                        WHERE created_at >= {window_cutoff}
-                        """
+                        WHERE created_at >= {window_cutoff} {profile_filter}
+                        """,
+                        profile_params,
                     )
                     agg = cur.fetchone()
 
@@ -162,11 +195,12 @@ class PostgresProcessingRunStore:
                         f"""
                         SELECT endpoint, COUNT(*) AS cnt
                         FROM medanon.processing_runs
-                        WHERE created_at >= {window_cutoff}
+                        WHERE created_at >= {window_cutoff} {profile_filter}
                         GROUP BY endpoint
                         ORDER BY cnt DESC
                         LIMIT 20
-                        """
+                        """,
+                        profile_params,
                     )
                     by_endpoint = {r["endpoint"]: r["cnt"] for r in cur.fetchall()}
 
@@ -174,19 +208,26 @@ class PostgresProcessingRunStore:
                         f"""
                         SELECT config_profile, COUNT(*) AS cnt
                         FROM medanon.processing_runs
-                        WHERE created_at >= {window_cutoff}
+                        WHERE created_at >= {window_cutoff} {profile_filter}
                         GROUP BY config_profile
                         ORDER BY cnt DESC
                         LIMIT 20
-                        """
+                        """,
+                        profile_params,
                     )
                     by_profile = {r["config_profile"]: r["cnt"] for r in cur.fetchall()}
 
-            avg = agg["avg_composite"]
+            def _round(v) -> float | None:
+                return round(float(v), 1) if v is not None else None
+
             return {
                 "total_runs": totals["total_runs"],
                 "scored_runs": agg["scored_runs"] or 0,
-                "avg_composite": round(float(avg), 1) if avg is not None else None,
+                "blocked_runs": agg["blocked_runs"] or 0,
+                "avg_composite": _round(agg["avg_composite"]),
+                "avg_privacy": _round(agg["avg_privacy"]),
+                "avg_utility": _round(agg["avg_utility"]),
+                "avg_quality": _round(agg["avg_quality"]),
                 "total_resources": totals["total_resources"] or 0,
                 "runs_by_endpoint": by_endpoint,
                 "runs_by_profile": by_profile,

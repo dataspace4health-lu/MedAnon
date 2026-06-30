@@ -48,6 +48,7 @@ from api.routers import (
     dashboard,
     dicom,
     fhir_bulk,
+    fhir_proxy,
     fhir_server,
     hl7v2,
     jobs,
@@ -57,6 +58,7 @@ from api.routers import (
     sql_source,
     synthetic,
     tabular,
+    trust_profiles,
     workflows,
 )
 from api.routers import fhir_subscriptions, smart
@@ -395,6 +397,7 @@ async def _startup() -> None:
             )
 
             pr_store = PostgresProcessingRunStore(pg_pool)
+            pr_store.ensure_schema()
             init_processing_run_store(store=pr_store)
             logger.info("processing_run_store=postgres")
         else:
@@ -405,6 +408,29 @@ async def _startup() -> None:
             logger.info("processing_run_store=sqlite path=%s", pr_db)
     except Exception as exc:
         logger.warning("processing_run_store_start_failed: %s", exc)
+
+    # Trust-profile store — PostgreSQL when app-db available, else SQLite.
+    # Holds the selectable Trust Gate audit profiles (phases/thresholds/targets).
+    try:
+        from pipeline.trust_profile import init_trust_profile_store
+
+        if pg_pool:
+            from integrations.postgres.trust_profile_store import (
+                PostgresTrustProfileStore,
+            )
+
+            tp_store = PostgresTrustProfileStore(pg_pool)
+            tp_store.ensure_schema()
+            init_trust_profile_store(store=tp_store)
+            logger.info("trust_profile_store=postgres")
+        else:
+            tp_db = os.environ.get(
+                "MEDANON_TRUST_PROFILE_DB", "/output/trust_profiles.db"
+            )
+            init_trust_profile_store(tp_db)
+            logger.info("trust_profile_store=sqlite path=%s", tp_db)
+    except Exception as exc:
+        logger.warning("trust_profile_store_start_failed: %s", exc)
 
     # Per-client API key store — PostgreSQL only (no SQLite fallback for key management).
     # Wiring this store makes X-API-Key mandatory on protected endpoints. Set
@@ -723,11 +749,13 @@ def metrics():
 app.include_router(auth_router.router)
 app.include_router(process.router, prefix="/v1")
 app.include_router(fhir_server.router, prefix="/v1")
+app.include_router(fhir_proxy.router, prefix="/v1")
 app.include_router(analytics.router, prefix="/v1")
 app.include_router(synthetic.router, prefix="/v1")
 app.include_router(jobs.router, prefix="/v1")
 app.include_router(workflows.router, prefix="/v1")
 app.include_router(configs.router, prefix="/v1")
+app.include_router(trust_profiles.router, prefix="/v1")
 app.include_router(scoring.router, prefix="/v1")
 app.include_router(processing_runs.router, prefix="/v1")
 app.include_router(audit.router, prefix="/v1")

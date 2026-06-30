@@ -251,6 +251,9 @@ def detect_phi_batch(
                 _log.error(
                     "nlp_unavailable — redacting %s", work_item.element.get("path", "?")
                 )
+                from utils.metrics import NLP_FALLBACK_TOTAL
+
+                NLP_FALLBACK_TOTAL.labels(reason="adapter_unavailable").inc()
                 redact_by_path(resources[i], work_item.element, {})
                 if _MANIFEST_ENABLED:
                     all_manifest_entries[i].append(

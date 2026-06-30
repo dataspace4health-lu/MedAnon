@@ -395,19 +395,19 @@ def _render_report(
 
     # Overall verdict
     if fail_count == 0 and not issues:
-        W(f"## ✓ PASS — Grade {grade} — No Issues")
+        W(f"## PASS — Grade {grade} — No Issues")
         W("")
         W(
             f"All {total:,} resources passed privacy checks. Composite score: **{avg_composite:.1f}%**"
         )
     elif fail_count == 0:
-        W(f"## ⚠ PASS — Grade {grade} — {len(issues)} Issue(s)")
+        W(f"## PASS — Grade {grade} — {len(issues)} Issue(s)")
         W("")
         W(
             "All resources passed privacy gate, but there are optimization opportunities."
         )
     else:
-        W(f"## ✗ FAIL — Grade {grade} — {fail_count:,} Resources Failed")
+        W(f"## FAIL — Grade {grade} — {fail_count:,} Resources Failed")
         W("")
         pct_fail = fail_count / max(total, 1) * 100
         W(f"**{pct_fail:.0f}%** of resources failed the privacy gate (composite = 0).")
@@ -449,16 +449,7 @@ def _render_report(
         W("### Issues Found")
         W("")
         for severity, msg in issues:
-            icon = (
-                "🔴"
-                if severity == "CRITICAL"
-                else "🟠"
-                if severity == "HIGH"
-                else "🟡"
-                if severity == "MEDIUM"
-                else "🔵"
-            )
-            W(f"- {icon} **{severity}:** {msg}")
+            W(f"- **{severity}:** {msg}")
         W("")
 
     #    # -----------------------------------------------------------------------
@@ -508,14 +499,14 @@ def _render_report(
         failing_type_count = sum(1 for ts in by_type.values() if ts.uncovered_hipaa)
 
         if fail_count > 0:
-            W("## 🔴 Uncovered HIPAA Paths")
+            W("## Uncovered HIPAA Paths")
             W("")
             W(
                 f"**{len(uncovered_hipaa)} fields** across **{failing_type_count} resource type(s)** "
                 f"have no transformation rule and caused **{fail_count:,} resource(s) to fail** the privacy gate."
             )
         else:
-            W("## 🔵 Partially Uncovered HIPAA Paths (below risk threshold)")
+            W("## Partially Uncovered HIPAA Paths (below risk threshold)")
             W("")
             W(
                 f"**{len(uncovered_hipaa)} fields** across **{failing_type_count} resource type(s)** "
@@ -562,7 +553,7 @@ def _render_report(
     if text_pattern_counts:
         W("---")
         W("")
-        W("## 🔴 PII Detected in Text Fields")
+        W("## PII Detected in Text Fields")
         W("")
         W(
             f"**{sum(text_pattern_counts.values())} matches** across {len(text_pattern_counts)} pattern types:"
@@ -599,7 +590,7 @@ def _render_report(
                 if min_k is not None and isinstance(min_k, int) and min_k < 5:
                     W("---")
                     W("")
-                    W("## 🟠 k-Anonymity Risk")
+                    W("## k-Anonymity Risk")
                     W("")
                     W(
                         f"**min_k = {min_k}** — {singletons} patient(s) are uniquely identifiable."
@@ -623,7 +614,7 @@ def _render_report(
     if il_avg is not None and il_avg < 0.55:
         W("---")
         W("")
-        W("## 🟠 High Information Loss")
+        W("## High Information Loss")
         W("")
         W(
             f"**{_pct(1 - il_avg)} of analytical value lost** — utility may be too low for research."
@@ -654,7 +645,7 @@ def _render_report(
     if ri_avg is not None and ri_avg < 0.95:
         W("---")
         W("")
-        W("## 🟡 Dangling References")
+        W("## Dangling References")
         W("")
         W(
             f"**{_pct(1 - ri_avg)} of references** are invalid after ID pseudonymization."
@@ -675,7 +666,7 @@ def _render_report(
         if truly_missed:
             W("---")
             W("")
-            W("## 🔵 Inactive Rules")
+            W("## Inactive Rules")
             W("")
             W(
                 f"**{len(truly_missed)} rule(s)** are defined in config but never fired on any resource:"
@@ -816,13 +807,13 @@ def _render_report(
                         continue
                     weighted = avg * w
                     if avg >= 0.95:
-                        verdict = "✓ strong"
+                        verdict = "strong"
                     elif avg >= 0.80:
                         verdict = "ok"
                     elif avg >= 0.60:
-                        verdict = "🟡 moderate"
+                        verdict = "moderate"
                     else:
-                        verdict = "🟠 weak (drives score down)"
+                        verdict = "weak (drives score down)"
                     W(
                         f"| {dim.replace('_', ' ')} | {w:.2f} | {avg * 100:.1f}% |"
                         f" {weighted * 100:.1f}% | {verdict} |"

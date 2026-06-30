@@ -17,6 +17,7 @@ class ProcessingRunResponse(BaseModel):
     input_type: str
     summary: dict | None = None
     score: dict | None = None
+    trust_passport: dict | None = None
 
 
 class ProcessingRunListResponse(BaseModel):
@@ -27,7 +28,11 @@ class ProcessingRunListResponse(BaseModel):
 class ProcessingRunStatsResponse(BaseModel):
     total_runs: int
     scored_runs: int = 0
-    avg_composite: float
+    blocked_runs: int = 0
+    avg_composite: float | None = None
+    avg_privacy: float | None = None
+    avg_utility: float | None = None
+    avg_quality: float | None = None
     total_resources: int
     runs_by_endpoint: dict[str, int]
     runs_by_profile: dict[str, int]
