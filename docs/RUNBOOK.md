@@ -6,7 +6,6 @@
 
 ```bash
 make up       # start full stack (preflight + docker compose + smoke verify)
-make dev      # start with hot-reload (source mounted, HAPI uses in-memory H2)
 make down     # stop containers; volumes preserved
 make logs     # tail all container logs
 make verify   # smoke-test a running stack
@@ -44,7 +43,6 @@ docker compose exec anonymizer tail -f /output/audit.log  # structured JSON audi
 | Command | Description |
 |---|---|
 | `make up` | Start full Docker stack |
-| `make dev` | Start with hot-reload |
 | `make down` | Stop containers |
 | `make build` | Rebuild anonymizer + UI images |
 | `make logs` | Tail container logs |

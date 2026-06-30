@@ -96,40 +96,19 @@ open http://localhost:8501
 
 ---
 
-## Development mode
-
-```bash
-make dev
-```
-
-Applies `docker-compose.dev.yml` overrides:
-- Anonymizer: source mounted at `/code/src`, uvicorn `--reload` active
-- HAPI FHIR: uses in-memory H2 (data resets on restart — intentional for dev)
-- gPAS: management console exposed on `127.0.0.1:9990`
-
----
-
 ## Environments
 
-Three deployment tiers are supported. Choose based on the stage of your workflow.
+Two deployment tiers run on Docker Compose. For day-to-day code iteration, run the anonymizer directly from a local virtualenv instead.
 
-### Development (hot-reload, ephemeral data)
+### Local development (no Docker)
 
 ```bash
-make dev
+make setup                       # create .venv and install anonymizer deps
+cd services/anonymizer
+../../.venv/bin/python -m uvicorn src.api.main:app --reload --port 8000
 ```
 
-Applies `docker-compose.dev.yml` overrides on top of the base stack:
-
-| Difference from production | Why |
-|---|---|
-| Anonymizer source mounted at `/code/src`, uvicorn `--reload` | Code changes apply instantly without rebuild |
-| HAPI FHIR uses in-memory H2 database | Data resets on restart — intentional; no migration needed during iteration |
-| gPAS management console exposed on `127.0.0.1:9990` | WildFly admin console accessible locally |
-| `MEDANON_API_KEY` typically left blank | Open mode — all callers are granted admin. Never use in non-local environments. |
-| NLP and analytics start alongside anonymizer | Same as production — both are always-on |
-
-**Not suitable for:** real patient data, performance testing, any multi-user access.
+The NLP, gPAS, and analytics integrations degrade gracefully when their URLs are unset, so the API runs without the full stack. Use `make test` for the suite (runs without Docker). For an end-to-end stack with real upstreams, use the Staging tier below with `make up`.
 
 ### Staging (full Docker Compose, persistent volumes)
 

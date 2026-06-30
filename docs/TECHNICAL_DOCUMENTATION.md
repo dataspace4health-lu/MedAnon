@@ -787,7 +787,7 @@ Exceptions with rationale:
 
 | Environment | Configuration | Notes |
 |---|---|---|
-| **Local dev** | `make dev` | Hot-reload, H2 in-memory HAPI (data resets on restart), gPAS mgmt port exposed |
+| **Local dev** | `make setup` + uvicorn `--reload` | Run the anonymizer from `.venv`; NLP/gPAS/analytics degrade gracefully when unset |
 | **Docker Compose (staging/prod)** | `make up` | Full stack, persistent PostgreSQL volumes, Redis, gPAS |
 | **Kubernetes / K3s** | `make helm-install` | Helm umbrella chart, HPA for worker, Traefik or nginx ingress |
 
@@ -1004,7 +1004,6 @@ server {
 
 ```bash
 make up       # start full stack (preflight checks + docker compose + smoke verify)
-make dev      # start with hot-reload (src mounted, HAPI uses in-memory H2)
 make down     # stop containers; volumes preserved
 make logs     # tail all container logs
 make verify   # smoke-test a running stack
@@ -1181,7 +1180,6 @@ Increase `mem_limit` in `docker-compose.yml` for the affected container. See res
 ```bash
 # Start / stop
 make up                                           # full stack
-make dev                                          # hot-reload dev mode
 make down                                         # stop, keep volumes
 docker compose down -v                            # stop + delete all data
 
