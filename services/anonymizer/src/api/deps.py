@@ -292,6 +292,24 @@ def _unwrap_to_resources(payload: Any) -> list[dict]:
     return []
 
 
+def _extract_full_urls(payload: Any) -> list[str]:
+    """Bundle ``entry.fullUrl`` values, so the Trust Gate can resolve intra-bundle
+    ``urn:uuid:`` / absolute references (reference integrity is NA without them).
+
+    Returns ``[]`` for a non-Bundle payload (a bare resource or an NDJSON list has
+    no fullUrl context).
+    """
+    if not isinstance(payload, dict) or payload.get("resourceType") != "Bundle":
+        return []
+    out: list[str] = []
+    for entry in payload.get("entry", []):
+        if isinstance(entry, dict):
+            fu = entry.get("fullUrl")
+            if isinstance(fu, str) and fu:
+                out.append(fu)
+    return out
+
+
 def _unwrap_parameters_payload(payload):
     """Support Parameters(resource, settings) wrapper for dynamic rule settings.
 

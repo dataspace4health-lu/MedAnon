@@ -109,19 +109,32 @@ class AgentService:
         return await asyncio.to_thread(detect_pii_leaks, resources, use_ai=use_ai)
 
     async def scan_fields(
-        self, field_context: str, model: str = "", *, granularity: str = "values"
+        self,
+        field_context: str,
+        model: str = "",
+        *,
+        granularity: str = "values",
+        include_values: bool = False,
+        guidance: str = "",
     ) -> dict:
-        """Classify a PHI-free field tree as PII and suggest actions.
+        """Classify a field tree as PII and suggest actions.
 
         Runs the synchronous scanner agent off the event loop. Never raises —
         the agent returns a structured error result on failure. ``granularity``
         ('values' | 'whole') controls leaf-vs-parent classification of
-        structured fields.
+        structured fields. ``include_values`` marks that the tree carries sample
+        values (PHI), so the agent enforces a local-only model. ``guidance`` is
+        optional user instruction on how to treat fields.
         """
         from integrations.ai.agents.field_scanner import scan_fields
 
         return await asyncio.to_thread(
-            scan_fields, field_context, model=model, granularity=granularity
+            scan_fields,
+            field_context,
+            model=model,
+            granularity=granularity,
+            include_values=include_values,
+            guidance=guidance,
         )
 
     async def explain_config(

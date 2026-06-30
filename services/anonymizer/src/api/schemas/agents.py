@@ -95,14 +95,30 @@ class FieldScanRequest(BaseModel):
     field_context: str = Field(
         ...,
         min_length=1,
-        max_length=20000,
-        description="PHI-free field-path tree (path: type only, no values) to "
-        "classify. Server-derived → treated as untrusted DATA. Must NOT contain "
-        "patient values.",
+        max_length=60000,
+        description="Field-path tree to classify. Paths + JSON value types only "
+        "by default; when ``include_values`` is true, each leaf also carries a "
+        "truncated SAMPLE value (``path : <type> = value``). Server-derived → "
+        "treated as untrusted DATA (sanitized + tag-wrapped before injection).",
+    )
+    include_values: bool = Field(
+        default=False,
+        description="When true, ``field_context`` carries patient sample values "
+        "so a LOCAL model can judge PII more accurately. The call is then a PHI "
+        "payload: the AI local-guard refuses any non-local endpoint (fail-"
+        "closed), so values never leave a self-hosted model.",
     )
     model: str = Field(
         default="",
         description="Optional local model override (e.g. 'ollama/gemma3:1b').",
+    )
+    guidance: str = Field(
+        default="",
+        max_length=2000,
+        description="Optional free-text user guidance on how to treat fields "
+        "(e.g. 'pseudonymize all identifiers', 'generalize dates to year'). "
+        "Injected as a sanitized system instruction the model follows when "
+        "classifying — never mixed into the untrusted field tree.",
     )
     granularity: Literal["values", "whole"] = Field(
         default="values",
@@ -197,13 +213,20 @@ class ChatRequest(BaseModel):
     )
     field_context: str = Field(
         default="",
-        max_length=20000,
-        description="PHI-free field-path tree (path: type only, no values) "
-        "extracted client-side from uploaded examples OR sampled from the live "
-        "FHIR server. Lets the assistant target proposed rules at the FHIRPaths "
-        "the user actually has. Server-derived, so treated as untrusted DATA "
-        "(sanitized + tag-wrapped before prompt injection). Must NOT contain "
-        "patient values. Truncated to 16k chars of whole lines if larger.",
+        max_length=60000,
+        description="Field-path tree extracted client-side from uploaded "
+        "examples OR sampled from the live FHIR server, so the assistant targets "
+        "proposed rules at the FHIRPaths the user actually has. Paths + types "
+        "only by default; when ``include_values`` is true each leaf also carries "
+        "a truncated SAMPLE value. Server-derived, so treated as untrusted DATA "
+        "(sanitized + tag-wrapped before prompt injection).",
+    )
+    include_values: bool = Field(
+        default=False,
+        description="When true, ``field_context`` carries patient sample values "
+        "so a LOCAL model can ground answers in real data. The call is then a "
+        "PHI payload: the AI local-guard refuses any non-local endpoint (fail-"
+        "closed), so values never leave a self-hosted model.",
     )
     granularity: Literal["values", "whole"] = Field(
         default="values",

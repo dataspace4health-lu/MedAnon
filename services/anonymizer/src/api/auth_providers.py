@@ -167,6 +167,20 @@ class OidcProvider:
                     "OIDC_USERNAME_CLAIM", "preferred_username"
                 ).strip()
                 subject = claims.get(username_claim) or claims.get("sub", "oidc-user")
+                # Deny-by-default: a validly-authenticated user with no mapped
+                # role gets zero roles → reject with 403 rather than silently
+                # granting access. Assign a realm role (medanon-viewer/analyst/
+                # admin) in Keycloak, or set OIDC_DEFAULT_ROLE to grant a floor.
+                if not roles:
+                    logger.warning(
+                        "oidc_no_role subject=%s — rejecting (assign a realm role "
+                        "or set OIDC_DEFAULT_ROLE)",
+                        subject,
+                    )
+                    raise HTTPException(
+                        status_code=403,
+                        detail="Authenticated, but no authorized role is assigned to this account.",
+                    )
                 return AuthContext(
                     subject=str(subject),
                     roles=roles,

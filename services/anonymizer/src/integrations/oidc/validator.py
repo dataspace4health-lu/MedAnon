@@ -36,16 +36,63 @@ def _issuer() -> str:
     return os.environ.get("OIDC_ISSUER", "").strip()
 
 
+def _discovery_base() -> str:
+    """Base URL the *backend* uses to reach the IdP for JWKS/discovery.
+
+    In a split-horizon deployment (Keycloak behind a reverse proxy) the browser
+    reaches Keycloak at the public ``OIDC_ISSUER`` URL, but the anonymizer
+    container must reach it at an internal Docker hostname. Set
+    ``OIDC_DISCOVERY_BASE`` to that internal realm URL, e.g.
+    ``http://medanon-keycloak:8080/auth/realms/medanon``. Falls back to the
+    public issuer when unset (single-host / backchannel-dynamic deployments).
+    """
+    return (os.environ.get("OIDC_DISCOVERY_BASE", "").strip() or _issuer()).rstrip("/")
+
+
+def _discover_jwks_uri(base: str) -> str:
+    """Fetch the OIDC discovery document and return its ``jwks_uri``.
+
+    Provider-agnostic: works for Keycloak, Azure AD, Auth0, Okta. Returns an
+    empty string on any failure so the caller can fall back to derivation.
+    """
+    import urllib.request
+
+    well_known = f"{base}/.well-known/openid-configuration"
+    try:
+        with urllib.request.urlopen(well_known, timeout=5) as resp:  # noqa: S310
+            doc = json.loads(resp.read().decode("utf-8"))
+        return str(doc.get("jwks_uri", "")).strip()
+    except Exception as exc:
+        logger.warning("oidc_discovery_failed url=%s: %s", well_known, exc)
+        return ""
+
+
+def _derive_jwks_url(base: str) -> str:
+    """Best-effort JWKS URL derivation by provider shape (discovery fallback)."""
+    if "/realms/" in base:
+        # Keycloak: realm keys live at /protocol/openid-connect/certs
+        return f"{base}/protocol/openid-connect/certs"
+    if "microsoftonline.com" in base:
+        # Azure AD: JWKS is at /discovery/keys
+        return f"{base}/discovery/keys"
+    # Auth0 / Okta / generic OIDC
+    return f"{base}/.well-known/jwks.json"
+
+
 def _jwks_url() -> str:
+    # 1. Explicit override — recommended for split-horizon / locked-down networks.
     url = os.environ.get("OIDC_JWKS_URL", "").strip()
-    if not url and _issuer():
-        # OIDC discovery: append /.well-known/jwks.json (works for Keycloak + Azure)
-        iss = _issuer().rstrip("/")
-        url = f"{iss}/.well-known/jwks.json"
-        if "microsoftonline.com" in iss:
-            # Azure uses openid-configuration → keys_endpoint; JWKS is at /discovery/keys
-            url = f"{iss}/discovery/keys"
-    return url
+    if url:
+        return url
+    if not _issuer():
+        return ""
+    base = _discovery_base()
+    # 2. Standards-correct: read jwks_uri from the discovery document.
+    discovered = _discover_jwks_uri(base)
+    if discovered:
+        return discovered
+    # 3. Fallback: derive by provider shape when discovery is unreachable.
+    return _derive_jwks_url(base)
 
 
 def _audience() -> str | None:
@@ -151,8 +198,25 @@ def _extract_claim(claims: dict, path: str) -> Any:
 # ---------------------------------------------------------------------------
 
 
+def _default_role() -> str:
+    """Fallback role for an authenticated user with no mapped role.
+
+    Empty (the default) = DENY BY DEFAULT: a user who authenticates but has no
+    recognised role gets zero roles, and the OIDC provider rejects the request
+    with 403. This is the production-safe posture for PHI — access must be
+    explicitly granted, never implied by mere authentication. Set
+    ``OIDC_DEFAULT_ROLE=viewer`` to restore the old "any authenticated user can
+    read" behaviour.
+    """
+    return os.environ.get("OIDC_DEFAULT_ROLE", "").strip().lower()
+
+
 def extract_roles(claims: dict) -> frozenset[str]:
-    """Map JWT claim roles → internal role names using OIDC_ROLE_MAP."""
+    """Map JWT claim roles → internal role names using OIDC_ROLE_MAP.
+
+    Returns an EMPTY set when the user has no mapped role and OIDC_DEFAULT_ROLE
+    is unset (deny-by-default). Callers must treat an empty set as "no access".
+    """
     role_values = _extract_claim(claims, _role_claim_path())
     if not isinstance(role_values, list):
         # scalar role (some providers emit a string)
@@ -164,8 +228,10 @@ def extract_roles(claims: dict) -> frozenset[str]:
     internal = frozenset(
         mapping[r] for r in role_values if r in mapping
     )
-    # Default to viewer when authenticated but no recognized role
-    return internal if internal else frozenset({"viewer"})
+    if internal:
+        return internal
+    default = _default_role()
+    return frozenset({default}) if default else frozenset()
 
 
 # ---------------------------------------------------------------------------

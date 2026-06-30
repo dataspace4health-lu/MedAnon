@@ -329,6 +329,33 @@ def detect_pii_fast(resources: list[dict]) -> list[dict]:
     return result["detections"]
 
 
+# Severities the output gate hard-blocks on. The default blocks both
+# ``critical`` (names, SSN, MRN) *and* ``high`` (phone, email, street address):
+# all five are HIPAA Safe Harbor direct identifiers (45 CFR 164.514(b)(2) items
+# B/C/L and the name/SSN/MRN items), so a residual one in de-identified output
+# is a reportable leak, not a warning. ``medium`` (bare ISO date, IP) is left
+# out by default because full-precision dates are legitimately retained by
+# date-shift pipelines (shifting preserves intervals at day precision); blocking
+# every ISO date would false-positive on intended output. Override with
+# ``MEDANON_PII_GATE_BLOCK_SEVERITY`` (comma-separated, e.g. ``critical,high,medium``
+# for strict Safe Harbor, or ``critical`` for the legacy names/SSN/MRN-only gate).
+_DEFAULT_BLOCK_SEVERITIES: tuple[str, ...] = ("critical", "high")
+
+
+def block_severities() -> frozenset[str]:
+    """Severities the output gate blocks on, read at call time (test-toggleable)."""
+    raw = os.environ.get("MEDANON_PII_GATE_BLOCK_SEVERITY", "").strip()
+    if not raw:
+        return frozenset(_DEFAULT_BLOCK_SEVERITIES)
+    return frozenset(s.strip().lower() for s in raw.split(",") if s.strip())
+
+
+def blocking_detections(detections: list[dict]) -> list[dict]:
+    """Filter *detections* to those whose severity is in the blocking set."""
+    block = block_severities()
+    return [d for d in detections if d.get("severity") in block]
+
+
 def _ai_scan_resource(
     resource: dict,
     text_fields: list[tuple[str, str]],

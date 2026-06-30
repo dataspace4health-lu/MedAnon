@@ -109,6 +109,8 @@ ENDPOINT_ROLES: dict[str, str] = {
     "/fhir/Subscription": "admin",
     # SMART token introspection
     "/oauth2/introspect": "analyst",
+    # Read-only FHIR proxy for user-supplied custom connections (SSRF-guarded)
+    "/v1/fhir-proxy": "analyst",
     # AI agent endpoints
     "/v1/ai/status": "viewer",
     "/v1/ai/generate-config": "admin",
