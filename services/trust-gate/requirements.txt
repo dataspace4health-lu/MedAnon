@@ -1,0 +1,15 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+prometheus_client==0.21.1
+urllib3==2.7.0
+PyYAML==6.0.3
+fhirpathpy==0.1.0
+# PostgreSQL — baseline store + SQL connector
+psycopg2-binary==2.9.10
+# File connector: multipart upload support
+python-multipart==0.0.20
+# File connector: Excel (.xlsx/.xls) parsing
+openpyxl==3.1.5
+# Optional: MySQL connector (only needed when driver="mysql")
+# pymysql==1.1.1

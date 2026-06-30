@@ -1,0 +1,19 @@
+# Deterministic cross-field clinical-logic coherence rules over OMOP (Phase 3B / C4).
+#
+# These are logical contradictions, not clinical ranges: no universal value ranges
+# are hardcoded (the OHDSI reversal stands). Each rule drives the verdict because a
+# contradiction is unambiguous given the data itself. Grounded in OHDSI DQD temporal
+# plausibility and OMOP CDM conventions.
+
+# A clinical event dated strictly after the person's death_date is incoherent.
+# Requires a populated `death` table (OMOP one-row-per-person death).
+events_after_death:
+  description: "A clinical event must not be dated after the person's death."
+  citation: "OHDSI DQD plausibleAfterDeath; OMOP CDM v5.4 death conventions"
+  events:
+    - {table: condition_occurrence, date: condition_start_date}
+    - {table: drug_exposure, date: drug_exposure_start_date}
+    - {table: procedure_occurrence, date: procedure_date}
+    - {table: measurement, date: measurement_date}
+    - {table: visit_occurrence, date: visit_start_date}
+    - {table: observation, date: observation_date}

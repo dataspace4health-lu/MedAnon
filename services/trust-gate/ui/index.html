@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Trust Gate — Clinical Data Quality QC</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500&family=Geist:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="app">
+    <div class="logo"></div>
+    <div>
+      <h1>Trust Gate</h1>
+      <div class="sub">Clinical data-quality QC for data providers &middot; Kahn 2016 &middot; OHDSI DQD &middot; ISO 25012 &middot; EHDS</div>
+    </div>
+    <nav class="seg" id="view-nav" style="margin-left:18px">
+      <button class="on" data-view="run">New QC run</button>
+      <button data-view="history">History &amp; findings</button>
+    </nav>
+    <div class="spacer"></div>
+    <button class="icon-btn" id="theme-toggle" title="Toggle light / dark" aria-label="Toggle theme">&#9788;</button>
+    <div class="status-pill" id="status"><span class="dot"></span><span id="status-txt">checking service&hellip;</span></div>
+  </header>
+
+  <main>
+    <!-- ===== input rail ================================================== -->
+    <aside class="rail">
+      <section class="card">
+        <div class="hd"><h2>Submit data for QC</h2></div>
+        <div class="bd">
+          <div class="seg" id="src-seg" role="tablist">
+            <button class="on" data-src="fhir">FHIR</button>
+            <button data-src="omop">OMOP</button>
+            <button data-src="tabular">Tabular</button>
+          </div>
+
+          <label class="fld" id="input-label" for="payload">FHIR resource, list, or Bundle (JSON)</label>
+          <textarea id="payload" spellcheck="false" placeholder='{ "resourceType": "Patient", "id": "p1", ... }'></textarea>
+
+          <div class="grid2">
+            <div>
+              <label class="fld" for="dataset">Dataset ID</label>
+              <input id="dataset" value="provider-dataset" />
+            </div>
+            <div>
+              <label class="fld" for="provider">Provider ID</label>
+              <input id="provider" value="provider-001" />
+            </div>
+          </div>
+
+          <label class="fld" for="usecase">Intended use (selects the metric subset)</label>
+          <select id="usecase"><option value="">All phases (default)</option></select>
+
+          <div class="grid2">
+            <div>
+              <label class="fld" for="lifecycle">Lifecycle stage</label>
+              <select id="lifecycle">
+                <option value="operation" selected>Operation</option>
+                <option value="planning">Planning</option>
+                <option value="construction">Construction</option>
+                <option value="utilization">Utilization</option>
+              </select>
+            </div>
+            <div>
+              <label class="fld" for="orgrole">Org role</label>
+              <select id="orgrole">
+                <option value="data-receiving" selected>Data receiving</option>
+                <option value="data-generating">Data generating</option>
+              </select>
+            </div>
+          </div>
+
+          <label class="fld" for="source">Source system (provenance)</label>
+          <input id="source" placeholder="e.g. LIS / EHR-export / ETL-v3" />
+
+          <div class="actions">
+            <button id="run">Run QC</button>
+            <button class="ghost sm" id="sample-good">Valid sample</button>
+            <button class="ghost sm" id="sample-bad">Invalid sample</button>
+          </div>
+          <div class="err" id="err"></div>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="hd"><h2>What QC runs</h2></div>
+        <div class="bd note" style="line-height:1.6">
+          A deterministic verdict (structure, terminology, completeness, referential &amp;
+          temporal integrity, clinical logic) plus a clearly-labelled statistical
+          <em>advisory</em> (outliers/drift) that never silently flips the gate. You receive a
+          Quality Passport, an EHDS quality/utility/maturity label, derived remediation findings,
+          and an ALCOA++ audit trail.
+        </div>
+      </section>
+    </aside>
+
+    <!-- ===== process + results ========================================== -->
+    <section id="stage-col">
+      <div class="card" id="intro">
+        <div class="bd placeholder">
+          <div class="big">Submit a dataset to run quality control</div>
+          <div>The QC pipeline runs step by step, then produces a full Quality Passport report and a full audit report.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== history & findings view (full width) ======================= -->
+    <section id="history-view" style="display:none; grid-column: 1 / -1;">
+      <div class="card">
+        <div class="hd"><h2>Dataset history &amp; remediation</h2>
+          <p class="note">Track a dataset's quality across runs and triage its open findings (PDSA study/act loop).</p></div>
+        <div class="bd">
+          <div style="display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap">
+            <div style="flex:1; min-width:220px">
+              <label class="fld" for="hist-dataset">Dataset ID</label>
+              <input id="hist-dataset" placeholder="provider-dataset" />
+            </div>
+            <button id="hist-load">Load history</button>
+          </div>
+          <div class="err" id="hist-err"></div>
+        </div>
+      </div>
+      <div id="history-mount"></div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

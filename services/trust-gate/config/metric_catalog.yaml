@@ -1,0 +1,160 @@
+# Metric catalog (Phase 2) — one "metric card" per built-in check.
+#
+# Operationalizes the Metric Hub (2026) idea: each metric is documented with its
+# applicability, level, and citation so selection is transparent and governed.
+# The check's Kahn category / dimension / phase are NOT duplicated here — the
+# engine assigns those (phases.py / dimensions.py) and emits them per check, so
+# this catalog stays drift-free and additive.
+#
+# Fields per card:
+#   title       human-readable name
+#   level       table | field | concept   (OHDSI DQD granularity)
+#   applies_to  resource/element scope the check evaluates
+#   citation    authoritative basis
+#   doc         one-line description
+
+cards:
+  conformance.resource_type_present:
+    title: "resourceType present"
+    level: table
+    applies_to: "every resource"
+    citation: "FHIR Safety Checklist; Kahn 2016 conformance/relational"
+    doc: "Every resource declares a non-empty resourceType (SAM prerequisite)."
+  conformance.resource_id_present:
+    title: "Resource id present"
+    level: table
+    applies_to: "every resource"
+    citation: "FHIR Safety Checklist; Kahn 2016 conformance/relational"
+    doc: "Every resource carries a non-empty id (identity prerequisite)."
+  conformance.status_not_entered_in_error:
+    title: "Not entered-in-error"
+    level: field
+    applies_to: "clinical resources with a status"
+    citation: "FHIR Safety Checklist (hl7.org/fhir/safety.html)"
+    doc: "Retracted (entered-in-error) resources must not be released."
+  conformance.structural:
+    title: "FHIR structural validity"
+    level: table
+    applies_to: "every resource (validator-backed)"
+    citation: "HL7 FHIR validator; Kahn 2016 conformance/value"
+    doc: "Resource validates against base FHIR (no error/fatal OperationOutcome)."
+  conformance.profile:
+    title: "Profile conformance"
+    level: table
+    applies_to: "resources asserting meta.profile"
+    citation: "HL7 FHIR profiles (US Core / IPS); Kahn 2016 conformance/value"
+    doc: "Resource validates against its asserted profile."
+  conformance.ig_profile:
+    title: "Implementation-Guide conformance"
+    level: table
+    applies_to: "covered resource types when an IG is selected (opt-in, NA otherwise)"
+    citation: "HL7 US Core IG STU 6.1.0 (USCDI v3); Kahn 2016 conformance/value"
+    doc: "Resource validates against the selected IG profile (e.g. US Core) even when meta.profile is unasserted."
+  conformance.value_format:
+    title: "Primitive value format"
+    level: field
+    applies_to: "date/dateTime/id primitives"
+    citation: "FHIR datatypes; Kahn 2016 conformance/value"
+    doc: "Primitive fields match the FHIR lexical patterns."
+  conformance.coding_structure:
+    title: "Coding structure"
+    level: field
+    applies_to: "every coding"
+    citation: "FHIR Coding; Kahn 2016 conformance/value"
+    doc: "Each coding has a system + code (no sentinels)."
+  conformance.code_wellformed:
+    title: "Code well-formedness (offline)"
+    level: concept
+    applies_to: "LOINC / SNOMED / ICD-10 / RxNorm codes"
+    citation: "LOINC check digit; SNOMED Verhoeff; CMS ICD-10; RxNorm"
+    doc: "Code format + check digit validated offline (no server)."
+  conformance.terminology:
+    title: "Terminology membership"
+    level: concept
+    applies_to: "clinical code systems (LOINC/SNOMED/ICD/RxNorm/UCUM)"
+    citation: "FHIR CodeSystem/$validate-code; Kahn 2016 conformance/value (validation)"
+    doc: "(system, code) validated against a terminology server."
+  conformance.reference_integrity:
+    title: "Reference integrity"
+    level: field
+    applies_to: "literal references"
+    citation: "Kahn 2016 conformance/relational; OHDSI DQD FK checks"
+    doc: "Every reference resolves within the batch / fullUrls."
+  conformance.provenance_present:
+    title: "Provenance present"
+    level: table
+    applies_to: "dataset"
+    citation: "ISO/HL7 21089; Kahn 2016 (auditability)"
+    doc: "At least one Provenance resource targets clinical resources."
+  completeness.required_elements:
+    title: "Required elements present"
+    level: field
+    applies_to: "per-resource-type required fields"
+    citation: "Kahn 2016 completeness; OHDSI measureValueCompleteness"
+    doc: "Required elements are populated (zero-tolerance)."
+  completeness.value_or_absent:
+    title: "Value or dataAbsentReason"
+    level: field
+    applies_to: "Observation"
+    citation: "FHIR Observation invariant obs-6/obs-7"
+    doc: "An Observation has value[x] or a dataAbsentReason."
+  completeness.element_density:
+    title: "Recommended-element density"
+    level: field
+    applies_to: "per-resource-type recommended fields"
+    citation: "OHDSI measureValueCompleteness (richness)"
+    doc: "Share of recommended elements populated (richness signal)."
+  plausibility.uniqueness:
+    title: "Resource uniqueness"
+    level: table
+    applies_to: "every resource"
+    citation: "Kahn 2016 plausibility/uniqueness"
+    doc: "No duplicate (resourceType, id) in the batch."
+  plausibility.patient_identity_stable:
+    title: "Patient identity stability"
+    level: concept
+    applies_to: ">= 2 Patient resources"
+    citation: "HL7 EHR WG 2026 identity reconciliation"
+    doc: "No identifier collisions / unqualified Patient.link."
+  plausibility.value_outlier:
+    title: "Value outlier (statistical)"
+    level: concept
+    applies_to: "Observation.valueQuantity per (code, unit)"
+    citation: "Iglewicz & Hoaglin modified z-score; Tukey IQR"
+    doc: "ADVISORY: extreme vs the batch/baseline distribution (non-deterministic)."
+  plausibility.definitional_bounds:
+    title: "Definitional unit bounds"
+    level: concept
+    applies_to: "values with a bounded unit (e.g. %)"
+    citation: "UCUM; Kahn 2016 plausibility/atemporal"
+    doc: "Value within the unit's definitional range (e.g. % in [0,100])."
+  plausibility.concordance:
+    title: "Cross-field concordance"
+    level: concept
+    applies_to: "configured cross-field rules"
+    citation: "Kahn 2016 plausibility; OHDSI plausibility checks"
+    doc: "No contradictory combinations (e.g. pregnancy on a male patient)."
+  plausibility.distribution_drift:
+    title: "Distribution drift (statistical)"
+    level: concept
+    applies_to: "Observation values vs accumulated baseline"
+    citation: "Modified z-score on medians (drift)"
+    doc: "ADVISORY: batch median shifted vs baseline (non-deterministic)."
+  plausibility.record_lag:
+    title: "Record lag"
+    level: field
+    applies_to: "event vs record date (opt-in)"
+    citation: "DAMA timeliness; Kahn 2016 plausibility/temporal"
+    doc: "Event-to-record lag within the configured window."
+  plausibility.currency:
+    title: "Currency"
+    level: field
+    applies_to: "meta.lastUpdated vs extraction (opt-in)"
+    citation: "DAMA currency"
+    doc: "Records are fresh within the configured window."
+  conformance.source_of_truth:
+    title: "Source-of-truth accuracy"
+    level: field
+    applies_to: "fields with a supplied reference value"
+    citation: "Kahn 2016 (validation context)"
+    doc: "Field value matches the operator-supplied gold reference."

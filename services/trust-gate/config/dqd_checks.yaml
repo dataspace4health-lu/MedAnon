@@ -1,0 +1,55 @@
+# OHDSI DQD-style value/plausibility checks over OMOP (Phase 3).
+#
+# The structural checks (required tables, NOT NULL required fields, FK integrity,
+# date well-formedness) are derived from the CDM spec in cdm/omop_model.py and run
+# automatically. This file adds the data-driven value/completeness checks. No
+# universal clinical ranges are hardcoded (OHDSI removed most plausibleValue ranges
+# for that reason); demographic-stratified clinical evaluation is Phase 3B.
+
+# Numeric range plausibility. ``max: null`` on year_of_birth means "current year"
+# (resolved at runtime), so a future birth year is implausible.
+value_ranges:
+  - table: person
+    column: year_of_birth
+    min: 1900
+    max: null
+    citation: "OHDSI DQD plausibleTemporal; a birth year must be past and post-1900"
+  - table: person
+    column: month_of_birth
+    min: 1
+    max: 12
+    citation: "OMOP CDM v5.4 person.month_of_birth domain (calendar month)"
+  - table: person
+    column: day_of_birth
+    min: 1
+    max: 31
+    citation: "OMOP CDM v5.4 person.day_of_birth domain (calendar day)"
+
+# Recommended-field completeness (OHDSI measureValueCompleteness / richness). These
+# are *recommended* fields, not required (NOT NULL is enforced structurally from the
+# CDM spec); the thresholds are richness floors, not clinical ranges.
+completeness:
+  - table: measurement
+    column: value_as_number
+    min_fill: 0.5
+    citation: "OHDSI measureValueCompleteness (a measurement should carry a value)"
+  - table: measurement
+    column: unit_source_value
+    min_fill: 0.4
+    citation: "OHDSI DQD; a numeric measurement should report its unit (UCUM)"
+  - table: condition_occurrence
+    column: condition_source_value
+    min_fill: 0.5
+    citation: "OHDSI DQD source-value richness (traceability to the source code)"
+  - table: drug_exposure
+    column: drug_source_value
+    min_fill: 0.5
+    citation: "OHDSI DQD source-value richness (traceability to the source code)"
+  - table: observation
+    column: observation_source_value
+    min_fill: 0.5
+    citation: "OHDSI DQD source-value richness (traceability to the source code)"
+  - table: procedure_occurrence
+    column: procedure_source_value
+    min_fill: 0.5
+    citation: "OHDSI DQD source-value richness (traceability to the source code)"

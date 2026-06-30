@@ -1,0 +1,69 @@
+# Use-case profiles (Phase 2) — the decision-tree that maps a declared
+# `intended_use` to the metric subset (phases) + threshold tweaks that matter for
+# it. Selecting by use case is more honest than a flat "run everything": quality
+# is fitness for a *declared* purpose (Kahn 2016; Wang & Strong 1996).
+#
+# Each profile: phases (audit suites to run), thresholds (per-check overrides,
+# optional), description, citation. An unknown use case falls back to all phases
+# (backward compatible with phases=None).
+
+use_cases:
+  ai_training:
+    description: "ML training/test data — needs structure, completeness, and plausibility."
+    phases:
+      - structural_conformance
+      - terminology_validity
+      - completeness_core
+      - completeness_richness
+      - value_plausibility
+      - temporal_plausibility
+      - identity_integrity
+    citation: "Metric Hub 2026 (fit-for-purpose ML data); Kahn 2016"
+
+  cohort_discovery:
+    description: "Feasibility / cohort counts — identity + core fields suffice."
+    phases:
+      - structural_conformance
+      - terminology_validity
+      - completeness_core
+      - identity_integrity
+    citation: "OHDSI feasibility use; Kahn 2016 completeness"
+
+  regulatory_rwe:
+    description: "Regulatory real-world evidence — strictest: provenance + accuracy + timeliness."
+    phases:
+      - structural_conformance
+      - terminology_validity
+      - referential_integrity
+      - completeness_core
+      - completeness_richness
+      - value_plausibility
+      - temporal_plausibility
+      - identity_integrity
+      - provenance_auditability
+      - timeliness
+      - source_accuracy
+    # RBQM critical-to-quality: failing these blocks for regulatory use.
+    critical_to_quality:
+      - conformance.terminology
+      - completeness.required_elements
+      - conformance.reference_integrity
+    citation: "EMA RWD DQ Framework; FDA RWD/RWE; ICH E6(R3)"
+
+  lab_analytics:
+    description: "Lab-centric analysis — terminology + value plausibility focus."
+    phases:
+      - structural_conformance
+      - terminology_validity
+      - completeness_core
+      - value_plausibility
+    citation: "LOINC/UCUM; Kahn 2016 plausibility"
+
+  exchange_interoperability:
+    description: "Standards-based exchange — structural + terminology + references."
+    phases:
+      - structural_conformance
+      - terminology_validity
+      - referential_integrity
+      - completeness_core
+    citation: "HL7 FHIR US Core / USCDI; 21st Century Cures"

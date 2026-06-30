@@ -1,0 +1,73 @@
+# Implementation-Guide (IG) profile bindings for the conformance.ig_profile check.
+#
+# Maps a FHIR resourceType to the canonical StructureDefinition URL(s) it is
+# expected to conform to under a named IG. Unlike conformance.profile (which only
+# checks the profile a resource *declares* in meta.profile), this check validates
+# every resource of a covered type against the IG profile even when the resource
+# asserts nothing - the typical real-world case for provider data that has not yet
+# been profiled.
+#
+# Selection is opt-in and off by default: with no IG selected
+# (TRUST_GATE_IG_PROFILE unset and no use-case 'ig' key) the check is NA and the
+# verdict is unchanged. Requires an external FHIR validator that knows the IG's
+# StructureDefinitions (TRUST_GATE_VALIDATOR_URL).
+#
+# Citations: HL7 US Core 6.1.0 (USCDI v3), https://hl7.org/fhir/us/core/STU6.1/
+
+implementation_guides:
+  us_core:
+    description: "HL7 US Core 6.1.0 (USCDI v3) must-support + bound value sets"
+    citation: "HL7 US Core Implementation Guide STU 6.1.0"
+    version: "6.1.0"
+    profiles:
+      Patient:
+        - "http://hl7.org/fhir/us/core/StructureDefinition/us-core-patient"
+      Condition:
+        - "http://hl7.org/fhir/us/core/StructureDefinition/us-core-condition-problems-health-concerns"
+      AllergyIntolerance:
+        - "http://hl7.org/fhir/us/core/StructureDefinition/us-core-allergyintolerance"
+      Observation:
+        - "http://hl7.org/fhir/us/core/StructureDefinition/us-core-observation-lab"
+        - "http://hl7.org/fhir/us/core/StructureDefinition/us-core-vital-signs"
+      MedicationRequest:
+        - "http://hl7.org/fhir/us/core/StructureDefinition/us-core-medicationrequest"
+      Procedure:
+        - "http://hl7.org/fhir/us/core/StructureDefinition/us-core-procedure"
+      Immunization:
+        - "http://hl7.org/fhir/us/core/StructureDefinition/us-core-immunization"
+      Encounter:
+        - "http://hl7.org/fhir/us/core/StructureDefinition/us-core-encounter"
+      DiagnosticReport:
+        - "http://hl7.org/fhir/us/core/StructureDefinition/us-core-diagnosticreport-lab"
+      DocumentReference:
+        - "http://hl7.org/fhir/us/core/StructureDefinition/us-core-documentreference"
+
+  # EU / EHDS: the European EHR Exchange Format (EEHRxF) patient-summary category
+  # is aligned to the HL7 International Patient Summary (IPS), whose profile
+  # canonicals are stable. Selectable per dataset via `ig: eehrxf` (or
+  # TRUST_GATE_IG_PROFILE=eehrxf) alongside us_core. Requires the validator to
+  # have the IPS package (hl7.fhir.uv.ips) loaded.
+  # Citations: EHDS Reg. (EU) 2025/327; EEHRxF; HL7 International Patient Summary.
+  eehrxf:
+    description: "EU EEHRxF patient summary (IPS-aligned) profile conformance"
+    citation: "HL7 International Patient Summary (IPS) STU 1.1; EEHRxF / EHDS Art. 56"
+    version: "ips-1.1"
+    profiles:
+      Patient:
+        - "http://hl7.org/fhir/uv/ips/StructureDefinition/Patient-uv-ips"
+      AllergyIntolerance:
+        - "http://hl7.org/fhir/uv/ips/StructureDefinition/AllergyIntolerance-uv-ips"
+      Condition:
+        - "http://hl7.org/fhir/uv/ips/StructureDefinition/Condition-uv-ips"
+      Medication:
+        - "http://hl7.org/fhir/uv/ips/StructureDefinition/Medication-uv-ips"
+      MedicationStatement:
+        - "http://hl7.org/fhir/uv/ips/StructureDefinition/MedicationStatement-uv-ips"
+      MedicationRequest:
+        - "http://hl7.org/fhir/uv/ips/StructureDefinition/MedicationRequest-uv-ips"
+      Observation:
+        - "http://hl7.org/fhir/uv/ips/StructureDefinition/Observation-results-uv-ips"
+      Immunization:
+        - "http://hl7.org/fhir/uv/ips/StructureDefinition/Immunization-uv-ips"
+      Procedure:
+        - "http://hl7.org/fhir/uv/ips/StructureDefinition/Procedure-uv-ips"
