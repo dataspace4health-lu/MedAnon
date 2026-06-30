@@ -1,0 +1,21 @@
+# Register PostgreSQL JDBC driver in WildFly datasources subsystem.
+#
+# The clients.postgresql module (PostgreSQL JDBC 42.7.10) is bundled in
+# mosaicgreifswald/wildfly:38 at:
+#   /opt/mosaic/wildfly/modules/clients/postgresql/main/
+# but it is NOT pre-registered as a named JDBC driver. All datasource scripts
+# that reference --driver-name=postgresql will fail at startup unless this
+# registration runs first.
+#
+# This script is prefixed "00_" so it sorts alphabetically before all other
+# configure_wildfly_*.cli scripts in /entrypoint-wildfly-cli/.
+##########################################################################
+
+if (outcome != "success") of /subsystem=datasources/jdbc-driver=postgresql:read-resource
+    echo >>> register PostgreSQL JDBC driver (clients.postgresql)
+    /subsystem=datasources/jdbc-driver=postgresql:add(\
+        driver-name=postgresql,\
+        driver-module-name=clients.postgresql,\
+        driver-class-name=org.postgresql.Driver\
+    )
+end-if

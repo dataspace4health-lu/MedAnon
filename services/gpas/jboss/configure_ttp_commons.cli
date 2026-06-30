@@ -1,0 +1,291 @@
+#>available-env< TTP_LOG_TO CONSOLE
+#>available-env< TTP_LOG_LEVEL INFO
+
+# add logger
+#############
+#>available-env< TTP_LOG_PATTERN %d %-5p [%c] (%t) %s%E%n
+set logPattern="%d %-5p [%c] (%t) %s%E%n"
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_LOG_PATTERN})
+	set logPattern=${env.TTP_LOG_PATTERN}
+end-if
+#>available-env< TTP_AUTH_LOG_PATTERN TTP_LOG_PATTERN
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_AUTH_LOG_PATTERN})
+	set logPattern=${env.TTP_AUTH_LOG_PATTERN}
+end-if
+
+set logLevel="INFO"
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_LOG_LEVEL})
+	set logLevel=${env.TTP_LOG_LEVEL}
+end-if
+#>available-env< TTP_AUTH_LOG_LEVEL INFO
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_AUTH_LOG_LEVEL})
+	set logLevel=${env.TTP_AUTH_LOG_LEVEL}
+end-if
+if (result ~= "(?i)(trace|debug|info|warn|error|fatal)") of :resolve-expression(expression=$logLevel)
+	echo \>\>\> set auth-logger to level $logLevel
+else
+	echo \<\<\< given loglevel not allowed ($logLevel), set INFO
+	set logLevel="INFO"
+end-if
+
+set logTo="console"
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_LOG_TO})
+	set logTo=${env.TTP_LOG_TO}
+end-if
+#>deprecated-env< TTP_AUTH_LOG_TO_FILE TTP_AUTH_LOG_TO
+if (result ~= "(?i)(on|true|yes|1)") of :resolve-expression(expression=${env.TTP_AUTH_LOG_TO_FILE})
+    set logTo="file"
+end-if
+if (result ~= "(?i)(off|false|no|0)") of :resolve-expression(expression=${env.TTP_AUTH_LOG_TO_FILE})
+    set logTo="console"
+end-if
+#>available-env< TTP_AUTH_LOG_TO CONSOLE
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_AUTH_LOG_TO})
+	set logTo=${env.TTP_AUTH_LOG_TO}
+end-if
+if (outcome != "success") of /subsystem=logging/logger=org.emau.icmvc.ttp.auth:read-resource
+    /subsystem=logging/logger=org.emau.icmvc.ttp.auth:add(use-parent-handlers=false,handlers=[])
+end-if
+/subsystem=logging/logger=org.emau.icmvc.ttp.auth:write-attribute(name=level,value=$logLevel)
+if (result ~= "(?i).*file.*") of :resolve-expression(expression=$logTo)
+	echo \>\>\> add auth-logger as separate file (auth.log)
+	/subsystem=logging/custom-handler=auth-file-handler:add(class=org.jboss.logmanager.handlers.PeriodicSizeRotatingFileHandler, module=org.jboss.logmanager, formatter=$logPattern, properties={rotateSize=10240000,maxBackupIndex=20,append=true,suffix=".yyyy-MM-dd",fileName="${jboss.server.log.dir}/auth/auth.log"})
+    /subsystem=logging/logger=org.emau.icmvc.ttp.auth:add-handler(name="auth-file-handler")
+end-if
+if (result ~= "(?i).*console.*") of :resolve-expression(expression=$logTo)
+	echo \>\>\> add auth-logger to console
+	/subsystem=logging/console-handler=auth-console-handler:add(named-formatter=COLOR-PATTERN)
+    /subsystem=logging/logger=org.emau.icmvc.ttp.auth:add-handler(name="auth-console-handler")
+end-if
+
+
+# add logger
+#############
+set logPattern="%d %-5p [%c] (%t) %s%E%n"
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_LOG_PATTERN})
+	set logPattern=${env.TTP_LOG_PATTERN}
+end-if
+#>available-env< TTP_WEB_LOG_PATTERN TTP_LOG_PATTERN
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_WEB_LOG_PATTERN})
+	set logPattern=${env.TTP_WEB_LOG_PATTERN}
+end-if
+
+set logLevel="INFO"
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_LOG_LEVEL})
+	set logLevel=${env.TTP_LOG_LEVEL}
+end-if
+#>available-env< TTP_WEB_LOG_LEVEL INFO
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_WEB_LOG_LEVEL})
+	set logLevel=${env.TTP_WEB_LOG_LEVEL}
+end-if
+if (result ~= "(?i)(trace|debug|info|warn|error|fatal)") of :resolve-expression(expression=$logLevel)
+	echo \>\>\> set web-logger to level $logLevel
+else
+	echo \<\<\< given loglevel not allowed ($logLevel), set INFO
+	set logLevel="INFO"
+end-if
+
+set logTo="console"
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_LOG_TO})
+	set logTo=${env.TTP_LOG_TO}
+end-if
+#>deprecated-env< TTP_WEB_LOG_TO_FILE TTP_WEB_LOG_TO
+if (result ~= "(?i)(on|true|yes|1)") of :resolve-expression(expression=${env.TTP_WEB_LOG_TO_FILE})
+    set logTo="file"
+end-if
+if (result ~= "(?i)(off|false|no|0)") of :resolve-expression(expression=${env.TTP_WEB_LOG_TO_FILE})
+    set logTo="console"
+end-if
+#>available-env< TTP_WEB_LOG_TO CONSOLE
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_WEB_LOG_TO})
+	set logTo=${env.TTP_WEB_LOG_TO}
+end-if
+if (outcome != "success") of /subsystem=logging/logger=org.icmvc.ttp.web:read-resource
+    /subsystem=logging/logger=org.icmvc.ttp.web:add(use-parent-handlers=false,handlers=[])
+end-if
+/subsystem=logging/logger=org.icmvc.ttp.web:write-attribute(name=level,value=$logLevel)
+if (result ~= "(?i).*file.*") of :resolve-expression(expression=$logTo)
+	echo \>\>\> add web-logger as separate file (web.log)
+	/subsystem=logging/custom-handler=web-file-handler:add(class=org.jboss.logmanager.handlers.PeriodicSizeRotatingFileHandler, module=org.jboss.logmanager, formatter=$logPattern, properties={rotateSize=1024000,maxBackupIndex=20,append=true,suffix=".yyyy-MM-dd",fileName="${jboss.server.log.dir}/web/web.log"})
+	/subsystem=logging/logger=org.icmvc.ttp.web:add-handler(name="web-file-handler")
+end-if
+if (result ~= "(?i).*console.*") of :resolve-expression(expression=$logTo)
+	echo \>\>\> add web-logger to console
+	/subsystem=logging/console-handler=web-console-handler:add(named-formatter=COLOR-PATTERN)
+	/subsystem=logging/logger=org.icmvc.ttp.web:add-handler(name="web-console-handler")
+end-if
+
+
+# KeycloakTTPAuthSoapInterceptor and AuthContextRemovalSoapInterceptor as cxf.interceptors.in
+##############################################################################################
+if (outcome != "success") of /subsystem=webservices/endpoint-config=Standard-Endpoint-Config/property=cxf.interceptors.in:read-resource
+    echo \>\>\> add property for KeycloakTTPAuthSoapInterceptor and AuthContextRemovalSoapInterceptor as cxf.interceptors.in
+    /subsystem=webservices/endpoint-config=Standard-Endpoint-Config/property=cxf.interceptors.in:add(\
+    	value="org.emau.icmvc.ttp.auth.KeycloakTTPAuthSoapInterceptor,org.emau.icmvc.ttp.auth.AuthContextRemovalSoapInterceptor")
+else
+	echo \>\>\> property for cxf.interceptors.in already exists
+end-if
+
+# add shared System-Properties for SOAP/FHIR-KeyCloak
+######################################################
+set temp=null
+#>deprecated-env< KEYCLOAK_SERVER_URL TTP_KEYCLOAK_SERVER_URL
+if (outcome == "success") of :resolve-expression(expression=${env.KEYCLOAK_SERVER_URL})
+	echo \>\>\> KEYCLOAK_SERVER_URL is obsolete and will not be supported in the future
+	set temp=${env.KEYCLOAK_SERVER_URL}
+end-if
+#>available-env< TTP_KEYCLOAK_SERVER_URL
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_KEYCLOAK_SERVER_URL})
+	set temp=${env.TTP_KEYCLOAK_SERVER_URL}
+end-if
+if (result != "null") of :resolve-expression(expression=$temp)
+    echo \>\>\> set system-property for TTP_KEYCLOAK_SERVER_URL: $temp
+    /system-property=ttp.auth.keycloak.baseUrl:add(value=$temp)
+end-if
+
+set temp=null
+#>deprecated-env< KEYCLOAK_REALM TTP_KEYCLOAK_REALM
+if (outcome == "success") of :resolve-expression(expression=${env.KEYCLOAK_REALM})
+	echo \>\>\> KEYCLOAK_REALM is obsolete and will not be supported in the future
+	set temp=${env.KEYCLOAK_REALM}
+end-if
+#>available-env< TTP_KEYCLOAK_REALM
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_KEYCLOAK_REALM})
+	set temp=${env.TTP_KEYCLOAK_REALM}
+end-if
+if (result != "null") of :resolve-expression(expression=$temp)
+    echo \>\>\> set system-property for TTP_KEYCLOAK_REALM: $temp
+    /system-property=ttp.auth.keycloak.realm:add(value=$temp)
+end-if
+
+set temp=null
+#>deprecated-env< KEYCLOAK_RESOURCE TTP_KEYCLOAK_CLIENT_ID
+if (outcome == "success") of :resolve-expression(expression=${env.KEYCLOAK_RESOURCE})
+	echo \>\>\> KEYCLOAK_RESOURCE is obsolete and will not be supported in the future
+	set temp=${env.KEYCLOAK_RESOURCE}
+end-if
+#>deprecated-env< KEYCLOAK_CLIENT_ID TTP_KEYCLOAK_CLIENT_ID
+if (outcome == "success") of :resolve-expression(expression=${env.KEYCLOAK_CLIENT_ID})
+	echo \>\>\> KEYCLOAK_CLIENT_ID is obsolete and will not be supported in the future
+	set temp=${env.KEYCLOAK_CLIENT_ID}
+end-if
+#>available-env< TTP_KEYCLOAK_CLIENT_ID
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_KEYCLOAK_CLIENT_ID})
+	set temp=${env.TTP_KEYCLOAK_CLIENT_ID}
+end-if
+if (result != "null") of :resolve-expression(expression=$temp)
+    echo \>\>\> set system-property for TTP_KEYCLOAK_CLIENT_ID
+    /system-property=ttp.auth.keycloak.clientId:add(value=$temp)
+end-if
+
+set temp=null
+#>deprecated-env< KEYCLOAK_CLIENT_SECRET TTP_KEYCLOAK_CLIENT_SECRET
+if (outcome == "success") of :resolve-expression(expression=${env.KEYCLOAK_CLIENT_SECRET})
+	echo \>\>\> KEYCLOAK_CLIENT_SECRET is obsolete and will not be supported in the future
+	set temp=${env.KEYCLOAK_CLIENT_SECRET}
+end-if
+#>available-env< TTP_KEYCLOAK_CLIENT_SECRET
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_KEYCLOAK_CLIENT_SECRET})
+	set temp=${env.TTP_KEYCLOAK_CLIENT_SECRET}
+end-if
+if (result != "null") of :resolve-expression(expression=$temp)
+    echo \>\>\> set system-property for TTP_KEYCLOAK_CLIENT_SECRET
+    /system-property=ttp.auth.keycloak.secret:add(value=$temp)
+end-if
+
+set temp=null
+#>deprecated-env< KEYCLOAK_SSL_REQUIRED TTP_KEYCLOAK_SSL_REQUIRED
+if (outcome == "success") of :resolve-expression(expression=${env.KEYCLOAK_SSL_REQUIRED})
+	echo \>\>\> KEYCLOAK_SSL_REQUIRED is obsolete and will not be supported in the future
+	set temp=${env.KEYCLOAK_SSL_REQUIRED}
+end-if
+#>available-env< TTP_KEYCLOAK_SSL_REQUIRED
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_KEYCLOAK_SSL_REQUIRED})
+	set temp=${env.TTP_KEYCLOAK_SSL_REQUIRED}
+end-if
+if (result != "null") of :resolve-expression(expression=$temp)
+    echo \>\>\> set system-property for TTP_KEYCLOAK_SSL_REQUIRED
+    /system-property=ttp.auth.keycloak.sslRequired:add(value=$temp)
+end-if
+
+set temp=null
+#>deprecated-env< KEYCLOAK_CONFIDENTIAL_PORT TTP_KEYCLOAK_CONFIDENTIAL_PORT
+if (outcome == "success") of :resolve-expression(expression=${env.KEYCLOAK_CONFIDENTIAL_PORT})
+	echo \>\>\> KEYCLOAK_CONFIDENTIAL_PORT is obsolete and will not be supported in the future
+	set temp=${env.KEYCLOAK_CONFIDENTIAL_PORT}
+end-if
+#>available-env< TTP_KEYCLOAK_CONFIDENTIAL_PORT
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_KEYCLOAK_CONFIDENTIAL_PORT})
+	set temp=${env.TTP_KEYCLOAK_CONFIDENTIAL_PORT}
+end-if
+if (result != "null") of :resolve-expression(expression=$temp)
+    echo \>\>\> set system-property for TTP_KEYCLOAK_CONFIDENTIAL_PORT
+    /system-property=ttp.auth.keycloak.confidentialPort:add(value=$temp)
+end-if
+
+set temp=null
+#>deprecated-env< KEYCLOAK_USE_RESOURCE_ROLE_MAPPINGS TTP_KEYCLOAK_USE_RESOURCE_ROLE_MAPPINGS
+if (outcome == "success") of :resolve-expression(expression=${env.KEYCLOAK_USE_RESOURCE_ROLE_MAPPINGS})
+	echo \>\>\> KEYCLOAK_USE_RESOURCE_ROLE_MAPPINGS is obsolete and will not be supported in the future
+	set temp=${env.KEYCLOAK_USE_RESOURCE_ROLE_MAPPINGS}
+end-if
+#>available-env< TTP_KEYCLOAK_USE_RESOURCE_ROLE_MAPPINGS
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_KEYCLOAK_USE_RESOURCE_ROLE_MAPPINGS})
+	set temp=${env.TTP_KEYCLOAK_USE_RESOURCE_ROLE_MAPPINGS}
+end-if
+if (result != "null") of :resolve-expression(expression=$temp)
+    echo \>\>\> set system-property for TTP_KEYCLOAK_USE_RESOURCE_ROLE_MAPPINGS
+    /system-property=ttp.auth.keycloak.useResourceRoleMappings:add(value=$temp)
+end-if
+
+# add specific System-Properties for SOAP-KeyCloak
+######################################################
+#>available-env< TTP_SOAP_KEYCLOAK_SERVER_URL
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_SOAP_KEYCLOAK_SERVER_URL})
+    set temp=${env.TTP_SOAP_KEYCLOAK_SERVER_URL}
+    echo \>\>\> set system-property for TTP_SOAP_KEYCLOAK_SERVER_URL: $temp
+    /system-property=ttp.auth.soap.keycloak.baseUrl:add(value=$temp)
+end-if
+#>available-env< TTP_SOAP_KEYCLOAK_REALM
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_SOAP_KEYCLOAK_REALM})
+    set temp=${env.TTP_SOAP_KEYCLOAK_REALM}
+    echo \>\>\> set system-property for TTP_SOAP_KEYCLOAK_REALM: $temp
+    /system-property=ttp.auth.soap.keycloak.realm:add(value=$temp)
+end-if
+#>available-env< TTP_SOAP_KEYCLOAK_RESOURCE
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_SOAP_KEYCLOAK_RESOURCE})
+    set temp=${env.TTP_SOAP_KEYCLOAK_RESOURCE}
+    echo \>\>\> set system-property for TTP_SOAP_KEYCLOAK_RESOURCE
+    /system-property=ttp.auth.soap.keycloak.clientId:add(value=$temp)
+end-if
+#>available-env< TTP_SOAP_KEYCLOAK_CLIENT_ID
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_SOAP_KEYCLOAK_CLIENT_ID})
+    set temp=${env.TTP_SOAP_KEYCLOAK_CLIENT_ID}
+    echo \>\>\> set system-property for TTP_SOAP_KEYCLOAK_CLIENT_ID
+    /system-property=ttp.auth.soap.keycloak.clientId:add(value=$temp)
+end-if
+#>available-env< TTP_SOAP_KEYCLOAK_CLIENT_SECRET
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_SOAP_KEYCLOAK_CLIENT_SECRET})
+    set temp=${env.TTP_SOAP_KEYCLOAK_CLIENT_SECRET}
+    echo \>\>\> set system-property for TTP_SOAP_KEYCLOAK_CLIENT_SECRET
+    /system-property=ttp.auth.soap.keycloak.secret:add(value=$temp)
+end-if
+#>available-env< TTP_SOAP_KEYCLOAK_SSL_REQUIRED
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_SOAP_KEYCLOAK_SSL_REQUIRED})
+    set temp=${env.TTP_SOAP_KEYCLOAK_SSL_REQUIRED}
+    echo \>\>\> set system-property for TTP_SOAP_KEYCLOAK_SSL_REQUIRED
+    /system-property=ttp.auth.soap.keycloak.sslRequired:add(value=$temp)
+end-if
+#>available-env< TTP_SOAP_KEYCLOAK_CONFIDENTIAL_PORT
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_SOAP_KEYCLOAK_CONFIDENTIAL_PORT})
+    set temp=${env.TTP_SOAP_KEYCLOAK_CONFIDENTIAL_PORT}
+    echo \>\>\> set system-property for TTP_SOAP_KEYCLOAK_CONFIDENTIAL_PORT
+    /system-property=ttp.auth.soap.keycloak.confidentialPort:add(value=$temp)
+end-if
+#>available-env< TTP_SOAP_KEYCLOAK_USE_RESOURCE_ROLE_MAPPINGS
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_SOAP_KEYCLOAK_USE_RESOURCE_ROLE_MAPPINGS})
+    set temp=${env.TTP_SOAP_KEYCLOAK_USE_RESOURCE_ROLE_MAPPINGS}
+    echo \>\>\> set system-property for TTP_SOAP_KEYCLOAK_USE_RESOURCE_ROLE_MAPPINGS
+    /system-property=ttp.auth.soap.keycloak.useResourceRoleMappings:add(value=$temp)
+end-if
+

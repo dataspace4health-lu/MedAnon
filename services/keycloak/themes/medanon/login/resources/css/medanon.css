@@ -1,0 +1,307 @@
+/* ===========================================================================
+   MedAnon · Data Privacy Toolkit — Keycloak login theme
+   Restyles the base (PatternFly) login/reset/update-password pages to match the
+   SPA brand. Targets both legacy (.pf-c-) and current (.pf-v5-c-) PatternFly
+   class prefixes plus base elements, so it is resilient across Keycloak versions.
+   Brand: primary #0072bc · navy #001d42 · accent #e8f0f8
+   ========================================================================= */
+
+:root {
+  --m-primary: #0072bc;
+  --m-primary-hover: #005c99;
+  --m-navy: #001d42;
+  --m-muted: #5a7184;
+  --m-accent: #e8f0f8;
+  --m-border: #d4dee8;
+  --m-radius: 14px;
+  --m-font: "Geist", "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+/* ── Page background ─────────────────────────────────────────────────────── */
+html, body { height: 100%; }
+body.login-pf,
+.login-pf body { background: none; }
+
+body, .login-pf-page {
+  font-family: var(--m-font);
+  color: var(--m-navy);
+  background:
+    radial-gradient(1200px 600px at 50% -10%, var(--m-accent) 0%, transparent 60%),
+    linear-gradient(180deg, #ffffff 0%, #f3f7fb 100%) !important;
+  min-height: 100vh;
+}
+
+.login-pf-page {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 16px;
+}
+
+/* Hide PatternFly's default fixed background image */
+.login-pf-page .login-pf-header { margin-bottom: 0; }
+#kc-header,
+.login-pf-page #kc-header { width: 100%; }
+
+/* ── Brand header (shield + wordmark) ───────────────────────────────────── */
+#kc-header-wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 0 0 22px;
+  font-size: 0;            /* hide raw realm-name whitespace; we re-add styled text */
+  color: transparent;
+}
+#kc-header-wrapper::before {
+  content: "";
+  width: 52px;
+  height: 52px;
+  border-radius: 14px;
+  background-color: var(--m-primary);
+  /* white shield-check emblem */
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ffffff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10'/%3E%3Cpath d='m9 12 2 2 4-4'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 28px 28px;
+  box-shadow: 0 6px 18px rgba(0, 114, 188, 0.28);
+}
+#kc-header-wrapper::after {
+  content: "Data Privacy Toolkit";
+  font-size: 20px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--m-navy);
+}
+
+/* ── Card ────────────────────────────────────────────────────────────────── */
+.login-pf-page .card-pf,
+.login-pf-page .card-pf.login-pf-accordion,
+.login-pf-page form ~ .card-pf {
+  width: 100%;
+  max-width: 400px;
+  margin: 0 auto;
+  padding: 30px 28px 26px;
+  background: #ffffff;
+  border: 1px solid var(--m-border);
+  border-radius: var(--m-radius);
+  box-shadow: 0 10px 30px rgba(0, 29, 66, 0.08);
+}
+
+#kc-content, #kc-content-wrapper { width: 100%; }
+#kc-content-wrapper { display: flex; justify-content: center; }
+
+/* Page heading (e.g. "Sign in to your account", "Reset password") */
+#kc-page-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--m-navy);
+  text-align: center;
+  margin: 0 0 18px;
+}
+
+/* ── Layout: force a clean vertical block flow regardless of the base
+   theme's grid/float layout (prevents the hint text floating beside inputs) ─ */
+#kc-content, #kc-content-wrapper,
+#kc-form, #kc-form-wrapper,
+form, .pf-c-form, .pf-v5-c-form { width: 100%; display: block; float: none; }
+
+.pf-c-form__group, .pf-v5-c-form__group, .form-group,
+.pf-c-form__group-control, .pf-c-form__horizontal,
+.pf-c-form__group-label, .control-label {
+  display: block;
+  width: 100%;
+  float: none;
+  margin-bottom: 16px;
+}
+
+/* ── Form fields ─────────────────────────────────────────────────────────── */
+.pf-c-form__label, .pf-v5-c-form__label,
+#kc-form-login label, #kc-reset-password-form label, .control-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--m-navy);
+  margin-bottom: 6px;
+  display: inline-block;
+}
+
+/* Text inputs only.
+   PatternFly 5 applies .pf-v5-c-form-control to ALL inputs including checkboxes.
+   :not() guards prevent the 100%×42px rule from hitting checkboxes/radios —
+   without these guards the checkbox renders as a 42px-tall block. */
+input[type="text"], input[type="password"], input[type="email"],
+input[type="tel"], input[type="number"],
+.pf-c-form-control:not([type="checkbox"]):not([type="radio"]),
+.pf-v5-c-form-control:not([type="checkbox"]):not([type="radio"]),
+.form-control:not([type="checkbox"]):not([type="radio"]) {
+
+  padding: 0 12px;
+  font-size: 14px;
+  color: var(--m-navy);
+  background: #ffffff;
+  border: 1px solid var(--m-border);
+  border-radius: 10px;
+  box-shadow: none;
+  transition: border-color .15s ease, box-shadow .15s ease;
+  box-sizing: border-box;
+}
+input[type="text"]:focus, input[type="password"]:focus, input[type="email"]:focus,
+.pf-c-form-control:not([type="checkbox"]):not([type="radio"]):focus,
+.pf-v5-c-form-control:not([type="checkbox"]):not([type="radio"]):focus,
+.form-control:not([type="checkbox"]):not([type="radio"]):focus {
+  outline: none;
+  border-color: var(--m-primary);
+  box-shadow: 0 0 0 3px rgba(0, 114, 188, 0.18);
+}
+
+/* Password show/hide toggle button */
+.pf-c-input-group, .pf-v5-c-input-group { display: flex; }
+.pf-c-button.pf-m-control, .pf-v5-c-button.pf-m-control {
+  border: 1px solid var(--m-border);
+  border-left: none;
+  border-radius: 0 10px 10px 0;
+  background: #f7fafc;
+}
+
+/* ── Buttons ─────────────────────────────────────────────────────────────── */
+.pf-c-button.pf-m-primary, .pf-v5-c-button.pf-m-primary,
+input[type="submit"], .btn-primary, #kc-login {
+  width: 100%;
+  height: 44px;
+  margin-top: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #ffffff;
+  background: var(--m-primary);
+  border: none;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background .15s ease, transform .02s ease;
+}
+.pf-c-button.pf-m-primary:hover, .pf-v5-c-button.pf-m-primary:hover,
+input[type="submit"]:hover, .btn-primary:hover, #kc-login:hover {
+  background: var(--m-primary-hover);
+}
+.pf-c-button.pf-m-primary:active, #kc-login:active { transform: translateY(1px); }
+
+/* Secondary / link buttons */
+.pf-c-button.pf-m-link, .pf-v5-c-button.pf-m-link,
+a, #kc-registration a, #kc-form-options a {
+  color: var(--m-primary);
+}
+a:hover { color: var(--m-primary-hover); text-decoration: underline; }
+
+/* ── Checkboxes / radios — pinned 16 px, never full-width ───────────────────
+   !important beats any PatternFly compound selector (e.g. .pf-v5-c-check >
+   .pf-v5-c-check__input) that may load after this stylesheet and override
+   the natural cascade. */
+input[type="checkbox"],
+input[type="radio"] {
+  width:     16px !important;
+  height:    16px !important;
+  min-width: 16px !important;
+  max-width: 16px !important;
+  min-height:16px !important;
+  max-height:16px !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  vertical-align: middle;
+  accent-color: var(--m-primary);
+  cursor: pointer;
+  box-sizing: content-box !important;
+  border-radius: 3px !important;
+}
+
+/* ── Options row (remember me / forgot password) ─────────────────────────── */
+#kc-form-options {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 2px 0 16px;
+  font-size: 13px;
+}
+#kc-form-options .checkbox { margin: 0; }
+#kc-form-options .checkbox label,
+.checkbox label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+  font-weight: 500;
+  color: var(--m-muted);
+  cursor: pointer;
+}
+/* Forgot-password link sits on the right of the row */
+#kc-form-options a, #kc-form-options span { white-space: nowrap; }
+
+/* ── Alerts / messages ───────────────────────────────────────────────────── */
+.alert, .pf-c-alert, .pf-v5-c-alert {
+  border-radius: 10px;
+  font-size: 13px;
+  margin-bottom: 16px;
+}
+.alert-error, .pf-m-danger {
+  background: #fdecec;
+  border: 1px solid #f5c2c2;
+  color: #a12222;
+}
+.alert-success, .pf-m-success {
+  background: #e9f7ef;
+  border: 1px solid #b7e3c8;
+  color: #1c7a45;
+}
+.alert-warning, .pf-m-warning {
+  background: #fef6e7;
+  border: 1px solid #f5dca0;
+  color: #8a6116;
+}
+.alert-info, .pf-m-info {
+  background: var(--m-accent);
+  border: 1px solid #c3d9ec;
+  color: var(--m-navy);
+}
+
+/* ── Reset-password: collapse the two-column Bootstrap grid to single column ─
+   Keycloak's loginWithInfoTemplate renders the instruction text in a separate
+   Bootstrap column (.col-sm-4) which appears as a floating grey box beside
+   the input. Force all grid columns to 100% so the page is single-column. */
+.login-pf-page [class*="col-xs-"],
+.login-pf-page [class*="col-sm-"],
+.login-pf-page [class*="col-md-"],
+.login-pf-page [class*="col-lg-"] {
+  width: 100% !important;
+  float: none !important;
+  padding-left: 0 !important;
+  padding-right: 0 !important;
+}
+
+/* ── Info / instruction area (reset-password hint, back-to-login, etc.) ─────
+   Forced to a full-width centered block. The grey box appearance comes from
+   the card-pf style inherited by the info column — strip it here. */
+#kc-info,
+#kc-info-wrapper,
+#kc-info-message,
+.instruction,
+.pf-c-login__main-footer-band {
+  width: 100% !important;
+  float: none !important;
+  clear: both !important;
+  display: block !important;
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  margin: 14px 0 0 !important;
+  padding: 0 !important;
+  text-align: center;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--m-muted);
+}
+
+/* Hide Keycloak's locale switcher for a cleaner single-locale look */
+#kc-locale { display: none; }
+
+/* Small print */
+.login-pf-page .login-pf-signup { color: var(--m-muted); }

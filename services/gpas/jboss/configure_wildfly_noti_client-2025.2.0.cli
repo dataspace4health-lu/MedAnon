@@ -1,0 +1,105 @@
+# add connection to notification-service
+#########################################
+#>available-env< TTP_NOTI_SVC_PROTOCOL http
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_NOTI_SVC_PROTOCOL})
+    set temp=${env.TTP_NOTI_SVC_PROTOCOL}
+	echo \>\>\> set notification.client.protocol to $temp
+	/system-property=notification.client.protocol:add(value=$temp)
+end-if
+#>available-env< TTP_NOTI_SVC_HOST localhost
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_NOTI_SVC_HOST})
+    set temp=${env.TTP_NOTI_SVC_HOST}
+	echo \>\>\> set notification.client.domain to $temp
+	/system-property=notification.client.domain:add(value=$temp)
+end-if
+#>available-env< TTP_NOTI_SVC_PORT 8080
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_NOTI_SVC_PORT})
+    set temp=${env.TTP_NOTI_SVC_PORT}
+	echo \>\>\> set notification.client.port to $temp
+	/system-property=notification.client.port:add(value=$temp)
+end-if
+
+
+# add logger
+#############
+#>available-env< TTP_LOG_PATTERN %d %-5p [%c] (%t) %s%E%n
+set logPattern="%d %-5p [%c] (%t) %s%E%n"
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_LOG_PATTERN})
+	set logPattern=${env.TTP_LOG_PATTERN}
+end-if
+#>available-env< TTP_NOTI_LOG_PATTERN TTP_LOG_PATTERN
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_NOTI_LOG_PATTERN})
+	set logPattern=${env.TTP_NOTI_LOG_PATTERN}
+end-if
+
+set logLevel="INFO"
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_LOG_LEVEL})
+	set logLevel=${env.TTP_LOG_LEVEL}
+end-if
+#>deprecated-env< NOTI_LOG_LEVEL TTP_NOTI_LOG_LEVEL
+if (outcome == "success") of :resolve-expression(expression=${env.NOTI_LOG_LEVEL})
+	set logLevel=${env.NOTI_LOG_LEVEL}
+end-if
+#>available-env< TTP_NOTI_LOG_LEVEL INFO
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_NOTI_LOG_LEVEL})
+	set logLevel=${env.TTP_NOTI_LOG_LEVEL}
+end-if
+if (result ~= "(TRACE|DEBUG|INFO|WARN|ERROR|FATAL)") of :resolve-expression(expression=$logLevel)
+	echo \>\>\> set noti-logger to level $logLevel
+else
+	echo \<\<\< given loglevel not allowed ($logLevel), set INFO
+	set logLevel="INFO"
+end-if
+
+set logTo="console"
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_LOG_TO})
+	set logTo=${env.TTP_LOG_TO}
+end-if
+#>deprecated-env< NOTI_FILE_LOG TTP_NOTI_LOG_TO
+if (result ~= "(?i)(on|true|yes|1)") of :resolve-expression(expression=${env.NOTI_FILE_LOG})
+    set logTo="file"
+end-if
+if (result ~= "(?i)(off|false|no|0)") of :resolve-expression(expression=${env.NOTI_FILE_LOG})
+    set logTo="console"
+end-if
+#>deprecated-env< TTP_NOTI_LOG_TO_FILE TTP_NOTI_LOG_TO
+if (result ~= "(?i)(on|true|yes|1)") of :resolve-expression(expression=${env.TTP_NOTI_LOG_TO_FILE})
+    set logTo="file"
+end-if
+if (result ~= "(?i)(off|false|no|0)") of :resolve-expression(expression=${env.TTP_NOTI_LOG_TO_FILE})
+    set logTo="console"
+end-if
+#>available-env< TTP_NOTI_LOG_TO FALSE
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_NOTI_LOG_TO})
+	set logTo=${env.TTP_NOTI_LOG_TO}
+end-if
+if (outcome != "success") of /subsystem=logging/logger=org.emau.icmvc.ttp.notification:read-resource
+  /subsystem=logging/logger=org.emau.icmvc.ttp.notification:add(use-parent-handlers=false,handlers=[])
+end-if
+/subsystem=logging/logger=org.emau.icmvc.ttp.notification:write-attribute(name=level,value=$logLevel)
+if (result ~= "(?i).*file.*") of :resolve-expression(expression=$logTo)
+	try
+		echo \>\>\> add noti-logger as separate file (noti.log)
+		/subsystem=logging/custom-handler=noti-file-handler:add(class=org.jboss.logmanager.handlers.PeriodicSizeRotatingFileHandler, module=org.jboss.logmanager, formatter=$logPattern, properties={rotateSize=10240000,maxBackupIndex=20,append=true,suffix=".yyyy-MM-dd",fileName="${jboss.server.log.dir}/noti/noti.log"})
+		/subsystem=logging/logger=org.emau.icmvc.ttp.notification:add-handler(name="noti-file-handler")
+	catch
+        echo \<\<\< noti-file-handler already exists
+	end-try
+end-if
+if (result ~= "(?i).*console.*") of :resolve-expression(expression=$logTo)
+	try
+		echo \>\>\> add noti-logger to console
+		/subsystem=logging/console-handler=noti-console-handler:add(named-formatter=COLOR-PATTERN)
+		/subsystem=logging/logger=org.emau.icmvc.ttp.notification:add-handler(name="noti-console-handler")
+	catch
+        echo \<\<\< noti-console-handler already exists
+	end-try
+end-if
+
+# CLI-VERSION
+##############
+try
+    /system-property=org.icmvc.ttp.noti-c.cli.version:add(value="2025.2.0")
+catch
+	/system-property=org.icmvc.ttp.noti-c.cli.version:write-attribute(name="value", value="2025.2.0")
+end-try

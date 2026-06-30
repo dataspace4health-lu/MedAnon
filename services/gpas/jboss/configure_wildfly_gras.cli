@@ -1,0 +1,126 @@
+# add datasource for gras — PostgreSQL version
+#
+# This is a modified version of configure_wildfly_gras.cli that uses
+# PostgreSQL JDBC instead of MySQL. The gras schema lives inside the
+# same gpas database (specified via currentSchema=gras).
+##########################
+set grasDbHost=postgresql
+#>available-env< TTP_DB_HOST postgresql
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_DB_HOST})
+	set grasDbHost=${env.TTP_DB_HOST}
+end-if
+#>deprecated-env< GRAS_DB_HOST TTP_GRAS_DB_HOST
+if (outcome == "success") of :resolve-expression(expression=${env.GRAS_DB_HOST})
+	set grasDbHost=${env.GRAS_DB_HOST}
+end-if
+#>available-env< TTP_GRAS_DB_HOST postgresql
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_GRAS_DB_HOST})
+	set grasDbHost=${env.TTP_GRAS_DB_HOST}
+end-if
+
+set grasDbPort=5432
+#>available-env< TTP_DB_PORT
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_DB_PORT})
+	set grasDbPort=${env.TTP_DB_PORT}
+end-if
+#>deprecated-env< GRAS_DB_PORT TTP_GRAS_DB_PORT
+if (outcome == "success") of :resolve-expression(expression=${env.GRAS_DB_PORT})
+	set grasDbPort=${env.GRAS_DB_PORT}
+end-if
+#>available-env< TTP_GRAS_DB_PORT 5432
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_GRAS_DB_PORT})
+	set grasDbPort=${env.TTP_GRAS_DB_PORT}
+end-if
+
+set grasDbName=gpas
+#>deprecated-env< GRAS_DB_NAME TTP_GRAS_DB_NAME
+if (outcome == "success") of :resolve-expression(expression=${env.GRAS_DB_NAME})
+	set grasDbName=${env.GRAS_DB_NAME}
+end-if
+#>available-env< TTP_GRAS_DB_NAME gpas
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_GRAS_DB_NAME})
+	set grasDbName=${env.TTP_GRAS_DB_NAME}
+end-if
+
+set grasDbUser=gras_user
+#>available-env< TTP_DB_USER
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_DB_USER})
+	set grasDbUser=${env.TTP_DB_USER}
+end-if
+#>deprecated-env< GRAS_DB_USER TTP_GRAS_DB_USER
+if (outcome == "success") of :resolve-expression(expression=${env.GRAS_DB_USER})
+	set grasDbUser=${env.GRAS_DB_USER}
+end-if
+#>available-env< TTP_GRAS_DB_USER gras_user
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_GRAS_DB_USER})
+	set grasDbUser=${env.TTP_GRAS_DB_USER}
+end-if
+
+set grasDbPass=gras_password
+#>available-env< TTP_DB_PASS
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_DB_PASS})
+	set grasDbPass=${env.TTP_DB_PASS}
+end-if
+#>deprecated-env< GRAS_DB_PASS TTP_GRAS_DB_PASS
+if (outcome == "success") of :resolve-expression(expression=${env.GRAS_DB_PASS})
+	set grasDbPass=${env.GRAS_DB_PASS}
+end-if
+#>available-env< TTP_GRAS_DB_PASS gras_password
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_GRAS_DB_PASS})
+	set grasDbPass=${env.TTP_GRAS_DB_PASS}
+end-if
+
+if (outcome != "success") of /subsystem=datasources/data-source=grasDS:read-resource
+	try
+		echo \>\>\> add datasources grasDS (PostgreSQL)
+		data-source add \
+			--name=grasDS \
+			--driver-name=postgresql \
+			--jndi-name=java:jboss/datasources/grasDS \
+			--connection-url=jdbc:postgresql://$grasDbHost:$grasDbPort/$grasDbName?currentSchema=gras \
+			--user-name=$grasDbUser \
+			--password=$grasDbPass \
+			--use-ccm=true \
+			--min-pool-size=0 \
+			--max-pool-size=20 \
+			--flush-strategy=FailingConnectionOnly \
+			--use-java-context=true \
+			--jta=true \
+			--enabled=true \
+			--check-valid-connection-sql="select 1" \
+			--validate-on-match=false \
+			--background-validation=true \
+			--background-validation-millis=10000
+
+		# add ttp-realm
+		echo \>\>\> add security-realm TtpRealm
+        /subsystem=elytron/jdbc-realm=TtpRealm:add(principal-query=[{\
+            data-source=grasDS,\
+            sql="SELECT r.role, p.password FROM domainuser_password p LEFT JOIN domainuser_role r ON p.domainuser = r.domainuser WHERE p.domainuser = ?",\
+            attribute-mapping=[{index=1, to=Roles}],\
+            simple-digest-mapper={algorithm=simple-digest-sha-256, hash-encoding=hex, password-index=2}\
+        }])
+
+		#add security-domain
+		echo \>\>\> add security-domain for TtpRealm
+        /subsystem=elytron/security-domain=jdbcdomain:add(\
+            default-realm=TtpRealm,\
+            realms=[{realm=TtpRealm}],\
+            permission-mapper=default-permission-mapper)
+
+		#add security-domain
+		echo \>\>\> add http-authentication-factory for TtpRealm
+        /subsystem=elytron/http-authentication-factory=http-db-auth:add(\
+            security-domain=jdbcdomain,\
+            mechanism-configurations=[\
+				{ mechanism-name=FORM, mechanism-realm-configurations=[realm-name=TtpRealm] }, \
+				{ mechanism-name=BASIC, mechanism-realm-configurations=[realm-name=TtpRealm] } \
+			],\
+            http-server-mechanism-factory=global)
+        /subsystem=undertow/application-security-domain=ttp-security-domain:add(http-authentication-factory=http-db-auth)
+		/subsystem=ejb3/application-security-domain=ttp-security-domain:add(security-domain=jdbcdomain)
+	catch
+		echo \<\<\< FAILED add grasDS and TtpRealm
+		data-source remove --name=grasDS
+	end-try
+end-if

@@ -1,0 +1,292 @@
+# add logger
+#############
+#>available-env< TTP_LOG_PATTERN %d %-5p [%c] (%t) %s%E%n
+set logPattern="%d %-5p [%c] (%t) %s%E%n"
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_LOG_PATTERN})
+	set logPattern=${env.TTP_LOG_PATTERN}
+end-if
+#>available-env< TTP_FHIR_LOG_PATTERN TTP_LOG_PATTERN
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_FHIR_LOG_PATTERN})
+	set logPattern=${env.TTP_FHIR_LOG_PATTERN}
+end-if
+
+set logLevel="INFO"
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_LOG_LEVEL})
+	set logLevel=${env.TTP_LOG_LEVEL}
+end-if
+#>available-env< TTP_FHIR_LOG_LEVEL INFO
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_FHIR_LOG_LEVEL})
+	set logLevel=${env.TTP_FHIR_LOG_LEVEL}
+end-if
+if (result ~= "(TRACE|DEBUG|INFO|WARN|ERROR|FATAL)") of :resolve-expression(expression=$logLevel)
+	echo \>\>\> set fhir-logger to level $logLevel
+else
+	echo \<\<\< given loglevel not allowed ($logLevel), set INFO
+	set logLevel="INFO"
+end-if
+
+set logTo="console"
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_LOG_TO})
+	set logTo=${env.TTP_LOG_TO}
+end-if
+#>deprecated-env< TTP_FHIR_LOG_TO_FILE TTP_FHIR_LOG_TO
+if (result ~= "(?i)(on|true|yes|1)") of :resolve-expression(expression=${env.TTP_FHIR_LOG_TO_FILE})
+	set logTo="file"
+end-if
+if (result ~= "(?i)(off|false|no|0)") of :resolve-expression(expression=${env.TTP_FHIR_LOG_TO_FILE})
+	set logTo="console"
+end-if
+#>available-env< TTP_FHIR_LOG_TO CONSOLE
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_FHIR_LOG_TO})
+	set logTo=${env.TTP_FHIR_LOG_TO}
+end-if
+if (outcome != "success") of /subsystem=logging/logger=org.icmvc.ttp.fhir:read-resource
+	/subsystem=logging/logger=org.icmvc.ttp.fhir:add(use-parent-handlers=false,handlers=[])
+end-if
+/subsystem=logging/logger=org.icmvc.ttp.fhir:write-attribute(name=level,value=$logLevel)
+if (result ~= "(?i).*file.*") of :resolve-expression(expression=$logTo)
+	echo \>\>\> add fhir-logger as separate file (fhir.log)
+	/subsystem=logging/custom-handler=fhir-file-handler:add(class=org.jboss.logmanager.handlers.PeriodicSizeRotatingFileHandler, module=org.jboss.logmanager, formatter=$logPattern, properties={rotateSize=10240000,maxBackupIndex=20,append=true,suffix=".yyyy-MM-dd",fileName="${jboss.server.log.dir}/fhir/fhir.log"})
+	/subsystem=logging/logger=org.icmvc.ttp.fhir:add-handler(name="fhir-file-handler")
+end-if
+if (result ~= "(?i).*console.*") of :resolve-expression(expression=$logTo)
+	echo \>\>\> add fhir-logger to console
+	/subsystem=logging/console-handler=fhir-console-handler:add(named-formatter=COLOR-PATTERN)
+	/subsystem=logging/logger=org.icmvc.ttp.fhir:add-handler(name="fhir-console-handler")
+end-if
+
+# add System-Properties for TTP-FHIR
+####################################
+#>available-env< TTP_FHIR_KEYCLOAK_REALM
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_FHIR_KEYCLOAK_REALM})
+	try
+		set temp=${env.TTP_FHIR_KEYCLOAK_REALM}
+		echo \>\>\> set system-property for TTP_FHIR_KEYCLOAK_REALM
+		/system-property=ttp.fhir.keycloak.realm:add(value=$temp)
+	catch
+		echo \<\<\< FAILED can\'t set system-property for TTP_FHIR_KEYCLOAK_REALM
+	end-try
+end-if
+#>available-env< TTP_FHIR_KEYCLOAK_CLIENT_ID
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_FHIR_KEYCLOAK_CLIENT_ID})
+	try
+		set temp=${env.TTP_FHIR_KEYCLOAK_CLIENT_ID}
+		echo \>\>\> set system-property for TTP_FHIR_KEYCLOAK_CLIENT_ID
+		/system-property=ttp.fhir.keycloak.clientId:add(value=$temp)
+	catch
+		echo \<\<\< FAILED can\'t set system-property for TTP_FHIR_KEYCLOAK_CLIENT_ID
+	end-try
+end-if
+#>available-env< TTP_FHIR_KEYCLOAK_SERVER_URL
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_FHIR_KEYCLOAK_SERVER_URL})
+	try
+		set temp=${env.TTP_FHIR_KEYCLOAK_SERVER_URL}
+		echo \>\>\> set system-property for TTP_FHIR_KEYCLOAK_SERVER_URL
+		/system-property=ttp.fhir.keycloak.baseUrl:add(value=$temp)
+	catch
+		echo \<\<\< FAILED can\'t set system-property for TTP_FHIR_KEYCLOAK_SERVER_URL
+	end-try
+end-if
+#>available-env< TTP_FHIR_KEYCLOAK_CLIENT_SECRET
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_FHIR_KEYCLOAK_CLIENT_SECRET})
+	try
+		set temp=${env.TTP_FHIR_KEYCLOAK_CLIENT_SECRET}
+		echo \>\>\> set system-property for TTP_FHIR_KEYCLOAK_CLIENT_SECRET
+		/system-property=ttp.fhir.keycloak.secret:add(value=$temp)
+	catch
+		echo \<\<\< FAILED can\'t set system-property for TTP_FHIR_KEYCLOAK_CLIENT_SECRET
+	end-try
+end-if
+#>available-env< TTP_FHIR_KEYCLOAK_SSL_REQUIRED
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_FHIR_KEYCLOAK_SSL_REQUIRED})
+	try
+		set temp=${env.TTP_FHIR_KEYCLOAK_SSL_REQUIRED}
+		echo \>\>\> set system-property for TTP_FHIR_KEYCLOAK_SSL_REQUIRED
+		/system-property=ttp.fhir.keycloak.sslRequired:add(value=$temp)
+	catch
+		echo \<\<\< FAILED can\'t set system-property for TTP_FHIR_KEYCLOAK_SSL_REQUIRED
+	end-try
+end-if
+#>available-env< TTP_FHIR_KEYCLOAK_CONFIDENTIAL_PORT
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_FHIR_KEYCLOAK_CONFIDENTIAL_PORT})
+	try
+		set temp=${env.TTP_FHIR_KEYCLOAK_CONFIDENTIAL_PORT}
+		echo \>\>\> set system-property for TTP_FHIR_KEYCLOAK_CONFIDENTIAL_PORT
+		/system-property=ttp.fhir.keycloak.confidentialPort:add(value=$temp)
+	catch
+		echo \<\<\< FAILED can\'t set system-property for TTP_FHIR_KEYCLOAK_CONFIDENTIAL_PORT
+	end-try
+end-if
+#>available-env< TTP_FHIR_KEYCLOAK_USE_RESOURCE_ROLE_MAPPINGS
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_FHIR_KEYCLOAK_USE_RESOURCE_ROLE_MAPPINGS})
+	try
+		set temp=${env.TTP_FHIR_KEYCLOAK_USE_RESOURCE_ROLE_MAPPINGS}
+		echo \>\>\> set system-property for TTP_FHIR_KEYCLOAK_USE_RESOURCE_ROLE_MAPPINGS
+		/system-property=ttp.fhir.keycloak.useResourceRoleMappings:add(value=$temp)
+	catch
+		echo \<\<\< FAILED can\'t set system-property for TTP_FHIR_KEYCLOAK_USE_RESOURCE_ROLE_MAPPINGS
+	end-try
+end-if
+#>available-env< TTP_FHIR_KEYCLOAK_ENABLE FALSE
+if (result ~= "(?i)(on|true|yes|1)") of :resolve-expression(expression=${env.TTP_FHIR_KEYCLOAK_ENABLE})
+	try
+		echo \>\>\> set system-properties for TTP_FHIR_KEYCLOAK_ENABLE
+		/system-property=ttp.fhir.keycloak.enabled:add(value=true)
+	catch
+		echo \<\<\< FAILED can\'t set system-properties for TTP_FHIR_KEYCLOAK_ENABLE
+	end-try
+else
+	try
+		/system-property=ttp.fhir.keycloak.enabled:add(value=false)
+	catch
+	end-try
+end-if
+
+# Keycloak-Role of TTP-FHIR-Gateway for E-PIX-, gICS- and gPAS-Admin
+####################################################################
+#>available-env< TTP_FHIR_KEYCLOAK_ROLE_EPIX_USER
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_FHIR_KEYCLOAK_ROLE_EPIX_USER})
+	try
+		set temp=${env.TTP_FHIR_KEYCLOAK_ROLE_EPIX_USER}
+		echo \>\>\> set system-property for TTP_FHIR_KEYCLOAK_ROLE_EPIX_USER.
+		/system-property=ttp.fhir.keycloak.role.epix.user:add(value=$temp)
+	catch
+		echo \<\<\< FAILED can\'t set system-property for TTP_FHIR_KEYCLOAK_ROLE_EPIX_USER
+	end-try
+else
+	echo \<\<\< TTP_FHIR_KEYCLOAK_ROLE_EPIX_USER maybe not set.
+end-if
+
+#>available-env< TTP_FHIR_KEYCLOAK_ROLE_EPIX_ADMIN
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_FHIR_KEYCLOAK_ROLE_EPIX_ADMIN})
+	try
+		set temp=${env.TTP_FHIR_KEYCLOAK_ROLE_EPIX_ADMIN}
+		echo \>\>\> set system-property for TTP_FHIR_KEYCLOAK_ROLE_EPIX_ADMIN.
+		/system-property=ttp.fhir.keycloak.role.epix.admin:add(value=$temp)
+	catch
+		echo \<\<\< FAILED can\'t set system-property for TTP_FHIR_KEYCLOAK_ROLE_EPIX_ADMIN
+	end-try
+else
+	echo \<\<\< TTP_FHIR_KEYCLOAK_ROLE_EPIX_ADMIN maybe not set.
+end-if
+
+#>available-env< TTP_FHIR_KEYCLOAK_ROLE_GICS_USER
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_FHIR_KEYCLOAK_ROLE_GICS_USER})
+	try
+		set temp=${env.TTP_FHIR_KEYCLOAK_ROLE_GICS_USER}
+		echo \>\>\> set system-property for TTP_FHIR_KEYCLOAK_ROLE_GICS_USER.
+		/system-property=ttp.fhir.keycloak.role.gics.user:add(value=$temp)
+	catch
+		echo \<\<\< FAILED can\'t set system-property for TTP_FHIR_KEYCLOAK_ROLE_GICS_USER
+	end-try
+else
+	echo \<\<\< TTP_FHIR_KEYCLOAK_ROLE_GICS_ADMIN maybe not set.
+end-if
+
+#>available-env< TTP_FHIR_KEYCLOAK_ROLE_GICS_ADMIN
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_FHIR_KEYCLOAK_ROLE_GICS_ADMIN})
+	try
+		set temp=${env.TTP_FHIR_KEYCLOAK_ROLE_GICS_ADMIN}
+		echo \>\>\> set system-property for TTP_FHIR_KEYCLOAK_ROLE_GICS_ADMIN.
+		/system-property=ttp.fhir.keycloak.role.gics.admin:add(value=$temp)
+	catch
+		echo \<\<\< FAILED can\'t set system-property for TTP_FHIR_KEYCLOAK_ROLE_GICS_ADMIN
+	end-try
+else
+	echo \<\<\< TTP_FHIR_KEYCLOAK_ROLE_GICS_ADMIN maybe not set.
+end-if
+
+#>available-env< TTP_FHIR_KEYCLOAK_ROLE_GPAS_USER
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_FHIR_KEYCLOAK_ROLE_GPAS_USER})
+	try
+		set temp=${env.TTP_FHIR_KEYCLOAK_ROLE_GPAS_USER}
+		echo \>\>\> set system-property for TTP_FHIR_KEYCLOAK_ROLE_GPAS_USER.
+		/system-property=ttp.fhir.keycloak.role.gpas.user:add(value=$temp)
+	catch
+		echo \<\<\< FAILED can\'t set system-property for TTP_FHIR_KEYCLOAK_ROLE_GPAS_USER
+	end-try
+else
+	echo \<\<\< TTP_FHIR_KEYCLOAK_ROLE_GPAS_USER maybe not set.
+end-if
+
+#>available-env< TTP_FHIR_KEYCLOAK_ROLE_GPAS_ADMIN
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_FHIR_KEYCLOAK_ROLE_GPAS_ADMIN})
+	try
+		set temp=${env.TTP_FHIR_KEYCLOAK_ROLE_GPAS_ADMIN}
+		echo \>\>\> set system-property for TTP_FHIR_KEYCLOAK_ROLE_GPAS_ADMIN.
+		/system-property=ttp.fhir.keycloak.role.gpas.admin:add(value=$temp)
+	catch
+		echo \<\<\< FAILED can\'t set system-property for TTP_FHIR_KEYCLOAK_ROLE_GPAS_ADMIN
+	end-try
+else
+	echo \<\<\< TTP_FHIR_KEYCLOAK_ROLE_GPAS_ADMIN maybe not set.
+end-if
+
+
+# Updates for TTP-FHIR-gICS-Terminology
+########################################
+#>available-env< TTP_FHIR_GICS_TERMINOLOGY_FOLDER
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_FHIR_GICS_TERMINOLOGY_FOLDER})
+	try
+		set temp=${env.TTP_FHIR_GICS_TERMINOLOGY_FOLDER}
+		echo \>\>\> add system-property for TTP_FHIR_GICS_TERMINOLOGY_FOLDER=addins/$temp
+		/system-property=ttp.fhir.terminology.import.folder:add(value=${jboss.server.data.dir}/addins/$temp)
+	catch
+		echo \<\<\< FAILED can\'t set system-property for TTP_FHIR_GICS_TERMINOLOGY_FOLDER
+	end-try
+end-if
+
+#>available-env< TTP_FHIR_GICS_TERMINOLOGY_FORCE_UPDATE_ON_STARTUP FALSE
+if (result ~= "(?i)(on|true|yes|1)") of :resolve-expression(expression=${env.TTP_FHIR_GICS_TERMINOLOGY_FORCE_UPDATE_ON_STARTUP})
+	try
+		echo \>\>\> add system-property for TTP_FHIR_GICS_TERMINOLOGY_FORCE_UPDATE_ON_STARTUP=true
+		/system-property=ttp.fhir.terminology.import.forceUpdateOnStartUp:add(value=true)
+	catch
+		echo \<\<\< FAILED can\'t set system-property for TTP_FHIR_GICS_TERMINOLOGY_FORCE_UPDATE_ON_STARTUP
+	end-try
+else
+	try
+		echo \>\>\> add system-property for TTP_FHIR_GICS_TERMINOLOGY_FORCE_UPDATE_ON_STARTUP=false
+		/system-property=ttp.fhir.terminology.import.forceUpdateOnStartUp:add(value=false)
+	catch
+		echo \<\<\< FAILED can\'t set system-property for TTP_FHIR_GICS_TERMINOLOGY_FORCE_UPDATE_ON_STARTUP
+	end-try
+end-if
+
+#>available-env< TTP_FHIR_RESOURCE_VALIDATION_ENABLED FALSE
+if (result ~= "(?i)(on|true|yes|1)") of :resolve-expression(expression=${env.TTP_FHIR_RESOURCE_VALIDATION_ENABLED})
+	try
+		echo \>\>\> add system-property for TTP_FHIR_RESOURCE_VALIDATION_ENABLED=true
+		/system-property=ttp.fhir.validation.enableResourceValidation:add(value=true)
+	catch
+		echo \<\<\< FAILED can\'t set system-property for TTP_FHIR_RESOURCE_VALIDATION_ENABLED
+	end-try
+else
+	try
+		echo \>\>\> add system-property for TTP_FHIR_RESOURCE_VALIDATION_ENABLED=false
+		/system-property=ttp.fhir.validation.enableResourceValidation:add(value=false)
+	catch
+		echo \<\<\< FAILED can\'t set system-property for TTP_FHIR_RESOURCE_VALIDATION_ENABLED
+	end-try
+end-if
+
+#>available-env< TTP_FHIR_GICS_CONSENT_SEARCH_DEFAULT_RESULT_TYPE policy
+if (outcome == "success") of :resolve-expression(expression=${env.TTP_FHIR_GICS_CONSENT_SEARCH_DEFAULT_RESULT_TYPE})
+	try
+		set temp=${env.TTP_FHIR_GICS_CONSENT_SEARCH_DEFAULT_RESULT_TYPE}
+		echo \>\>\> set system-property for TTP_FHIR_GICS_CONSENT_SEARCH_DEFAULT_RESULT_TYPE=$temp
+		/system-property=ttp.fhir.gics.consent.search.default.resultType:add(value=$temp)
+	catch
+		echo \<\<\< FAILED can\'t set system-property for TTP_FHIR_GICS_CONSENT_SEARCH_DEFAULT_RESULT_TYPE
+		echo \>\>\> set DEFAULT system-property for TTP_FHIR_GICS_CONSENT_SEARCH_DEFAULT_RESULT_TYPE
+		/system-property=ttp.fhir.gics.consent.search.default.resultType:add(value=policy)
+	end-try
+end-if
+
+# CLI-VERSION
+##############
+try
+    /system-property=org.icmvc.ttp.fhir-gw.cli.version:add(value="2025.2.0")
+catch
+	/system-property=org.icmvc.ttp.fhir-gw.cli.version:write-attribute(name="value", value="2025.2.0")
+end-try
