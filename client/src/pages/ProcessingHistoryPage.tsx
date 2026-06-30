@@ -7,8 +7,9 @@ import {
   getProcessingRunStats,
   purgeProcessingRuns,
 } from '@/api/processingRuns';
-import type { ProcessingRun, ProcessingRunStats } from '@/api/processingRuns';
+import type { ProcessingRun, ProcessingRunStats, TrustPassport } from '@/api/processingRuns';
 import { ApiError } from '@/api/types';
+import { QualityPassportPanel } from '@/components/shared/QualityPassportPanel';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import {
@@ -73,6 +74,24 @@ function ScoreBadge({ score }: { score: Record<string, unknown> | null }) {
   return (
     <span className={cn('inline-block rounded px-1.5 py-0.5 text-[11px] font-semibold tabular-nums', color)}>
       {pct}%
+    </span>
+  );
+}
+
+function PassportChip({ passport }: { passport: TrustPassport | null }) {
+  if (!passport) return null;
+  const map: Record<string, string> = {
+    PASS: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300',
+    CONDITIONAL_PASS: 'bg-amber-100 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300',
+    BLOCK: 'bg-red-100 text-red-800 dark:bg-red-950/40 dark:text-red-300',
+  };
+  const label = passport.decision === 'CONDITIONAL_PASS' ? 'COND' : passport.decision;
+  return (
+    <span
+      className={cn('inline-block rounded px-1.5 py-0.5 text-[10px] font-semibold', map[passport.decision] ?? 'bg-muted')}
+      title={`Trust Gate: ${passport.decision} · ${passport.overall_score != null ? Math.round(passport.overall_score) : "n/a"}% checks passing`}
+    >
+      {label}
     </span>
   );
 }
@@ -175,7 +194,7 @@ function RunDetailPanel({ run }: { run: ProcessingRun }) {
           )}>
             <span className="font-medium">Identifier pseudonymisation</span>
             <span className={cn('font-semibold', identifierHits === 0 ? 'text-emerald-600' : 'text-amber-600')}>
-              {identifierHits === 0 ? '✓ Protected' : `${identifierHits} residual risks`}
+              {identifierHits === 0 ? 'Protected' : `${identifierHits} residual risks`}
             </span>
           </div>
 
@@ -188,7 +207,7 @@ function RunDetailPanel({ run }: { run: ProcessingRun }) {
           )}>
             <span className="font-medium">NLP text scrubbing</span>
             <span className={cn('font-semibold', textHits === 0 ? 'text-emerald-600' : 'text-amber-600')}>
-              {textHits === 0 ? '✓ Clean' : `${textHits} PHI hits`}
+              {textHits === 0 ? 'Clean' : `${textHits} PHI hits`}
             </span>
           </div>
 
@@ -275,6 +294,12 @@ function RunDetailPanel({ run }: { run: ProcessingRun }) {
         </div>
 
       </div>
+
+      {run.trust_passport && (
+        <div className="mt-4 border-t pt-4 max-w-2xl">
+          <QualityPassportPanel passport={run.trust_passport} />
+        </div>
+      )}
     </div>
   );
 }
@@ -469,7 +494,12 @@ export default function ProcessingHistoryPage() {
                       {run.error_count}
                     </TableCell>
                     <TableCell className="text-right text-xs tabular-nums">{fmtDuration(run.duration_ms)}</TableCell>
-                    <TableCell className="text-center"><ScoreBadge score={run.score} /></TableCell>
+                    <TableCell className="text-center">
+                      <div className="flex flex-col items-center gap-1">
+                        <ScoreBadge score={run.score} />
+                        <PassportChip passport={run.trust_passport} />
+                      </div>
+                    </TableCell>
                     <TableCell>
                       <ChevronDown className={cn('size-3.5 text-muted-foreground transition-transform', expandedId === run.id && 'rotate-180')} />
                     </TableCell>

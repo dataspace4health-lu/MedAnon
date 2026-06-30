@@ -37,14 +37,15 @@ function fmt(n: number): string {
 export default function AnalyticsPage() {
   const [profileFilter, setProfileFilter] = useState('all');
 
+  const profileParam = profileFilter !== 'all' ? profileFilter : undefined;
+
   const { data: runsData, isLoading, refetch, isFetching } = useProcessingRuns({
-    config_profile: profileFilter !== 'all' ? profileFilter : undefined,
+    config_profile: profileParam,
     limit: 500,
   });
-  const { data: stats } = useProcessingRunStats();
+  const { data: stats } = useProcessingRunStats({ config_profile: profileParam });
 
   const runs = runsData?.runs ?? [];
-  const scoredRuns = runs.filter((r) => r.score != null);
 
   const profiles = Object.keys(stats?.runs_by_profile ?? {}).sort();
   const avgComposite = stats?.avg_composite;
@@ -69,18 +70,24 @@ export default function AnalyticsPage() {
       />
 
       {/* KPI strip */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 xl:grid-cols-7">
         <KpiCard
           label="Total Runs"
           value={(stats?.total_runs ?? runsData?.total ?? 0).toLocaleString()}
         />
         <KpiCard
-          label="Scored Runs"
-          value={(stats?.scored_runs ?? scoredRuns.length).toLocaleString()}
-          sub={`of ${(stats?.total_runs ?? runsData?.total ?? 0).toLocaleString()} total`}
+          label="Scored"
+          value={(stats?.scored_runs ?? 0).toLocaleString()}
+          sub={`of ${(stats?.total_runs ?? 0).toLocaleString()} total`}
         />
         <KpiCard
-          label="Resources Processed"
+          label="Blocked"
+          value={(stats?.blocked_runs ?? 0).toLocaleString()}
+          valueClass={(stats?.blocked_runs ?? 0) > 0 ? 'text-red-600 dark:text-red-400' : ''}
+          sub="output gate rejections"
+        />
+        <KpiCard
+          label="Resources"
           value={stats?.total_resources != null ? fmt(stats.total_resources) : '—'}
         />
         <KpiCard
@@ -88,6 +95,24 @@ export default function AnalyticsPage() {
           value={avgComposite != null ? `${Math.round(avgComposite)}%` : '—'}
           valueClass={compositeClass}
           sub="overall score"
+        />
+        <KpiCard
+          label="Avg Privacy"
+          value={stats?.avg_privacy != null ? `${Math.round(stats.avg_privacy)}%` : '—'}
+          valueClass={stats?.avg_privacy != null
+            ? stats.avg_privacy >= 80 ? 'text-emerald-600 dark:text-emerald-400'
+              : stats.avg_privacy >= 60 ? 'text-amber-600 dark:text-amber-400'
+              : 'text-red-600 dark:text-red-400'
+            : ''}
+        />
+        <KpiCard
+          label="Avg Utility"
+          value={stats?.avg_utility != null ? `${Math.round(stats.avg_utility)}%` : '—'}
+          valueClass={stats?.avg_utility != null
+            ? stats.avg_utility >= 80 ? 'text-emerald-600 dark:text-emerald-400'
+              : stats.avg_utility >= 60 ? 'text-amber-600 dark:text-amber-400'
+              : 'text-red-600 dark:text-red-400'
+            : ''}
         />
       </div>
 

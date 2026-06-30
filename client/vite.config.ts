@@ -10,6 +10,7 @@ export default defineConfig(({ mode }) => {
   const hapiTargetPort = env.HAPI_TARGET_PORT || "8082"
   const uiPort = env.UI_PORT || "8501"
   const keycloakPort = env.KEYCLOAK_PORT || "8180"
+  const trustGatePort = env.TRUST_GATE_PORT || "8400"
 
   return {
     plugins: [react(), tailwindcss()],
@@ -35,6 +36,13 @@ export default defineConfig(({ mode }) => {
           target: `http://localhost:${hapiPort}/fhir`,
           changeOrigin: true,
           rewrite: (p) => p.replace(/^\/fhir/, ""),
+        },
+        // Trailing slash so the SPA routes /trust-gate, /trust-profiles,
+        // /trust-history are NOT proxied — only the API under /trust/.
+        "/trust/": {
+          target: `http://localhost:${trustGatePort}`,
+          changeOrigin: true,
+          rewrite: (p) => p.replace(/^\/trust/, ""),
         },
         // Keycloak OIDC — only used in dev when OIDC_ISSUER points at a
         // /auth-relative path. In production nginx proxies /auth/ directly.

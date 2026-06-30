@@ -6,6 +6,7 @@ import { Badge } from '@/components/ui/badge';
 import { FileText, ChevronDown, ChevronUp, Download, Loader2, ShieldAlert, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { toast } from 'sonner';
 import type { ProcessingRun } from '@/api/processingRuns';
+import { MarkdownReport } from '@/components/shared/MarkdownReport';
 
 interface RunScore {
   avg_composite?: number;
@@ -167,7 +168,7 @@ function RunAuditRow({ run }: { run: ProcessingRun }) {
             ? 'border-emerald-200 bg-emerald-50 dark:border-emerald-800/30 dark:bg-emerald-950/20'
             : 'border-red-200 bg-red-50 dark:border-red-800/30 dark:bg-red-950/20'
         }`}>
-          <span className="font-semibold">{privacy.passed ? '✓ Privacy gate PASSED' : '✗ Privacy gate FAILED'}</span>
+          <span className="font-semibold">{privacy.passed ? 'Privacy gate PASSED' : 'Privacy gate FAILED'}</span>
           <span className="text-muted-foreground">Risk: <span className="font-mono font-semibold">{privacy.risk_score.toFixed(3)}</span></span>
           <span className="text-muted-foreground">Threshold: <span className="font-mono">{privacy.threshold}</span></span>
         </div>
@@ -188,9 +189,9 @@ function RunAuditRow({ run }: { run: ProcessingRun }) {
                   : reportError}
               </div>
             ) : report ? (
-              <pre className="text-xs font-mono leading-relaxed whitespace-pre-wrap overflow-auto max-h-80 rounded-lg bg-muted/50 p-3 border">
-                {report}
-              </pre>
+              <div className="overflow-auto max-h-80 rounded-lg border bg-muted/50 p-3">
+                <MarkdownReport markdown={report} />
+              </div>
             ) : null}
           </div>
         </div>

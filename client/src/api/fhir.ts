@@ -182,21 +182,31 @@ export interface ServerFieldTree {
 const _FIELD_TREE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 let _fieldTreeCache: ServerFieldTree | null = null;
 let _fieldTreeCacheAt = 0;
+// Whether the cached tree carries sample values (PHI). A request for a different
+// mode must miss the cache — a values tree and a paths-only tree differ.
+let _fieldTreeCacheValues = false;
 let _fieldTreeInflight: Promise<ServerFieldTree> | null = null;
 
 /** Clear the cached field tree and type list (call after the user refreshes). */
 export function clearServerFieldTreeCache(): void {
   _fieldTreeCache = null;
   _fieldTreeCacheAt = 0;
+  _fieldTreeCacheValues = false;
   _typesCache = null;
   _countsCache = null;
   _countsCacheAt = 0;
 }
 
 /**
- * Build a PHI-free field-tree by sampling `samplePerType` resources of every
- * server type, extracting paths+types only via `extractFn` (injected to avoid a
- * cross-module import cycle with the config-builder fieldTree util).
+ * Build a field-tree by sampling `samplePerType` resources of every server
+ * type, extracting paths+types via `extractFn` (injected to avoid a cross-module
+ * import cycle with the config-builder fieldTree util).
+ *
+ * By default the tree is PHI-free (paths + types). When `opts.includeValues` is
+ * set, `extractFn` is expected to append sample values per leaf — the tree then
+ * carries PHI and must only be sent to a local model (the backend enforces this
+ * via the AI local-guard when the request is flagged). The cache holds only one
+ * mode at a time; switching modes misses the cache.
  *
  * Cached for 5 minutes. Concurrent callers share one in-flight request.
  */
@@ -214,12 +224,22 @@ export async function buildServerFieldTree(
     /** Cap the number of types sampled when onlyTypes is not given. When
      * omitted, ALL data-bearing types are sampled. */
     maxTypes?: number;
+    /** Marks that `extractFn` produces a values-bearing (PHI) tree. Used only
+     * to key the cache so a values tree is never served for a paths-only
+     * request (or vice-versa); the actual value extraction lives in extractFn. */
+    includeValues?: boolean;
   },
 ): Promise<ServerFieldTree> {
   const samplePerType = opts?.samplePerType ?? 3;
   const onProgress = opts?.onProgress;
+  const includeValues = opts?.includeValues ?? false;
 
-  if (!opts?.force && _fieldTreeCache && Date.now() - _fieldTreeCacheAt < _FIELD_TREE_TTL_MS) {
+  if (
+    !opts?.force &&
+    _fieldTreeCache &&
+    _fieldTreeCacheValues === includeValues &&
+    Date.now() - _fieldTreeCacheAt < _FIELD_TREE_TTL_MS
+  ) {
     onProgress?.(1, 1);
     return _fieldTreeCache;
   }
@@ -249,6 +269,7 @@ export async function buildServerFieldTree(
     const tree = extractFn(all);
     _fieldTreeCache = tree;
     _fieldTreeCacheAt = Date.now();
+    _fieldTreeCacheValues = includeValues;
     return tree;
   })();
 
@@ -302,6 +323,53 @@ export async function fetchResourceTypeCounts(): Promise<ResourceTypeCount[]> {
   _countsCache = counts;
   _countsCacheAt = Date.now();
   return counts;
+}
+
+/**
+ * Fetch raw resources of the given types from the source FHIR server, up to
+ * `perType` of each, and return them as one flat list. Used by the Trust Gate
+ * page to assemble a real cross-type batch for quality assessment. Unlike
+ * `sampleResources`, fetch errors propagate so the UI can report them.
+ */
+export async function fetchResourcesByTypes(
+  types: string[],
+  perType: number,
+): Promise<Record<string, unknown>[]> {
+  const results = await Promise.all(
+    types.map(async (t) => {
+      const bundle = await fetchFhir<FhirBundle>(`/${t}`, { _count: String(perType) });
+      return (bundle.entry ?? [])
+        .map((e) => e.resource)
+        .filter((r): r is Record<string, unknown> => r != null);
+    }),
+  );
+  return results.flat();
+}
+
+/**
+ * Fetch a patient's full compartment via `Patient/{id}/$everything`, following
+ * pagination. Returns a self-contained resource list (references resolve within
+ * the batch), which is the ideal input for the Trust Gate's reference-integrity
+ * check. Capped at `maxPages` to bound large compartments.
+ */
+export async function fetchPatientEverything(
+  patientId: string,
+  maxPages = 10,
+): Promise<Record<string, unknown>[]> {
+  const out: Record<string, unknown>[] = [];
+  let bundle = await fetchFhir<FhirBundle>(`/Patient/${encodeURIComponent(patientId)}/$everything`, {
+    _count: "200",
+  });
+  let pages = 0;
+  while (true) {
+    for (const e of bundle.entry ?? []) {
+      if (e.resource) out.push(e.resource);
+    }
+    const next = bundle.link?.find((l) => l.relation === "next")?.url;
+    if (!next || ++pages >= maxPages) break;
+    bundle = await fetchFhirByUrl<FhirBundle>(next);
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------

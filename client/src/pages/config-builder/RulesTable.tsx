@@ -16,7 +16,20 @@ import {
   TableRow,
   TableCell,
 } from '@/components/ui/table';
-import { Plus, Trash2, Lock, Shuffle, AlertTriangle, Wand2, Filter } from 'lucide-react';
+import {
+  Plus,
+  Trash2,
+  Copy,
+  Lock,
+  Shuffle,
+  AlertTriangle,
+  Wand2,
+  Filter,
+  ChevronUp,
+  ChevronDown,
+  Eye,
+  EyeOff,
+} from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import {
@@ -36,6 +49,9 @@ import {
   resourceTypeOf,
   resourceTypesIn,
   actionLabel,
+  defaultParamsForAction,
+  isRuleEnabled,
+  uid,
 } from './configConstants';
 import { ParamsEditor } from './ParamsEditor';
 
@@ -62,7 +78,24 @@ export function RulesTable({
 
   const remove = (id: string) => onChange(rules.filter((r) => r._id !== id));
 
+  // Duplicate a rule directly below the original (deep-copying params) so a
+  // near-identical rule can be tweaked instead of rebuilt from scratch.
+  const clone = (id: string) => {
+    const idx = rules.findIndex((r) => r._id === id);
+    if (idx === -1) return;
+    const src = rules[idx];
+    const copy: LocalRule = {
+      ...src,
+      _id: uid(),
+      params: { ...src.params },
+      name: src.name.trim() ? `${src.name.trim()} (copy)` : '',
+    };
+    onChange([...rules.slice(0, idx + 1), copy, ...rules.slice(idx + 1)]);
+  };
+
   const addRule = () => onChange([...rules, newRule()]);
+
+  const setEnabled = (id: string, enabled: boolean) => update(id, { enabled });
 
   // Distinct resource types present, for the filter dropdown.
   const presentTypes = useMemo(() => resourceTypesIn(rules), [rules]);
@@ -83,20 +116,58 @@ export function RulesTable({
     [rules, effectiveFilter],
   );
 
-  // Per-rule param validation errors: ruleId → error messages.
+  // Reorder: move a rule above/below its nearest VISIBLE neighbour. Rule order
+  // is global precedence (the engine applies the first matching rule per path),
+  // so we swap in the full array but step over rows hidden by the type filter.
+  const move = (id: string, dir: 'up' | 'down') => {
+    const i = rules.findIndex((r) => r._id === id);
+    if (i === -1) return;
+    const visibleIds = new Set(visibleRules.map((r) => r._id));
+    const step = dir === 'up' ? -1 : 1;
+    let j = i + step;
+    while (j >= 0 && j < rules.length && !visibleIds.has(rules[j]._id)) j += step;
+    if (j < 0 || j >= rules.length) return;
+    const next = [...rules];
+    [next[i], next[j]] = [next[j], next[i]];
+    onChange(next);
+  };
+
+  // Bulk-apply one action to every rule currently shown by the type filter.
+  const bulkSetAction = (action: Action) => {
+    const visibleIds = new Set(visibleRules.map((r) => r._id));
+    onChange(
+      rules.map((r) =>
+        visibleIds.has(r._id)
+          ? { ...r, action, params: defaultParamsForAction(action) }
+          : r,
+      ),
+    );
+    toast.success(
+      `Set ${visibleRules.length} rule${visibleRules.length !== 1 ? 's' : ''} to ${actionLabel(action)}.`,
+    );
+  };
+
+  const firstVisibleId = visibleRules[0]?._id;
+  const lastVisibleId = visibleRules[visibleRules.length - 1]?._id;
+
+  // Per-rule param validation errors: ruleId → error messages. Disabled rules
+  // are excluded from the saved config, so don't flag them.
   const paramErrors = useMemo(() => {
     const out = new Map<string, string[]>();
     for (const r of rules) {
+      if (!isRuleEnabled(r)) continue;
       const errs = validateParams(r.action, r.params);
       if (errs.length > 0) out.set(r._id, errs.map((e) => e.message));
     }
     return out;
   }, [rules]);
 
-  // Match expressions that appear more than once (trimmed, non-empty).
+  // Match expressions that appear more than once (trimmed, non-empty). Disabled
+  // rules don't ship, so they can't shadow or duplicate an active rule.
   const duplicateMatches = useMemo(() => {
     const counts = new Map<string, number>();
     for (const r of rules) {
+      if (!isRuleEnabled(r)) continue;
       const m = r.match.trim();
       if (m) counts.set(m, (counts.get(m) ?? 0) + 1);
     }
@@ -108,6 +179,7 @@ export function RulesTable({
     const seen = new Map<string, string>(); // match → first action seen
     const conflicts = new Set<string>();
     for (const r of rules) {
+      if (!isRuleEnabled(r)) continue;
       const m = r.match.trim();
       if (!m) continue;
       if (!seen.has(m)) {
@@ -174,6 +246,29 @@ export function RulesTable({
           )}
         </div>
         <div className="flex shrink-0 items-center gap-2">
+          {visibleRules.length > 1 && (
+            <Select value="" onValueChange={(v) => v && bulkSetAction(v as Action)}>
+              <SelectTrigger
+                className="h-7 w-auto min-w-40 gap-1 text-xs"
+                title={`Apply one action to all ${visibleRules.length} rules shown`}
+              >
+                <Wand2 className="size-3 shrink-0 text-muted-foreground" />
+                <SelectValue placeholder={`Set all ${visibleRules.length} shown →`} />
+              </SelectTrigger>
+              <SelectContent className="min-w-[18rem]">
+                {VALID_ACTIONS.map((a) => (
+                  <SelectItem key={a} value={a} className="text-sm">
+                    <span className="flex w-full items-center gap-2">
+                      <span className="truncate">{actionLabel(a)}</span>
+                      <span className="ml-auto shrink-0 pl-3 font-mono text-[11px] text-muted-foreground/70">
+                        {a}
+                      </span>
+                    </span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
           {hasIssues && (
             <Button
               variant="outline"
@@ -222,8 +317,8 @@ export function RulesTable({
         <div className="flex items-center gap-2 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-800 dark:border-red-700 dark:bg-red-950/40 dark:text-red-300">
           <AlertTriangle className="size-3.5 shrink-0" />
           {paramErrors.size === 1
-            ? '1 rule has invalid params — hover the ⚠ icon in the Params column for details.'
-            : `${paramErrors.size} rules have invalid params — hover the ⚠ icons for details.`}
+            ? '1 rule has invalid params — hover the warning icon in the Params column for details.'
+            : `${paramErrors.size} rules have invalid params — hover the warning icons for details.`}
         </div>
       )}
 
@@ -241,7 +336,7 @@ export function RulesTable({
                 <TableHead className="w-[20%] text-xs">Action</TableHead>
                 <TableHead className="text-xs">Params</TableHead>
                 <TableHead className="w-[16%] text-xs">Name (optional)</TableHead>
-                <TableHead className="w-8" />
+                <TableHead className="w-24" />
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -264,14 +359,16 @@ export function RulesTable({
               ) : (
                 visibleRules.map((rule) => {
                 const m = rule.match.trim();
-                const isDup = m !== '' && duplicateMatches.has(m);
-                const isConflict = m !== '' && conflictMatches.has(m);
+                const enabled = isRuleEnabled(rule);
+                const isDup = enabled && m !== '' && duplicateMatches.has(m);
+                const isConflict = enabled && m !== '' && conflictMatches.has(m);
                 return (
                   <TableRow
                     key={rule._id}
                     className={cn(
                       isConflict && 'bg-orange-50/70 dark:bg-orange-950/20',
                       !isConflict && isDup && 'bg-amber-50/60 dark:bg-amber-950/20',
+                      !enabled && 'opacity-50',
                     )}
                   >
                     <TableCell className="py-1.5">
@@ -303,7 +400,12 @@ export function RulesTable({
                         <Select
                           value={rule.action}
                           onValueChange={(v) =>
-                            update(rule._id, { action: v as Action, params: {} })
+                            update(rule._id, {
+                              action: v as Action,
+                              // Seed sensible defaults (e.g. substitute_with) so
+                              // common params don't have to be typed each time.
+                              params: defaultParamsForAction(v as Action),
+                            })
                           }
                         >
                           <SelectTrigger className="h-7 min-w-0 flex-1 text-xs">
@@ -379,14 +481,58 @@ export function RulesTable({
                         className="h-7 text-xs"
                       />
                     </TableCell>
-                    <TableCell className="py-1.5 text-center">
-                      <button
-                        onClick={() => remove(rule._id)}
-                        className="text-muted-foreground transition-colors hover:text-destructive"
-                        aria-label="Remove rule"
-                      >
-                        <Trash2 className="size-3.5" />
-                      </button>
+                    <TableCell className="py-1.5">
+                      <div className="flex items-center justify-center gap-1">
+                        <div className="flex flex-col">
+                          <button
+                            onClick={() => move(rule._id, 'up')}
+                            disabled={rule._id === firstVisibleId}
+                            className="text-muted-foreground transition-colors hover:text-foreground disabled:opacity-30 disabled:hover:text-muted-foreground"
+                            aria-label="Move rule up"
+                            title="Move up (higher precedence)"
+                          >
+                            <ChevronUp className="size-3" />
+                          </button>
+                          <button
+                            onClick={() => move(rule._id, 'down')}
+                            disabled={rule._id === lastVisibleId}
+                            className="text-muted-foreground transition-colors hover:text-foreground disabled:opacity-30 disabled:hover:text-muted-foreground"
+                            aria-label="Move rule down"
+                            title="Move down (lower precedence)"
+                          >
+                            <ChevronDown className="size-3" />
+                          </button>
+                        </div>
+                        <button
+                          onClick={() => setEnabled(rule._id, !enabled)}
+                          className={cn(
+                            'transition-colors',
+                            enabled
+                              ? 'text-emerald-600 hover:text-emerald-700 dark:text-emerald-400'
+                              : 'text-muted-foreground hover:text-foreground',
+                          )}
+                          aria-label={enabled ? 'Disable rule' : 'Enable rule'}
+                          title={enabled ? 'Rule active — click to disable (kept but excluded from the saved config)' : 'Rule disabled — click to enable'}
+                        >
+                          {enabled ? <Eye className="size-3.5" /> : <EyeOff className="size-3.5" />}
+                        </button>
+                        <button
+                          onClick={() => clone(rule._id)}
+                          className="text-muted-foreground transition-colors hover:text-foreground"
+                          aria-label="Duplicate rule"
+                          title="Duplicate this rule"
+                        >
+                          <Copy className="size-3.5" />
+                        </button>
+                        <button
+                          onClick={() => remove(rule._id)}
+                          className="text-muted-foreground transition-colors hover:text-destructive"
+                          aria-label="Remove rule"
+                          title="Remove this rule"
+                        >
+                          <Trash2 className="size-3.5" />
+                        </button>
+                      </div>
                     </TableCell>
                   </TableRow>
                 );

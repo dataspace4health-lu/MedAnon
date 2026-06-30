@@ -118,6 +118,14 @@ export interface LocalRule {
   action: Action;
   params: Record<string, unknown>;
   name: string;
+  // UI-only: a disabled rule is kept in the editor but excluded from the saved
+  // config (and from validation/duplicate warnings). Undefined == enabled.
+  enabled?: boolean;
+}
+
+/** Whether a rule is active (default true — undefined counts as enabled). */
+export function isRuleEnabled(r: LocalRule): boolean {
+  return r.enabled !== false;
 }
 
 // crypto.randomUUID() requires HTTPS or localhost — unavailable over plain HTTP.
@@ -128,19 +136,43 @@ export function uid(): string {
   });
 }
 
+// Default placeholder for the `substitute` action. Required by the schema, so a
+// sensible default keeps the rule valid out of the box and saves typing it on
+// every rule. Single source of truth — used by the UI seed, the export
+// fallback, and the explorer.
+export const SUBSTITUTE_DEFAULT = '[SUBSTITUTED]';
+
+// Params auto-seeded when a rule's action is (re)selected, so common
+// required/recommended params don't have to be typed each time. Extend this map
+// to give other actions their own sensible defaults.
+export const ACTION_PARAM_DEFAULTS: Partial<Record<Action, Record<string, unknown>>> = {
+  substitute: { substitute_with: SUBSTITUTE_DEFAULT },
+  // date_shift.max_days is required — seed a reasonable window so the rule is
+  // valid out of the box; the user can tune it.
+  date_shift: { max_days: 30, direction: 'both' },
+  // mask needs a strategy + how many chars to keep; keep_prefix/4 suits most IDs.
+  mask: { strategy: 'keep_prefix', keep_chars: 4 },
+};
+
+/** A fresh copy of the default params for an action (empty when none). */
+export function defaultParamsForAction(action: Action): Record<string, unknown> {
+  const d = ACTION_PARAM_DEFAULTS[action];
+  return d ? { ...d } : {};
+}
+
 export function newRule(): LocalRule {
   return { _id: uid(), match: '', action: 'redact', params: {}, name: '' };
 }
 
 export function toApiRules(rules: LocalRule[]): ConfigRule[] {
-  return rules.map(({ match, action, params, name }) => {
+  return rules.filter(isRuleEnabled).map(({ match, action, params, name }) => {
     // Drop empty-string/null values — they add no information and can confuse
     // the backend validator. Keep explicit false / 0 / arrays.
     const resolvedParams = Object.fromEntries(
       Object.entries(params).filter(([, v]) => v !== '' && v !== null && v !== undefined),
     );
     if (action === 'substitute' && !resolvedParams.substitute_with) {
-      resolvedParams.substitute_with = '[REDACTED]';
+      resolvedParams.substitute_with = SUBSTITUTE_DEFAULT;
     }
     const r: ConfigRule = { match, action };
     if (Object.keys(resolvedParams).length > 0) r.params = resolvedParams;
@@ -178,6 +210,53 @@ function unquote(raw: string): string {
   if (hash !== -1) v = v.slice(0, hash);
   if (v === '#' || v.startsWith('# ')) return '';
   return v.trim();
+}
+
+/** Coerce a YAML scalar string to bool / number / unquoted string. */
+function coerceScalar(raw: string): unknown {
+  const v = raw.replace(/\s+#.*$/, '').trim().replace(/^["']|["']$/g, '');
+  if (v === 'true' || v === 'false') return v === 'true';
+  if (v !== '' && !isNaN(Number(v))) return Number(v);
+  return v;
+}
+
+/**
+ * Extract the `general:` block (appname, rewrite_references, domain_map, …) from
+ * a config YAML so it survives a builder round-trip. The config builder only
+ * parses `rules:`, so without this the `general:` block — crucially `domain_map`
+ * and `rewrite_references` — is silently dropped when a profile is duplicated or
+ * edited, breaking cross-resource reference rewriting.
+ *
+ * Handles scalar keys and ONE level of nesting (e.g. `domain_map:` → Type:domain).
+ */
+export function extractGeneralBlock(yaml: string): Record<string, unknown> {
+  const lines = yaml.split('\n');
+  const start = lines.findIndex((l) => /^general\s*:/.test(l));
+  if (start === -1) return {};
+
+  const out: Record<string, unknown> = {};
+  let nested: Record<string, unknown> | null = null;
+  for (let i = start + 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.trim() === '' || line.trimStart().startsWith('#')) continue;
+    const indent = line.length - line.trimStart().length;
+    if (indent === 0) break; // reached the next top-level section (rules:)
+    const m = line.match(/^(\s+)([\w.-]+)\s*:\s*(.*)$/);
+    if (!m) continue;
+    const [, ind, key, rawVal] = m;
+    if (ind.length <= 2) {
+      if (rawVal.trim() === '' || rawVal.trim().startsWith('#')) {
+        nested = {}; // a nested block opener (e.g. domain_map:)
+        out[key] = nested;
+      } else {
+        nested = null;
+        out[key] = coerceScalar(rawVal);
+      }
+    } else if (nested) {
+      nested[key] = coerceScalar(rawVal);
+    }
+  }
+  return out;
 }
 
 export function parseYamlIntoRules(yaml: string): { rules: LocalRule[]; error: string | null } {
@@ -516,6 +595,7 @@ export function buildYamlPreview(
   name: string,
   description: string,
   rules: LocalRule[],
+  opts?: { rewriteReferences?: boolean; general?: Record<string, unknown> },
 ): string {
   if (!name && rules.length === 0) return '';
 
@@ -525,12 +605,30 @@ export function buildYamlPreview(
     '',
     'general:',
     '  appname: SPE-FHIR-BlackBox',
-    '',
-    'rules:',
   ];
+  // Referential integrity: rewrite cross-resource references (and bare IDs in
+  // free text) so a patient's resources stay linked after IDs are pseudonymized.
+  if (opts?.rewriteReferences) {
+    lines.push('  rewrite_references: true');
+    lines.push('  rewrite_text_ids: true');
+  }
+  // Preserve any other general settings (e.g. domain_map) carried over from the
+  // source profile so a builder round-trip doesn't drop them.
+  for (const [k, v] of Object.entries(opts?.general ?? {})) {
+    if (['appname', 'rewrite_references', 'rewrite_text_ids'].includes(k)) continue;
+    if (v && typeof v === 'object' && !Array.isArray(v)) {
+      lines.push(`  ${k}:`);
+      for (const [nk, nv] of Object.entries(v as Record<string, unknown>)) {
+        lines.push(`    ${nk}: ${nv}`);
+      }
+    } else {
+      lines.push(`  ${k}: ${v}`);
+    }
+  }
+  lines.push('', 'rules:');
 
   for (const r of rules) {
-    if (!r.match.trim()) continue;
+    if (!r.match.trim() || !isRuleEnabled(r)) continue;
     // Always emit `- match:` (or `- name:`) as the first key so the block is
     // unambiguous YAML — never a bare `  -`.
     if (r.name.trim()) {
@@ -540,7 +638,13 @@ export function buildYamlPreview(
       lines.push(`  - match: "${r.match}"`);
     }
     lines.push(`    action: ${r.action}`);
-    const filteredParams = Object.entries(r.params).filter(
+    // substitute requires substitute_with — fall back to the default so an
+    // imported/AI rule that omitted it still produces a valid config.
+    const effectiveParams =
+      r.action === 'substitute' && !r.params.substitute_with
+        ? { ...r.params, substitute_with: SUBSTITUTE_DEFAULT }
+        : r.params;
+    const filteredParams = Object.entries(effectiveParams).filter(
       ([, v]) => v !== '' && v !== null && v !== undefined,
     );
     if (filteredParams.length > 0) {

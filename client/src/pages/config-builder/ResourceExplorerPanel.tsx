@@ -10,6 +10,7 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
+import { Textarea } from '@/components/ui/textarea';
 import {
   Select,
   SelectContent,
@@ -25,6 +26,7 @@ import {
   Loader2,
   CheckCircle2,
   Search,
+  Sparkles,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
@@ -35,7 +37,10 @@ import {
   VALID_ACTIONS,
   deduplicateIncoming,
   actionLabel,
+  defaultParamsForAction,
 } from './configConstants';
+import { extractFieldPaths } from './fieldTree';
+import { scanFieldsForPii, type PiiScanResult } from '@/api/agents';
 import { FHIR_EXAMPLES } from './fhirExamples';
 import { fetchFhir } from '@/api/client';
 import { listResourceTypes } from '@/api/fhir';
@@ -44,8 +49,18 @@ import { listResourceTypes } from '@/api/fhir';
 // Action suggestion heuristic
 // ---------------------------------------------------------------------------
 
+/** Reduce a match expression to its bare structural path so the keyword
+ * heuristics below match regardless of element targeting:
+ * `extension.where(url='…race').valueString` → `extension.valuestring`. */
+function normalizePath(p: string): string {
+  return p
+    .toLowerCase()
+    .replace(/\.where\([^)]*\)/g, '')
+    .replace(/\[\d+\]/g, '');
+}
+
 function suggestAction(fhirPath: string): Action {
-  const p = fhirPath.toLowerCase();
+  const p = normalizePath(fhirPath);
 
   if (/\.id$/.test(p)) return 'gpas_pseudonymize';
   if (p.endsWith('.identifier.value') || p.includes('identifier.value')) return 'gpas_pseudonymize';
@@ -160,14 +175,12 @@ function mergeValues(a: unknown, b: unknown): unknown {
   if (a === null || a === undefined) return b;
   if (b === null || b === undefined) return a;
   if (Array.isArray(a) && Array.isArray(b)) {
-    const all = [...a, ...b];
-    const objs = all.filter(
-      (x): x is Record<string, unknown> =>
-        typeof x === 'object' && x !== null && !Array.isArray(x),
-    );
-    const prims = all.filter((x) => typeof x !== 'object' || x === null);
-    if (objs.length > 0) return [mergeObjects(objs)];
-    return prims.length > 0 ? [prims[0]] : [];
+    // Keep the RICHER array intact rather than collapsing both into a single
+    // merged element. FHIR array elements are distinct (extensions keyed by
+    // url, each identifier, geolocation latitude vs longitude); a positional
+    // merge hides every sibling that shares a key. Preferring the longer sample
+    // keeps one real resource's full array so the explorer can show every leaf.
+    return a.length >= b.length ? a : b;
   }
   if (Array.isArray(a)) return a;
   if (Array.isArray(b)) return b;
@@ -231,32 +244,82 @@ const PLACEHOLDER_RE = /^<[a-zA-Z]+>$/;
 /** Collect every scalar leaf FHIRPath under a node (recursing into objects /
  * arrays). Used when the user picks "sub-field values only": one redact rule
  * per identifying leaf, keeping the parent structure intact. */
-function collectLeafPaths(
+function collectRelativeLeaves(
   node: unknown,
-  pathSegments: string[],
+  prefix: string[],
   depth: number,
-  acc: string[],
+  acc: string[][],
 ): void {
   if (depth > MAX_DEPTH) return;
   if (Array.isArray(node)) {
-    if (node.length > 0) collectLeafPaths(node[0], pathSegments, depth, acc);
-    else acc.push(pathSegments.join('.'));
+    if (node.length > 0) collectRelativeLeaves(node[0], prefix, depth, acc);
+    else acc.push(prefix);
     return;
   }
   if (typeof node === 'object' && node !== null) {
     for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
       if (k === 'resourceType') continue;
-      collectLeafPaths(v, [...pathSegments, k], depth + 1, acc);
+      collectRelativeLeaves(v, [...prefix, k], depth + 1, acc);
     }
     return;
   }
-  acc.push(pathSegments.join('.'));
+  acc.push(prefix);
 }
 
 function isLeaf(value: unknown): boolean {
   if (value === null || value === undefined || typeof value !== 'object') return true;
   if (Array.isArray(value) && (value.length === 0 || typeof value[0] !== 'object')) return true;
   return false;
+}
+
+// ---------------------------------------------------------------------------
+// Per-element targeting via .where(discriminator='value')
+//
+// The de-identification engine matches at the FHIRPath FIELD level: a bare
+// `Patient.identifier.value` rule is applied to EVERY identifier. To target one
+// element we append a `.where(key='val')` predicate keyed on a discriminator the
+// element carries — FHIR extensions key on `url` (the engine has native, fast
+// support), identifiers/telecom on `system`, codings on `code`. Verified: a
+// value-transforming action (substitute/cryptohash/pseudonymize/…) + a
+// `.where(url=…)` match changes ONLY the matched element. NOTE: `redact` clears
+// the whole field regardless, so per-element targeting only bites for value
+// transforms — redact is inherently array-wide.
+// ---------------------------------------------------------------------------
+
+const DISCRIMINATOR_KEYS = ['url', 'system', 'code', 'use'] as const;
+
+/** Return a `.where(key='val')`-predicated match that isolates `el` within its
+ * array, or null when the element exposes no usable string discriminator (the
+ * caller then keeps the collapsed array path, applied to every element). */
+function elementWhere(arrayMatch: string, el: Record<string, unknown>): string | null {
+  for (const key of DISCRIMINATOR_KEYS) {
+    const v = el[key];
+    // FHIRPath string literal — require a quote-free string so the predicate is
+    // well-formed and the engine's native url-where fast path can parse it.
+    if (typeof v === 'string' && v.length > 0 && !v.includes("'")) {
+      return `${arrayMatch}.where(${key}='${v}')`;
+    }
+  }
+  return null;
+}
+
+/** A short discriminator label (key=lastSegment) for the element's tree row, or
+ * null. Lets the user see the row targets one element, e.g. `url=…/us-core-race`
+ * shows as `url=us-core-race`. */
+function elementDiscriminatorLabel(el: Record<string, unknown>): string | null {
+  for (const key of DISCRIMINATOR_KEYS) {
+    const v = el[key];
+    if (typeof v === 'string' && v.length > 0) {
+      const short = v.includes('/') ? v.slice(v.lastIndexOf('/') + 1) : v;
+      return `${key}=${short}`;
+    }
+  }
+  return null;
+}
+
+/** Drop the resourceType prefix from a match for the rule's display name. */
+function nameFromMatch(match: string): string {
+  return match.replace(/^[^.]+\./, '') || match;
 }
 
 // ---------------------------------------------------------------------------
@@ -308,7 +371,7 @@ const FLAG_META: Record<
 /** Infer content-nature flags for a leaf field from its path. Purely advisory —
  * drives the badge hints, not the rule action. */
 function fieldFlags(fhirPath: string): FieldFlag[] {
-  const p = fhirPath.toLowerCase();
+  const p = normalizePath(fhirPath);
   const flags: FieldFlag[] = [];
   // Base64 attachment data: FHIR Attachment.data / inline data URIs.
   if (p.endsWith('.data') || p.includes('attachment.data') || p.endsWith('.presentedform.data')) {
@@ -373,46 +436,56 @@ const TREATMENT_HELP: Record<Treatment, string> = {
 // Actions that scrub text and therefore honour the base64_encoded param.
 const NLP_ACTIONS = new Set<Action>(['nlp_scrub', 'nlp_detect_act']);
 
-/** Default params for a (path, action) pair — auto-sets base64_encoded on an
- * NLP rule targeting a Base64 attachment field so the payload is decoded before
- * scrubbing. */
+/** Default params for a (path, action) pair — seeds action defaults (e.g.
+ * substitute_with) and auto-sets base64_encoded on an NLP rule targeting a
+ * Base64 attachment field so the payload is decoded before scrubbing. */
 function defaultParamsFor(fhirPath: string, action: Action): Record<string, unknown> {
+  const params = defaultParamsForAction(action);
   if (NLP_ACTIONS.has(action) && fieldFlags(fhirPath).includes('base64')) {
-    return { base64_encoded: true };
+    params.base64_encoded = true;
   }
-  return {};
+  return params;
 }
 
-// Expand one selected (path, treatment) into the concrete rules it implies.
+// Expand one selected (match, treatment) into the concrete rules it implies.
+// `match` is the full FHIRPath for the selected node — it already carries any
+// `.where(…)` predicates the tree built while descending into array elements,
+// so the rules below stay targeted at exactly the element the user picked.
 function expandSelection(
-  fhirPath: string,
+  match: string,
   value: unknown,
   treatment: Treatment,
   action: Action,
 ): LocalRule[] {
-  const name = fhirPath.split('.').slice(1).join('.') || fhirPath;
+  const name = nameFromMatch(match);
 
   if (treatment === 'everything') {
-    return [{ _id: uid(), match: fhirPath, action, params: defaultParamsFor(fhirPath, action), name }];
+    return [{ _id: uid(), match, action, params: defaultParamsFor(match, action), name }];
   }
   if (treatment === 'value' || isLeaf(value)) {
     // For a leaf, "value" and "subfields" both mean: rule on this path.
-    return [{ _id: uid(), match: fhirPath, action, params: defaultParamsFor(fhirPath, action), name }];
+    return [{ _id: uid(), match, action, params: defaultParamsFor(match, action), name }];
   }
-  // subfields on a non-leaf: one rule per leaf descendant, action per-leaf suggested.
-  const leaves: string[] = [];
-  collectLeafPaths(value, fhirPath.split('.'), fhirPath.split('.').length, leaves);
-  const unique = [...new Set(leaves)];
-  return unique.map((lp) => {
+  // subfields on a non-leaf: one rule per leaf descendant, appended to the base
+  // match so each rule inherits the element predicate; action per-leaf suggested.
+  const rels: string[][] = [];
+  collectRelativeLeaves(value, [], 0, rels);
+  const seen = new Set<string>();
+  const out: LocalRule[] = [];
+  for (const rel of rels) {
+    const lp = rel.length > 0 ? `${match}.${rel.join('.')}` : match;
+    if (seen.has(lp)) continue;
+    seen.add(lp);
     const leafAction = suggestAction(lp);
-    return {
+    out.push({
       _id: uid(),
       match: lp,
       action: leafAction,
       params: defaultParamsFor(lp, leafAction),
-      name: lp.split('.').slice(1).join('.'),
-    };
-  });
+      name: nameFromMatch(lp),
+    });
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -424,38 +497,57 @@ const SKIP_KEYS = new Set(['resourceType']);
 function TreeNode({
   nodeKey,
   value,
-  pathSegments,
+  matchPath,
+  discLabel,
   depth,
   selected,
-  configuredPaths,
+  configuredActionFor,
+  aiSuggestionFor,
+  hideConfigured,
   onToggle,
   filter,
 }: {
   nodeKey: string;
   value: unknown;
-  pathSegments: string[];
+  /** Full FHIRPath for this node's rule — carries any `.where(…)` predicate the
+   * ancestors added while descending into multi-element arrays. Used as BOTH the
+   * selection identity and the generated rule match. */
+  matchPath: string;
+  /** Discriminator hint shown on an element row (e.g. `url=us-core-race`), or
+   * undefined for object/leaf nodes and elements with no discriminator. */
+  discLabel?: string;
   depth: number;
   selected: Set<string>;
-  configuredPaths: Map<string, string>;
+  /** Action already configured for this path (exact or array-collapsed), or
+   * undefined. Drives the always-on "configured" check. */
+  configuredActionFor: (path: string) => string | undefined;
+  /** AI scan suggestion for this path, or undefined. */
+  aiSuggestionFor: (path: string) => PiiScanResult | undefined;
+  /** When true, hide leaves that already have a configured rule. */
+  hideConfigured: boolean;
   onToggle: (path: string, value: unknown) => void;
   filter: string;
 }) {
   const [open, setOpen] = useState(depth < 2);
-  const fhirPath = pathSegments.join('.');
 
   if (SKIP_KEYS.has(nodeKey) || depth > MAX_DEPTH) return null;
 
   // Filter: when a query is present, show a node if it (or any descendant) matches.
   const matchesFilter =
-    !filter || fhirPath.toLowerCase().includes(filter.toLowerCase());
+    !filter || matchPath.toLowerCase().includes(filter.toLowerCase());
 
   const leaf = isLeaf(value);
   const isPlaceholder = typeof value === 'string' && PLACEHOLDER_RE.test(value);
-  const configuredAction = configuredPaths.get(fhirPath);
-  const isChecked = selected.has(fhirPath);
+  const configuredAction = configuredActionFor(matchPath);
+  const ai = aiSuggestionFor(matchPath);
+  const isChecked = selected.has(matchPath);
+  // A configured field shows as checked at all times (emerald) so the user can
+  // see at a glance which fields already have a rule.
+  const showChecked = isChecked || !!configuredAction;
 
   if (leaf) {
     if (!matchesFilter) return null;
+    if (hideConfigured && configuredAction) return null;
     const preview = Array.isArray(value)
       ? `[${value.slice(0, 2).map(String).join(', ')}]`
       : isPlaceholder
@@ -467,18 +559,33 @@ function TreeNode({
         className={cn(
           'flex items-center gap-2 py-[3px] rounded-sm cursor-pointer hover:bg-accent/50',
           isChecked && 'bg-[#0072bc]/10',
+          !isChecked && configuredAction && 'bg-emerald-50/60 dark:bg-emerald-950/20',
         )}
       >
         <Checkbox
-          checked={isChecked}
-          onCheckedChange={() => onToggle(fhirPath, value)}
-          className="size-3.5 shrink-0"
+          checked={showChecked}
+          onCheckedChange={() => onToggle(matchPath, value)}
+          className={cn(
+            'size-3.5 shrink-0',
+            !isChecked && configuredAction &&
+              'data-[state=checked]:border-emerald-600 data-[state=checked]:bg-emerald-600',
+          )}
+          title={configuredAction ? `Configured: ${configuredAction}` : undefined}
         />
         <span className="text-[11px] font-mono shrink-0 text-foreground/80">{nodeKey}</span>
         <span className={cn('text-[11px] truncate flex-1', isPlaceholder ? 'text-foreground/25 italic' : 'text-foreground/40')}>
           : {preview}
         </span>
-        {fieldFlags(fhirPath).map((f) => (
+        {ai?.is_pii && ai.suggested_action && (
+          <span
+            title={`AI: ${ai.suggested_action}${ai.reason ? ` — ${ai.reason}` : ''}`}
+            className="shrink-0 inline-flex items-center gap-0.5 rounded bg-violet-100 px-1 py-px text-[9px] font-medium text-violet-700 dark:bg-violet-900/30 dark:text-violet-300"
+          >
+            <Sparkles className="size-2.5" />
+            {ai.suggested_action}
+          </span>
+        )}
+        {fieldFlags(matchPath).map((f) => (
           <span
             key={f}
             title={FLAG_META[f].title}
@@ -500,10 +607,36 @@ function TreeNode({
     );
   }
 
-  // Container node (object or array of objects)
-  const entries = Array.isArray(value)
-    ? Object.entries((value[0] as Record<string, unknown>) ?? {})
+  // Container node (object or array of objects).
+  //
+  // Arrays are rendered element-by-element — NOT merged. FHIR array elements are
+  // distinct (extensions keyed by url, each identifier, lat vs long), so a merged
+  // view hides siblings. For a MULTI-element array each element gets a
+  // `.where(discriminator='value')` predicate (via elementWhere) baked into its
+  // matchPath, so selecting a leaf under it targets ONLY that element and its
+  // checkbox is independent. When an element has no discriminator we fall back to
+  // the collapsed array path — honest, since the engine then hits every element.
+  const isArray = Array.isArray(value);
+  const arrayObjs = isArray
+    ? (value as unknown[]).filter(
+        (x): x is Record<string, unknown> =>
+          typeof x === 'object' && x !== null && !Array.isArray(x),
+      )
+    : [];
+  const objectEntries = isArray
+    ? []
     : Object.entries(value as Record<string, unknown>);
+  const headerCount = isArray ? `[${arrayObjs.length}]` : `{${objectEntries.length}}`;
+
+  const childProps = {
+    depth: depth + 1,
+    selected,
+    configuredActionFor,
+    aiSuggestionFor,
+    hideConfigured,
+    onToggle,
+    filter,
+  };
 
   return (
     <div>
@@ -512,10 +645,14 @@ function TreeNode({
         className="flex items-center gap-2 py-[3px] rounded-sm hover:bg-accent/40"
       >
         <Checkbox
-          checked={isChecked}
-          onCheckedChange={() => onToggle(fhirPath, value)}
-          className="size-3.5 shrink-0"
-          title="Select this whole object"
+          checked={showChecked}
+          onCheckedChange={() => onToggle(matchPath, value)}
+          className={cn(
+            'size-3.5 shrink-0',
+            !isChecked && configuredAction &&
+              'data-[state=checked]:border-emerald-600 data-[state=checked]:bg-emerald-600',
+          )}
+          title={configuredAction ? `Configured: ${configuredAction}` : 'Select this whole object'}
         />
         <button
           onClick={() => setOpen((o) => !o)}
@@ -524,8 +661,16 @@ function TreeNode({
           {open ? <ChevronDown className="size-3 shrink-0" /> : <ChevronRight className="size-3 shrink-0" />}
           <span>{nodeKey}</span>
           <span className="ml-1 text-[10px] font-normal text-foreground/30">
-            {Array.isArray(value) ? '[array]' : `{${entries.length}}`}
+            {headerCount}
           </span>
+          {discLabel && (
+            <span
+              className="ml-1 rounded bg-[#0072bc]/10 px-1 py-px text-[9px] font-normal text-[#0072bc]"
+              title={`This element is targeted individually via .where(${discLabel})`}
+            >
+              {discLabel}
+            </span>
+          )}
         </button>
         {configuredAction && (
           <span className="shrink-0 inline-flex items-center gap-0.5 text-[10px] text-emerald-600 dark:text-emerald-400">
@@ -536,19 +681,40 @@ function TreeNode({
       </div>
       {open && (
         <div>
-          {entries.map(([k, v]) => (
-            <TreeNode
-              key={k}
-              nodeKey={k}
-              value={v}
-              pathSegments={[...pathSegments, k]}
-              depth={depth + 1}
-              selected={selected}
-              configuredPaths={configuredPaths}
-              onToggle={onToggle}
-              filter={filter}
-            />
-          ))}
+          {isArray
+            ? arrayObjs.length === 1
+              ? // Single element — inline its fields (no predicate needed: a
+                // collapsed path already resolves to the only element).
+                Object.entries(arrayObjs[0]).map(([k, v]) => (
+                  <TreeNode
+                    key={k}
+                    nodeKey={k}
+                    value={v}
+                    matchPath={`${matchPath}.${k}`}
+                    {...childProps}
+                  />
+                ))
+              : // Multiple elements — each gets its own .where() predicate so it
+                // is independently selectable and individually targeted.
+                arrayObjs.map((el, i) => (
+                  <TreeNode
+                    key={i}
+                    nodeKey={`${nodeKey}[${i}]`}
+                    value={el}
+                    matchPath={elementWhere(matchPath, el) ?? matchPath}
+                    discLabel={elementDiscriminatorLabel(el) ?? undefined}
+                    {...childProps}
+                  />
+                ))
+            : objectEntries.map(([k, v]) => (
+                <TreeNode
+                  key={k}
+                  nodeKey={k}
+                  value={v}
+                  matchPath={`${matchPath}.${k}`}
+                  {...childProps}
+                />
+              ))}
         </div>
       )}
     </div>
@@ -627,6 +793,14 @@ export function ResourceExplorerPanel({
   const [treatment, setTreatment] = useState<Treatment>('value');
   const [bulkAction, setBulkAction] = useState<Action>('redact');
   const [filter, setFilter] = useState('');
+  const [hideConfigured, setHideConfigured] = useState(false);
+
+  // AI assistant state. `aiResults` maps a NORMALIZED path (no where()/index, so
+  // a collapsed AI suggestion lights up per-element nodes too) → scan result.
+  const [aiGuidance, setAiGuidance] = useState('');
+  const [aiIncludeValues, setAiIncludeValues] = useState(true);
+  const [aiScanning, setAiScanning] = useState(false);
+  const [aiResults, setAiResults] = useState<Map<string, PiiScanResult>>(new Map());
 
   const runDiscovery = useCallback(async () => {
     setDiscoveryState('discovering');
@@ -689,10 +863,12 @@ export function ResourceExplorerPanel({
     }
   }, [selectedType, typeLoadStates, discoveryState, loadTypeSchema]);
 
-  // Clear selection when switching resource type (paths are type-scoped).
+  // Clear selection + AI results when switching resource type (both are
+  // type-scoped — paths and suggestions don't carry across types).
   useEffect(() => {
     setSelected(new Map());
     setFilter('');
+    setAiResults(new Map());
   }, [selectedType]);
 
   const toggleSelect = (path: string, value: unknown) => {
@@ -709,10 +885,101 @@ export function ResourceExplorerPanel({
   const liveCount = selectedType ? (typeLiveCounts[selectedType] ?? 0) : 0;
   const topEntries = schema ? Object.entries(schema).filter(([k]) => k !== 'resourceType') : [];
 
-  const configuredPaths = useMemo(
-    () => new Map<string, string>(rules.filter((r) => r.match.trim()).map((r) => [r.match.trim(), r.action])),
-    [rules],
+  // Configured-rule lookup. Matches a node's path exactly first, then by
+  // normalized path (no where()/index, lowercased) so a collapsed rule like
+  // `Patient.identifier.value` also marks the per-element value nodes as
+  // configured. Exact case keys + normalized keys live in one map.
+  const configuredActionFor = useMemo(() => {
+    const exact = new Map<string, string>();
+    const norm = new Map<string, string>();
+    for (const r of rules) {
+      const m = r.match.trim();
+      if (!m) continue;
+      if (!exact.has(m)) exact.set(m, r.action);
+      const n = normalizePath(m);
+      if (!norm.has(n)) norm.set(n, r.action);
+    }
+    return (path: string) => exact.get(path) ?? norm.get(normalizePath(path));
+  }, [rules]);
+
+  // Number of rules configured on the selected type (for the header summary).
+  const configuredCount = useMemo(
+    () =>
+      selectedType
+        ? rules.filter(
+            (r) => r.match.trim() === selectedType || r.match.trim().startsWith(`${selectedType}.`),
+          ).length
+        : 0,
+    [rules, selectedType],
   );
+
+  // AI suggestion lookup, keyed by normalized path so collapsed AI suggestions
+  // also surface on per-element nodes.
+  const aiSuggestionFor = useMemo(
+    () => (path: string) => aiResults.get(normalizePath(path)),
+    [aiResults],
+  );
+
+  // Run the AI field scan against the current type's tree. Builds a
+  // `path : <type> [= value]` summary from the loaded schema (real sample values
+  // where present), then overlays the structured PII suggestions.
+  const runAiScan = useCallback(async () => {
+    if (!selectedType || !schema) return;
+    setAiScanning(true);
+    try {
+      const ctx = extractFieldPaths([{ resourceType: selectedType, ...schema }], {
+        includeValues: aiIncludeValues,
+      });
+      // Drop placeholder "values" (spec-only fields) so the model sees real
+      // sample values where available, type-only elsewhere.
+      const summary = ctx.summary.replace(/ = <[a-zA-Z]+>$/gm, '');
+      const hasValues = aiIncludeValues && / = /.test(summary);
+      const results = await scanFieldsForPii(summary || ctx.summary, {
+        granularity: 'values',
+        includeValues: hasValues,
+        guidance: aiGuidance.trim() || undefined,
+      });
+      const map = new Map<string, PiiScanResult>();
+      for (const r of results) map.set(normalizePath(r.path), r);
+      setAiResults(map);
+      const piiCount = results.filter((r) => r.is_pii).length;
+      toast.success(`AI scanned ${results.length} fields — ${piiCount} flagged as PII.`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'AI scan failed.');
+    } finally {
+      setAiScanning(false);
+    }
+  }, [selectedType, schema, aiIncludeValues, aiGuidance]);
+
+  // Apply every AI-suggested PII rule (collapsed field-level matches) at once.
+  const aiPendingRules = useMemo<LocalRule[]>(() => {
+    const out: LocalRule[] = [];
+    for (const r of aiResults.values()) {
+      if (!r.is_pii || !r.suggested_action) continue;
+      const action = (VALID_ACTIONS as readonly string[]).includes(r.suggested_action)
+        ? (r.suggested_action as Action)
+        : 'redact';
+      out.push({
+        _id: uid(),
+        match: r.path,
+        action,
+        params: defaultParamsForAction(action),
+        name: r.path.replace(/^[^.]+\./, ''),
+      });
+    }
+    return out;
+  }, [aiResults]);
+
+  const applyAiSuggestions = () => {
+    if (aiPendingRules.length === 0) return;
+    const { added, skipped } = deduplicateIncoming(aiPendingRules, rules);
+    for (const r of added) onAddRule(r);
+    toast.success(
+      skipped.length > 0
+        ? `Added ${added.length} AI rule${added.length !== 1 ? 's' : ''}; skipped ${skipped.length} already configured.`
+        : `Added ${added.length} AI rule${added.length !== 1 ? 's' : ''}.`,
+    );
+  };
 
   // Expand the current selection into concrete rules under the chosen treatment.
   const pendingRules = useMemo(() => {
@@ -819,6 +1086,68 @@ export function ResourceExplorerPanel({
               )}
             </div>
 
+            {/* Configured summary + AI assistant toolbar */}
+            <div className="flex flex-col gap-2 border-b bg-muted/20 px-3 py-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                  <CheckCircle2 className="size-3 text-emerald-500" />
+                  {configuredCount} rule{configuredCount !== 1 ? 's' : ''} configured on{' '}
+                  <span className="font-mono">{selectedType}</span>
+                </span>
+                <label className="flex cursor-pointer items-center gap-1.5 text-[11px] text-muted-foreground">
+                  <Checkbox
+                    checked={hideConfigured}
+                    onCheckedChange={(c) => setHideConfigured(c === true)}
+                    className="size-3.5"
+                  />
+                  Only unconfigured
+                </label>
+              </div>
+              <Textarea
+                value={aiGuidance}
+                onChange={(e) => setAiGuidance(e.target.value)}
+                placeholder="Optional: tell the AI how to treat fields — e.g. 'pseudonymize all identifiers, generalize dates to year, redact names'."
+                className="min-h-0 h-12 resize-none text-[11px]"
+              />
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  size="sm"
+                  className="h-7 gap-1.5 text-xs"
+                  onClick={runAiScan}
+                  disabled={aiScanning || !schema}
+                >
+                  {aiScanning ? (
+                    <Loader2 className="size-3 animate-spin" />
+                  ) : (
+                    <Sparkles className="size-3" />
+                  )}
+                  {aiScanning ? 'Scanning…' : 'Suggest actions with AI'}
+                </Button>
+                <label
+                  className="flex cursor-pointer items-center gap-1.5 text-[11px] text-muted-foreground"
+                  title="Send real sample values so a local model judges PII more accurately. Values only ever reach a local model (the server refuses non-local AI for value-bearing requests)."
+                >
+                  <Checkbox
+                    checked={aiIncludeValues}
+                    onCheckedChange={(c) => setAiIncludeValues(c === true)}
+                    className="size-3.5"
+                  />
+                  Let AI read values
+                </label>
+                {aiPendingRules.length > 0 && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="ml-auto h-7 gap-1.5 text-xs"
+                    onClick={applyAiSuggestions}
+                  >
+                    <Sparkles className="size-3 text-violet-500" />
+                    Apply {aiPendingRules.length} AI suggestion{aiPendingRules.length !== 1 ? 's' : ''}
+                  </Button>
+                )}
+              </div>
+            </div>
+
             <div className="flex-1 overflow-y-auto p-2">
               {!loadState || loadState === 'loading' ? (
                 <div className="flex flex-col items-center justify-center gap-2 py-12 text-xs text-muted-foreground">
@@ -831,10 +1160,12 @@ export function ResourceExplorerPanel({
                     key={k}
                     nodeKey={k}
                     value={v}
-                    pathSegments={[selectedType!, k]}
+                    matchPath={`${selectedType}.${k}`}
                     depth={1}
                     selected={new Set(selected.keys())}
-                    configuredPaths={configuredPaths}
+                    configuredActionFor={configuredActionFor}
+                    aiSuggestionFor={aiSuggestionFor}
+                    hideConfigured={hideConfigured}
                     onToggle={toggleSelect}
                     filter={filter}
                   />

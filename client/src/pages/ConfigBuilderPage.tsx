@@ -37,6 +37,7 @@ import {
   VALID_ACTIONS,
   ACTION_DESCRIPTIONS,
   parseYamlIntoRules,
+  extractGeneralBlock,
   buildYamlPreview,
   toApiRules,
 } from './config-builder/configConstants';
@@ -65,6 +66,14 @@ export default function ConfigBuilderPage() {
   const [configName, setConfigName] = useState(editName ?? '');
   const [configDescription, setConfigDescription] = useState('');
   const [rules, setRules] = useState<LocalRule[]>([]);
+  // Referential integrity — rewrite cross-resource references so a patient's
+  // resources stay linked after IDs are pseudonymized/hashed. Default ON: this
+  // is almost always what you want, and omitting it silently breaks references.
+  const [rewriteReferences, setRewriteReferences] = useState(true);
+  // The source profile's `general:` block (domain_map etc.) carried through a
+  // load/duplicate so the builder doesn't strip it on save. The toggle controls
+  // rewrite_references/_text_ids; everything else here is preserved verbatim.
+  const [preservedGeneral, setPreservedGeneral] = useState<Record<string, unknown>>({});
   const [yamlPreviewOpen, setYamlPreviewOpen] = useState(false);
   // PHI-free field-path summary from uploaded example resources (Resource
   // Explorer) → grounds the AI assistant when no live server tree is loaded.
@@ -104,6 +113,11 @@ export default function ConfigBuilderPage() {
         if (!cancelled) {
           if (parseErr) setError(parseErr);
           setRules(parsed);
+          // Reflect + preserve the source profile's general block so editing or
+          // duplicating it doesn't strip domain_map / referential integrity.
+          const general = extractGeneralBlock(yaml);
+          setPreservedGeneral(general);
+          setRewriteReferences(general.rewrite_references === true);
         }
       } catch (err) {
         if (!cancelled) setError(String(err));
@@ -117,8 +131,12 @@ export default function ConfigBuilderPage() {
   }, [editName, fromName, isEdit]);
 
   const yamlPreview = useMemo(
-    () => buildYamlPreview(configName, configDescription, rules),
-    [configName, configDescription, rules],
+    () =>
+      buildYamlPreview(configName, configDescription, rules, {
+        rewriteReferences,
+        general: preservedGeneral,
+      }),
+    [configName, configDescription, rules, rewriteReferences, preservedGeneral],
   );
 
   const handleSave = useCallback(async () => {
@@ -140,10 +158,19 @@ export default function ConfigBuilderPage() {
 
     setSaving(true);
     try {
+      // Merge the preserved source general block (domain_map, …) with the
+      // referential-integrity flags the toggle controls, so editing/duplicating
+      // a profile keeps its gPAS domain routing intact.
+      const general: Record<string, unknown> = {
+        ...preservedGeneral,
+        rewrite_references: rewriteReferences,
+        rewrite_text_ids: rewriteReferences,
+      };
       if (isEdit && editName) {
         await updateConfig(editName, {
           description: configDescription,
           rules: toApiRules(validRules),
+          general,
         });
         toast.success(`Config "${editName}" updated.`);
       } else {
@@ -151,6 +178,7 @@ export default function ConfigBuilderPage() {
           name: configName.trim(),
           description: configDescription,
           rules: toApiRules(validRules),
+          general,
         });
         toast.success(`Config "${configName}" created.`);
       }
@@ -160,7 +188,7 @@ export default function ConfigBuilderPage() {
     } finally {
       setSaving(false);
     }
-  }, [configName, configDescription, rules, isEdit, editName, navigate]);
+  }, [configName, configDescription, rules, rewriteReferences, preservedGeneral, isEdit, editName, navigate]);
 
   if (loading) {
     return (
@@ -249,6 +277,31 @@ export default function ConfigBuilderPage() {
             />
           </div>
         </div>
+
+        {/* Referential integrity toggle */}
+        <label className="mt-4 flex cursor-pointer items-start gap-2.5 rounded-md border bg-muted/20 p-3">
+          <input
+            type="checkbox"
+            checked={rewriteReferences}
+            onChange={(e) => setRewriteReferences(e.target.checked)}
+            className="mt-0.5 size-4 shrink-0 accent-[#0072bc]"
+          />
+          <span className="text-sm">
+            <span className="font-medium text-foreground">
+              Keep resources linked (rewrite references)
+            </span>
+            <span className="mt-0.5 block text-xs text-muted-foreground">
+              After IDs are pseudonymized/hashed, rewrite every cross-resource
+              reference (<span className="font-mono">subject</span>,{' '}
+              <span className="font-mono">patient</span>, …) so the same patient's
+              resources still point at each other. The engine rewrites the id
+              after the <span className="font-mono">ResourceType/</span> prefix with
+              the same deterministic mapping as the <span className="font-mono">.id</span> rule —
+              don't add separate rules on <span className="font-mono">*.reference</span>.
+              Leave on unless you specifically want references untouched.
+            </span>
+          </span>
+        </label>
       </div>
 
       <Separator className="mb-6" />

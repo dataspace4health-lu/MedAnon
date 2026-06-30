@@ -426,6 +426,11 @@ export function AiAssistantPanel({
   const [typeFilter, setTypeFilter] = useState("");
   /** Which sidebar tab is visible. */
   const [sideTab, setSideTab] = useState<"settings" | "tree">("settings");
+  /** When true the field tree sent to the AI includes real sample values so a
+   * LOCAL model can judge PII more accurately. The values never leave a local
+   * model — the backend marks the request as a PHI payload and refuses any
+   * non-local AI endpoint (fail-closed). */
+  const [includeValues, setIncludeValues] = useState(false);
 
   const [fieldTree, setFieldTree] = useState<FieldTreeState>({
     status: "idle",
@@ -467,12 +472,16 @@ export function AiAssistantPanel({
       const allTypes = await listResourceTypes();
       setAllResourceTypes(allTypes);
 
-      const result = await buildServerFieldTree(extractFieldPaths, {
-        force,
-        samplePerType: 10,
-        onlyTypes: allTypes.length > 0 ? allTypes : undefined,
-        onProgress: (loaded, total) => setLoadProgress({ loaded, total }),
-      });
+      const result = await buildServerFieldTree(
+        (r) => extractFieldPaths(r, { includeValues }),
+        {
+          force,
+          includeValues,
+          samplePerType: 10,
+          onlyTypes: allTypes.length > 0 ? allTypes : undefined,
+          onProgress: (loaded, total) => setLoadProgress({ loaded, total }),
+        },
+      );
       setFieldTree({
         status: "done",
         summary: result.summary,
@@ -494,6 +503,19 @@ export function AiAssistantPanel({
       setLoadProgress(null);
     }
   };
+
+  // Rebuild the tree when the values toggle flips (the cached paths-only and
+  // values trees are not interchangeable). Skip the initial mount — the
+  // open-effect already performs the first load.
+  const didMountValues = useRef(false);
+  useEffect(() => {
+    if (!didMountValues.current) {
+      didMountValues.current = true;
+      return;
+    }
+    if (open && fieldTree.status !== "idle") loadTree(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [includeValues]);
 
   const scrollToBottom = () => {
     requestAnimationFrame(() => {
@@ -585,6 +607,7 @@ export function AiAssistantPanel({
         history,
         model,
         field_context: activeFieldContext || undefined,
+        include_values: includeValues,
         granularity,
       })) {
         full += chunk;
@@ -667,7 +690,7 @@ export function AiAssistantPanel({
         AI Assistant
       </DialogTrigger>
 
-      <DialogContent className="max-w-6xl! w-full overflow-hidden p-0 gap-0 sm:max-w-6xl!">
+      <DialogContent className="max-w-[95vw]! w-[95vw] overflow-hidden p-0 gap-0 sm:max-w-[95vw]!">
         {/* ── Header ─────────────────────────────────────────────── */}
         <DialogHeader className="border-b bg-gradient-to-r from-[#0072bc]/[0.06] to-transparent px-6 py-4">
           <div className="flex items-center justify-between gap-2">
@@ -685,7 +708,7 @@ export function AiAssistantPanel({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex h-[70vh] min-h-[520px] px-6 py-3">
+        <div className="flex h-[82vh] min-h-[560px] px-6 py-3">
           {/* ── Left sidebar ───────────────────────────────────────── */}
           <aside className="flex w-64 shrink-0 flex-col overflow-hidden rounded-l-md border-y border-l border-r bg-muted/20">
             {/* Tab switcher */}
@@ -891,6 +914,31 @@ export function AiAssistantPanel({
                       </button>
                     )}
                   </div>
+
+                  {/* Local-AI values toggle. Including real sample values lets a
+                      local model judge PII far more accurately; the backend
+                      marks the call PHI and refuses any non-local endpoint, so
+                      values never leave a self-hosted model. */}
+                  <label
+                    className="flex cursor-pointer items-start gap-2 rounded-md border bg-muted/20 p-2"
+                    title="Send a truncated sample value per field. Only ever reaches a local model — the server refuses non-local AI endpoints for value-bearing requests."
+                  >
+                    <input
+                      type="checkbox"
+                      checked={includeValues}
+                      onChange={(e) => setIncludeValues(e.target.checked)}
+                      className="mt-0.5 size-3.5 shrink-0 accent-[#0072bc]"
+                    />
+                    <span className="text-[11px] leading-snug">
+                      <span className="font-medium text-foreground">
+                        Let local AI read sample values
+                      </span>
+                      <span className="block text-muted-foreground">
+                        More accurate PII calls. Values reach a local model only
+                        — non-local endpoints are refused.
+                      </span>
+                    </span>
+                  </label>
 
                   {fieldTree.status === "loading" && (
                     <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">

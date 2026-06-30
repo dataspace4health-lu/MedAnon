@@ -2,6 +2,7 @@ import { useLocation, Link } from 'react-router-dom';
 import { Menu, X, ChevronRight } from 'lucide-react';
 import { HealthBadge } from '@/components/shared/HealthBadge';
 import { ThemeToggle } from '@/components/shared/ThemeToggle';
+import { UserMenu } from '@/components/auth/UserMenu';
 import { useHealth } from '@/hooks/useHealth';
 import { resolveCrumb } from '@/config/navigation';
 import ds4hLogo from '@/assets/ds4h-logo.png';
@@ -52,10 +53,11 @@ export function TopBar({ sidebarOpen, onToggleSidebar }: TopBarProps) {
         <span className="truncate text-sm font-semibold text-foreground">{crumb.label}</span>
       </div>
 
-      {/* Right: health + theme + partner logo */}
+      {/* Right: health + theme + user menu + partner logo */}
       <div className="flex shrink-0 items-center gap-3">
         <HealthBadge ok={health.ok} version={health.version} loading={health.loading} />
         <ThemeToggle />
+        <UserMenu />
         <div className="hidden h-8 w-px bg-border md:block" />
         <img
           src={ds4hLogo}

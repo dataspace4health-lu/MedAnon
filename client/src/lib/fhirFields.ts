@@ -10,19 +10,21 @@ interface FieldRow {
   value: string;
 }
 
+// `text` (Narrative.div) and `extension` are intentionally NOT skipped — they
+// carry identifying content (the rendered narrative, US-Core race/ethnicity,
+// patient-mothersMaidenName, birthPlace, geolocation lat/long), so their leaves
+// must be visible in the table. Only provenance/version (`meta`), contained
+// resources, modifier extensions, and parser noise are dropped.
 const SKIP_KEYS = new Set([
   "meta",
-  "text",
-  "extension",
   "contained",
   "modifierExtension",
   "implicitRules",
 ]);
 
-// Keys to skip when recursing into nested objects (allow "text" inside
-// CodeableConcept etc., but still drop FHIR extensions and containers).
+// Keys to skip when recursing into nested objects. Nested `extension` is kept
+// so extension-in-extension PHI (race ombCategory, geolocation) still surfaces.
 const SKIP_NESTED = new Set([
-  "extension",
   "modifierExtension",
   "contained",
   "fhir_comments",
@@ -57,10 +59,15 @@ function walkValue(
     ) {
       // Scalar array (e.g. name.given: ["John", "A"]) — join values
       rows.push({ field: key, value: value.map(String).join(", ") });
-    } else if (first && typeof first === "object") {
-      // Object array — walk first element only; avoids index-based paths
-      // that would break field matching between original and de-identified.
-      walkValue(rows, key, first, depth);
+    } else {
+      // Object array — walk EVERY element so heterogeneous siblings all
+      // surface their leaves (e.g. identifier[0] has no `type`, but
+      // identifier[1].type.coding.code does). Paths stay index-free so they
+      // still match the de-identified resource and the transformation
+      // manifest; the dedup pass below keeps the first value per dotted path.
+      for (const item of value) {
+        if (item && typeof item === "object") walkValue(rows, key, item, depth);
+      }
     }
     return;
   }

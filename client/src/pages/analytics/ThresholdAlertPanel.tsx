@@ -81,7 +81,7 @@ export function ThresholdAlertPanel({ runs }: { runs: ProcessingRun[] }) {
                       <p className="font-semibold text-destructive tabular-nums">{composite.toFixed(0)}%</p>
                     )}
                     {privacyFailed && (
-                      <p className="text-destructive">Privacy ✗</p>
+                      <p className="text-destructive">Privacy failed</p>
                     )}
                   </div>
                 </div>

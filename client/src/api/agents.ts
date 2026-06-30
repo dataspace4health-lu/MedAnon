@@ -164,8 +164,12 @@ export interface ChatRequest {
   config_yaml?: string;
   history?: ChatTurn[];
   model?: string;
-  /** PHI-free field-path tree (path: type only) from uploaded examples or server samples. */
+  /** Field-path tree from uploaded examples or server samples. Paths + types
+   * only by default; carries sample values (PHI) when `include_values` is set. */
   field_context?: string;
+  /** When true, `field_context` includes sample values — the backend then
+   * treats the call as a PHI payload and refuses any non-local AI endpoint. */
+  include_values?: boolean;
   /** Leaf-vs-whole treatment of structured PII fields. */
   granularity?: FieldGranularity;
 }
@@ -241,16 +245,22 @@ interface FieldScanResponse {
  */
 export async function scanFieldsForPii(
   fieldContext: string,
-  model?: string,
-  granularity: FieldGranularity = "values",
+  opts: {
+    model?: string;
+    granularity?: FieldGranularity;
+    includeValues?: boolean;
+    guidance?: string;
+  } = {},
 ): Promise<PiiScanResult[]> {
   const res = await fetchApi<FieldScanResponse>("/v1/ai/scan-fields", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       field_context: fieldContext,
-      model: model ?? "",
-      granularity,
+      model: opts.model ?? "",
+      granularity: opts.granularity ?? "values",
+      include_values: opts.includeValues ?? false,
+      guidance: opts.guidance ?? "",
     }),
   });
   if (res.source === "error") {

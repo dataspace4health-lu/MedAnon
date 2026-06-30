@@ -13,10 +13,10 @@ export function useProcessingRuns(params?: {
   });
 }
 
-export function useProcessingRunStats() {
+export function useProcessingRunStats(params?: { config_profile?: string }) {
   return useQuery({
-    queryKey: ['processing-runs', 'stats'],
-    queryFn: getProcessingRunStats,
+    queryKey: ['processing-runs', 'stats', params],
+    queryFn: () => getProcessingRunStats(params),
     refetchInterval: 15_000,
   });
 }

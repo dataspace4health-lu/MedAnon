@@ -11,4 +11,5 @@ export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 export const STORAGE_KEYS = {
   API_KEY: "medanon_api_key",
   CONFIG_PROFILE: "medanon_config_profile",
+  REFRESH_TOKEN: "medanon_refresh_token",
 } as const;

@@ -6,6 +6,7 @@
  */
 
 import { ApiError } from "./types";
+import { getAccessToken } from "./authToken";
 
 // ---------------------------------------------------------------------------
 // Auth helpers
@@ -23,6 +24,12 @@ function getApiKey(): string | null {
 }
 
 export function getAuthHeaders(): Record<string, string> {
+  // OIDC bearer token (when logged in via Keycloak) takes precedence; the
+  // backend dual-accepts X-API-Key, so the API-key path remains the fallback.
+  const token = getAccessToken();
+  if (token) {
+    return { Authorization: `Bearer ${token}` };
+  }
   const key = getApiKey();
   if (key) {
     return { "X-API-Key": key };
@@ -114,7 +121,11 @@ export async function fetchFhirByUrl<T>(hapiAbsoluteUrl: string): Promise<T> {
   let proxyUrl: string;
   try {
     const parsed = new URL(hapiAbsoluteUrl);
-    proxyUrl = parsed.pathname + parsed.search;
+    // HAPI's `_getpages` cursor links are bare `/fhir?...`. The nginx `/fhir/`
+    // location only matches with a trailing slash, so `/fhir?...` 301-redirects
+    // and the fetch fails. Normalise an exact `/fhir` pathname to `/fhir/`.
+    const pathname = parsed.pathname === "/fhir" ? "/fhir/" : parsed.pathname;
+    proxyUrl = pathname + parsed.search;
   } catch {
     proxyUrl = hapiAbsoluteUrl;
   }
@@ -192,6 +203,56 @@ export async function fetchFhir<T>(
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+/**
+ * Follow a HAPI `next` pagination link against the de-identified TARGET server.
+ *
+ * The target server returns absolute links pointing at its internal host
+ * (http://hapi-fhir-target:8080/fhir?...). We strip the origin and re-route the
+ * `/fhir` path prefix to the `/fhir-target` nginx proxy so it reaches the target
+ * server, not the source.
+ */
+export async function fetchFhirTargetByUrl<T>(hapiAbsoluteUrl: string): Promise<T> {
+  let pathname = hapiAbsoluteUrl;
+  let search = "";
+  try {
+    const parsed = new URL(hapiAbsoluteUrl);
+    // Same bare-`/fhir` cursor-link normalisation as the source helper.
+    pathname = parsed.pathname === "/fhir" ? "/fhir/" : parsed.pathname;
+    search = parsed.search;
+  } catch {
+    /* not an absolute URL — use as-is */
+  }
+  const proxyUrl = pathname.replace(/^\/fhir/, "/fhir-target") + search;
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 15_000);
+  try {
+    const response = await fetch(proxyUrl, {
+      signal: controller.signal,
+      headers: { Accept: "application/fhir+json" },
+    });
+    if (!response.ok) throw new ApiError(response.status, response.statusText);
+    return (await response.json()) as T;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+/**
+ * Fetch an absolute FHIR URL from a user-supplied ("custom connection") server
+ * through the backend SSRF-guarded proxy (GET /api/v1/fhir-proxy?url=...).
+ *
+ * The browser cannot call arbitrary external origins (CORS + the SPA's
+ * connect-src 'self' CSP), so custom-server reads are routed through the
+ * anonymizer, which validates the URL against the private/loopback block-list.
+ */
+export async function fetchFhirProxy<T>(absoluteUrl: string, token?: string): Promise<T> {
+  return fetchApi<T>(`/v1/fhir-proxy?url=${encodeURIComponent(absoluteUrl)}`, {
+    timeout: 60_000,
+    headers: token ? { "X-FHIR-Token": token } : undefined,
+  });
 }
 
 /**

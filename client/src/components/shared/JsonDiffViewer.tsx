@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { AlertTriangle } from "lucide-react";
 import { diffLines, diffWords } from "diff";
 import { highlightJsonHtml } from "./highlightJson";
 import { CopyButton } from "./CopyButton";
@@ -355,7 +356,7 @@ export function JsonDiffViewer({
       }}>
         {changes === 0 ? (
           <div className="flex flex-col items-center justify-center gap-2 py-10 text-center">
-            <span className="text-2xl">⚠️</span>
+            <AlertTriangle className="size-6 text-amber-500" />
             <p className="text-sm font-medium text-foreground">No fields were de-identified</p>
             <p className="max-w-xs text-xs text-muted-foreground">
               The output is identical to the input. The active config profile may not have

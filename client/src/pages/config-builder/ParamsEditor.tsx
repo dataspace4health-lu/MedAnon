@@ -14,6 +14,7 @@ import {
   SCRUB_MODES,
   SCRUB_PATTERNS,
   NLP_MODES,
+  SUBSTITUTE_DEFAULT,
 } from './configConstants';
 
 // ---------------------------------------------------------------------------
@@ -281,7 +282,7 @@ export function ParamsEditor({
   if (action === 'substitute') {
     return (
       <Input
-        placeholder="substitute_with (required)"
+        placeholder={`${SUBSTITUTE_DEFAULT} (default)`}
         className="h-7 text-xs"
         value={String(params.substitute_with ?? '')}
         onChange={(e) =>
