@@ -26,6 +26,9 @@ privacy_model:
   enabled: true
   target_k: 5                       # every equivalence class must have ≥ 5 members
   target_l: 2                       # optional: each class must have ≥ 2 distinct Condition codes
+  # target_t: 0.2                   # optional t-closeness: max total-variation distance
+                                    # between each class's Condition-code distribution and
+                                    # the global one (0 = identical, 1 = maximally skewed)
   max_suppression: 0.05             # suppress at most 5% of Patients
   quasi_identifiers:
     - path: "Patient.gender"
