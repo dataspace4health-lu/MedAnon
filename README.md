@@ -207,3 +207,9 @@ More: [docs/RUNBOOK.md](docs/RUNBOOK.md)
 | [docs/RUNBOOK.md](docs/RUNBOOK.md) | Monitoring, backup, secret rotation, troubleshooting |
 | [docs/scoring-system.md](docs/scoring-system.md) | Privacy × utility × quality scoring model |
 | [docs/policies.md](docs/policies.md) | Profile selection and compliance mapping |
+
+---
+
+## License
+
+See [LICENSE](./LICENSE) for the full license text.
