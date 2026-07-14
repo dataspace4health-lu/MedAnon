@@ -414,7 +414,7 @@ def _run_finalize_stage(
             try:
                 # submit_with_context — _assemble_resource may call
                 # depseudonymize_resource_identifiers, which reads the active
-                # permit context (pipeline.permit_context) for domain scoping.
+                # permit context (utils.permit_context) for domain scoping.
                 fut = submit_with_context(
                     pool,
                     _assemble_resource,
@@ -666,7 +666,7 @@ def process_data_batch(
                     try:
                         # submit_with_context — _evaluate_rules dispatches
                         # cryptohash/tokenize/date_shift, which read the
-                        # active permit context (pipeline.permit_context) to
+                        # active permit context (utils.permit_context) to
                         # scope their derived keys per permit.
                         futures.append(
                             submit_with_context(

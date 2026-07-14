@@ -92,7 +92,7 @@ def submit_with_context(pool: ThreadPoolExecutor, fn, *args, **kwargs) -> Future
     ``contextvars.Context`` into the worker thread (unlike ``asyncio.to_thread``
     / ``loop.run_in_executor``, which do). Any contextvar the caller has set —
     the correlation id (:mod:`pipeline.trace`), the active data-permit id
-    (:mod:`pipeline.permit_context`) — would silently reset to its default
+    (:mod:`utils.permit_context`) — would silently reset to its default
     inside the worker thread, which is a correctness bug for permit-scoped
     pseudonymisation keys/domains (they would derive as *unscoped*, or raise
     the regulated-mode "no permit" error, depending on context).

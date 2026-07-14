@@ -11,7 +11,7 @@ from fastapi.responses import Response, StreamingResponse
 
 import pipeline.config as config
 from pipeline.io_formats import parse_payload_bytes, serialize_payload
-from pipeline.permit_context import permit_scope
+from utils.permit_context import permit_scope
 from utils.tasks import retain_task
 
 from api.deps import (

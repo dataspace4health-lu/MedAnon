@@ -217,7 +217,7 @@ def pseudonymize_resource_identifiers(
     # gets exactly one HTTP call.  A single resource may have fields that map
     # to different leaf domains (e.g. Patient.id → patient-admin, but a
     # contained Observation.id → observation).
-    from pipeline.permit_context import scope_domain_to_permit
+    from utils.permit_context import scope_domain_to_permit
 
     domain_to_params: dict[str, dict] = {}
     domain_to_values: dict[str, list[str]] = {}
@@ -345,7 +345,7 @@ def depseudonymize_resource_identifiers(
         return
 
     from integrations.gpas.client import gpas_depseudonymize_batch
-    from pipeline.permit_context import scope_domain_to_permit
+    from utils.permit_context import scope_domain_to_permit
 
     # Group by domain. Reversal re-exposes direct identifiers, so — same as
     # the pseudonymize path — the domain is scoped to the active permit
@@ -511,7 +511,7 @@ def pseudonymize_identifier_batch(
     # Group values by their resolved gpas_domain so each distinct domain gets
     # exactly one HTTP call.  Without this, domain_map routing would send all
     # resource types to the same domain during the N>1 batch pre-fetch.
-    from pipeline.permit_context import scope_domain_to_permit
+    from utils.permit_context import scope_domain_to_permit
 
     domain_to_params: dict[str, dict] = {}
     domain_to_values: dict[str, list[str]] = {}

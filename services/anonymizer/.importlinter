@@ -34,9 +34,6 @@ layers =
     integrations
     analytics | utils | domain | formats
 ignore_imports =
-    actions.cryptohash -> pipeline.permit_context
-    actions.date_shift -> pipeline.permit_context
-    actions.tokenize -> pipeline.permit_context
     integrations.ai.agents.config_generator -> pipeline.config.loader
     integrations.ai.agents.config_generator -> pipeline.deidentify
     integrations.ai.agents.pii_detector -> pipeline.deidentify

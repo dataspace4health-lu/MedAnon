@@ -185,7 +185,7 @@ def derive_permit_key(base_key: str, *, permit_id: str, key_id: str = "") -> str
     together, in a traceable way.
 
     Raises ``ValueError`` if *permit_id* is empty — callers must resolve the
-    permit context before calling this (see ``pipeline.permit_context``).
+    permit context before calling this (see ``utils.permit_context``).
     """
     if not permit_id:
         raise ValueError("derive_permit_key requires a non-empty permit_id")

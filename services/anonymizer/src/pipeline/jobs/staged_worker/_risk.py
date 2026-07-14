@@ -301,7 +301,7 @@ def execute_risk_driven_export_staged(job, store, staging) -> None:
     # reach gPAS/NLP — no wasted work and no risk of a suppressed value leaking.
     survivors = filter_and_apply(resources, plan, privacy_model)
 
-    from pipeline.permit_context import permit_scope
+    from utils.permit_context import permit_scope
 
     permit_id = params.get("permit_id")
 

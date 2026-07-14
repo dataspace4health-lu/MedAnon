@@ -40,11 +40,11 @@ def _resolve_secret_key(params: dict) -> str | None:
     2. Environment variable ``MEDANON_HASH_KEY`` (global default)
     3. Inline ``params['secret_key']`` value (permitted only for local dev/testing)
 
-    When a permit context is active (``pipeline.permit_context``), the
+    When a permit context is active (``utils.permit_context``), the
     resolved base key is HKDF-derived per permit so the same subject
     produces unrelated hashes under different permits (D7.2 §4.4). In
     regulated mode a permit context is required — see
-    :func:`pipeline.permit_context.require_permit_if_regulated`.
+    :func:`utils.permit_context.require_permit_if_regulated`.
     """
     env_name = params.get("secret_key_env")
     base_key = None
@@ -57,7 +57,7 @@ def _resolve_secret_key(params: dict) -> str | None:
     if not base_key:
         return None
 
-    from pipeline.permit_context import scope_key_to_permit
+    from utils.permit_context import scope_key_to_permit
 
     return scope_key_to_permit(base_key, action="cryptohash")
 

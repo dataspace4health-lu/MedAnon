@@ -38,7 +38,7 @@ Production deployments must set ``MEDANON_HASH_KEY``; plain SHA-256 is only
 permitted when ``MEDANON_HASH_ALLOW_PLAIN=true`` — and never in regulated mode
 (EHDS/D7.2 §4.4: an unsalted/unkeyed hash of direct identifiers does not
 qualify as pseudonymisation). When a data-permit context is active
-(``pipeline.permit_context``) the key is additionally scoped per permit, so
+(``utils.permit_context``) the key is additionally scoped per permit, so
 the same input produces unrelated tokens under different permits (§4.4:
 pseudonyms MUST NOT be reused across permits).
 """
@@ -73,7 +73,7 @@ def _derive_stream(namespace: str, value: str) -> "_Stream":
     msg = f"{namespace}:{value}".encode()
     secret_key = os.environ.get("MEDANON_HASH_KEY") or ""
     if secret_key:
-        from pipeline.permit_context import scope_key_to_permit
+        from utils.permit_context import scope_key_to_permit
 
         secret_key = scope_key_to_permit(secret_key, action="tokenize")
         seed = _hmac.new(secret_key.encode(), msg, digestmod="sha256").digest()

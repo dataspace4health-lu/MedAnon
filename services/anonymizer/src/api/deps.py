@@ -274,7 +274,7 @@ def resolve_active_permit(permit_id: str | None):
     ``APPROVED`` permit that is currently within its validity window — this
     gives callers a clear error at the request boundary rather than the
     deep, generic ``PermitRequiredError`` raised mid-pipeline by
-    ``pipeline.permit_context`` when regulated mode requires one.
+    ``utils.permit_context`` when regulated mode requires one.
     """
     if not permit_id:
         return None

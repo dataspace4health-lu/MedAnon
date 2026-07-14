@@ -465,7 +465,7 @@ def _run_staged_phase2(
     # permit. The compute-pool path copies this context into its worker threads
     # via ``submit_with_context`` (a raw ``pool.submit`` would reset the
     # contextvar to its default in the worker thread). No-op when unset.
-    from pipeline.permit_context import permit_scope
+    from utils.permit_context import permit_scope
     from utils.thread_pool import submit_with_context
 
     _permit_id = (getattr(job, "params", None) or {}).get("permit_id")
