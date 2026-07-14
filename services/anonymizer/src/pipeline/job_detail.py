@@ -1,11 +1,11 @@
-"""Job detail cache — stores per-job parsed result (resource counts, field analysis).
+"""Job detail cache  stores per-job parsed result (resource counts, field analysis).
 
 Allows the frontend to load previously-parsed job results without re-downloading
 and re-parsing the NDJSON output.
 
 Backends (in priority order):
-  1. PostgreSQL — when MEDANON_APP_DB_URL is set
-  2. SQLite     — fallback (default path /output/job_details.db)
+  1. PostgreSQL  when MEDANON_APP_DB_URL is set
+  2. SQLite      fallback (default path /output/job_details.db)
 """
 
 from __future__ import annotations

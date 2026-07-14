@@ -38,7 +38,7 @@ class PostgresProcessingRunStore:
         migrates ``created_at`` off the legacy ``TEXT`` type.  Both steps are
         no-ops once applied.
 
-        ``created_at`` was originally declared ``TEXT`` — a direct port of the
+        ``created_at`` was originally declared ``TEXT``  a direct port of the
         SQLite DDL.  Every windowed aggregate in :meth:`get_stats` compares it
         against ``NOW()``, which PostgreSQL rejects outright ("operator does not
         exist: text >= timestamp with time zone"), so the whole stats endpoint
@@ -205,7 +205,7 @@ class PostgresProcessingRunStore:
                     # (pipeline/scoring/engine.py): `avg_composite`, `avg_utility`,
                     # `avg_quality`, `batch_privacy`, `pii_leak_blocked`.  There is
                     # no `privacy_score`/`utility_score`/`quality_score`/`blocked`
-                    # key — reading those yields SQL NULL and the dashboard renders
+                    # key  reading those yields SQL NULL and the dashboard renders
                     # an em dash for every average and 0 for every block.
                     #
                     # Scale: `avg_composite` is already 0-100, but `avg_utility` and

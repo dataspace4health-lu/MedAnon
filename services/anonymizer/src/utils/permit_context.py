@@ -1,12 +1,12 @@
-"""Permit context — request/job-scoped propagation of the active data permit.
+"""Permit context  request/job-scoped propagation of the active data permit.
 
 TEHDAS2 D7.2 §4.4: pseudonyms MUST NOT be reused across different data
 permits, and reversal of pseudonymisation may only be performed by the HDAB
-or a designated TTP (Art 66(3)) — never the data user. Threading a new
+or a designated TTP (Art 66(3))  never the data user. Threading a new
 parameter through every action-function signature and every processing entry
 point (sync ``/process``, streaming, staged workers, jobs) would be a large,
-invasive refactor. Instead the active permit id — once validated for the
-current request/job — is carried on a ``contextvars.ContextVar``, mirroring
+invasive refactor. Instead the active permit id  once validated for the
+current request/job  is carried on a ``contextvars.ContextVar``, mirroring
 the idiom :mod:`pipeline.trace` already uses for the correlation id, so it
 propagates across thread-pool workers via the existing context-copy wrapper.
 
@@ -36,7 +36,7 @@ def reset_permit_id(token: contextvars.Token) -> None:
     try:
         _permit_id.reset(token)
     except (ValueError, LookupError):
-        # Token from a different context (e.g. crossed a thread boundary) —
+        # Token from a different context (e.g. crossed a thread boundary)
         # best-effort reset; never raise from a context helper.
         pass
 
@@ -75,7 +75,7 @@ class PermitRequiredError(ValueError):
 def require_permit_if_regulated(action: str) -> str:
     """Return the active permit id; fail closed in regulated mode when unset.
 
-    Non-regulated deployments get back whatever is set (possibly ``""`` —
+    Non-regulated deployments get back whatever is set (possibly ``""``
     legacy global-key/domain behaviour, unchanged for backward compatibility).
     Regulated deployments must bind every keyed pseudonymisation / gPAS call
     to a permit (D7.2 §4.4).
@@ -86,7 +86,7 @@ def require_permit_if_regulated(action: str) -> str:
     if not pid and regulated_mode():
         raise PermitRequiredError(
             f"MEDANON_REGULATED_MODE is on: {action} requires an active data "
-            "permit context (D7.2 §4.4 — pseudonyms and derived keys must be "
+            "permit context (D7.2 §4.4  pseudonyms and derived keys must be "
             "scoped per permit and MUST NOT be reused across permits). Pass "
             "permit_id on the request/job; it must resolve to an APPROVED, "
             "currently-active permit."
@@ -114,7 +114,7 @@ def scope_domain_to_permit(domain: str, *, action: str = "gpas") -> str:
 
     Fails closed in regulated mode when no permit context is active. Domain
     suffixing (rather than key derivation) is used for gPAS because gPAS
-    itself holds the pseudonymisation secrets — a distinct domain is gPAS's
+    itself holds the pseudonymisation secrets  a distinct domain is gPAS's
     unit of pseudonym-space isolation (mirrors the D7.2 §4.6 "trusted third
     party" administration-service model).
     """

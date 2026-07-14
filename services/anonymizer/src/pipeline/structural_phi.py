@@ -4,16 +4,16 @@ These patterns are structurally recognisable regardless of which config
 profile is active and cannot be expressed as simple single-level FHIRPath
 rules without recursive-descent support:
 
-1. Geolocation — ``{url: "latitude"|"longitude", valueDecimal: X}`` anywhere
+1. Geolocation  ``{url: "latitude"|"longitude", valueDecimal: X}`` anywhere
    in the resource tree (Patient.address, Location, Organization, custom
    extensions at any nesting depth).  Value is zeroed in place.
 
-2. Extension text labels — ``{url: "text", valueString: X}`` inside any
+2. Extension text labels  ``{url: "text", valueString: X}`` inside any
    ``extension`` array (US Core race/ethnicity text, and any other complex
    extension following the same FHIR sub-extension pattern).  Value is
    replaced with ``"[REDACTED]"``.
 
-This pass is **opt-in** (``MEDANON_STRUCTURAL_PHI_ENABLED``, default off) — the
+This pass is **opt-in** (``MEDANON_STRUCTURAL_PHI_ENABLED``, default off)  the
 config rules are normally the single source of truth.  When enabled, every
 change is reported back to the caller (a list of ``{path, action}`` records) so
 it appears in the transformation manifest rather than mutating silently.

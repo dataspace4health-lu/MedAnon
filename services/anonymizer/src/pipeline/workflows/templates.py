@@ -3,7 +3,7 @@
 Express the common bulk operations as small DAGs so callers can run them via
 ``POST /v1/workflows`` without changing the existing ``POST /v1/jobs/*`` API
 (which stays as-is). These are plain builders returning ``list[WorkflowStep]``
-— the engine and either orchestration backend consume them unchanged.
+ the engine and either orchestration backend consume them unchanged.
 """
 
 from __future__ import annotations

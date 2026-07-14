@@ -30,7 +30,7 @@ class DashboardSummaryResponse(BaseModel):
 
     Combines four upstream calls (health, readiness, recent jobs, processing-run
     stats) into a single round-trip so the SPA renders without a request waterfall.
-    Each section is independently optional — a downstream failure degrades to
+    Each section is independently optional  a downstream failure degrades to
     ``null`` rather than failing the whole response.
     """
 

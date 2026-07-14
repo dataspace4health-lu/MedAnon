@@ -23,13 +23,13 @@ class LocalResultStorage:
         return open(result_key, encoding="utf-8")
 
     def iter_bytes(self, result_key: str, chunk_size: int = 65536) -> Iterator[bytes]:
-        """Yield raw byte chunks — binary-safe (results may be .zip, not NDJSON)."""
+        """Yield raw byte chunks  binary-safe (results may be .zip, not NDJSON)."""
         with open(result_key, "rb") as fh:
             while chunk := fh.read(chunk_size):
                 yield chunk
 
     def get_download_url(self, result_key: str, expires: int = 3600) -> str | None:
-        """Local storage has no presigned URLs — callers use FileResponse."""
+        """Local storage has no presigned URLs  callers use FileResponse."""
         return None
 
     def exists(self, result_key: str) -> bool:

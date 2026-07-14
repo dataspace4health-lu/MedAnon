@@ -1,6 +1,6 @@
 """Prometheus metrics for the MedAnon anonymizer service.
 
-All metrics are module-level singletons — import and use directly:
+All metrics are module-level singletons  import and use directly:
 
     from utils.metrics import REQUEST_COUNT, GPAS_CACHE_HITS
 
@@ -48,12 +48,12 @@ GPAS_CACHE_MISSES = Counter(
     "gPAS pseudonym cache misses",
 )
 
-# Retained for Grafana dashboard compatibility. No longer incremented — the
+# Retained for Grafana dashboard compatibility. No longer incremented  the
 # pipeline relies on the gPAS client's deterministic L1/L2 cache for
 # cross-chunk dedup instead of an in-process seen-values set.
 SEEN_VALUES_CAP_REACHED = Counter(
     "medanon_seen_values_cap_reached_total",
-    "Times the in-process seen-values dedup set reached its cap (deprecated — always 0)",
+    "Times the in-process seen-values dedup set reached its cap (deprecated  always 0)",
 )
 
 # ── Rule conflicts ───────────────────────────────────────────────────────────
@@ -138,11 +138,11 @@ NLP_L2_CACHE_MISSES = Counter(
 
 # ── Per-stage pipeline latency ───────────────────────────────────────────────
 # Stage labels:
-#   "rule_evaluation"  — FHIRPath evaluation + de-identification rule dispatch (parallel per resource)
-#   "phi_detection"    — NLP batch PHI detection + text replacement
-#   "pseudonymization" — gPAS batch identifier pseudonymization (HTTP lookup)
-#   "resource_assembly"— pseudonym write-back + reference rewriting (parallel per resource)
-# Note: phi_detection and pseudonymization run concurrently — their wall-clock
+#   "rule_evaluation"   FHIRPath evaluation + de-identification rule dispatch (parallel per resource)
+#   "phi_detection"     NLP batch PHI detection + text replacement
+#   "pseudonymization"  gPAS batch identifier pseudonymization (HTTP lookup)
+#   "resource_assembly" pseudonym write-back + reference rewriting (parallel per resource)
+# Note: phi_detection and pseudonymization run concurrently  their wall-clock
 # durations overlap; summing them does not yield the critical path.
 
 PIPELINE_STAGE_LATENCY = Histogram(
@@ -304,7 +304,7 @@ SCORE_DURATION = Histogram(
 # ── Output-barrier / QC quality observability ────────────────────────────────
 # De-identification *quality* signals, distinct from latency/throughput. Before
 # these, gate blocks and quarantines were observable only by grepping
-# log.warning — you could not alert on or graph "leak rate spiked".
+# log.warning  you could not alert on or graph "leak rate spiked".
 
 # Every output-gate verdict. ``gate``: "raw_pii" (always-on raw-resource scan)
 # | "score_summary" (opt-in scoring gate). ``decision``: "pass" | "block".
@@ -316,7 +316,7 @@ GATE_DECISIONS = Counter(
 
 # Residual personal identifiers detected in de-identified output, by category
 # and severity. A non-zero rate means PHI is slipping past the rules into the
-# gate — a precision/recall signal for the de-identification config itself.
+# gate  a precision/recall signal for the de-identification config itself.
 PHI_LEAK_DETECTED = Counter(
     "medanon_phi_leak_detected_total",
     "Residual personal-identifier detections in output, by type and severity",
@@ -331,7 +331,7 @@ QUARANTINE_TOTAL = Counter(
     ["stage", "reason"],
 )
 
-# NLP fail-closed events — when PHI detection could not run and the pipeline
+# NLP fail-closed events  when PHI detection could not run and the pipeline
 # redacted instead of leaking. ``reason``: "adapter_unavailable" (no NLP
 # configured) | "unavailable_token" (remote call failed → [NLP_UNAVAILABLE]).
 # A rising rate means PHI-bearing text is being mass-redacted, not scrubbed.

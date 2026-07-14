@@ -1,7 +1,7 @@
 """Load-time rule schema validation (Pydantic).
 
 The structural checks in ``Settings._validate_rules`` only verify that
-``match``/``action`` are non-empty strings and ``params`` is a mapping — an
+``match``/``action`` are non-empty strings and ``params`` is a mapping  an
 unknown action name or a typo'd strategy was previously discovered *at apply
 time*, mid-run, per matched element (and in skip mode it quarantined resources
 one by one). This module validates rules when the profile is loaded:
@@ -13,7 +13,7 @@ one by one). This module validates rules when the profile is loaded:
   - unknown top-level rule keys (e.g. ``patams``) are rejected.
 
 Severity is controlled by ``MEDANON_RULE_SCHEMA_STRICT``:
-  - unset / ``false`` (default): violations are logged as warnings — existing
+  - unset / ``false`` (default): violations are logged as warnings  existing
     deployments keep working for one release while profiles are cleaned up;
   - ``true``: violations raise ``ValueError`` at load time.
 
@@ -35,7 +35,7 @@ _log = logging.getLogger("medanon.config")
 # Per-action params models
 # ---------------------------------------------------------------------------
 # ``extra="allow"`` on params models: actions tolerate (and some read)
-# additional keys, and strategy-specific keys vary — the models pin down the
+# additional keys, and strategy-specific keys vary  the models pin down the
 # keys that have caused real misconfigurations (enums, bounds, required keys)
 # without freezing the full param surface.
 
@@ -103,7 +103,7 @@ class TokenizeParams(ParamsBase):
 
 
 class SubstituteParams(ParamsBase):
-    substitute_with: Any  # required — see commit "enforce required substitute_with"
+    substitute_with: Any  # required  see commit "enforce required substitute_with"
 
 
 class CryptohashParams(ParamsBase):
@@ -204,7 +204,7 @@ _PARAMS_MODELS: dict[str, type[ParamsBase]] = {
 
 
 class RuleModel(BaseModel):
-    """Top-level rule shape — unknown keys (typos) are rejected.
+    """Top-level rule shape  unknown keys (typos) are rejected.
 
     ``priority`` is accepted for rule-ordering support; ``condition`` /
     ``conditions`` for conditional rules (E2.4).
@@ -222,7 +222,7 @@ class RuleModel(BaseModel):
 
 
 def _known_action_names() -> frozenset[str]:
-    """Action names from the dispatch registries (lazy import — no cycle)."""
+    """Action names from the dispatch registries (lazy import  no cycle)."""
     from pipeline.deidentify import deident_actions, depseudo_actions, pseudo_actions
 
     return (
@@ -235,7 +235,7 @@ def _known_action_names() -> frozenset[str]:
 def validate_rules_schema(rules: list[dict]) -> list[str]:
     """Validate *rules* against the schema; return a list of error strings.
 
-    Pure check — never raises, never mutates. The caller decides severity
+    Pure check  never raises, never mutates. The caller decides severity
     (warn vs raise) based on ``MEDANON_RULE_SCHEMA_STRICT``.
     """
     errors: list[str] = []

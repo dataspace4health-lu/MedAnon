@@ -33,7 +33,7 @@ async def _retry_async(
         except Exception as exc:
             if attempt < retries:
                 logger.warning(
-                    "%s_failed attempt=%d/%d: %s — retrying in %.0fs",
+                    "%s_failed attempt=%d/%d: %s  retrying in %.0fs",
                     label,
                     attempt,
                     retries,
@@ -105,13 +105,13 @@ def assert_durable_store_or_exit(
 ) -> None:
     """Refuse to start with SQLite when running in multi-container mode.
 
-    SQLite WAL mode is not safe across container boundaries — both the API
+    SQLite WAL mode is not safe across container boundaries  both the API
     and the dedicated worker bind-mount ``./output`` so a shared SQLite DB
     risks data loss and double-claim races.
 
     Behaviour:
       - ``role="worker"``: SQLite is *always* unsafe (the worker only exists
-        as a separate container) — exit on SQLite regardless of env.
+        as a separate container)  exit on SQLite regardless of env.
       - ``role="api"``: exit on SQLite only when
         ``MEDANON_REQUIRE_DURABLE_STORE=true`` *or* the dedicated worker is
         enabled separately (``MEDANON_WORKER_ENABLED=false`` here implies
@@ -120,7 +120,7 @@ def assert_durable_store_or_exit(
     Set ``MEDANON_ALLOW_SQLITE_FALLBACK=true`` to override the guard for
     single-container local development.
     """
-    if job_store is not None:  # Redis or PostgreSQL — durable, all good
+    if job_store is not None:  # Redis or PostgreSQL  durable, all good
         return
     if os.environ.get("MEDANON_ALLOW_SQLITE_FALLBACK", "").lower() in (
         "true",
@@ -128,7 +128,7 @@ def assert_durable_store_or_exit(
         "yes",
     ):
         logger.warning(
-            "sqlite_fallback_allowed role=%s — only safe in single-container "
+            "sqlite_fallback_allowed role=%s  only safe in single-container "
             "local dev; set MEDANON_REDIS_URL or MEDANON_APP_DB_URL in production",
             role,
         )
@@ -141,10 +141,10 @@ def assert_durable_store_or_exit(
 
     if role == "worker":
         # The dedicated worker container ALWAYS shares /output with the API
-        # container — SQLite here is unsafe. No exception.
+        # container  SQLite here is unsafe. No exception.
         msg = (
             "FATAL: worker_main started without a durable job store. "
-            "Set MEDANON_REDIS_URL or MEDANON_APP_DB_URL — SQLite at "
+            "Set MEDANON_REDIS_URL or MEDANON_APP_DB_URL  SQLite at "
             "/output/jobs.db is not safe across container boundaries. "
             "Override (single-container dev only): MEDANON_ALLOW_SQLITE_FALLBACK=true"
         )
@@ -162,7 +162,7 @@ def assert_durable_store_or_exit(
 
     # Permissive default for the API (matches historical single-container dev)
     logger.warning(
-        "sqlite_job_store role=api — single-container mode only. Set "
+        "sqlite_job_store role=api  single-container mode only. Set "
         "MEDANON_REDIS_URL or MEDANON_APP_DB_URL for multi-replica deployments."
     )
 
@@ -172,25 +172,25 @@ async def setup_redis_cache(redis_url: str) -> None:
 
     Also logs the cache-key invariants that **must** be stable across runs for
     the warm-cache speedup to work:
-      * GPAS_DOMAIN — keys are scoped per domain
-      * GPAS_OPERATION (default ``pseudonymizeAllowCreate``) — must be the
+      * GPAS_DOMAIN  keys are scoped per domain
+      * GPAS_OPERATION (default ``pseudonymizeAllowCreate``)  must be the
         same on every run; switching to a different operation produces a
         different cache key and forces a full L2 miss.
     """
-    # Emit the cache-key invariants regardless of whether L2 is configured —
+    # Emit the cache-key invariants regardless of whether L2 is configured
     # an operator inspecting logs after a slow second run needs this signal
     # even on local-only caching.
     _gpas_domain = os.environ.get("GPAS_DOMAIN", "<unset>")
     _gpas_operation = os.environ.get("GPAS_OPERATION", "pseudonymizeAllowCreate")
     logger.info(
-        "gpas_cache_keys domain=%s operation=%s — must be stable across runs",
+        "gpas_cache_keys domain=%s operation=%s  must be stable across runs",
         _gpas_domain,
         _gpas_operation,
     )
 
     if not redis_url:
         logger.warning(
-            "gpas_cache=local — MEDANON_REDIS_URL not set; pseudonym cache will "
+            "gpas_cache=local  MEDANON_REDIS_URL not set; pseudonym cache will "
             "NOT survive container restart and is NOT shared across replicas"
         )
         return
@@ -216,7 +216,7 @@ async def setup_redis_cache(redis_url: str) -> None:
 
 
 async def check_gpas_canary(redis_url: str) -> None:
-    """Run gPAS cache coherence check — detect stale Redis after DB wipe."""
+    """Run gPAS cache coherence check  detect stale Redis after DB wipe."""
     if not redis_url:
         return
     try:
@@ -278,7 +278,7 @@ def select_staging_store(
       2. *staging_db_url* or *app_db_url* → ``StagingStore`` (Postgres, default).
       3. Neither configured → returns ``None``.
 
-    Does **not** call ``ensure_schema()`` — callers that need DDL must do so
+    Does **not** call ``ensure_schema()``  callers that need DDL must do so
     explicitly (``setup_staging()`` in ``api/main.py`` handles this for the
     API path; the Argo ``deid`` step calls it directly).
     """

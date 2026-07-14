@@ -1,4 +1,4 @@
-"""perturb — date and numeric perturbation action.
+"""perturb  date and numeric perturbation action.
 
 Date perturbation
 -----------------
@@ -17,7 +17,7 @@ HMAC) is only permitted when ``MEDANON_HASH_ALLOW_PLAIN=true``.
 Numeric perturbation
 --------------------
 Numeric values are perturbed by a cryptographically random offset
-(``secrets.randbelow()``) per value — no ordering guarantee exists for numbers.
+(``secrets.randbelow()``) per value  no ordering guarantee exists for numbers.
 """
 
 from __future__ import annotations
@@ -48,7 +48,7 @@ def _subject_key(resource: dict) -> str:
       1. resource.id  (the most common stable identifier)
       2. resource.subject.reference  (Observation, Condition, …)
       3. resource.patient.reference  (Encounter, …)
-      4. empty string (no subject — offset is deterministic on the key value)
+      4. empty string (no subject  offset is deterministic on the key value)
     """
     rid = resource.get("id")
     if rid:
@@ -68,7 +68,7 @@ def _date_offset(subject_id: str, noise_range: list) -> int:
     Uses HMAC-SHA256(MEDANON_HASH_KEY, subject_id) reduced modulo the span
     so the offset is stable across calls for the same subject and config.
     Falls back to plain SHA-256 when MEDANON_HASH_ALLOW_PLAIN=true and no key
-    is set (same policy as cryptohash — warns once, never silently randomises).
+    is set (same policy as cryptohash  warns once, never silently randomises).
     """
     global _warned_no_key
 
@@ -102,7 +102,7 @@ def _date_offset(subject_id: str, noise_range: list) -> int:
         with _warned_lock:
             if not _warned_no_key:
                 _log.warning(
-                    "MEDANON_HASH_KEY is unset — date perturbation offsets are deterministic "
+                    "MEDANON_HASH_KEY is unset  date perturbation offsets are deterministic "
                     "but unkeyed (plain SHA-256). NOT suitable for production pseudonymization."
                 )
                 _warned_no_key = True
@@ -114,11 +114,11 @@ def _date_offset(subject_id: str, noise_range: list) -> int:
 
 
 def _perturb_numeric(real_value: Union[int, float]) -> Any:
-    """Random numeric noise — no ordering guarantee for numeric values."""
+    """Random numeric noise  no ordering guarantee for numeric values."""
     # bounded_random uses secrets.randbelow() (CSPRNG); this is intentionally
     # non-deterministic because numeric values have no temporal ordering contract.
     # Callers must pass the noise range; we use ±10% as a sensible hard-coded
-    # range for the fallback — but perturb_by_path passes the configured range.
+    # range for the fallback  but perturb_by_path passes the configured range.
     raise RuntimeError(
         "_perturb_numeric must not be called directly; use _perturb_nodes"
     )
@@ -180,7 +180,7 @@ def perturb_by_path(resource: dict, el: dict, params: dict) -> None:
     path = path.split(".")[1:]  # Remove root
     if len(path) == 0:
         raise ValueError(
-            f"Empty path after removing resource type root in perturb — "
+            f"Empty path after removing resource type root in perturb  "
             f"refusing to clear entire resource (original path: {el['path']!r})"
         )
     noise_range = [int(params["min"]), int(params["max"])]

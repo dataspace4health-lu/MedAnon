@@ -8,7 +8,7 @@ Budget allocation (when no per-subsystem override)::
 
     gPAS HTTP      30%  →  3000 connections  (GPAS_POOL_SIZE)
     FHIR HTTP      15%  →  1500 connections  (FHIR_POOL_SIZE)
-    Proxy HTTP     15%  →  1500 connections  (PROXY_POOL_SIZE)  — shared NLP + Analytics
+    Proxy HTTP     15%  →  1500 connections  (PROXY_POOL_SIZE)   shared NLP + Analytics
     PG shared      25%  →  2500 connections  (PG_POOL_MAX)
     PG staging     15%  →  1500 connections  (PG_STAGING_POOL_MAX)
 """
@@ -81,7 +81,7 @@ def check_thread_budget() -> None:
     ``MEDANON_GLOBAL_MAX_THREADS`` or the thread pool will stall and
     throughput will degrade under load.
 
-    Emits a WARNING (not an error) so the process can still start — operators
+    Emits a WARNING (not an error) so the process can still start  operators
     may have deliberately configured a larger thread pool on their host.
     """
     from utils.thread_pool import _MAX_THREADS
@@ -93,7 +93,7 @@ def check_thread_budget() -> None:
     if product > _MAX_THREADS:
         _log.warning(
             "thread_budget_exceeded MEDANON_PIPELINE_WIDTH=%d × "
-            "MEDANON_PARALLEL_WORKERS=%d = %d > MEDANON_GLOBAL_MAX_THREADS=%d — "
+            "MEDANON_PARALLEL_WORKERS=%d = %d > MEDANON_GLOBAL_MAX_THREADS=%d  "
             "reduce MEDANON_PIPELINE_WIDTH or MEDANON_PARALLEL_WORKERS to avoid "
             "thread-pool starvation and deadlocks under load",
             pipeline_width,
@@ -104,7 +104,7 @@ def check_thread_budget() -> None:
     elif product > int(_MAX_THREADS * 0.75):
         _log.warning(
             "thread_budget_high MEDANON_PIPELINE_WIDTH=%d × "
-            "MEDANON_PARALLEL_WORKERS=%d = %d (%.0f%% of %d-thread cap) — "
+            "MEDANON_PARALLEL_WORKERS=%d = %d (%.0f%% of %d-thread cap)  "
             "consider lowering concurrency or raising MEDANON_GLOBAL_MAX_THREADS",
             pipeline_width,
             parallel_workers,

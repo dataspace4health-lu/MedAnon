@@ -64,13 +64,13 @@ def _assert_pii_model_is_local(model: str, api_base: str | None) -> None:
     """Enforce the local-only PII model contract (C4).
 
     No-op when MEDANON_AI_PII_REQUIRE_LOCAL is disabled. Otherwise raises
-    PiiModelNotLocalError unless the endpoint is provably local — either an
+    PiiModelNotLocalError unless the endpoint is provably local  either an
     explicit local ``api_base`` or a recognised local provider prefix. The
     caller MUST treat a raise as fail-closed (do not send PHI).
 
     The actual check lives in ``integrations.ai.local_guard`` and is ALSO
     enforced unconditionally inside ``LLMProvider`` for ``phi_payload=True``
-    calls — this wrapper exists for the early caller-side check (precise
+    calls  this wrapper exists for the early caller-side check (precise
     error before any work) and for backward compatibility.
     """
     if not _pii_require_local():
@@ -83,7 +83,7 @@ def pii_enforcement_status() -> dict:
 
     Returns the configured PII model/endpoint, whether enforcement is active,
     and whether the resolved endpoint is provably local (loopback/private).
-    Performs no PHI processing — safe to call from a status handler.
+    Performs no PHI processing  safe to call from a status handler.
     """
     model = os.environ.get("MEDANON_AI_PII_PROVIDER", "").strip()
     api_base = (
@@ -155,14 +155,14 @@ You are a medical data privacy auditor. Your task is to scan de-identified \
 FHIR resource text fields for residual PII that was NOT properly removed.
 
 IMPORTANT: You are receiving DE-IDENTIFIED data. Most fields should already \
-be scrubbed. You are looking for LEAKS — PII that slipped through.
+be scrubbed. You are looking for LEAKS  PII that slipped through.
 
 Categories of PII to detect:
 1. Patient names (full, partial, or nicknames)
 2. Provider/practitioner names
 3. Phone numbers, fax numbers
 4. Email addresses
-5. Physical addresses (street, city — state/country alone are OK)
+5. Physical addresses (street, city  state/country alone are OK)
 6. Social Security Numbers or national IDs
 7. Medical Record Numbers (MRN)
 8. Dates more specific than year (month-day, exact dates)
@@ -188,7 +188,7 @@ def _extract_text_fields(resource: dict, min_len: int = 15) -> list[tuple[str, s
     ``min_len`` is the shortest string value that is scanned. The default (15)
     targets free-text narrative; the Resource Explorer lowers it (``min_len=1``)
     to scan EVERY string field, so short direct identifiers that live in
-    structured fields — an SSN, a phone number, a ``name.family`` — are seen by
+    structured fields  an SSN, a phone number, a ``name.family``  are seen by
     regex/NER too, not just prose.
     """
     results: list[tuple[str, str]] = []
@@ -243,7 +243,7 @@ def _ner_detections(adapter, indexed: list[tuple[str, str, str, str]]) -> list[d
     *indexed* is ``[(resource_id, resource_type, field_path, text), ...]``.
 
     Previously this issued ``adapter.detect(text)`` once per field per resource,
-    serially — with ``NLP_SERVICE_URL`` set (always, in the shipped compose
+    serially  with ``NLP_SERVICE_URL`` set (always, in the shipped compose
     stack) that is one HTTP round-trip per field.  ``detect_batch`` collapses
     them into one request per chunk.
 
@@ -300,7 +300,7 @@ def detect_pii_leaks(
 
     By default this is a **free-text** content scanner: ``_extract_text_fields``
     only walks strings of >= 15 characters, so a leaked ``name.family`` or
-    ``identifier.value`` in a structured field is invisible to it — those are the
+    ``identifier.value`` in a structured field is invisible to it  those are the
     job of the structural coverage check in :mod:`pipeline.identifier_gate`.
 
     Lower ``min_len`` (the Resource Explorer passes ``min_len=1``) to scan EVERY
@@ -309,7 +309,7 @@ def detect_pii_leaks(
 
     Three layers:
     1. Regex patterns (deterministic, no model needed)
-    2. NER scan (Presidio, batched — when the adapter is available)
+    2. NER scan (Presidio, batched  when the adapter is available)
     3. LLM contextual analysis (when AI enabled + local model available)
 
     Returns: {
@@ -320,7 +320,7 @@ def detect_pii_leaks(
     }
 
     ``layers_used`` lists layers that actually produced a result.  A layer that
-    was attempted and failed appears in ``degraded`` instead — it previously
+    was attempted and failed appears in ``degraded`` instead  it previously
     appeared in ``layers_used`` regardless, so an NLP outage silently reduced
     the scan to regex while still reporting that NER had run.
     """
@@ -343,7 +343,7 @@ def detect_pii_leaks(
             for field_path, text in text_fields
         )
 
-        # Layer 3: LLM contextual analysis (per resource — needs the whole doc)
+        # Layer 3: LLM contextual analysis (per resource  needs the whole doc)
         if use_ai and text_fields:
             try:
                 ai_hits = _ai_scan_resource(resource, text_fields)
@@ -371,7 +371,7 @@ def detect_pii_leaks(
         except Exception as exc:
             degraded.append("ner")
             _log.error(
-                "pii_gate_ner_layer_failed error_type=%s — scan degraded to regex only",
+                "pii_gate_ner_layer_failed error_type=%s  scan degraded to regex only",
                 type(exc).__name__,
             )
 
@@ -450,7 +450,7 @@ def _ai_scan_resource(
     # Pin the PII scan to a dedicated self-hosted endpoint. When
     # MEDANON_AI_PII_API_BASE is unset, fall back to the global
     # MEDANON_AI_API_BASE (e.g. the Ollama VM) rather than letting litellm
-    # default to localhost — otherwise a model_override silently routes to
+    # default to localhost  otherwise a model_override silently routes to
     # 127.0.0.1 on THIS host instead of the configured remote VM.
     pii_api_base = (
         os.environ.get("MEDANON_AI_PII_API_BASE", "").strip()
@@ -458,7 +458,7 @@ def _ai_scan_resource(
         or None
     )
 
-    # C4: refuse to ship de-identified text to a non-local LLM. Fail-closed —
+    # C4: refuse to ship de-identified text to a non-local LLM. Fail-closed
     # skip the AI layer rather than risk PHI exfiltration.
     try:
         _assert_pii_model_is_local(pii_model, pii_api_base)
@@ -491,7 +491,7 @@ def _ai_scan_resource(
             api_base_override=pii_api_base,
             temperature=0.0,
             max_tokens=2048,
-            # De-identified text may carry residual PHI — the provider
+            # De-identified text may carry residual PHI  the provider
             # re-enforces endpoint locality (defense in depth vs the early
             # _assert_pii_model_is_local check above).
             phi_payload=True,

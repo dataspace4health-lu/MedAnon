@@ -2,13 +2,13 @@
 
 CRUD for de-identification configuration profiles:
 
-    GET    /v1/configs              — list all (system + user-defined)
-    GET    /v1/configs/{name}       — fetch YAML for a named config
-    POST   /v1/configs              — create a user-defined config
-    PUT    /v1/configs/{name}       — replace rules of a user-defined config
-    DELETE /v1/configs/{name}       — delete a user-defined config
+    GET    /v1/configs               list all (system + user-defined)
+    GET    /v1/configs/{name}        fetch YAML for a named config
+    POST   /v1/configs               create a user-defined config
+    PUT    /v1/configs/{name}        replace rules of a user-defined config
+    DELETE /v1/configs/{name}        delete a user-defined config
 
-System configs (the six bundled profiles) are read-only — PUT and DELETE
+System configs (the six bundled profiles) are read-only  PUT and DELETE
 return 403. All write operations require the 'admin' role.
 
 Config names are validated to ``^[a-zA-Z0-9_-]{1,64}$`` before any
@@ -37,7 +37,7 @@ _NAME_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 
 _USER_CONFIG_DIR = os.environ.get("MEDANON_USER_CONFIG_DIR", "/output/user-configs")
 
-# Valid action names — used for request validation.
+# Valid action names  used for request validation.
 _VALID_ACTIONS = frozenset(
     {
         "redact",
@@ -64,7 +64,7 @@ _VALID_ACTIONS = frozenset(
 # ---------------------------------------------------------------------------
 
 
-# Keys that reference filesystem paths — must come from env vars, never from
+# Keys that reference filesystem paths  must come from env vars, never from
 # API callers.  Allowing these inline would enable path-traversal via the
 # encrypt/decrypt actions which call open() on the resolved path.
 _BLOCKED_PARAM_KEYS = frozenset({"public_key", "private_key", "key_file"})
@@ -284,7 +284,7 @@ def _read_yaml(name: str, is_system: bool) -> str:
 
 @router.get("/configs")
 def list_configs(request: Request):
-    """List all config profiles — system (read-only) and user-defined."""
+    """List all config profiles  system (read-only) and user-defined."""
     store = _get_store()
     return {"configs": store.list_all()}
 

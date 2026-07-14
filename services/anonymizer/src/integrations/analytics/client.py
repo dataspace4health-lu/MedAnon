@@ -53,7 +53,7 @@ def proxy_analyse_risk(body: bytes, content_type: str) -> dict:
     Raises ValueError on HTTP errors or connection failures.
     """
     if not _analytics_cb.allow_request():
-        raise ValueError("Analytics service unavailable — circuit breaker OPEN")
+        raise ValueError("Analytics service unavailable  circuit breaker OPEN")
     url = _analytics_url("/v1/analyse/risk")
     try:
         result = proxy_post_json(
@@ -80,7 +80,7 @@ def proxy_analyse_privacy_risk(body: bytes, content_type: str) -> dict:
     errors or connection failures. Mirrors :func:`proxy_analyse_risk`.
     """
     if not _analytics_cb.allow_request():
-        raise ValueError("Analytics service unavailable — circuit breaker OPEN")
+        raise ValueError("Analytics service unavailable  circuit breaker OPEN")
     url = _analytics_url("/v1/analyse/privacy-risk")
     try:
         result = proxy_post_json(
@@ -107,7 +107,7 @@ def proxy_synthetic_passport(body: bytes, content_type: str) -> dict:
     HTTP errors or connection failures. Mirrors :func:`proxy_analyse_risk`.
     """
     if not _analytics_cb.allow_request():
-        raise ValueError("Analytics service unavailable — circuit breaker OPEN")
+        raise ValueError("Analytics service unavailable  circuit breaker OPEN")
     url = _analytics_url("/v1/synthetic/passport")
     try:
         result = proxy_post_json(
@@ -134,7 +134,7 @@ def proxy_generate_synthetic(body: bytes, content_type: str, params: dict) -> by
     Raises ValueError on HTTP errors or connection failures.
     """
     if not _analytics_cb.allow_request():
-        raise ValueError("Analytics service unavailable — circuit breaker OPEN")
+        raise ValueError("Analytics service unavailable  circuit breaker OPEN")
     qs = urlencode({k: v for k, v in params.items() if v is not None})
     url = _analytics_url(f"/v1/generate/synthetic?{qs}")
     try:

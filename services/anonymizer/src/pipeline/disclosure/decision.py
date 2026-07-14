@@ -204,7 +204,7 @@ def assess_export_decision(
         "regulated_mode": regulated,
     }
 
-    # Audit the decision (PHI-safe — counts + levels only). Never break on audit.
+    # Audit the decision (PHI-safe  counts + levels only). Never break on audit.
     try:
         from utils.audit import emit as audit_emit
 

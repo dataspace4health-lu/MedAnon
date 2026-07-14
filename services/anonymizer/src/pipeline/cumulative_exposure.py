@@ -9,12 +9,12 @@ disclosure over repeated releases, not just the release in hand.
 This module gives the measurement half:
 
 - :func:`fingerprint_population` reduces a release's subject ids to a set of
-  **keyed one-way hashes** — PII-safe (HMAC over already-pseudonymous ids, so
+  **keyed one-way hashes**  PII-safe (HMAC over already-pseudonymous ids, so
   nothing reversible or linkable outside the system is stored), yet still
   supporting set-overlap between releases.
 - :func:`assess_cumulative_exposure` compares a new release's fingerprint to
   prior releases (same permit / recipient) and reports repeat exposure, cohort
-  overlap, and — the risk that actually matters — individuals re-released under a
+  overlap, and  the risk that actually matters  individuals re-released under a
   *different* quasi-identifier signature (the differencing surface), with a
   graded verdict.
 
@@ -29,7 +29,7 @@ import hmac
 from typing import Any
 
 # Default thresholds (fractions of the new release's population). These are not
-# regulatory constants — the literature gives no single number — but encode the
+# regulatory constants  the literature gives no single number  but encode the
 # differencing rationale: any reuse under a *different* generalisation is worth a
 # look (review), and substantial such reuse is elevated risk. Tunable per call.
 DEFAULT_REVIEW_OVERLAP = 0.5

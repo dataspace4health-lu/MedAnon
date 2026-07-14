@@ -1,9 +1,9 @@
-"""Workflow domain types — a DAG of steps over the existing job system.
+"""Workflow domain types  a DAG of steps over the existing job system.
 
 A :class:`Workflow` is a directed acyclic graph of :class:`WorkflowStep`\\ s.
 Each step maps to an existing job ``type`` (``bulk-export``, ``cohort``,
 ``bulk-import``, ...) and is executed as an ordinary ``Job`` by the existing
-worker — the workflow engine only schedules steps as their dependencies
+worker  the workflow engine only schedules steps as their dependencies
 complete. This keeps the in-process 4-stage micro-pipeline and all executors
 untouched; orchestration lives one level up (job → workflow step).
 
@@ -41,7 +41,7 @@ class WorkflowStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
-# Terminal step states — a step in one of these will never run again.
+# Terminal step states  a step in one of these will never run again.
 TERMINAL_STEP_STATES = frozenset(
     {StepStatus.DONE, StepStatus.ERROR, StepStatus.SKIPPED, StepStatus.CANCELLED}
 )
@@ -85,7 +85,7 @@ class WorkflowValidationError(ValueError):
 def validate_dag(steps: list[WorkflowStep]) -> None:
     """Validate that *steps* form a DAG: unique ids, known deps, no cycles.
 
-    Uses Kahn's algorithm — raises :class:`WorkflowValidationError` on a
+    Uses Kahn's algorithm  raises :class:`WorkflowValidationError` on a
     duplicate/empty step id, a ``depends_on`` referencing an unknown step, or
     any cycle.
     """

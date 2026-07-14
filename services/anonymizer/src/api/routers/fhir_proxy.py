@@ -7,11 +7,11 @@ through the backend so that:
 
 - the browser is not blocked by CORS / the SPA's ``connect-src 'self'`` CSP;
 - every user-supplied URL passes the same SSRF guard used elsewhere
-  (``_validate_server_url`` — rejects private / loopback / link-local targets,
+  (``_validate_server_url``  rejects private / loopback / link-local targets,
   so this endpoint cannot be turned into an internal port scanner).
 
 Only GET is supported; the response body is size-capped. This is a thin pass-
-through — the client drives FHIR pagination by passing successive ``next`` link
+through  the client drives FHIR pagination by passing successive ``next`` link
 URLs as the ``url`` parameter.
 """
 
@@ -64,7 +64,7 @@ def _resolve_saved_source(
 
     The bearer token is decrypted here, server-side, and never returned to the
     browser. An absolute ``url`` (a paginated next-link) is honoured only when it
-    shares the saved server's origin — this prevents the caller from aiming the
+    shares the saved server's origin  this prevents the caller from aiming the
     saved credential at an arbitrary host. Otherwise the effective URL is the
     saved base plus the relative ``path``.
     """

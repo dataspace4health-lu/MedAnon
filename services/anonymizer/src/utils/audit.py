@@ -14,12 +14,12 @@ Audit events are:
    object-lock (WORM) to satisfy HIPAA §164.312(b) audit integrity.
 
 MinIO/S3 audit configuration:
-  MEDANON_S3_AUDIT_BUCKET   — bucket name (enables S3 sink)
-  MEDANON_S3_ENDPOINT       — e.g. http://minio:9000 (default: AWS)
-  MEDANON_S3_ACCESS_KEY     — access key / AWS_ACCESS_KEY_ID
-  MEDANON_S3_SECRET_KEY     — secret key / AWS_SECRET_ACCESS_KEY
-  MEDANON_S3_SECURE         — "true"/"false" (TLS, default false for internal)
-  MEDANON_AUDIT_FLUSH_EVERY — flush after this many events (default: 100)
+  MEDANON_S3_AUDIT_BUCKET    bucket name (enables S3 sink)
+  MEDANON_S3_ENDPOINT        e.g. http://minio:9000 (default: AWS)
+  MEDANON_S3_ACCESS_KEY      access key / AWS_ACCESS_KEY_ID
+  MEDANON_S3_SECRET_KEY      secret key / AWS_SECRET_ACCESS_KEY
+  MEDANON_S3_SECURE          "true"/"false" (TLS, default false for internal)
+  MEDANON_AUDIT_FLUSH_EVERY  flush after this many events (default: 100)
 """
 
 from __future__ import annotations
@@ -64,7 +64,7 @@ def _get_s3():
         from minio import Minio
 
         endpoint = os.environ.get("MEDANON_S3_ENDPOINT", "s3.amazonaws.com")
-        # Strip scheme — minio client takes host:port only
+        # Strip scheme  minio client takes host:port only
         endpoint = endpoint.removeprefix("https://").removeprefix("http://")
         secure = os.environ.get("MEDANON_S3_SECURE", "false").lower() in (
             "1",
@@ -84,7 +84,7 @@ def _get_s3():
             _s3_client.make_bucket(_S3_BUCKET)
         _log.info("audit_s3_connected bucket=%s", _S3_BUCKET)
     except Exception as exc:
-        _log.warning("audit_s3_unavailable: %s — audit will not write to S3", exc)
+        _log.warning("audit_s3_unavailable: %s  audit will not write to S3", exc)
         _s3_client = None
     return _s3_client
 
@@ -125,7 +125,7 @@ def _append_to_s3(line: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Async sink dispatch (F.18) — keep Redis/S3 writes off the request hot path
+# Async sink dispatch (F.18)  keep Redis/S3 writes off the request hot path
 # ---------------------------------------------------------------------------
 # When MEDANON_AUDIT_ASYNC=true, emit() drops the (entry, line) tuple onto a
 # bounded queue drained by a single daemon thread. The authoritative stdout

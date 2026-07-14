@@ -8,8 +8,8 @@ selected profile's ``phases`` are passed to the service per request via
 ``integrations/trust_gate/client``.
 
 Backends (mirrors ``pipeline/processing_run``):
-  1. PostgreSQL — when MEDANON_APP_DB_URL is set (``integrations/postgres/trust_profile_store``)
-  2. SQLite     — fallback, always available (default /output/trust_profiles.db)
+  1. PostgreSQL  when MEDANON_APP_DB_URL is set (``integrations/postgres/trust_profile_store``)
+  2. SQLite      fallback, always available (default /output/trust_profiles.db)
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ _DEFAULT_DB = "/output/trust_profiles.db"
 
 # Canonical audit-phase ids. KEEP IN SYNC with services/trust-gate/src/phases.py
 # ALL_PHASES (the two services have no shared package). The Trust Gate defends
-# against drift — ``normalize_selection`` drops unknown phase ids — but this list
+# against drift  ``normalize_selection`` drops unknown phase ids  but this list
 # is what the API validates new profiles against, so update both together.
 PHASE_IDS: tuple[str, ...] = (
     "structural_conformance",
@@ -71,7 +71,7 @@ _SYSTEM_PROFILES: list[dict] = [
     },
     {
         "name": "structural-only",
-        "description": "FHIR structural validity only — the fast pre-flight gate.",
+        "description": "FHIR structural validity only  the fast pre-flight gate.",
         "phases": ["structural_conformance"],
         "intended_use": "ingestion pre-flight",
     },

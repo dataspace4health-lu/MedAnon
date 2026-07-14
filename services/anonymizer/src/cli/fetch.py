@@ -1,4 +1,4 @@
-"""CLI fetch subcommand — download FHIR resources from a server."""
+"""CLI fetch subcommand  download FHIR resources from a server."""
 
 import json
 import os

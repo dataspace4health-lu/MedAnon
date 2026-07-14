@@ -14,7 +14,7 @@ audit_log = logging.getLogger("medanon.audit")
 
 _MAX_NESTING_DEPTH = 50
 
-# FHIR resource types that represent people — their display labels are
+# FHIR resource types that represent people  their display labels are
 # directly identifying (patient name, practitioner name) and must always
 # be removed when the reference ID is pseudonymised.  Clinical resource
 # types (Observation, Organization, Location, …) may have non-PHI display
@@ -260,7 +260,7 @@ def _collect_reference_ids(
     via the domain_map rather than always using the default domain.
     """
     if _depth > _MAX_NESTING_DEPTH:
-        # Refuse to silently drop reference IDs at depth — missed pseudonyms
+        # Refuse to silently drop reference IDs at depth  missed pseudonyms
         # leave the original value in the output, which is a PHI exposure
         # risk.  Other walkers in this module raise; match them.
         raise ValueError(
@@ -274,7 +274,7 @@ def _collect_reference_ids(
                 resource_id = ref[len("urn:uuid:") :]
                 if resource_id:
                     ids.add(resource_id)
-                    # urn:uuid: references don't carry a resource type — they fall
+                    # urn:uuid: references don't carry a resource type  they fall
                     # back to the default domain; no entry written to ref_types.
             elif "/" in ref and not ref.startswith("http"):
                 parts = ref.split("/")
@@ -332,7 +332,7 @@ def _apply_reference_pseudonyms(obj, ref_mapping: dict, _depth: int = 0) -> None
                 # contract requires fields to stay present; the field must exist
                 # with a masked value, not disappear entirely.
                 # For other profiles that already ran action:redact on the
-                # display, the field is already gone before this point — no-op.
+                # display, the field is already gone before this point  no-op.
                 if "display" in obj:
                     ref_type = new_ref.split("/")[0] if "/" in new_ref else ""
                     if ref_type in _PERSON_RESOURCE_TYPES:
@@ -367,7 +367,7 @@ def _deep_rewrite_references_gpas(obj, gpas_params: dict, pseudonymizer) -> dict
 
 
 # NOTE: a former ``_collect_gpas_reference_mapping`` helper (a SEPARATE gPAS
-# round-trip for reference IDs) was removed — the batch path
+# round-trip for reference IDs) was removed  the batch path
 # (``processor._finalize_batch``) already folds reference IDs into the PRIMARY
 # ``_pseudonymize`` call via ``_extra_values_by_domain``, so references are
 # pseudonymized in the same HTTP batch as structured identifiers (no second
@@ -493,7 +493,7 @@ def _shallow_post_process_bundle(
     Each inner resource was already processed individually with the same shared
     pseudonym mapping, so their ``reference`` fields are already correct.
     This function walks only Bundle-level metadata and ``entry[]`` housekeeping
-    fields (``fullUrl``, ``request``, ``response``, ``search``) — skipping the
+    fields (``fullUrl``, ``request``, ``response``, ``search``)  skipping the
     ``entry[i].resource`` sub-trees that are already up-to-date.
 
     When text-ID replacement is also required use the full ``_post_process_resource``
@@ -509,10 +509,10 @@ def _shallow_post_process_bundle(
                 if not isinstance(entry_item, dict):
                     continue
                 # Process all entry-level fields except the inner resource payload.
-                # fullUrl:  string — handled via text-ID style rewrite below.
-                # request:  dict with url / method / ifNoneMatch / ... — recurse normally.
-                # response: dict with location / status / ... — recurse normally.
-                # search:   dict with mode / score               — recurse normally.
+                # fullUrl:  string  handled via text-ID style rewrite below.
+                # request:  dict with url / method / ifNoneMatch / ...  recurse normally.
+                # response: dict with location / status / ...  recurse normally.
+                # search:   dict with mode / score                recurse normally.
                 for entry_key, entry_val in entry_item.items():
                     if entry_key in _BUNDLE_RESOURCE_KEYS:
                         continue
@@ -523,7 +523,7 @@ def _shallow_post_process_bundle(
                         if new_val != entry_val:
                             entry_item[entry_key] = new_val
                     else:
-                        # Sub-dicts (request, response, search) — full walk is safe
+                        # Sub-dicts (request, response, search)  full walk is safe
                         # because they contain no resource payload.
                         _post_process_resource(entry_val, ref_mapping, None)
         elif isinstance(value, str):

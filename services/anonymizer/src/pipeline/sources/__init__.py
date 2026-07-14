@@ -1,4 +1,4 @@
-"""Source-format adapters — one normalization seam for all input formats.
+"""Source-format adapters  one normalization seam for all input formats.
 
 Every input format (FHIR JSON/NDJSON/XML today; CDA, HL7v2, DICOM, tabular in
 future phases) is parsed into the common intermediate representation the rule

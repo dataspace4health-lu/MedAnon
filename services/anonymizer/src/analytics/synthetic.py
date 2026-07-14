@@ -1,8 +1,8 @@
-"""Synthetic FHIR resource generator — statistical synthesis from de-identified data.
+"""Synthetic FHIR resource generator  statistical synthesis from de-identified data.
 
 Generates synthetic FHIR Patient and Condition resources that preserve the
 statistical distributions of the input dataset without copying any real
-patient records.  No new dependencies — stdlib only.
+patient records.  No new dependencies  stdlib only.
 
 Usage
 -----
@@ -370,7 +370,7 @@ def generate_synthetic_patients(
                   least one record.
         count: Number of synthetic patients to generate (1 – 10 000).
         seed: Optional random seed for reproducibility.
-        dp_epsilon: If set, sample from **differentially-private** marginals — the
+        dp_epsilon: If set, sample from **differentially-private** marginals  the
             budget is split evenly across the attributes and charged to
             *accountant* (or a fresh one sized to ``dp_epsilon``). The output then
             satisfies ``dp_epsilon``-DP w.r.t. the input by post-processing.
@@ -386,7 +386,7 @@ def generate_synthetic_patients(
     """
     if not patients:
         raise ValueError(
-            "patients list must not be empty — no distribution to sample from"
+            "patients list must not be empty  no distribution to sample from"
         )
     if count < 1 or count > 10_000:
         raise ValueError(f"count must be between 1 and 10 000, got {count}")
@@ -429,8 +429,8 @@ def generate_synthetic_conditions(
         count_per_patient: Max conditions per patient (actual count is random 0–N).
         seed: Optional random seed for reproducibility.
         dp_epsilon: If set, sample from DP-noised code/status/category marginals
-            (charged to *accountant*), so the diagnosis distribution — the
-            sensitive attribute — carries a formal DP guarantee too.
+            (charged to *accountant*), so the diagnosis distribution  the
+            sensitive attribute  carries a formal DP guarantee too.
         accountant: Shared DP budget accountant.
 
     Returns:

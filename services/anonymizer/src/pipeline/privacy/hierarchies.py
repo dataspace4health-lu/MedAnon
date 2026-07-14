@@ -2,7 +2,7 @@
 
 Each *kind* maps to an ordered sequence of levels (level 0 = least generalised,
 top level = full suppression sentinel).  Every level is a callable
-``(value: str) -> str`` — applying a higher level produces a coarser output.
+``(value: str) -> str``  applying a higher level produces a coarser output.
 
 Existing strategy functions from ``actions/generalize.py`` are re-used directly
 (not reimplemented) so there is one source of truth for the transformation logic.
@@ -129,52 +129,52 @@ _HIERARCHIES: dict[str, GeneralizationHierarchy] = {
     "date": GeneralizationHierarchy(
         kind="date",
         levels=(
-            _identity,  # 0 — keep as-is
-            _date_year_month,  # 1 — YYYY-MM
-            _date_year,  # 2 — YYYY
-            _date_decade,  # 3 — decade start year (e.g. 1990)
-            _suppress,  # 4 — [SUPPRESSED]
+            _identity,  # 0  keep as-is
+            _date_year_month,  # 1  YYYY-MM
+            _date_year,  # 2  YYYY
+            _date_decade,  # 3  decade start year (e.g. 1990)
+            _suppress,  # 4  [SUPPRESSED]
         ),
     ),
     "zip": GeneralizationHierarchy(
         kind="zip",
         levels=(
-            _identity,  # 0 — keep full postal code
-            _zip_prefix(4),  # 1 — first 4 chars
-            _zip_prefix(3),  # 2 — first 3 chars (HIPAA Safe Harbor default)
-            _zip_prefix(2),  # 3 — first 2 chars
-            _zip_prefix(1),  # 4 — first char only
-            _suppress,  # 5 — [SUPPRESSED]
+            _identity,  # 0  keep full postal code
+            _zip_prefix(4),  # 1  first 4 chars
+            _zip_prefix(3),  # 2  first 3 chars (HIPAA Safe Harbor default)
+            _zip_prefix(2),  # 3  first 2 chars
+            _zip_prefix(1),  # 4  first char only
+            _suppress,  # 5  [SUPPRESSED]
         ),
     ),
     "age": GeneralizationHierarchy(
         kind="age",
         levels=(
-            _identity,  # 0 — keep exact birth date
-            _age_bracket(5),  # 1 — 5-year brackets
-            _age_bracket(10),  # 2 — 10-year brackets (most common)
-            _age_bracket(20),  # 3 — 20-year brackets
-            _suppress,  # 4 — [SUPPRESSED]
+            _identity,  # 0  keep exact birth date
+            _age_bracket(5),  # 1  5-year brackets
+            _age_bracket(10),  # 2  10-year brackets (most common)
+            _age_bracket(20),  # 3  20-year brackets
+            _suppress,  # 4  [SUPPRESSED]
         ),
     ),
     "numeric": GeneralizationHierarchy(
         kind="numeric",
         levels=(
-            _identity,  # 0 — exact
-            _number_round(10),  # 1 — nearest 10
-            _number_round(100),  # 2 — nearest 100
-            _suppress,  # 3 — [SUPPRESSED]
+            _identity,  # 0  exact
+            _number_round(10),  # 1  nearest 10
+            _number_round(100),  # 2  nearest 100
+            _suppress,  # 3  [SUPPRESSED]
         ),
     ),
-    # category: minimal — exact value or suppressed.
+    # category: minimal  exact value or suppressed.
     # Intermediate mappings (e.g. ICD codes → disease category) are config-
     # authored and applied by the normal static generalize action; they are not
     # part of the automated lattice search.
     "category": GeneralizationHierarchy(
         kind="category",
         levels=(
-            _identity,  # 0 — keep as-is
-            _suppress,  # 1 — [SUPPRESSED]
+            _identity,  # 0  keep as-is
+            _suppress,  # 1  [SUPPRESSED]
         ),
     ),
 }

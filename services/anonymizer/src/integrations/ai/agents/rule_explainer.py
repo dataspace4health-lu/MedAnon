@@ -1,7 +1,7 @@
 """Rule Explainer agent.
 
 Explains config profile rules in plain language and maps them to
-regulatory requirements. Safe for external LLM — config YAML contains
+regulatory requirements. Safe for external LLM  config YAML contains
 no PHI (only rule definitions).
 """
 
@@ -32,8 +32,8 @@ Key regulatory mappings:
 
 Action meanings:
 - redact: Permanently removes the value (irreversible)
-- cryptohash: One-way hash — preserves linkability within dataset
-- encrypt: Reversible with key — used when re-identification is needed
+- cryptohash: One-way hash  preserves linkability within dataset
+- encrypt: Reversible with key  used when re-identification is needed
 - generalize: Reduces precision (e.g., exact date to year only)
 - scrub_text: Regex-based text pattern replacement
 - nlp_scrub: AI-based named entity recognition and replacement
@@ -73,7 +73,7 @@ def explain_config(yaml_text: str, *, streaming: bool = False):
         return iter([result]) if streaming else result
 
     try:
-        # YAML rule text only — no resource content (phi_payload=False).
+        # YAML rule text only  no resource content (phi_payload=False).
         if streaming:
             return provider.complete_streaming(
                 messages, temperature=0.3, phi_payload=False

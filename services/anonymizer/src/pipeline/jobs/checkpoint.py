@@ -100,7 +100,7 @@ def _truncate_to_lines(path: str, line_count: int) -> int:
         #
         # Compare against the real file size, not the scan position: the scan
         # stops at the Nth newline, so ``pos == cut_pos`` there and a
-        # ``target < pos`` guard would never fire — surplus lines written after
+        # ``target < pos`` guard would never fire  surplus lines written after
         # the last checkpoint (crash case 1) would survive and duplicate on
         # resume.
         target = cut_pos if cut_pos is not None else last_complete_pos

@@ -1,18 +1,18 @@
-"""Privacy Risk Evaluator — hard constraint gate.
+"""Privacy Risk Evaluator  hard constraint gate.
 
 Evaluates residual re-identification risk on de-identified FHIR resources
 using five sub-evaluators:
 
-1. Attacker model analysis (prosecutor / journalist / marketer) — k-anonymity
+1. Attacker model analysis (prosecutor / journalist / marketer)  k-anonymity
    (Samarati & Sweeney 1998)
 2. Direct identifier detection (manifest coverage of HIPAA-sensitive paths)
 3. Text risk detection (NER + regex residual PII scan)
 4. (batch) Distinct l-diversity (Machanavajjhala et al. 2007) + t-closeness via
    categorical EMD (Li et al. 2007) over QI equivalence classes
-5. (batch) Cross-resource linkage attack surface — WP216 linkability/inference
+5. (batch) Cross-resource linkage attack surface  WP216 linkability/inference
    (Art. 29 WP Opinion 05/2014)
 
-The per-resource privacy risk is ``max(attacker, identifier, text)`` — the
+The per-resource privacy risk is ``max(attacker, identifier, text)``  the
 worst dimension determines the risk; the batch path additionally maxes in the
 population metrics (4, 5). Risk above the configured threshold FAILs the
 resource/cohort.
@@ -37,7 +37,7 @@ from pipeline.scoring.constants import (
 _log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# PII regex patterns (lightweight — no NLP needed)
+# PII regex patterns (lightweight  no NLP needed)
 # ---------------------------------------------------------------------------
 
 _PII_PATTERNS: dict[str, re.Pattern] = {
@@ -45,7 +45,7 @@ _PII_PATTERNS: dict[str, re.Pattern] = {
     "phone": re.compile(r"\b(?:\+?1[\s-]?)?\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}\b"),
     "email": re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b"),
     "date_iso": re.compile(r"\b\d{4}-\d{2}-\d{2}\b"),
-    # Match IPv4 only — reject OID strings (5+ dotted segments like 2.16.840.1.113883)
+    # Match IPv4 only  reject OID strings (5+ dotted segments like 2.16.840.1.113883)
     "ip": re.compile(
         r"(?<!\d\.)(?<!\d)"
         r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}"
@@ -76,7 +76,7 @@ _DEFAULT_PII_WEIGHT = 0.15
 # Per-resource attacker-model advisory ceiling. Quasi-identifier retention on a
 # single record is a *linkability* signal (Art. 29 WP216), not a re-identification
 # verdict: under k-anonymity the actual risk is 1/k where k is the equivalence-
-# class size — a population property only the batch evaluator can measure. So the
+# class size  a population property only the batch evaluator can measure. So the
 # per-resource heuristic is kept strictly below RISK_THRESHOLD; it lowers the
 # composite as more QIs are exposed but never fails a resource on its own. The
 # batch k-anonymity gate owns the authoritative attacker-model FAIL.
@@ -123,7 +123,7 @@ def _is_bare_reference(value: Any) -> bool:
     when ``rewrite_references: true`` rewrites all reference targets.
 
     If the reference has a ``display``, ``identifier``, or other sub-field,
-    it is NOT bare — those sub-fields need explicit transformation coverage.
+    it is NOT bare  those sub-fields need explicit transformation coverage.
 
     Also handles lists of References (e.g. ``Observation.performer``).
     """
@@ -240,12 +240,12 @@ class PrivacyRiskEvaluator:
 
         Adapts the k-anonymity gate to the population size:
 
-        - N=1  (single-patient): k-anonymity is not applicable — return
+        - N=1  (single-patient): k-anonymity is not applicable  return
           risk=0.0, passed=True.  A single-patient export is a per-record
           de-identification task, not a population-anonymity task.
 
         - N=2..4 (small cohort): k-anonymity is computed but treated as
-          *informational* — the gate is softened so that the expected
+          *informational*  the gate is softened so that the expected
           min_k=1..4 range does not unconditionally fail the score.
           Risk is scaled proportionally to how far min_k is from the
           safe threshold (5), capped at RISK_THRESHOLD so it never FAILs
@@ -281,7 +281,7 @@ class PrivacyRiskEvaluator:
                 evidence=evidence,
             )
 
-        # ── N=2..4: small cohort — informational k-anonymity ────────────────
+        # ── N=2..4: small cohort  informational k-anonymity ────────────────
         if n < 5:
             try:
                 from analytics.risk import compute_k_anonymity
@@ -303,7 +303,7 @@ class PrivacyRiskEvaluator:
                     check="attacker_model_batch",
                     value=attacker_risk,
                     details={
-                        "reason": "small cohort — k-anonymity informational only",
+                        "reason": "small cohort  k-anonymity informational only",
                         "patient_count": n,
                         "min_k": min_k,
                         "safe_threshold_k": _SAFE_K,
@@ -370,7 +370,7 @@ class PrivacyRiskEvaluator:
         # _extract_patient_qi already normalises de-identification outputs
         # (generalized dates like "1970", truncated zip like "123", redacted
         # sentinels, blank values) to empty strings.  An empty string means
-        # the QI field is suppressed/generalized — i.e. correctly treated.
+        # the QI field is suppressed/generalized  i.e. correctly treated.
         suppressed = sum(1 for v in qi if not v)
         total = len(qi)
 
@@ -533,7 +533,7 @@ class PrivacyRiskEvaluator:
         Resolves clinical resources back to their patient's QI within the same
         batch (per the chosen within-batch resolution strategy). The sensitive
         attribute is the primary diagnosis / observation code; the QI tuple is
-        the de-identified ``(gender, birth_year, zip3)`` — the same QI the
+        the de-identified ``(gender, birth_year, zip3)``  the same QI the
         attacker model uses. Returns ``{qi_tuple: [sensitive_value, ...]}`` so
         callers can compute the *value frequency* per class (required for the
         canonical distinct-l / t-closeness definitions, which depend on counts,
@@ -577,7 +577,7 @@ class PrivacyRiskEvaluator:
             ref = subject.get("reference", "") if isinstance(subject, dict) else ""
             qi = patient_qi.get(ref)
             if qi is None:
-                # Reference does not resolve to a Patient in this batch — cannot
+                # Reference does not resolve to a Patient in this batch  cannot
                 # attribute to an equivalence class, so skip (not-applicable),
                 # rather than collapsing all unresolved refs into one fake class.
                 continue
@@ -591,19 +591,19 @@ class PrivacyRiskEvaluator:
     ) -> float:
         """Distinct l-diversity (Machanavajjhala 2007) + t-closeness (Li 2007).
 
-        **Distinct l-diversity** — an equivalence class is l-diverse iff the
+        **Distinct l-diversity**  an equivalence class is l-diverse iff the
         most frequent sensitive value occupies at most a 1/l fraction of the
         class; equivalently l = floor(1 / max_value_frequency). A class where
         every member shares one diagnosis has l=1 and is fully vulnerable to a
         homogeneity attack even if k-anonymity holds.
 
-        **T-closeness** — the distribution of the sensitive attribute within
+        **T-closeness**  the distribution of the sensitive attribute within
         each class must be close to its distribution over the whole cohort. For
         a *categorical* attribute (diagnosis codes) with equal ground distance,
         the Earth Mover's Distance reduces to the variational distance
         ``EMD = ½·Σ|p_i − q_i|`` between the class distribution p and the global
         distribution q (Li et al. 2007, §IV-B), bounded in [0,1]. A high EMD
-        means a class is skewed relative to the population — a skewness attack.
+        means a class is skewed relative to the population  a skewness attack.
 
         Risk is the worse of the two, mapped to the [0,1] gate scale.
         """
@@ -689,17 +689,17 @@ class PrivacyRiskEvaluator:
     ) -> float:
         """Linkability/inference risk from combining multiple resource types.
 
-        Maps to the Article 29 WP216 (Opinion 05/2014) risk of *linkability* —
+        Maps to the Article 29 WP216 (Opinion 05/2014) risk of *linkability*
         the ability to link records concerning the same individual across data
-        sets — and *inference*. A single Patient with generalized QIs may be
+        sets  and *inference*. A single Patient with generalized QIs may be
         safe in isolation; paired with Condition, Observation, Encounter, etc.
         sharing the same (pseudonymized) patient reference, an attacker gains
         multiple correlated axes that narrow the population. We score by the
         maximum number of distinct PHI-bearing resource types linked to one
         patient reference.
 
-        The cut-offs (2/3/5 axes) are a deliberately conservative heuristic —
-        WP216 gives no numeric threshold — capped at RISK_THRESHOLD so this
+        The cut-offs (2/3/5 axes) are a deliberately conservative heuristic
+        WP216 gives no numeric threshold  capped at RISK_THRESHOLD so this
         dimension flags linkability for review without unilaterally failing the
         gate (k-anonymity/l-diversity remain the hard population gates).
         """
@@ -775,8 +775,8 @@ class PrivacyRiskEvaluator:
 
         # NOTE: We deliberately do NOT short-circuit to risk=1.0 when
         # manifest_entries is empty.  An empty manifest can mean either
-        # (a) a genuine leak — sensitive fields are present but nothing was
-        # transformed — or (b) a *sparse* resource that simply has no sensitive
+        # (a) a genuine leak  sensitive fields are present but nothing was
+        # transformed  or (b) a *sparse* resource that simply has no sensitive
         # fields to transform (e.g. a Patient with only id/resourceType).  The
         # per-field existence analysis below distinguishes the two correctly:
         # case (a) accumulates unmatched present fields (risk > 0), while case
@@ -834,15 +834,15 @@ class PrivacyRiskEvaluator:
             # Precise field existence check
             if "." in s_path:
                 # Compound path (e.g. "location.period", "contact.name")
-                # — verify the full nested path exists, not just the root.
+                #  verify the full nested path exists, not just the root.
                 field_present = _nested_path_exists(deidentified, s_path)
             else:
-                # Simple path — check root field existence
+                # Simple path  check root field existence
                 field_present = s_path in deidentified
                 if field_present:
                     # The resource ``id`` and bare FHIR References are
                     # transitively covered by ``*.id`` pseudonymization +
-                    # reference rewriting — an opaque server key is not, on its
+                    # reference rewriting  an opaque server key is not, on its
                     # own, re-identifying PHI.
                     if s_path == "id" or _is_bare_reference(deidentified[s_path]):
                         covered = True
@@ -860,7 +860,7 @@ class PrivacyRiskEvaluator:
         # Risk = fraction of *present* sensitive fields left uncovered.  Using
         # ``present`` (not the full ``sensitive`` list) as the denominator means
         # a resource whose every present sensitive field is uncovered scores
-        # high regardless of how many sensitive paths it lacks — while a sparse
+        # high regardless of how many sensitive paths it lacks  while a sparse
         # resource with no sensitive fields present scores 0.
         total = len(sensitive)
         matched = present - len(unmatched)

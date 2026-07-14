@@ -1,9 +1,9 @@
 """Shared three-state circuit breaker for service integrations.
 
 States:
-  CLOSED    — normal operation; failures are counted
-  OPEN      — all requests fail-fast without hitting the upstream
-  HALF_OPEN — a limited number of probe requests are allowed through
+  CLOSED     normal operation; failures are counted
+  OPEN       all requests fail-fast without hitting the upstream
+  HALF_OPEN  a limited number of probe requests are allowed through
 
 Transitions:
   CLOSED -> OPEN:      failure_count >= threshold within the sliding window
@@ -19,12 +19,12 @@ degrades silently to per-process in-memory state so individual replicas still
 protect themselves.
 
 Redis key layout (all with TTL = window_sec * 4):
-  <prefix>:state          TEXT  — "closed" | "open" | "half_open"
-  <prefix>:failures       INT   — failure count in current window
-  <prefix>:timeouts       INT   — timeout count in current window
-  <prefix>:last_fail      FLOAT — monotonic epoch of last failure
-  <prefix>:window_start   FLOAT — start of current failure-count window
-  <prefix>:trips          INT   — total trip count (counter, no TTL)
+  <prefix>:state          TEXT   "closed" | "open" | "half_open"
+  <prefix>:failures       INT    failure count in current window
+  <prefix>:timeouts       INT    timeout count in current window
+  <prefix>:last_fail      FLOAT  monotonic epoch of last failure
+  <prefix>:window_start   FLOAT  start of current failure-count window
+  <prefix>:trips          INT    total trip count (counter, no TTL)
 """
 
 import logging
@@ -33,13 +33,13 @@ import time
 
 _log = logging.getLogger("medanon.circuit_breaker")
 
-# Lazy import of Prometheus metrics — utils.metrics imports prometheus_client
+# Lazy import of Prometheus metrics  utils.metrics imports prometheus_client
 # which is an optional dependency in some test contexts; guard at use sites.
 try:
     from utils.metrics import CIRCUIT_BREAKER_STATE, CIRCUIT_BREAKER_TRIPS
 
     _METRICS_OK = True
-except Exception:  # pragma: no cover — defensive
+except Exception:  # pragma: no cover  defensive
     CIRCUIT_BREAKER_STATE = None
     CIRCUIT_BREAKER_TRIPS = None
     _METRICS_OK = False
@@ -158,7 +158,7 @@ class CircuitBreaker:
                     self._state = self.CLOSED
                     _publish_state(self._name, self.CLOSED)
             elif self._state == self.CLOSED:
-                # Decrement rather than reset — a single success should not
+                # Decrement rather than reset  a single success should not
                 # erase multiple prior failures within the sliding window.
                 self._failure_count = max(0, self._failure_count - 1)
                 self._timeout_count = max(0, self._timeout_count - 1)
@@ -188,7 +188,7 @@ class CircuitBreaker:
                 _publish_state(self._name, self.OPEN)
 
     def record_timeout(self) -> None:
-        """Record a timeout failure — trips the CB faster than generic failures.
+        """Record a timeout failure  trips the CB faster than generic failures.
 
         Timeouts are a strong signal that the upstream is overloaded or
         unreachable. The timeout_threshold (default 2) is much lower than

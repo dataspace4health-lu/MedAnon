@@ -45,7 +45,7 @@ _PROFILE_MAP = {
 # Reverse lookup: config filename → canonical profile alias.  Callers that only
 # hold a resolved filename (e.g. ``Settings.filename``) must round-trip through
 # this rather than mangling the stem, otherwise the same profile is recorded
-# under two names — ``config_value_masking.yaml`` becomes ``value_masking``
+# under two names  ``config_value_masking.yaml`` becomes ``value_masking``
 # while the alias is ``value-masking``, splitting per-profile aggregates.
 _FILENAME_TO_PROFILE = {v: k for k, v in _PROFILE_MAP.items() if v}
 
@@ -151,7 +151,7 @@ def is_valid_profile(profile: str) -> bool:
 
 
 def clear_settings_cache() -> None:
-    """Invalidate the config cache — next call to get_settings() reloads from disk.
+    """Invalidate the config cache  next call to get_settings() reloads from disk.
 
     Called from the config CRUD endpoints (POST/PUT/DELETE /v1/configs) so
     profile edits take effect without a process restart.
@@ -183,7 +183,7 @@ def get_settings(profile: str = "auto") -> Settings:
                  structural, value-masking) or a user-defined profile name created via POST /v1/configs.
                  'auto' selects config_gpas.yaml when GPAS_URL is set, else config.yaml.
                  The 'auto' alias is resolved on every call so it always reflects the
-                 current environment — it is never cached under the key 'auto'.
+                 current environment  it is never cached under the key 'auto'.
 
     Returns:
         Loaded and validated Settings instance.

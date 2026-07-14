@@ -1,8 +1,8 @@
 """Cumulative-exposure ledger singleton + assessment service (D7.2 §5.5.7).
 
 Wraps the durable :class:`PostgresReleaseLedger` behind the same
-``init_*_store`` / ``get_*_store`` idiom used by ``api.services.reports``. The
-assessment is scoped to a permit and/or recipient — cumulative disclosure is
+``init_*_store`` / ``get_*_store`` idiom used by ``pipeline.reports``. The
+assessment is scoped to a permit and/or recipient  cumulative disclosure is
 only meaningful within a governance scope, never globally.
 
 The population fingerprint is a keyed one-way hash of the subject ids

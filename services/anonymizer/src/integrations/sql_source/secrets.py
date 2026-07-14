@@ -56,6 +56,6 @@ def decrypt_secret(token: str) -> str:
         return _fernet().decrypt((token or "").encode("ascii")).decode("utf-8")
     except InvalidToken as exc:
         raise CredentialKeyError(
-            f"Stored connection password could not be decrypted — the "
+            f"Stored connection password could not be decrypted  the "
             f"{_ENV_KEY} value may have changed since it was saved."
         ) from exc

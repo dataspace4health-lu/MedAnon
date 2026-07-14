@@ -1,4 +1,4 @@
-"""Domain types — re-exported for convenience."""
+"""Domain types  re-exported for convenience."""
 
 from domain.jobs import (  # noqa: F401
     Job,

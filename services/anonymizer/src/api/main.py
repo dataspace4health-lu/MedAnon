@@ -1,4 +1,4 @@
-"""MedAnon FastAPI application — entry point.
+"""MedAnon FastAPI application  entry point.
 
 Wires together middleware, health/status endpoints, and the four endpoint routers.
 Business logic lives in api/routers/; shared dependencies in api/deps.py.
@@ -138,7 +138,7 @@ async def _supervised_worker_loop(worker_module) -> None:
             consecutive_failures = 0
             backoff = 1.0
             await worker_module.worker_loop()
-            # worker_loop() should never return — if it does, restart.
+            # worker_loop() should never return  if it does, restart.
             logger.warning("worker_loop returned unexpectedly, restarting")
         except asyncio.CancelledError:
             logger.info("worker_loop cancelled (shutdown)")
@@ -147,7 +147,7 @@ async def _supervised_worker_loop(worker_module) -> None:
             consecutive_failures += 1
             _worker_healthy = False
             logger.error(
-                "worker_loop crashed (attempt %d): %s — restarting in %.1fs",
+                "worker_loop crashed (attempt %d): %s  restarting in %.1fs",
                 consecutive_failures,
                 exc,
                 backoff,
@@ -169,7 +169,7 @@ async def _startup() -> None:
         pass  # metrics are optional in some test contexts
 
     # Refuse to start with plain (un-keyed) hashing outside a dev environment.
-    # Plain SHA3 is reversible via rainbow tables — must never reach production.
+    # Plain SHA3 is reversible via rainbow tables  must never reach production.
     _allow_plain = os.environ.get("MEDANON_HASH_ALLOW_PLAIN", "").strip().lower() in (
         "1",
         "true",
@@ -184,7 +184,7 @@ async def _startup() -> None:
     if _allow_plain and not _is_dev:
         raise RuntimeError(
             "MEDANON_HASH_ALLOW_PLAIN=true is set but ENVIRONMENT is not 'dev' or 'test'. "
-            "Plain SHA3 hashing is not safe in production — set MEDANON_HASH_KEY instead."
+            "Plain SHA3 hashing is not safe in production  set MEDANON_HASH_KEY instead."
         )
 
     # Log the centralized connection pool budget and check thread concurrency.
@@ -210,7 +210,7 @@ async def _startup() -> None:
     await setup_redis_cache(redis_url)
     await check_gpas_canary(redis_url)
 
-    # Validate Redis durability config — AOF must be enabled in production
+    # Validate Redis durability config  AOF must be enabled in production
     # so that an unexpected restart does not lose queued jobs (RDB snapshots
     # alone may be up to 60 s stale).  Soft warning by default; set
     # MEDANON_REQUIRE_REDIS_AOF=true to fail startup when AOF is off.
@@ -222,7 +222,7 @@ async def _startup() -> None:
             cfg = _r.config_get("appendonly") or {}
             if str(cfg.get("appendonly", "")).lower() != "yes":
                 msg = (
-                    "redis_aof_disabled — durability at risk; set "
+                    "redis_aof_disabled  durability at risk; set "
                     "appendonly=yes in redis.conf or MEDANON_REQUIRE_REDIS_AOF=false to silence"
                 )
                 if (
@@ -264,7 +264,7 @@ async def _startup() -> None:
     except Exception:
         logger.warning("idempotency_store_init_failed", exc_info=True)
 
-    # Async job queue — select backend:
+    # Async job queue  select backend:
     #   1. MEDANON_REDIS_URL → RedisJobStore (event-driven Streams)
     #   2. MEDANON_APP_DB_URL → PostgresJobStore (LISTEN/NOTIFY + FOR UPDATE SKIP LOCKED)
     #   3. Fallback → SqliteJobStore (polling, local dev)
@@ -285,7 +285,7 @@ async def _startup() -> None:
         store = init_job_store(store=job_store)
         _worker.init_worker(store, max_concurrent=max_concurrent)
 
-        # Staging store — two-phase large-scale export
+        # Staging store  two-phase large-scale export
         staging_url = os.environ.get("MEDANON_STAGING_DB_URL", "").strip()
         staging_store = await setup_staging(staging_url, app_db_url, pg_pool)
         if staging_store is not None:
@@ -307,7 +307,7 @@ async def _startup() -> None:
 
     # Ensure a shared PostgreSQL pool exists for app-state stores (config,
     # subscriptions, processing runs, API keys, SQL source connections) whenever
-    # MEDANON_APP_DB_URL is set — even when Redis is the job store. Otherwise
+    # MEDANON_APP_DB_URL is set  even when Redis is the job store. Otherwise
     # ``select_job_store`` only creates the pool when Postgres is the job-store
     # backend, leaving these stores to fall back to SQLite or fail to initialise
     # despite the app database being available. ``get_pool`` is an idempotent
@@ -322,7 +322,7 @@ async def _startup() -> None:
         except Exception as exc:
             logger.warning("app_db_pool_init_failed: %s", exc)
 
-    # FHIR Subscription store — PostgreSQL when app-db available, else SQLite
+    # FHIR Subscription store  PostgreSQL when app-db available, else SQLite
     try:
         from pipeline.subscriptions import init_subscription_store
 
@@ -343,7 +343,7 @@ async def _startup() -> None:
     except Exception as exc:
         logger.warning("subscription_store_start_failed: %s", exc)
 
-    # Config metadata store — PostgreSQL when app-db available, else SQLite
+    # Config metadata store  PostgreSQL when app-db available, else SQLite
     try:
         from pipeline.config.store import init_config_store
 
@@ -362,7 +362,7 @@ async def _startup() -> None:
     except Exception as exc:
         logger.warning("config_store_start_failed: %s", exc)
 
-    # SQL-source connection store — PostgreSQL only (saved encrypted credentials)
+    # SQL-source connection store  PostgreSQL only (saved encrypted credentials)
     if pg_pool:
         try:
             from integrations.postgres.sql_connection_store import (
@@ -375,7 +375,7 @@ async def _startup() -> None:
         except Exception as exc:
             logger.warning("sql_connection_store_start_failed: %s", exc)
 
-    # Dataspace connector stores — saved input sources + S3 output destinations
+    # Dataspace connector stores  saved input sources + S3 output destinations
     # (PostgreSQL only, encrypted secrets). Enables configuring where data comes
     # from and the S3 location the de-identified file is delivered to.
     if pg_pool:
@@ -395,7 +395,7 @@ async def _startup() -> None:
         except Exception as exc:
             logger.warning("connector_stores_start_failed: %s", exc)
 
-    # Instance-settings store — deployment-wide admin-managed application defaults
+    # Instance-settings store  deployment-wide admin-managed application defaults
     # (which FHIR source/target the app is wired to, default rule profile,
     # assessment defaults). PostgreSQL only; without it the API serves built-in
     # defaults and rejects writes.
@@ -413,7 +413,7 @@ async def _startup() -> None:
     # Postgres so approved permits + their disclosure bindings survive a restart;
     # falls back to the in-memory default (correct for single-container dev).
     try:
-        from api.services.permits import init_permit_store
+        from pipeline.permits import init_permit_store
 
         if pg_pool:
             from integrations.postgres.permit_store import PostgresPermitStore
@@ -429,11 +429,11 @@ async def _startup() -> None:
     except Exception as exc:
         logger.warning("permit_store_start_failed: %s", exc)
 
-    # Transformation-passport report store (D7.2 §5.5.1 / Art 79) — durable,
+    # Transformation-passport report store (D7.2 §5.5.1 / Art 79)  durable,
     # queryable passports in Postgres. Anonymous by construction; no-op without
     # a DB (passports still ride on the job checkpoint for the per-job view).
     try:
-        from api.services.reports import init_passport_store
+        from pipeline.reports import init_passport_store
 
         if pg_pool:
             from integrations.postgres.passport_store import PostgresPassportStore
@@ -450,7 +450,7 @@ async def _startup() -> None:
     except Exception as exc:
         logger.warning("passport_store_start_failed: %s", exc)
 
-    # Release ledger for cumulative-exposure analysis (D7.2 §5.5.7) — Postgres
+    # Release ledger for cumulative-exposure analysis (D7.2 §5.5.7)  Postgres
     # only; without a DB there is no prior-release history to compare against.
     try:
         from api.services.exposure import init_release_ledger
@@ -470,7 +470,7 @@ async def _startup() -> None:
     except Exception as exc:
         logger.warning("release_ledger_start_failed: %s", exc)
 
-    # Workflow (DAG) engine — PostgreSQL only ("staging is the ledger"); the
+    # Workflow (DAG) engine  PostgreSQL only ("staging is the ledger"); the
     # engine schedules steps through the same job store the worker drains.
     workflows_enabled = os.environ.get(
         "MEDANON_WORKFLOWS_ENABLED", "true"
@@ -488,11 +488,11 @@ async def _startup() -> None:
             logger.warning("workflow_engine_start_failed: %s", exc)
     elif workflows_enabled and not pg_pool:
         logger.info(
-            "workflow_engine disabled — requires MEDANON_APP_DB_URL "
+            "workflow_engine disabled  requires MEDANON_APP_DB_URL "
             "(Postgres is the workflow ledger)"
         )
 
-    # Processing run store — PostgreSQL when app-db available, else SQLite
+    # Processing run store  PostgreSQL when app-db available, else SQLite
     try:
         from pipeline.processing_run import init_processing_run_store
 
@@ -514,7 +514,7 @@ async def _startup() -> None:
     except Exception as exc:
         logger.warning("processing_run_store_start_failed: %s", exc)
 
-    # Trust-profile store — PostgreSQL when app-db available, else SQLite.
+    # Trust-profile store  PostgreSQL when app-db available, else SQLite.
     # Holds the selectable Trust Gate audit profiles (phases/thresholds/targets).
     try:
         from pipeline.trust_profile import init_trust_profile_store
@@ -537,7 +537,7 @@ async def _startup() -> None:
     except Exception as exc:
         logger.warning("trust_profile_store_start_failed: %s", exc)
 
-    # Per-client API key store — PostgreSQL only (no SQLite fallback for key management).
+    # Per-client API key store  PostgreSQL only (no SQLite fallback for key management).
     # Wiring this store makes X-API-Key mandatory on protected endpoints. Set
     # MEDANON_API_KEY_STORE_ENABLED=false to keep the app DB configured (jobs,
     # configs, etc.) while running the API in keyless OPEN MODE for local dev.
@@ -558,7 +558,7 @@ async def _startup() -> None:
     elif pg_pool:
         logger.info("api_key_store=disabled (MEDANON_API_KEY_STORE_ENABLED=false)")
 
-    # OIDC JWKS warmup — eagerly fetch public keys so first JWT validation is fast.
+    # OIDC JWKS warmup  eagerly fetch public keys so first JWT validation is fast.
     # Non-fatal: if Keycloak is not yet up the warmup logs a warning and continues;
     # the JWKS client will retry on the first real request.
     try:
@@ -569,7 +569,7 @@ async def _startup() -> None:
     except Exception as exc:
         logger.warning("oidc_warmup_failed: %s", exc)
 
-    # Job detail cache — PostgreSQL when app-db available, else SQLite
+    # Job detail cache  PostgreSQL when app-db available, else SQLite
     try:
         from pipeline.job_detail import init_job_detail_store
 
@@ -590,7 +590,7 @@ async def _startup() -> None:
     # first user request is not blocked by the 3-second model load.
     # With gunicorn multi-worker, each worker process loads its own copy of
     # en_core_web_lg (~700 MB). Set MEDANON_NLP_PREWARM=false to skip prewarm
-    # and load lazily on first request — saves N_workers × 700 MB at startup
+    # and load lazily on first request  saves N_workers × 700 MB at startup
     # cost of ~5 s cold-start on the first NLP request per worker.
     if os.environ.get("MEDANON_NLP_PREWARM", "false").lower() not in (
         "false",
@@ -702,7 +702,7 @@ class _BodyTooLarge(Exception):
     """Signals an over-limit body from the streaming receive wrapper.
 
     Raised inside ``_counting_receive`` and caught in the middleware so the client
-    gets a clean 413 JSON response — raising ``HTTPException`` from a middleware /
+    gets a clean 413 JSON response  raising ``HTTPException`` from a middleware /
     ASGI receive escapes the exception handlers and surfaces as a 500.
     """
 
@@ -723,7 +723,7 @@ async def enforce_body_size(request: Request, call_next):
     Checks Content-Length when present (fast path) and also streams
     chunked/unknown-length bodies to enforce the limit before the full
     payload is buffered into memory. Streaming endpoints in
-    ``_BODY_SIZE_EXEMPT_PATHS`` are skipped — they self-limit via chunked reads.
+    ``_BODY_SIZE_EXEMPT_PATHS`` are skipped  they self-limit via chunked reads.
     """
     if request.url.path in _BODY_SIZE_EXEMPT_PATHS:
         return await call_next(request)
@@ -738,7 +738,7 @@ async def enforce_body_size(request: Request, call_next):
         if cl_int > MAX_BODY_BYTES:
             return _body_too_large_response()
     elif request.method in ("POST", "PUT", "PATCH"):
-        # No Content-Length header (chunked transfer) — wrap the receive
+        # No Content-Length header (chunked transfer)  wrap the receive
         # callable to count bytes as they flow through, without buffering
         # the entire body in a parallel list (avoids 2× peak memory).
         original_receive = request._receive
@@ -813,13 +813,13 @@ async def read_root(settings: config.Settings = Depends(get_settings)):
 
 @app.get("/health")
 def health():
-    """Liveness probe — returns 200 when the process is alive."""
+    """Liveness probe  returns 200 when the process is alive."""
     return {"status": "ok"}
 
 
 @app.get("/ready")
 def readiness(request: Request):
-    """Readiness probe — verifies that configured upstream services are reachable.
+    """Readiness probe  verifies that configured upstream services are reachable.
 
     Probes every configured upstream (gPAS, FHIR source/target, Redis, NLP,
     Postgres, analytics, scoring, Trust Gate, AI) and reports each in `checks`.
@@ -832,12 +832,12 @@ def readiness(request: Request):
     {"ready": true/false} without upstream service details to avoid
     leaking internal network topology.
     """
-    from api.services.health import CRITICAL_CHECKS, HealthCheckService
+    from pipeline.health import CRITICAL_CHECKS, HealthCheckService
 
     checks = HealthCheckService().check_readiness()
     # Only critical upstreams gate readiness. Advisory microservices (analytics,
     # scoring, Trust Gate, AI) are reported in `checks` but must not 503 this
-    # pod out of the load balancer — they degrade gracefully by design.
+    # pod out of the load balancer  they degrade gracefully by design.
     ready = all(v == "ok" for k, v in checks.items() if k in CRITICAL_CHECKS)
 
     # /ready is in OPEN_PATHS so auth_middleware never sets request.state.auth.

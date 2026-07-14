@@ -1,6 +1,6 @@
 """Field & attachment text extraction for the NLP batch stage.
 
-Split out of :mod:`pipeline.nlp_orchestrator` — this is the *extraction* half
+Split out of :mod:`pipeline.nlp_orchestrator`  this is the *extraction* half
 (navigate to matched elements, decode Base64 attachments, discover inline
 data: URIs) that feeds the detection/replacement orchestration. Keeping it
 separate keeps the orchestrator focused on the batch detect→replace flow.
@@ -24,7 +24,7 @@ _log = logging.getLogger("medanon.nlp_batch")
 
 # MIME types whose Base64-encoded payloads can be decoded to text and NLP-scrubbed.
 # Everything else (image/*, application/pdf, …) is redacted entirely when
-# the base64_encoded param is set — we cannot scrub opaque binary payloads.
+# the base64_encoded param is set  we cannot scrub opaque binary payloads.
 _TEXT_MIME_TYPES = frozenset(
     {
         "text/plain",
@@ -71,7 +71,7 @@ class _FieldText:
     is_xhtml: bool
     work_item: PHIDetectionTask  # back-reference for params/action_type
     resource_idx: int  # index into the parsed resources list
-    nlp_params: tuple = ()  # (entities, threshold, language) — populated post-extraction
+    nlp_params: tuple = ()  # (entities, threshold, language)  populated post-extraction
     base64_encoded: bool = (
         False  # True when text is Base64-decoded; write-back re-encodes
     )
@@ -105,7 +105,7 @@ def _extract_fields(
     try:
         nodes = find_nodes(resource, parent_path, [])
     except Exception:
-        _log.error("nlp_batch_find_nodes_failed path=%s — will redact", path)
+        _log.error("nlp_batch_find_nodes_failed path=%s  will redact", path)
         return []
 
     fields: list[_FieldText] = []
@@ -144,11 +144,11 @@ def _extract_fields(
         elif use_base64 and isinstance(current, str):
             # Attachment data field: decode Base64, check MIME type, enqueue for NLP.
             # Non-text MIME types (image/*, application/pdf, …) and undecodable blobs
-            # are redacted in-place — we cannot scrub opaque binary payloads.
+            # are redacted in-place  we cannot scrub opaque binary payloads.
             mime = node.get("contentType", "").split(";")[0].strip().lower()
             if mime not in _TEXT_MIME_TYPES:
                 _log.debug(
-                    "base64_scrub: non-text mime=%r at path=%s — redacting data field",
+                    "base64_scrub: non-text mime=%r at path=%s  redacting data field",
                     mime,
                     path,
                 )
@@ -162,7 +162,7 @@ def _extract_fields(
                 raw = base64.b64decode(current, validate=True)
                 candidate = raw.decode("utf-8", errors="strict")
                 # Heuristic: real base64 payload is always >=4 chars and decodes to
-                # printable text — if >5% of bytes are control chars, it's binary.
+                # printable text  if >5% of bytes are control chars, it's binary.
                 ctrl_ratio = sum(
                     1 for c in candidate if ord(c) < 32 and c not in "\t\n\r"
                 ) / max(len(candidate), 1)
@@ -175,7 +175,7 @@ def _extract_fields(
                 # Fallback: data field already contains plain text (common with
                 # inbound bundles that ignore the FHIR base64-only spec).  Scrub
                 # in-place WITHOUT re-encoding so the field stays human-readable.
-                # Require whitespace as proof of prose — strings like
+                # Require whitespace as proof of prose  strings like
                 # "not!!valid==base64" (no spaces, contains non-base64 chars)
                 # are corrupt payloads, not plain text, and must be redacted.
                 has_whitespace = any(c.isspace() for c in current)
@@ -183,12 +183,12 @@ def _extract_fields(
                     decoded = current
                     is_b64 = False
                     _log.info(
-                        "base64_scrub: data field at path=%s is plain text — scrubbing without re-encoding",
+                        "base64_scrub: data field at path=%s is plain text  scrubbing without re-encoding",
                         path,
                     )
                 else:
                     _log.error(
-                        "base64_decode_failed path=%s — redacting data field", path
+                        "base64_decode_failed path=%s  redacting data field", path
                     )
                     node[field_key] = ""
                     return
@@ -244,17 +244,17 @@ def _discover_text_attachments(
 
     Three structural patterns, independent of resource type or nesting depth:
 
-    Pattern 1 — MIME indicator + ``data`` field:
+    Pattern 1  MIME indicator + ``data`` field:
         Any dict with a MIME-type field (``contentType``, ``sigFormat``, ``mimeType``)
         alongside a ``data`` Base64Binary. Covers Attachment, Binary, Signature, and
         any extension following the same convention.
         text/* → decode + enqueue; binary → redact in-place.
 
-    Pattern 2 — ``data:`` URI in ``url`` field:
+    Pattern 2  ``data:`` URI in ``url`` field:
         Attachment.url may carry inline content as ``data:[mime];base64,<b64>``.
         Scrubbed text is re-encoded and the data: URI reconstructed on write-back.
 
-    Pattern 3 — standalone ``*Base64Binary`` fields:
+    Pattern 3  standalone ``*Base64Binary`` fields:
         Polymorphic value[x] fields (``valueBase64Binary``, etc.) carry no MIME type.
         Strict UTF-8 decode attempted; success means likely human-readable text.
         Binary payloads fail strict UTF-8 and are silently skipped.
@@ -287,7 +287,7 @@ def _discover_text_attachments(
                         )
                     except Exception:
                         _log.error(
-                            "heuristic_base64_decode_failed path=%s — redacting",
+                            "heuristic_base64_decode_failed path=%s  redacting",
                             field_path,
                         )
                         obj["data"] = ""
@@ -312,7 +312,7 @@ def _discover_text_attachments(
                         claimed.add(claim_key)
                 else:
                     _log.debug(
-                        "heuristic_attachment: non-text mime=%r at %s — redacting data",
+                        "heuristic_attachment: non-text mime=%r at %s  redacting data",
                         mime,
                         field_path,
                     )
@@ -354,7 +354,7 @@ def _discover_text_attachments(
                         )
                         claimed.add(claim_key)
             except (ValueError, Exception):
-                pass  # malformed data: URI — leave untouched
+                pass  # malformed data: URI  leave untouched
 
     # --- Pattern 3: standalone *Base64Binary fields + recurse ---
     for k, v in obj.items():
@@ -365,7 +365,7 @@ def _discover_text_attachments(
                 try:
                     decoded = base64.b64decode(v).decode("utf-8", errors="strict")
                 except (ValueError, UnicodeDecodeError):
-                    pass  # binary payload — skip silently
+                    pass  # binary payload  skip silently
                 else:
                     results.append(
                         _FieldText(

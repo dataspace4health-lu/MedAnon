@@ -1,11 +1,11 @@
-"""TabularAdapter — de-identify CSV / Excel / Parquet by column.
+"""TabularAdapter  de-identify CSV / Excel / Parquet by column.
 
 Tabular data has no fixed field map (columns are arbitrary), so it uses a
 distinct rule dialect: rules target columns directly with a ``column:<name>``
 matcher rather than a FHIRPath expression.  Each row is treated as a flat
 synthetic resource ``{"resourceType": "TabularRow", "<col>": value, …}`` and the
 existing actions (redact / generalize / perturb / substitute / cryptohash /
-scrub_text / nlp_*) are applied to the matched columns unchanged — a
+scrub_text / nlp_*) are applied to the matched columns unchanged  a
 ``column:foo`` rule is dispatched as the path ``TabularRow.foo``.
 
 Example profile (``format: tabular``)::
@@ -26,7 +26,7 @@ is absent.
 
 Round-trip: ``parse`` keeps the column order + source format on the instance;
 ``serialize`` writes the de-identified rows back in the same format.
-``can_target_fhir_server()`` is False — tabular output never reaches the FHIR
+``can_target_fhir_server()`` is False  tabular output never reaches the FHIR
 target server.
 """
 
@@ -75,7 +75,7 @@ class TabularAdapter:
 
         Powers the UI column-mapping step: the user sees each column's name and
         a few example values, then assigns an action per column.  No rules are
-        applied here — this is read-only inspection.
+        applied here  this is read-only inspection.
 
         Returns
         ``{columns: [{name, samples: [...], recommended_action}], row_count, format}``.
@@ -181,7 +181,7 @@ class TabularAdapter:
         """Write the de-identified rows back in the source format."""
         # Strip the synthetic resourceType tag; keep only column values, in the
         # original column order.  Redacted columns may have been deleted from a
-        # row dict — fall back to "" so every column stays aligned.
+        # row dict  fall back to "" so every column stays aligned.
         rows = [{col: r.get(col, "") for col in self._columns} for r in resources]
         if self._format == "csv":
             return self._serialize_csv(rows)
@@ -279,7 +279,7 @@ def resolve_column_manifest(
     """Return the transformation manifest for a tabular file (no cell values).
 
     Lists the ``column:<name>`` rules that apply to columns actually present in
-    the file as ``{column, action, rule}`` entries — the tabular analogue of the
+    the file as ``{column, action, rule}`` entries  the tabular analogue of the
     FHIR transformation manifest, released as a separate artifact.
     """
     src_rules = rules if rules is not None else (getattr(settings, "rules", []) or [])
@@ -382,7 +382,7 @@ def _apply_gpas_columns(
     """Pseudonymize whole columns through gPAS, one batch call per column.
 
     gPAS is a trusted third party that persists the value→pseudonym mapping, so
-    the same source value yields the same pseudonym everywhere — consistent
+    the same source value yields the same pseudonym everywhere  consistent
     within the file and across the whole dataset (enabling linkage without
     exposing the original).  Distinct non-empty values per column are gathered
     and sent in a single ``gpas_pseudonymize_batch`` call.
@@ -427,7 +427,7 @@ def _apply_gpas_columns(
 # pre-select the dropdown directly:
 #   none · redact · generalize_year · pseudonymize_gpas · tokenize · nlp_scrub
 
-# Ordered (action, column-name pattern) pairs — first match wins, so the more
+# Ordered (action, column-name pattern) pairs  first match wins, so the more
 # specific identifier/date patterns are tried before the broad PII catch-all.
 _RECOMMEND_NAME_RULES: tuple[tuple[str, "re.Pattern[str]"], ...] = (
     (
@@ -472,7 +472,7 @@ def recommend_column_action(name: str, samples: list[str]) -> str:
     Matches the column *name* against known identifier / date / free-text / PII
     keyword patterns first, then falls back to inspecting *samples* for emails,
     phone numbers, or date-shaped values.  Returns ``"none"`` (keep) when nothing
-    looks sensitive — the UI pre-selects this and the user can always override.
+    looks sensitive  the UI pre-selects this and the user can always override.
     """
     n = str(name).lower()
     for action, pattern in _RECOMMEND_NAME_RULES:

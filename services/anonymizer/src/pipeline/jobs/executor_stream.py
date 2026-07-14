@@ -25,7 +25,7 @@ _PROGRESS_INTERVAL: int = int(os.environ.get("MEDANON_PROGRESS_INTERVAL", "500")
 
 _PIPELINE_QUEUE_SIZE: int = int(os.environ.get("MEDANON_PIPELINE_QUEUE_SIZE", "4"))
 # Number of concurrent de-identification consumer threads per job.
-# Default 1: optimal for single gPAS/NLP instances — additional consumers add
+# Default 1: optimal for single gPAS/NLP instances  additional consumers add
 # thread overhead without faster service responses. Raise only when scaling
 # gPAS/NLP horizontally (set to replica count). Keep width × MEDANON_PARALLEL_WORKERS
 # within MEDANON_GLOBAL_MAX_THREADS (default 64).
@@ -62,22 +62,7 @@ def manifest_sidecar(data_path: str):
 
 
 # FHIR infrastructure resource types excluded from bulk export.
-INFRA_RESOURCE_TYPES = frozenset(
-    {
-        "CapabilityStatement",
-        "OperationDefinition",
-        "SearchParameter",
-        "StructureDefinition",
-        "CompartmentDefinition",
-        "ImplementationGuide",
-        "CodeSystem",
-        "ValueSet",
-        "ConceptMap",
-        "NamingSystem",
-        "OperationOutcome",
-        "Bundle",
-    }
-)
+from domain.fhir import INFRA_RESOURCE_TYPES  # noqa: F401,E402  re-exported for executors
 
 
 def compress_ndjson(path: str) -> str:
@@ -171,7 +156,7 @@ def process_with_bisect_fallback(
         return [(r, None) for r in out]
     except Exception as exc:
         _worker_log.debug(
-            "batch_process_failed chunk_size=%d — bisecting: %s", len(chunk), exc
+            "batch_process_failed chunk_size=%d  bisecting: %s", len(chunk), exc
         )
         mid = len(chunk) // 2
         return process_with_bisect_fallback(
@@ -299,7 +284,7 @@ class _PipelineProgressDisplay:
             import sys
 
             if not sys.stderr.isatty():
-                return  # not a terminal — skip live display
+                return  # not a terminal  skip live display
             self._Console = Console
             self._Table = Table
             self._Live = Live
@@ -391,14 +376,14 @@ class DeidentificationPipeline:
 
     A single fetcher thread fills a bounded queue with resource chunks.
     MEDANON_PIPELINE_WIDTH consumer threads independently process chunks,
-    each issuing its own NLP + gPAS HTTP calls — fanning out across all
+    each issuing its own NLP + gPAS HTTP calls  fanning out across all
     available replicas so a single job uses the full cluster capacity.
 
     Thread safety:
     - De-identification compute (NLP/gPAS HTTP) runs outside the output lock.
     - File writes, counters, and summary recording are serialized under
       self._output_lock so result ordering is deterministic within each write.
-    - self._cancelled is a plain bool — GIL-protected reads/writes are safe in
+    - self._cancelled is a plain bool  GIL-protected reads/writes are safe in
       CPython without an explicit lock.
     """
 
@@ -600,7 +585,7 @@ class DeidentificationPipeline:
                 if self._manifest_fh is not None:
                     if not _is_error:
                         write_manifest_line(self._manifest_fh, result, entries)
-                    # Released data must not carry the manifest inline — it ships
+                    # Released data must not carry the manifest inline  it ships
                     # as the separate manifest artifact.
                     strip_manifest_tag(result)
                 self._fh.write(_json_dumps(result) + "\n")
@@ -610,7 +595,7 @@ class DeidentificationPipeline:
                 self._manifest_fh.flush()
             count_now = self._count
 
-        # Checkpoint + cancellation check (outside lock — enqueue is thread-safe)
+        # Checkpoint + cancellation check (outside lock  enqueue is thread-safe)
         if chunk_idx == 0 or count_now % _PROGRESS_INTERVAL < len(chunk):
             chk = {"phase": "processing", "lines_written": count_now}
             if self._cursor_state:
@@ -636,7 +621,7 @@ class DeidentificationPipeline:
 def write_manifest_line(manifest_fh, result: dict, entries) -> None:
     """Write one transformation-manifest line for *result* to the sidecar handle.
 
-    Shape: ``{"resourceType", "id", "rules": [<manifest entries>]}`` — the entries
+    Shape: ``{"resourceType", "id", "rules": [<manifest entries>]}``  the entries
     already carry only rule name/match/action/path (no PHI values). Resources with
     no fired rule still get a line (empty ``rules``) so the manifest is a complete
     per-resource ledger of the released data.

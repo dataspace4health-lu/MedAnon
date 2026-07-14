@@ -1,4 +1,4 @@
-"""FHIR server integration service — fetch, process, upload orchestration."""
+"""FHIR server integration service  fetch, process, upload orchestration."""
 
 import asyncio
 import logging
@@ -301,7 +301,7 @@ class FhirServerService:
 
         De-identification and upload are split into two phases so that
         ``upload_resources`` receives the full dataset and can apply a global
-        topological sort — preventing HAPI-1094 referential integrity failures
+        topological sort  preventing HAPI-1094 referential integrity failures
         when Conditions (or other dependent types) are sent before the Patient
         or Encounter they reference.
 
@@ -437,7 +437,7 @@ class FhirServerService:
                     yield _json_dumps({"status": "error", "error": "gPAS unavailable"})
                     return
 
-        # Phase 2: upload — _infer_upload_tiers needs the full list for
+        # Phase 2: upload  _infer_upload_tiers needs the full list for
         # topological ordering, but we stream results from the generator
         # instead of materialising all upload dicts at once.
         def _upload_gen():

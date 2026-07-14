@@ -1,9 +1,9 @@
-"""Hl7v2Adapter — map HL7 v2 messages onto the FHIR intermediate representation.
+"""Hl7v2Adapter  map HL7 v2 messages onto the FHIR intermediate representation.
 
 Unlike the legacy ``formats/hl7v2.py`` scrubber (which blanks a fixed list of
 segment fields), this adapter maps known PHI fields onto a FHIR-shaped
 ``Patient`` resource, runs the *full* rule engine over it (so an MRN can be
-gPAS-pseudonymised, a name NLP-scrubbed, a DOB generalised — not merely blanked),
+gPAS-pseudonymised, a name NLP-scrubbed, a DOB generalised  not merely blanked),
 then writes the de-identified values back into the original HL7 message
 structure.
 
@@ -12,7 +12,7 @@ Round-trip contract
 ``parse`` keeps the parsed :class:`hl7.Message` and a field-origin map on the
 adapter instance.  ``serialize`` reads the (mutated) IR Patient and writes each
 field back to its originating ``(segment, field_index)``.  The adapter is
-therefore single-use per message — construct one, ``parse`` then ``serialize``.
+therefore single-use per message  construct one, ``parse`` then ``serialize``.
 
 Mapping is intentionally focused on the highest-value PID demographics; the
 field map is data-driven (`_PID_FIELD_MAP`) so it is easy to extend.  Fields
@@ -83,7 +83,7 @@ class Hl7v2Adapter:
         try:
             pid = message.segment("PID")
         except Exception:
-            # No PID segment — nothing to map; return an empty patient.
+            # No PID segment  nothing to map; return an empty patient.
             return [patient]
 
         for fhir_path, (seg_name, field_idx) in _PID_FIELD_MAP.items():
@@ -139,7 +139,7 @@ class Hl7v2Adapter:
         for fhir_path, (_seg, field_idx) in self._origin.items():
             new_value = self._get_ir_field(patient, fhir_path)
             if new_value is None:
-                # Field was removed entirely (e.g. redact deleted it) — blank it.
+                # Field was removed entirely (e.g. redact deleted it)  blank it.
                 new_value = ""
             try:
                 pid[field_idx] = new_value
@@ -168,7 +168,7 @@ class Hl7v2Adapter:
         return None
 
     def can_target_fhir_server(self) -> bool:
-        # HL7 v2 output is not FHIR — never upload to the FHIR target server.
+        # HL7 v2 output is not FHIR  never upload to the FHIR target server.
         return False
 
 

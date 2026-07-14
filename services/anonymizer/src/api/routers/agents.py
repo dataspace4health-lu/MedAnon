@@ -1,13 +1,13 @@
-"""AI Agent API endpoints — /v1/ai/*.
+"""AI Agent API endpoints  /v1/ai/*.
 
-GET   /v1/ai/status          — provider health + circuit breaker state
-POST  /v1/ai/generate-config — generate config from natural language
-POST  /v1/ai/detect-pii      — scan de-identified resources for PII leaks
-POST  /v1/ai/scan-fields     — classify a field tree as PII + suggest actions
-POST  /v1/ai/field-sketch    — compact PHI-safe schema sketch for AI context
-POST  /v1/ai/explain         — explain config rules (supports SSE streaming)
-POST  /v1/ai/chat            — conversational Q&A about a config (SSE stream)
-POST  /v1/ai/compliance      — regulatory gap analysis
+GET   /v1/ai/status           provider health + circuit breaker state
+POST  /v1/ai/generate-config  generate config from natural language
+POST  /v1/ai/detect-pii       scan de-identified resources for PII leaks
+POST  /v1/ai/scan-fields      classify a field tree as PII + suggest actions
+POST  /v1/ai/field-sketch     compact PHI-safe schema sketch for AI context
+POST  /v1/ai/explain          explain config rules (supports SSE streaming)
+POST  /v1/ai/chat             conversational Q&A about a config (SSE stream)
+POST  /v1/ai/compliance       regulatory gap analysis
 """
 
 import json
@@ -100,7 +100,7 @@ async def scan_fields_endpoint(body: FieldScanRequest, request: Request):
     """Classify a field-path tree as PII and suggest per-field actions.
 
     Input is field paths + JSON value types; when ``include_values`` is set it
-    also carries truncated sample values, which makes the call a PHI payload —
+    also carries truncated sample values, which makes the call a PHI payload
     the agent then enforces a local-only model. Returns structured results the
     UI overlays on its field tree. Degrades to an empty result set with a
     ``detail`` string when AI is disabled/unreachable rather than erroring, so
@@ -229,7 +229,7 @@ async def chat_config_endpoint(body: ChatRequest, request: Request):
     async def _sse_generator():
         # Produce chunks in a dedicated daemon thread (litellm's streaming
         # generator is synchronous and blocking). The drain loop polls the
-        # queue with a short timeout via the event loop's executor — using a
+        # queue with a short timeout via the event loop's executor  using a
         # dedicated producer thread (not the shared executor) avoids starving
         # the single default executor worker, which would otherwise deadlock
         # the get() call against the produce() call.
@@ -257,7 +257,7 @@ async def chat_config_endpoint(body: ChatRequest, request: Request):
                         chunk_queue.put(chunk)
                 else:
                     chunk_queue.put(str(gen))
-            except Exception as exc:  # noqa: BLE001 — surfaced to the client
+            except Exception as exc:  # noqa: BLE001  surfaced to the client
                 chunk_queue.put(exc)
             finally:
                 chunk_queue.put(None)  # completion sentinel

@@ -5,7 +5,7 @@ Reversing pseudonymisation (``gpas_depseudonymize``) or decrypting an
 D7.2 §4.4 is explicit: "reversibility of the pseudonymisation can only be
 implemented by the HDAB or a designated TTP and not by the data user"
 (EHDS Art 66(3)). MedAnon's RBAC roles map the HDAB/TTP operator to
-``admin`` and the data user to ``analyst`` (see ``api/auth.py``) — so a
+``admin`` and the data user to ``analyst`` (see ``api/auth.py``)  so a
 config profile whose rules can reverse pseudonymisation/encryption must
 only be executable by an ``admin`` caller.
 """

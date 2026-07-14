@@ -50,7 +50,7 @@ def _extract_field_value(resource: dict, fhir_path: str) -> str:
     """Extract a single scalar QI value from a resource using a simple path.
 
     Supports only two-level paths like ``Patient.birthDate`` and
-    ``Patient.address.postalCode`` — the common QI patterns.  For
+    ``Patient.address.postalCode``  the common QI patterns.  For
     ``address.postalCode``, the first address entry is used.
 
     Returns an empty string when the field is absent.
@@ -77,7 +77,7 @@ def _extract_field_value(resource: dict, fhir_path: str) -> str:
     if obj is None:
         return ""
     if isinstance(obj, dict):
-        # e.g. CodeableConcept — take text or first coding.code
+        # e.g. CodeableConcept  take text or first coding.code
         codings = obj.get("coding") or []
         if codings and isinstance(codings, list):
             code = codings[0].get("code") or codings[0].get("display") or ""
@@ -166,7 +166,7 @@ def build_qi_index(
     qi_paths = [q["path"] for q in qis]
     qi_kinds = [q["kind"] for q in qis]
 
-    # Sensitive attribute for l-diversity / t-closeness — configurable per
+    # Sensitive attribute for l-diversity / t-closeness  configurable per
     # D7.2 §5.5.4 (``privacy_model.sensitive_attributes``, a list of FHIRPaths),
     # grouped by leading resource type. When omitted, ``{"Condition": None}``
     # keeps the historical default (Condition codes via _extract_condition_code).
@@ -200,7 +200,7 @@ def build_qi_index(
         total_resources += 1
 
         # Accept plain FHIR resource dicts only.
-        # Staging rows no longer contain resource_json — they hold only references
+        # Staging rows no longer contain resource_json  they hold only references
         # (resource_id, resource_type, fhir_source_url).  The caller is responsible
         # for re-fetching resources from FHIR before passing them here.
         if not isinstance(row, dict):
@@ -217,7 +217,7 @@ def build_qi_index(
             pid = str(resource.get("id") or "")
             qi_values = tuple(_extract_field_value(resource, path) for path in qi_paths)
 
-            # Patient-level sensitive attributes (e.g. Patient.maritalStatus) —
+            # Patient-level sensitive attributes (e.g. Patient.maritalStatus)
             # read directly off the Patient, keyed by its own id.
             _pat_sens = sens_by_type.get("Patient")
             if isinstance(_pat_sens, list) and pid:
@@ -237,7 +237,7 @@ def build_qi_index(
                     # Also update conditions for replaced entry: remove old,
                     # but we can't easily do that without the old id.  In
                     # practice the conditions_by_patient dict grows beyond the
-                    # reservoir — acceptable since Condition count is bounded.
+                    # reservoir  acceptable since Condition count is bounded.
                     patient_ids[j] = pid
                     patient_qi_tuples[j] = qi_values
 

@@ -1,6 +1,6 @@
 """CDA (HL7 v3) de-identification endpoint.
 
-POST /process/cda — de-identify a single CDA / CCDA document through the full
+POST /process/cda  de-identify a single CDA / CCDA document through the full
 rule engine (CdaAdapter → process_data_batch → validation barrier).
 """
 

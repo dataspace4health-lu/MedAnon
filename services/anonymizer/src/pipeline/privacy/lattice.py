@@ -259,7 +259,7 @@ def solve(qi_index: "QiIndex", privacy_model: dict) -> GeneralizationPlan:
     n_qi = len(qi_paths)
 
     if n_qi == 0:
-        raise ValueError("privacy_model.quasi_identifiers is empty — nothing to solve")
+        raise ValueError("privacy_model.quasi_identifiers is empty  nothing to solve")
     if n_qi > MAX_QI_COUNT:
         raise ValueError(
             f"privacy_model has {n_qi} quasi-identifiers; maximum is {MAX_QI_COUNT}"
@@ -271,7 +271,7 @@ def solve(qi_index: "QiIndex", privacy_model: dict) -> GeneralizationPlan:
 
     if total_patients == 0:
         _log.warning(
-            "solve: no Patient records in index — returning trivially-feasible plan"
+            "solve: no Patient records in index  returning trivially-feasible plan"
         )
         return GeneralizationPlan(
             levels={p: 0 for p in qi_paths},
@@ -283,7 +283,7 @@ def solve(qi_index: "QiIndex", privacy_model: dict) -> GeneralizationPlan:
         )
 
     # Enumerate all lattice nodes in ascending information-loss order.
-    # (This is an exhaustive search — tractable because the lattice is small.)
+    # (This is an exhaustive search  tractable because the lattice is small.)
     level_ranges = [range(ml + 1) for ml in max_levels]
     all_nodes = list(itertools.product(*level_ranges))
     all_nodes.sort(key=lambda nd: _information_loss(nd, max_levels))

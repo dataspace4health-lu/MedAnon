@@ -1,4 +1,4 @@
-"""PseudonymizerPort — structural Protocol for pseudonymization adapters.
+"""PseudonymizerPort  structural Protocol for pseudonymization adapters.
 
 Any object implementing :meth:`pseudonymize_batch` satisfies this Protocol and
 can be injected into :func:`~pipeline.processor.process_resource` or
@@ -7,7 +7,7 @@ can be injected into :func:`~pipeline.processor.process_resource` or
 
 Typical implementations:
 
-* :class:`~integrations.gpas.adapter.GpasPseudonymizerAdapter` — production gPAS HTTP client
+* :class:`~integrations.gpas.adapter.GpasPseudonymizerAdapter`  production gPAS HTTP client
 * Test stubs (pass a plain object or ``unittest.mock.MagicMock``)
 """
 
@@ -52,7 +52,7 @@ class PseudonymizerPort(Protocol):
         """Return cached pseudonyms for *values* without calling the backend.
 
         Only returns entries present in L1 (and L2 when Redis is configured).
-        Values absent from cache are not included — the caller is responsible
+        Values absent from cache are not included  the caller is responsible
         for falling back to :meth:`pseudonymize_batch` for any missing values.
 
         Default implementation returns an empty dict (safe fallback for adapters

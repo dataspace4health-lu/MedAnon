@@ -14,7 +14,7 @@ from concurrent.futures import as_completed
 
 from utils.fhirpath import find_nodes
 from utils.thread_pool import get_executor
-from actions.substitute import _substitute_nodes
+from utils.fhirpath import _substitute_nodes
 from pipeline.action_dispatcher import PseudonymizationTask
 from pipeline.manifest import _MANIFEST_ENABLED
 from pipeline.rule_matcher import _resolve_rule_params
@@ -24,7 +24,7 @@ from integrations.gpas.circuit_breaker import GpasUnavailableError
 audit_log = logging.getLogger("medanon.audit")
 
 # ---------------------------------------------------------------------------
-# gPAS params cache — avoid re-scanning rules on every resource
+# gPAS params cache  avoid re-scanning rules on every resource
 # ---------------------------------------------------------------------------
 
 _SENTINEL = object()
@@ -41,7 +41,7 @@ def clear_gpas_params_cache() -> None:
 def _extract_gpas_params(settings) -> dict | None:
     """Return the params dict from the first ``gpas_pseudonymize`` rule, or *None*.
 
-    Cached per ``(filename, config_hash)`` — content-keyed so an in-place
+    Cached per ``(filename, config_hash)``  content-keyed so an in-place
     profile edit can never serve stale gPAS params.
     """
     rules = getattr(settings, "rules", [])
@@ -58,7 +58,7 @@ def _extract_gpas_params(settings) -> dict | None:
             result = _resolve_rule_params(rule, settings)
             # A bare `gpas_pseudonymize` rule (no params:) resolves to an empty
             # dict. Downstream guards test ``if not gpas_params`` and would then
-            # treat the profile as having NO gPAS rules at all — skipping the
+            # treat the profile as having NO gPAS rules at all  skipping the
             # batch pre-fetch entirely, so write-back finds an empty mapping and
             # raises "gPAS did not return a pseudonym". Seed the domain/operation
             # from the environment (mirrors the low-level client's own fallback)
@@ -153,14 +153,14 @@ def _write_back_pseudonyms(
         path = item.element["path"].split(".")[1:]
         if len(path) == 0:
             audit_log.warning(
-                "gpas_root_path_skipped caller=%s path=%s — refusing to clear "
+                "gpas_root_path_skipped caller=%s path=%s  refusing to clear "
                 "entire resource",
                 caller,
                 item.element.get("path", "?"),
             )
             if processing_mode != "skip":
                 raise ValueError(
-                    f"Empty path after removing resource type root in {caller} — "
+                    f"Empty path after removing resource type root in {caller}  "
                     f"refusing to clear entire resource "
                     f"(original path: {item.element['path']!r})"
                 )
@@ -232,10 +232,10 @@ def pseudonymize_resource_identifiers(
                 f"targeting path '{item.element.get('path', '?')}'. "
                 "Check your config profile's gpas_domain parameter."
             )
-        # D7.2 §4.4: pseudonyms MUST NOT be reused across permits — scope the
+        # D7.2 §4.4: pseudonyms MUST NOT be reused across permits  scope the
         # gPAS domain to the active permit context (fails closed when
         # regulated mode has no permit context set). ``item.params`` is a
-        # cached, shared dict (see ``_gpas_params_lru``) — never mutate it in
+        # cached, shared dict (see ``_gpas_params_lru``)  never mutate it in
         # place, or the permit scope from one request would leak into the
         # next. Store a shallow copy carrying the scoped domain instead.
         domain = scope_domain_to_permit(domain, action="gpas_pseudonymize")
@@ -260,7 +260,7 @@ def pseudonymize_resource_identifiers(
 
     domains = list(domain_to_values.keys())
     if len(domains) <= 1:
-        # Single domain — skip thread pool overhead
+        # Single domain  skip thread pool overhead
         for domain in domains:
             _, partial, exc = _call_domain(domain)
             if exc is not None:
@@ -281,7 +281,7 @@ def pseudonymize_resource_identifiers(
             if partial:
                 batch_mapping.update(partial)
     else:
-        # Multiple domains — call in parallel
+        # Multiple domains  call in parallel
         pool = get_executor()
         futures = {}
         for d in domains:
@@ -289,7 +289,7 @@ def pseudonymize_resource_identifiers(
                 futures[pool.submit(_call_domain, d)] = d
             except TimeoutError:
                 audit_log.error(
-                    "gpas_submit_timeout domain=%s — thread pool saturated", d
+                    "gpas_submit_timeout domain=%s  thread pool saturated", d
                 )
                 if processing_mode != "skip":
                     raise
@@ -347,8 +347,8 @@ def depseudonymize_resource_identifiers(
     from integrations.gpas.client import gpas_depseudonymize_batch
     from utils.permit_context import scope_domain_to_permit
 
-    # Group by domain. Reversal re-exposes direct identifiers, so — same as
-    # the pseudonymize path — the domain is scoped to the active permit
+    # Group by domain. Reversal re-exposes direct identifiers, so  same as
+    # the pseudonymize path  the domain is scoped to the active permit
     # context (D7.2 §4.4) and a permit is required in regulated mode. RBAC
     # restriction to the HDAB-equivalent (admin) role is enforced at the API
     # boundary (see ``pipeline.config.reversal``), since role information is
@@ -388,7 +388,7 @@ def depseudonymize_resource_identifiers(
 
     # D7.2 §4.4: reversal of pseudonymisation must be logged (it re-exposes the
     # original direct identifiers and may only be performed by the HDAB/TTP).
-    # Emit a PHI-safe audit event — domains + counts only, never the recovered
+    # Emit a PHI-safe audit event  domains + counts only, never the recovered
     # originals or the pseudonyms themselves. Guarded so audit never breaks the
     # pipeline (same posture as pipeline.privacy.apply).
     if batch_mapping:
@@ -405,7 +405,7 @@ def depseudonymize_resource_identifiers(
                     "reversed_count": len(batch_mapping),
                 },
             )
-        except Exception:  # noqa: BLE001 — audit must never break the pipeline
+        except Exception:  # noqa: BLE001  audit must never break the pipeline
             pass
 
     # Write back originals
@@ -430,7 +430,7 @@ def depseudonymize_resource_identifiers(
             if processing_mode != "skip":
                 raise ValueError(
                     f"Empty path after removing resource type root in depseudonymize "
-                    f"— refusing to clear entire resource (original path: {item.element['path']!r})"
+                    f" refusing to clear entire resource (original path: {item.element['path']!r})"
                 )
             continue
         ret = find_nodes(resource, path[:-1], [])
@@ -448,7 +448,7 @@ def apply_pseudonym_mapping(
 
     Used in the N>1 batch path where :func:`pseudonymize_identifier_batch` has
     already fetched the shared mapping.  This function does only the
-    write-back step — no pseudonymizer call is made.
+    write-back step  no pseudonymizer call is made.
 
     Returns the same *batch_mapping* passed in (for text-ID rewriting parity
     with :func:`pseudonymize_resource_identifiers`).
@@ -480,7 +480,7 @@ def pseudonymize_identifier_batch(
 
     After this function returns, the pseudonymizer's internal cache is warm.
     Subsequent ``pseudonymize_resource_identifiers`` calls for each individual resource will find
-    their values already cached — zero additional gPAS HTTP round-trips.
+    their values already cached  zero additional gPAS HTTP round-trips.
 
     Args:
         gpas_works:      One list of :class:`PseudonymizationTask` items per resource.
@@ -489,7 +489,7 @@ def pseudonymize_identifier_batch(
         gpas_params:     gPAS call parameters (domain, operation, etc.).
         extra_values:    Additional values to include in the batch (e.g. reference IDs),
                          all routed to the default ``gpas_params`` domain.  Mutually
-                         exclusive with *extra_values_by_domain* — if both are provided
+                         exclusive with *extra_values_by_domain*  if both are provided
                          *extra_values_by_domain* takes precedence.
         extra_values_by_domain:  Per-domain reference ID buckets: ``{domain: [id, ...]}``.
                          When provided, each bucket is sent to its own gPAS domain so
@@ -505,7 +505,7 @@ def pseudonymize_identifier_batch(
         Empty dict when no work items exist or gPAS is unavailable in skip mode.
     """
     if not gpas_params:
-        # No gPAS rules configured — nothing to pre-fetch.
+        # No gPAS rules configured  nothing to pre-fetch.
         return {}
 
     # Group values by their resolved gpas_domain so each distinct domain gets
@@ -529,7 +529,7 @@ def pseudonymize_identifier_batch(
                 )
             # D7.2 §4.4: scope to the active permit (fails closed in regulated
             # mode without one). ``item.params`` may be the cached, shared
-            # per-profile dict — never mutate it; store a scoped copy.
+            # per-profile dict  never mutate it; store a scoped copy.
             domain = scope_domain_to_permit(domain, action="gpas_pseudonymize")
             if domain not in domain_to_params:
                 domain_to_params[domain] = {**item.params, "gpas_domain": domain}
@@ -537,7 +537,7 @@ def pseudonymize_identifier_batch(
             domain_to_values[domain].append(item.serialized_value)
 
     # Reference IDs are stored under sentinel keys (prefixed "\x00extra") so they
-    # are processed LAST — PseudonymizationTask results (per-type domain_map routing) take
+    # are processed LAST  PseudonymizationTask results (per-type domain_map routing) take
     # precedence over the default domain when both cover the same original value.
     # extra_values_by_domain uses per-domain sentinels "\x00extra\x00{domain}" for
     # typed routing; extra_values (legacy) uses the single "\x00extra" sentinel.
@@ -658,7 +658,7 @@ def pseudonymize_identifier_batch(
             ]
             if not need:
                 continue
-            # Pass 1: pure cache lookup — hot L1 hit → O(1) shard lock, no HTTP;
+            # Pass 1: pure cache lookup  hot L1 hit → O(1) shard lock, no HTTP;
             # warm L2 hit → one Redis mget (~1 ms), promotes to L1.
             try:
                 cached_partial = pseudonymizer.lookup_cache_batch(

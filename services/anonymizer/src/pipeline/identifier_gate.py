@@ -3,8 +3,8 @@
 The raw PII scan in :mod:`integrations.ai.agents.pii_detector` is a *content*
 scanner: it walks strings of >= 15 characters looking for patterns and NER
 entities.  On a FHIR resource the direct identifiers live in short structured
-fields — ``name.family`` (5 chars), ``identifier.value`` (8), ``telecom.value``
-(12) — so the content scanner never sees them.  A Patient whose every direct
+fields  ``name.family`` (5 chars), ``identifier.value`` (8), ``telecom.value``
+(12)  so the content scanner never sees them.  A Patient whose every direct
 identifier leaked produces zero detections.
 
 Lowering the length threshold does not fix this: NER on a bare surname without
@@ -17,7 +17,7 @@ it?  That is deterministic, needs no model, and costs a handful of dict lookups.
 
 ``HIPAA_SENSITIVE_PATHS`` (34 resource types) and the two path helpers are
 reused verbatim from ``pipeline.scoring.privacy``, which already performs this
-computation as ``identifier_risk`` — but only when ``MEDANON_SCORING_ENABLED``
+computation as ``identifier_risk``  but only when ``MEDANON_SCORING_ENABLED``
 is set, and only as a score contribution rather than a gate.  This module
 exposes the same judgement as a hard, always-available predicate.
 
@@ -53,7 +53,7 @@ _CONDITIONAL_ACTIONS = frozenset({"nlp_detect_act", "nlp_scrub", "nlp_detect"})
 # Everything else is ``medium``: temporal quasi-identifiers (``period``,
 # ``effectiveDateTime``, ``onsetDateTime``, …) and provenance references
 # (``subject``, ``performer``, ``recorder``, …).  Dates are deliberately not
-# blocking — a date-shift pipeline legitimately retains day precision, which is
+# blocking  a date-shift pipeline legitimately retains day precision, which is
 # the same reason ``pii_detector`` scores ``date_iso`` as ``medium``.  Bare
 # References are already treated as covered (see ``uncovered_sensitive_paths``);
 # a Reference carrying a ``display`` name surfaces here as a ``medium`` warning.
@@ -88,7 +88,7 @@ def manifest_recording_enabled() -> bool:
 
     The structural check reads the manifest to learn which paths were
     transformed.  With recording off, every present sensitive path would look
-    uncovered and the gate would block everything — so the check is skipped
+    uncovered and the gate would block everything  so the check is skipped
     instead.  ``docker-compose.yml`` sets ``MEDANON_MANIFEST_ENABLED=true``;
     the code default is off.
     """
@@ -139,7 +139,7 @@ def uncovered_sensitive_paths(
     returns the offending paths rather than a risk fraction.
 
     Absent paths are excluded: they cannot leak.  ``id`` and bare FHIR
-    References are treated as covered — an opaque server key is not, on its own,
+    References are treated as covered  an opaque server key is not, on its own,
     re-identifying, and reference rewriting handles it transitively.
     """
     if not isinstance(resource, dict):
@@ -186,7 +186,7 @@ def structural_detections(
 ) -> list[dict]:
     """Graded detections for every present-but-untransformed sensitive path.
 
-    Returns an empty list (and logs) when the manifest is unavailable — without
+    Returns an empty list (and logs) when the manifest is unavailable  without
     it the check cannot distinguish "no rule fired" from "nothing was recorded",
     and blocking on that would reject every batch.
 
@@ -198,13 +198,13 @@ def structural_detections(
     travel into audit logs and error payloads, so no identifier value and no
     resource id go with them.  That also makes per-resource duplicates literally
     identical, so results are collapsed to one entry per
-    ``(resource_type, field_path)`` carrying an ``affected_resources`` count —
+    ``(resource_type, field_path)`` carrying an ``affected_resources`` count
     a 1000-resource batch with an uncovered ``Patient.name`` yields one
     detection, not a thousand.
     """
     if manifest_entries_list is None or not manifest_recording_enabled():
         _log.debug(
-            "structural_gate_skipped — manifest recording disabled "
+            "structural_gate_skipped  manifest recording disabled "
             "(set MEDANON_MANIFEST_ENABLED=true to enable the structural check)"
         )
         return []

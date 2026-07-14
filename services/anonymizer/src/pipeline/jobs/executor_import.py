@@ -20,13 +20,13 @@ def _execute_bulk_import(job: Job, store, staging) -> None:
     """Read a completed NDJSON result and upload resources to a target FHIR server.
 
     Accepts job params:
-        ``job_id``       — source export Job whose result_path is used.
-        ``ndjson_path``  — explicit NDJSON path (local or s3://); used when job_id absent.
-        ``target_url``   — target FHIR server base URL (required).
-        ``target_token`` — bearer token for the target (optional).
-        ``timeout``      — per-request HTTP timeout in seconds (default 30).
-        ``parallel``     — concurrent FHIR batch Bundle POSTs per tier (default 4).
-        ``batch_size``   — resources per FHIR batch Bundle (default 500).
+        ``job_id``        source export Job whose result_path is used.
+        ``ndjson_path``   explicit NDJSON path (local or s3://); used when job_id absent.
+        ``target_url``    target FHIR server base URL (required).
+        ``target_token``  bearer token for the target (optional).
+        ``timeout``       per-request HTTP timeout in seconds (default 30).
+        ``parallel``      concurrent FHIR batch Bundle POSTs per tier (default 4).
+        ``batch_size``    resources per FHIR batch Bundle (default 500).
 
     Streams the NDJSON in a single read pass to extract (resourceType, id) metadata
     for topological tier ordering and ID sanitisation, keeping raw JSON strings
@@ -76,7 +76,7 @@ def _execute_bulk_import(job: Job, store, staging) -> None:
     # The previous implementation kept the entire NDJSON parsed in memory as
     # ``full_objs`` so that the topological tier helper and the ID-sanitisation
     # helper could iterate it twice.  For a 318k-resource export that means
-    # holding ~318k Python dicts simultaneously — the dominant memory cost.
+    # holding ~318k Python dicts simultaneously  the dominant memory cost.
     #
     # The streaming variant below extracts only the small metadata each helper
     # actually needs (raw line, resourceType, id, raw reference types), then
@@ -150,7 +150,7 @@ def _execute_bulk_import(job: Job, store, staging) -> None:
                 sanitised = _sanitise_resource_id(rid)
                 if sanitised != rid:
                     id_map[(rt, rid)] = sanitised
-            # ``obj`` goes out of scope here — reclaimed on next iteration.
+            # ``obj`` goes out of scope here  reclaimed on next iteration.
     finally:
         if hasattr(stream, "close"):
             stream.close()
@@ -205,7 +205,7 @@ def _execute_bulk_import(job: Job, store, staging) -> None:
 
     _MAX_ERROR_DETAILS = 50  # cap stored error details to avoid bloating the checkpoint
     uploaded = errors = 0
-    error_details: list[dict] = []  # [{resourceType, error}] — first N failures
+    error_details: list[dict] = []  # [{resourceType, error}]  first N failures
     pool = get_executor() if parallel > 1 else None
 
     def _tally(results: list[dict]) -> None:

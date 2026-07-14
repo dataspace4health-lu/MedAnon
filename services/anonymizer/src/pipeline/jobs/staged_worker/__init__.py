@@ -1,16 +1,16 @@
-"""staged_worker — two-phase staged bulk-export and cohort executors.
+"""staged_worker  two-phase staged bulk-export and cohort executors.
 
-Phase 1 — Fetch:   Stream FHIR resources into ``medanon.staged_resources``
+Phase 1  Fetch:   Stream FHIR resources into ``medanon.staged_resources``
                    (PostgreSQL) with pagination-cursor checkpoints for crash
                    recovery without re-fetching.
 
-Phase 2 — Process: Read pending rows in batches, run gPAS/NLP de-identification
+Phase 2  Process: Read pending rows in batches, run gPAS/NLP de-identification
                    once per batch, write NDJSON, atomically mark rows done.
 
 Package layout:
-    _core.py       — shared constants and private helpers
-    _executors.py  — standard executors (bulk, cohort, patient, reprocess)
-    _risk.py       — risk-driven k-anonymity executor
+    _core.py        shared constants and private helpers
+    _executors.py   standard executors (bulk, cohort, patient, reprocess)
+    _risk.py        risk-driven k-anonymity executor
 
 Public API:
     execute_bulk_export_staged(job, store, staging)

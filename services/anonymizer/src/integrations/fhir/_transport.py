@@ -1,4 +1,4 @@
-"""Shared FHIR HTTP transport layer — connection pool, config, helpers.
+"""Shared FHIR HTTP transport layer  connection pool, config, helpers.
 
 Provides the urllib3 PoolManager, configuration constants, input validators,
 and low-level HTTP helper functions used by reader, writer, and bulk modules.
@@ -130,7 +130,7 @@ _RESOURCE_TYPE_RE = re.compile(r"^[A-Z][a-zA-Z]+$")
 # FHIR R4 §2.1.0.1: id  ::=  [A-Za-z0-9\-\.]{1,64}
 # Underscores (_) are NOT part of the spec and HAPI 7.x rejects them.
 _RESOURCE_ID_RE = re.compile(r"^[A-Za-z0-9.\-]{1,64}$")
-# Characters not allowed in a FHIR ID — used to sanitise gPAS pseudonyms
+# Characters not allowed in a FHIR ID  used to sanitise gPAS pseudonyms
 # that may contain underscores (e.g. rid_1234567890 → rid-1234567890).
 _FHIR_ID_INVALID_RE = re.compile(r"[^A-Za-z0-9.\-]")
 
@@ -186,7 +186,7 @@ def _make_headers(token=None, target: bool = False):
 
 
 def _make_post_headers(token=None, target: bool = False):
-    """Headers for write requests — Accept + Content-Type + optional Auth."""
+    """Headers for write requests  Accept + Content-Type + optional Auth."""
     h = _make_headers(token, target=target)
     h["Content-Type"] = "application/fhir+json"
     return h
@@ -213,7 +213,7 @@ def _retry_request(
     if not cb.allow_request():
         FHIR_CALL_COUNT.labels(operation=operation, status="error", role=role).inc()
         raise FhirCircuitBreakerOpen(
-            f"FHIR server unavailable — circuit breaker OPEN ({operation})"
+            f"FHIR server unavailable  circuit breaker OPEN ({operation})"
         )
 
     t0 = time.perf_counter()
@@ -230,7 +230,7 @@ def _retry_request(
                 should_retry = resp.status in (429, 500, 502, 503, 504)
                 if should_retry and attempt < _FHIR_RETRY_COUNT:
                     log.warning(
-                        "FHIR request %s HTTP %d — retrying (%d/%d)",
+                        "FHIR request %s HTTP %d  retrying (%d/%d)",
                         url,
                         resp.status,
                         attempt + 1,
@@ -273,7 +273,7 @@ def _retry_request(
         except (urllib3.exceptions.HTTPError, OSError) as exc:
             if attempt < _FHIR_RETRY_COUNT:
                 log.warning(
-                    "FHIR request %s connection error — retrying (%d/%d)",
+                    "FHIR request %s connection error  retrying (%d/%d)",
                     url,
                     attempt + 1,
                     _FHIR_RETRY_COUNT,
@@ -342,7 +342,7 @@ def _safe_next_url(
     else:
         auth_origin = current_origin
 
-    # Same origin as authoritative — return unchanged.
+    # Same origin as authoritative  return unchanged.
     if next_origin == auth_origin:
         return next_url
 

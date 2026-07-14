@@ -23,7 +23,7 @@ def get_auth_config() -> dict:
     """Return the current authentication provider configuration.
 
     This endpoint is intentionally open (listed in OPEN_PATHS) so the SPA can
-    fetch it before the user is authenticated.  No secrets are exposed — only
+    fetch it before the user is authenticated.  No secrets are exposed  only
     the provider name, OIDC authority, and client_id.
     """
     from api.auth_providers import auth_config

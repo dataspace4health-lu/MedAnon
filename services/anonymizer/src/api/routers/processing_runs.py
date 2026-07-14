@@ -1,9 +1,9 @@
 """Processing run history endpoints.
 
-GET    /v1/processing-runs             — list runs (paged, filterable)
-GET    /v1/processing-runs/stats       — aggregate dashboard statistics
-GET    /v1/processing-runs/{run_id}    — single run detail
-DELETE /v1/processing-runs             — purge runs older than N days (admin)
+GET    /v1/processing-runs              list runs (paged, filterable)
+GET    /v1/processing-runs/stats        aggregate dashboard statistics
+GET    /v1/processing-runs/{run_id}     single run detail
+DELETE /v1/processing-runs              purge runs older than N days (admin)
 """
 
 import asyncio

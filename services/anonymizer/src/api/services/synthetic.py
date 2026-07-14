@@ -90,7 +90,7 @@ class SyntheticDataService:
 
         if not patients:
             raise ValueError(
-                "No Patient resources found in input — "
+                "No Patient resources found in input  "
                 "provide de-identified Patient FHIR resources"
             )
 
@@ -189,7 +189,7 @@ class SyntheticDataService:
                     accountant=acc,
                 )
             except ValueError:
-                pass  # Insufficient condition input — patients still DP-synthesised
+                pass  # Insufficient condition input  patients still DP-synthesised
 
         return SyntheticResult(
             patients=synthetic,
@@ -202,7 +202,7 @@ class SyntheticDataService:
         """Fidelity + privacy passport for a synthetic dataset (D7.2 §5.4/§5.5).
 
         Body is a plain JSON object: ``{"real": [...], "synthetic": [...],
-        "privacy_model": {...}?, "dp_params": {...}?}`` — not FHIR-format-detected
+        "privacy_model": {...}?, "dp_params": {...}?}``  not FHIR-format-detected
         content. Proxies when ANALYTICS_SERVICE_URL is set, else local.
 
         Raises:

@@ -4,11 +4,11 @@ Jobs are persisted to SQLite at MEDANON_JOB_DB (default /output/jobs.db).
 The store uses WAL mode and is safe to access from multiple threads.
 
 Public surface:
-    ``init_job_store(db_path)`` — initialise the module-level singleton.
-    ``SqliteJobStore``          — SQLite backend (default).
-    ``JobStore``                — backward-compat alias for ``SqliteJobStore``.
-    ``Job``                     — dataclass representing a single job (from domain.jobs).
-    ``JobStatus``               — Enum: pending | running | done | error (from domain.jobs).
+    ``init_job_store(db_path)``  initialise the module-level singleton.
+    ``SqliteJobStore``           SQLite backend (default).
+    ``JobStore``                 backward-compat alias for ``SqliteJobStore``.
+    ``Job``                      dataclass representing a single job (from domain.jobs).
+    ``JobStatus``                Enum: pending | running | done | error (from domain.jobs).
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from domain.jobs import Job, JobStatus  # noqa: F401 — re-exported for callers
+from domain.jobs import Job, JobStatus  # noqa: F401  re-exported for callers
 from utils.sqlite_store import connect as sqlite_connect
 
 _jobs_log = logging.getLogger("medanon.jobs")
@@ -183,7 +183,7 @@ class SqliteJobStore:
         return [_row_to_job(row) for row in rows]
 
     def notify_new_job(self, job_id: str) -> None:
-        """No-op for SQLite — the worker polls."""
+        """No-op for SQLite  the worker polls."""
 
     def cancel(self, job_id: str) -> bool:
         """Mark a pending or running job as cancelled.

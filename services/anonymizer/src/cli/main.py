@@ -1,4 +1,4 @@
-"""CLI entry point — thin dispatcher to command sub-modules."""
+"""CLI entry point  thin dispatcher to command sub-modules."""
 
 import argparse
 import json

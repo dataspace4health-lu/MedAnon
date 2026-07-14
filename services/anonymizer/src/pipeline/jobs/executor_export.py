@@ -138,7 +138,7 @@ def _export_mode() -> str:
     - staged: always use the staged/partitioned path (crash-resume + multi-pod
               scale-out, at the cost of the Phase-2 re-fetch).
     - stream: always use the single-fetch streaming path (fetch once, process
-              once, cursor-checkpoint resume) — best single-pod throughput.
+              once, cursor-checkpoint resume)  best single-pod throughput.
     """
     return os.environ.get("MEDANON_EXPORT_MODE", "auto").strip().lower()
 
@@ -149,7 +149,7 @@ def _use_staged(staging, estimated_rows: int | None) -> bool:
         return False
     mode = _export_mode()
     if mode == "stream":
-        _worker_log.info("export_mode=stream — forcing single-fetch stream path")
+        _worker_log.info("export_mode=stream  forcing single-fetch stream path")
         return False
     if mode == "staged":
         return True
@@ -158,7 +158,7 @@ def _use_staged(staging, estimated_rows: int | None) -> bool:
         return True  # always staged if threshold explicitly disabled
     if estimated_rows is not None and estimated_rows < _STAGED_THRESHOLD_ROWS:
         _worker_log.info(
-            "staged_threshold_skip estimated_rows=%d threshold=%d — using stream path",
+            "staged_threshold_skip estimated_rows=%d threshold=%d  using stream path",
             estimated_rows,
             _STAGED_THRESHOLD_ROWS,
         )
@@ -170,7 +170,7 @@ def _secure_open(path: str, mode: str, **kw):
     """Open *path* for writing with owner-only permissions (mode 0o600).
 
     Using os.open with O_CREAT+explicit mode ensures the file is never
-    world-readable even for a brief moment — unlike open() + chmod().
+    world-readable even for a brief moment  unlike open() + chmod().
     Falls back to regular open() for read/append modes not covered by O_CREAT.
     """
     if "w" in mode and "r" not in mode:
@@ -191,7 +191,7 @@ def _mkdir_secure(path: str) -> None:
     try:
         p.chmod(0o700)
     except OSError:
-        pass  # read-only filesystem or insufficient permissions — best effort
+        pass  # read-only filesystem or insufficient permissions  best effort
 
 
 def _execute_bulk_export(job: Job, store, staging) -> None:
@@ -365,7 +365,7 @@ def _execute_bulk_export(job: Job, store, staging) -> None:
                     file_size_bytes=os.path.getsize(output_path),
                     compressed=True,
                 )
-            from integrations.storage import publish_result
+            from pipeline.jobs.result_publisher import publish_result
 
             job.result_path = publish_result(
                 job, output_path, manifest_path=manifest_path, audit=summary_dict
@@ -394,7 +394,7 @@ def _execute_bulk_export(job: Job, store, staging) -> None:
                 server_url, token=token, timeout=timeout
             )
             candidate_types = [t for t in all_types if t not in INFRA_RESOURCE_TYPES]
-            # Skip resource types that have no data — avoids paginating through
+            # Skip resource types that have no data  avoids paginating through
             # dozens of empty FHIR R4 types that the capability statement lists
             # but the server has never received data for.  Runs one lightweight
             # _summary=count request per type in parallel (same pool size as the
@@ -420,11 +420,11 @@ def _execute_bulk_export(job: Job, store, staging) -> None:
 
     if not resource_types:
         _worker_log.info(
-            "bulk_export_empty job=%s — no resource types to export", job.id
+            "bulk_export_empty job=%s  no resource types to export", job.id
         )
         with _secure_open(output_path, "w"):
             pass  # touch an empty result file
-        from integrations.storage import publish_result
+        from pipeline.jobs.result_publisher import publish_result
 
         job.result_path = publish_result(job, output_path)
         save_checkpoint(store, job, {"phase": "done", "lines_written": 0})
@@ -507,7 +507,7 @@ def _execute_bulk_export(job: Job, store, staging) -> None:
     if not cancelled:
         # Compute the summary from the (local, streamed) output file BEFORE
         # promoting it to the durable result store.  The score gate runs here,
-        # pre-publish, so a blocked job never calls store_result — eliminating
+        # pre-publish, so a blocked job never calls store_result  eliminating
         # the former write-then-delete race (publish, then delete from both the
         # durable store and local disk).  On block we only remove the local
         # staging file; job.result_path was never set.
@@ -541,7 +541,7 @@ def _execute_bulk_export(job: Job, store, staging) -> None:
             _cleanup_blocked_output(job, output_path, audit_path, manifest_path)
             raise
 
-        # Gate passed — now (and only now) promote the output to the durable
+        # Gate passed  now (and only now) promote the output to the durable
         # store and finalise the job.
         if _COMPRESS_RESULTS:
             output_path = compress_ndjson(output_path)
@@ -550,7 +550,7 @@ def _execute_bulk_export(job: Job, store, staging) -> None:
                 file_size_bytes=os.path.getsize(output_path),
                 compressed=True,
             )
-        from integrations.storage import publish_result
+        from pipeline.jobs.result_publisher import publish_result
 
         job.result_path = publish_result(
             job, output_path, manifest_path=manifest_path, audit=summary_dict
@@ -567,7 +567,7 @@ def _execute_bulk_export(job: Job, store, staging) -> None:
         save_checkpoint(store, job, checkpoint_data)
         _save_detail(job, collector)
         try:
-            from api.services.scoring_helpers import persist_run_sync
+            from pipeline.scoring_helpers import persist_run_sync
 
             persist_run_sync(
                 endpoint="bulk_export",
@@ -647,13 +647,13 @@ def _execute_cohort(job: Job, store, staging) -> None:
         )
         if count == 0:
             _worker_log.info(
-                "cohort_empty job=%s — no %s resources found, skipping export",
+                "cohort_empty job=%s  no %s resources found, skipping export",
                 job.id,
                 search_type,
             )
             with _secure_open(output_path, "w"):
                 pass  # touch an empty result file
-            from integrations.storage import publish_result
+            from pipeline.jobs.result_publisher import publish_result
 
             job.result_path = publish_result(job, output_path)
             save_checkpoint(store, job, {"phase": "done", "lines_written": 0})
@@ -695,7 +695,7 @@ def _execute_cohort(job: Job, store, staging) -> None:
 
     if not cancelled:
         # Validate BEFORE promoting to the durable store (see the bulk-export
-        # path for the rationale — pre-publish gate eliminates write-then-delete).
+        # path for the rationale  pre-publish gate eliminates write-then-delete).
         summary_dict = collector.to_dict(
             file_size_bytes=os.path.getsize(output_path),
             compressed=False,
@@ -725,14 +725,14 @@ def _execute_cohort(job: Job, store, staging) -> None:
             _cleanup_blocked_output(job, output_path, cohort_audit_path, manifest_path)
             raise
 
-        # Gate passed — promote to the durable store and finalise.
+        # Gate passed  promote to the durable store and finalise.
         if _COMPRESS_RESULTS:
             output_path = compress_ndjson(output_path)
             summary_dict = collector.to_dict(
                 file_size_bytes=os.path.getsize(output_path),
                 compressed=True,
             )
-        from integrations.storage import publish_result
+        from pipeline.jobs.result_publisher import publish_result
 
         job.result_path = publish_result(
             job, output_path, manifest_path=manifest_path, audit=summary_dict
@@ -749,7 +749,7 @@ def _execute_cohort(job: Job, store, staging) -> None:
         save_checkpoint(store, job, checkpoint_data)
         _save_detail(job, collector)
         try:
-            from api.services.scoring_helpers import persist_run_sync
+            from pipeline.scoring_helpers import persist_run_sync
 
             persist_run_sync(
                 endpoint="cohort",
@@ -869,7 +869,7 @@ def _execute_patient_export(job: Job, store, staging) -> None:
             _cleanup_blocked_output(job, output_path, audit_path, manifest_path)
             raise
 
-        # Gate passed — now (and only now) promote the output to the durable
+        # Gate passed  now (and only now) promote the output to the durable
         # store and finalise the job.
         if _COMPRESS_RESULTS:
             output_path = compress_ndjson(output_path)
@@ -878,7 +878,7 @@ def _execute_patient_export(job: Job, store, staging) -> None:
                 file_size_bytes=os.path.getsize(output_path),
                 compressed=True,
             )
-        from integrations.storage import publish_result
+        from pipeline.jobs.result_publisher import publish_result
 
         job.result_path = publish_result(
             job, output_path, manifest_path=manifest_path, audit=summary_dict
@@ -893,7 +893,7 @@ def _execute_patient_export(job: Job, store, staging) -> None:
         save_checkpoint(store, job, checkpoint_data)
         _save_detail(job, collector)
         try:
-            from api.services.scoring_helpers import persist_run_sync
+            from pipeline.scoring_helpers import persist_run_sync
 
             persist_run_sync(
                 endpoint="patient_export",
@@ -1012,7 +1012,7 @@ def _execute_batch_patient_export(job: Job, store, staging) -> None:
             _cleanup_blocked_output(job, output_path, audit_path, manifest_path)
             raise
 
-        # Gate passed — now (and only now) promote the output to the durable
+        # Gate passed  now (and only now) promote the output to the durable
         # store and finalise the job.
         if _COMPRESS_RESULTS:
             output_path = compress_ndjson(output_path)
@@ -1021,7 +1021,7 @@ def _execute_batch_patient_export(job: Job, store, staging) -> None:
                 file_size_bytes=os.path.getsize(output_path),
                 compressed=True,
             )
-        from integrations.storage import publish_result
+        from pipeline.jobs.result_publisher import publish_result
 
         job.result_path = publish_result(
             job, output_path, manifest_path=manifest_path, audit=summary_dict
@@ -1036,7 +1036,7 @@ def _execute_batch_patient_export(job: Job, store, staging) -> None:
         save_checkpoint(store, job, checkpoint_data)
         _save_detail(job, collector)
         try:
-            from api.services.scoring_helpers import persist_run_sync
+            from pipeline.scoring_helpers import persist_run_sync
 
             persist_run_sync(
                 endpoint="batch_patient_export",

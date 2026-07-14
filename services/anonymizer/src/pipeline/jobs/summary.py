@@ -77,7 +77,7 @@ class JobSummaryCollector:
             resource:         The processed FHIR resource dict.
             manifest_entries: Pre-parsed manifest entries from the processor.
                               When provided, skips the JSON re-parse from
-                              ``meta.tag`` — eliminates one ``json.loads()``
+                              ``meta.tag``  eliminates one ``json.loads()``
                               call per resource in the bulk-export hot loop.
         """
         if not isinstance(resource, dict):

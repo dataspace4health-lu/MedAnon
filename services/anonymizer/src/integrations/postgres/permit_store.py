@@ -1,7 +1,7 @@
 """PostgreSQL-backed data-permit store (TEHDAS2 D7.2 §2 governance, EHDS Art 79).
 
 Durable home for data permits so the governance decisions made during a run
-(permit approval, disclosure binding) survive a restart — Art 79 auditability
+(permit approval, disclosure binding) survive a restart  Art 79 auditability
 requires the permit that authorised a release to remain queryable afterwards.
 
 Same public surface as :class:`pipeline.governance.store.InMemoryPermitStore`
@@ -97,7 +97,7 @@ class PostgresPermitStore:
     # ------------------------------------------------------------------
 
     def save(self, permit: Permit) -> Permit:
-        """Upsert *permit* (overwrite on id — matches in-memory save semantics)."""
+        """Upsert *permit* (overwrite on id  matches in-memory save semantics)."""
         conn = self._get_conn()
         try:
             with conn:

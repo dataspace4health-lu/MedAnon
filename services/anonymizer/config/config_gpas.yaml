@@ -6,14 +6,14 @@
 # Strategy: gPAS server-managed pseudonymization + generalization + NLP scrubbing
 # Applicable resources: All FHIR resources (IDs rewritten and cross-referenced)
 # Dependencies: gPAS server (set GPAS_URL and GPAS_DOMAIN environment variables)
-# Legal basis: Varies by jurisdiction — pair with config_gdpr_eu.yaml or
+# Legal basis: Varies by jurisdiction  pair with config_gdpr_eu.yaml or
 #              config_hipaa_safe_harbor.yaml for full regulatory compliance
 #
 # Required env vars:
-#   GPAS_URL          — gPAS server base URL (e.g. http://gpas:8080/ttp-fhir/fhir)
-#   GPAS_DOMAIN       — pseudonym domain name configured in gPAS
-#   GPAS_BASIC_USER   — HTTP Basic Auth username (default: user)
-#   GPAS_BASIC_PASS   — HTTP Basic Auth password
+#   GPAS_URL           gPAS server base URL (e.g. http://gpas:8080/ttp-fhir/fhir)
+#   GPAS_DOMAIN        pseudonym domain name configured in gPAS
+#   GPAS_BASIC_USER    HTTP Basic Auth username (default: user)
+#   GPAS_BASIC_PASS    HTTP Basic Auth password
 # =============================================================================
 
 general:
@@ -137,7 +137,7 @@ rules:
 - match: Patient.address
   action: redact
 
-# Geolocation extension nested inside Patient.address — lat/lon are re-identification PHI.
+# Geolocation extension nested inside Patient.address  lat/lon are re-identification PHI.
 # Must be listed explicitly because the parent address rule redacts scalar fields
 # but nested extension objects survive without their own rule.
 - name: "redact patient address geolocation"
@@ -307,7 +307,7 @@ rules:
 # 8. DISPLAY FIELDS AND SUBJECT/PATIENT REFERENCES
 # ==========================================================
 
-# Person-type references always contain a name — redact unconditionally.
+# Person-type references always contain a name  redact unconditionally.
 - match: "*.subject.display"
   action: redact
 
@@ -335,11 +335,11 @@ rules:
 # 9. DOCUMENTS / ATTACHMENTS
 # text/* payloads: Base64-decoded → NLP-scrubbed → re-encoded.
 # Non-text MIME types (image/*, application/pdf …): data field redacted.
-# NOTE: *.attachment.data does NOT match DocumentReference — the attachment is
+# NOTE: *.attachment.data does NOT match DocumentReference  the attachment is
 # nested under content[*].attachment, so specific paths are required per resource.
 # ==========================================================
 
-# DocumentReference — clinical notes (content[*].attachment, nested one level)
+# DocumentReference  clinical notes (content[*].attachment, nested one level)
 - name: scrub document reference attachment text
   match: DocumentReference.content.attachment.data
   action: nlp_detect_act
@@ -360,7 +360,7 @@ rules:
   match: DocumentReference.content.attachment.hash
   action: redact
 
-# DiagnosticReport, QuestionnaireResponse — presentedForm is Attachment directly
+# DiagnosticReport, QuestionnaireResponse  presentedForm is Attachment directly
 - name: scrub presented form text
   match: "*.presentedForm.data"
   action: nlp_detect_act
@@ -377,7 +377,7 @@ rules:
   match: "*.presentedForm.title"
   action: redact
 
-# Observation, Task — valueAttachment
+# Observation, Task  valueAttachment
 - name: scrub value attachment text
   match: "*.valueAttachment.data"
   action: nlp_detect_act
@@ -390,7 +390,7 @@ rules:
   match: "*.valueAttachment.url"
   action: redact
 
-# Photos — biometric identifiers (never NLP-scrubable)
+# Photos  biometric identifiers (never NLP-scrubable)
 - name: redact photo data
   match: "*.photo.data"
   action: redact
@@ -438,7 +438,7 @@ rules:
 # ==========================================================
 
 # FHIR Narrative div is an XHTML summary derived from the resource data.
-# NLP scrubbing alone is insufficient — the div re-derives names, addresses,
+# NLP scrubbing alone is insufficient  the div re-derives names, addresses,
 # and dates from raw fields. Redact it entirely; downstream rendering
 # systems should regenerate narrative from the de-identified fields.
 - name: "redact narrative div"
@@ -507,7 +507,7 @@ rules:
     mode: tokenize
     threshold: 0.4
 
-# Street address pattern — fires on any valueString containing a recognizable
+# Street address pattern  fires on any valueString containing a recognizable
 # address regardless of LOINC code or resource structure (covers PRAPARE 56799-0,
 # custom SDOH panels, and any other free-text fields with address content).
 # Two rules: one for top-level valueString, one for component.valueString

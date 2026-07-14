@@ -1,14 +1,14 @@
 """Workflow (DAG) orchestration endpoints.
 
-POST   /workflows            — submit a DAG of steps, returns 202
-POST   /workflows/template   — submit from a named template (bulk-export | cohort)
-GET    /workflows            — list workflows (optional ?status=)
-GET    /workflows/{id}       — workflow + per-step status
-DELETE /workflows/{id}       — cancel a workflow
+POST   /workflows             submit a DAG of steps, returns 202
+POST   /workflows/template    submit from a named template (bulk-export | cohort)
+GET    /workflows             list workflows (optional ?status=)
+GET    /workflows/{id}        workflow + per-step status
+DELETE /workflows/{id}        cancel a workflow
 
 RBAC: the auth middleware maps /v1/workflows → analyst. Steps whose job_type
 reads source FHIR or writes a target (bulk-export/cohort/bulk-import) require
-admin — enforced per-request here since it depends on the submitted graph.
+admin  enforced per-request here since it depends on the submitted graph.
 """
 
 from __future__ import annotations

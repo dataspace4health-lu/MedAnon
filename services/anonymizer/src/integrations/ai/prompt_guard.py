@@ -3,7 +3,7 @@
 User-supplied text interpolated into LLM messages is sanitized and wrapped in
 explicit data tags so the model can distinguish instructions from data. The
 *primary* security boundary remains output-side (generated YAML is only ever
-schema-validated, never executed) — this module reduces the attack surface,
+schema-validated, never executed)  this module reduces the attack surface,
 it does not replace output validation.
 """
 
@@ -49,7 +49,7 @@ def wrap_untrusted(text: str, tag: str = "user_requirements") -> str:
 def clean_label(text: str, max_len: int = 64) -> str:
     """Allowlist filter for short labels (e.g. regulation names).
 
-    Returns the cleaned label, or "" when nothing safe remains — callers
+    Returns the cleaned label, or "" when nothing safe remains  callers
     treat "" exactly like an absent label.
     """
     if not text:

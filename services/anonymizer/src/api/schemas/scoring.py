@@ -33,7 +33,7 @@ class ScoreResourceRequest(BaseModel):
 
     original: dict | None = Field(
         default=None,
-        description="Original FHIR resource (before de-identification). Optional — enables field retention and temporal consistency checks.",
+        description="Original FHIR resource (before de-identification). Optional  enables field retention and temporal consistency checks.",
     )
     deidentified: dict = Field(
         ...,

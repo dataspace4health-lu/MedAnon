@@ -2,13 +2,13 @@
 
 The internal result store (``store_result``) keeps a durable copy that powers
 ``GET /jobs/{id}/result``. Delivery is a separate, final step that pushes the same
-file to the **dataspace S3 destination** chosen for the job — a per-job bucket +
+file to the **dataspace S3 destination** chosen for the job  a per-job bucket +
 credentials, unlike the single global result bucket.
 
 Resolution order for the destination:
 
-1. ``job.params["destination_id"]`` — a saved, encrypted destination.
-2. ``MEDANON_DEFAULT_DESTINATION_ID`` env — pin every job to one saved destination
+1. ``job.params["destination_id"]``  a saved, encrypted destination.
+2. ``MEDANON_DEFAULT_DESTINATION_ID`` env  pin every job to one saved destination
    without per-request wiring.
 3. otherwise ``None`` (no destination configured).
 
@@ -59,7 +59,7 @@ def resolve_destination_spec(dest_id: str | None) -> DestinationSpec | None:
     Falls back to ``MEDANON_DEFAULT_DESTINATION_ID`` when *dest_id* is empty.
     Returns ``None`` when no destination is configured (the caller decides whether
     that is fatal). Raises if a referenced id exists but cannot be loaded/decrypted
-    — a misconfiguration must never silently downgrade to "no delivery".
+     a misconfiguration must never silently downgrade to "no delivery".
     """
     dest_id = dest_id or os.environ.get("MEDANON_DEFAULT_DESTINATION_ID")
     if not dest_id:
@@ -70,7 +70,7 @@ def resolve_destination_spec(dest_id: str | None) -> DestinationSpec | None:
     store = get_destination_store()
     if store is None:
         raise DeliveryError(
-            "destination_id set but the destination store is not initialised — "
+            "destination_id set but the destination store is not initialised  "
             "set MEDANON_APP_DB_URL (PostgreSQL) to use saved S3 destinations."
         )
     meta = store.get(dest_id)
@@ -189,7 +189,7 @@ def deliver_content(
     """Write *data* to a temp file and deliver it to the resolved S3 destination.
 
     The delivery counterpart of :func:`~integrations.storage.publish_result` for
-    synchronous (non-job) outputs — the format endpoints (DICOM / CDA / HL7 v2)
+    synchronous (non-job) outputs  the format endpoints (DICOM / CDA / HL7 v2)
     that return content inline instead of producing a job result file.
 
     Resolution + policy match the job path: the destination comes from

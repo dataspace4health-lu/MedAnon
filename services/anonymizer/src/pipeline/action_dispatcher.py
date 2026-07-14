@@ -85,7 +85,7 @@ class PHIDetectionTask:
     action_type: str  # 'nlp_scrub', 'nlp_detect', or 'nlp_detect_act'
 
 
-# Backward-compatible aliases — remove after all callers are updated.
+# Backward-compatible aliases  remove after all callers are updated.
 BatchWork = PseudonymizationTask
 NlpWork = PHIDetectionTask
 
@@ -95,7 +95,7 @@ def _stable_value_key(v):
 
     Stable across runs, threads and processes: an earlier version used ``id()``
     of the matched value, which is only unique within an object's lifetime and
-    is reused after GC — under parallel processing that produced
+    is reused after GC  under parallel processing that produced
     non-reproducible output, a disqualifier for a privacy tool.
 
     Defined at module scope rather than inside ``evaluate_and_dispatch``'s rule
@@ -109,7 +109,7 @@ def _stable_value_key(v):
         # (orjson preserves insertion order otherwise).
         return _json_dumps_sorted(v)
     except Exception:
-        # Last-resort fallback — identity is OK here because the only path that
+        # Last-resort fallback  identity is OK here because the only path that
         # hits this branch is non-JSON-serializable objects, which never come
         # from FHIR resources in practice.
         return f"unhashable:{id(v)}"
@@ -122,7 +122,7 @@ def _bare_path_prefix(expr: str) -> str:
     ``find_nodes`` silently returns ``[]`` for function segments like
     ``where(...)``, so a fallback redact targeting the raw expression would
     no-op and leave the field intact. Redacting the longest plain-navigable
-    prefix over-redacts (drops the whole parent field) — the fail-closed
+    prefix over-redacts (drops the whole parent field)  the fail-closed
     direction.
     """
     expr = expr.strip()
@@ -152,18 +152,18 @@ def evaluate_and_dispatch(
     pseudonymization and PHI detection to their respective batch passes.
 
     Returns:
-        ``(pseudonymization_tasks, phi_detection_tasks)`` — work items for
+        ``(pseudonymization_tasks, phi_detection_tasks)``  work items for
         the pseudonymization and PHI-detection stages respectively.
     """
     gpas_work: list[PseudonymizationTask] = []
     nlp_work: list[PHIDetectionTask] = []
-    # Dedup key: (path, action, stable_value_key) — see _stable_value_key below.
+    # Dedup key: (path, action, stable_value_key)  see _stable_value_key below.
     processed_paths: set[tuple] = set()
     # Conflict detection: first action applied to each concrete path. A later
     # rule with a *different* action on the same path is a config conflict.
     path_action_seen: dict[str, str] = {}
 
-    # Config-independent structural PHI pass — OFF by default so nothing is
+    # Config-independent structural PHI pass  OFF by default so nothing is
     # transformed without a matching config rule. When enabled, the changes it
     # makes are recorded in the manifest (no longer a silent mutation).
     if _STRUCTURAL_PHI_ENABLED:
@@ -183,7 +183,7 @@ def evaluate_and_dispatch(
 
         # Conditional rules (E2.4): skip this rule entirely when its optional
         # condition/conditions block does not hold for the current resource.
-        # Evaluated before params are resolved — a condition never reads them.
+        # Evaluated before params are resolved  a condition never reads them.
         if not evaluate_rule_condition(rule, resource):
             audit_log.debug(
                 "rule_skipped_condition action=%s match=%s",
@@ -216,7 +216,7 @@ def evaluate_and_dispatch(
                 except Exception as exc:
                     if processing_mode == "skip":
                         audit_log.warning(
-                            "fhirpath_eval_failed_skip expression=%s resource_type=%s error=%s — "
+                            "fhirpath_eval_failed_skip expression=%s resource_type=%s error=%s  "
                             "redacting matched path as safety fallback",
                             candidate.replace("\n", " ").replace("\r", " "),
                             resource.get("resourceType", "unknown")
@@ -227,7 +227,7 @@ def evaluate_and_dispatch(
                         # Fail-safe: redact the longest plain-navigable prefix of
                         # the candidate path. The raw expression may contain
                         # function segments (where(), first(), …) that find_nodes
-                        # cannot navigate — it returns [] for those, so a redact
+                        # cannot navigate  it returns [] for those, so a redact
                         # targeting the raw expression silently no-ops and the
                         # element passes through unprocessed.
                         fallback_path = _bare_path_prefix(candidate)
@@ -238,7 +238,7 @@ def evaluate_and_dispatch(
                             ACTION_FALLBACK.labels(
                                 action=str(action), reason=type(exc).__name__
                             ).inc()
-                        except Exception:  # noqa: BLE001 — metrics must never break the pipeline
+                        except Exception:  # noqa: BLE001  metrics must never break the pipeline
                             pass
                         try:
                             perform_deidentification(
@@ -250,7 +250,7 @@ def evaluate_and_dispatch(
                             # the processor quarantines the whole resource.
                             audit_log.error(
                                 "fhirpath_fallback_redact_failed expression=%s "
-                                "fallback_path=%s error_type=%s — quarantining resource",
+                                "fallback_path=%s error_type=%s  quarantining resource",
                                 candidate,
                                 fallback_path,
                                 type(redact_exc).__name__,
@@ -290,7 +290,7 @@ def evaluate_and_dispatch(
                     resource.get("resourceType") if isinstance(resource, dict) else None
                 )
                 if resource_type and resource_type in _domain_map:
-                    params = dict(params)  # shallow copy — gpas_domain is a scalar
+                    params = dict(params)  # shallow copy  gpas_domain is a scalar
                     params["gpas_domain"] = _domain_map[resource_type]
 
         # Include a param fingerprint in the dedup key so two rules with the
@@ -311,7 +311,7 @@ def evaluate_and_dispatch(
             el_val = el.get("value")
             val_key = _stable_value_key(el_val)
             path_key = (el_path, action, val_key, params_key)
-            # Skip if this (path, action, value, params) was already selected —
+            # Skip if this (path, action, value, params) was already selected
             # by a prior rule OR by an earlier candidate of *this same* rule.
             # ``_build_match_candidates`` expands a wildcard like ``*.id`` into
             # both ``*.id`` and ``Patient.id``; on a typed resource both match
@@ -348,7 +348,7 @@ def evaluate_and_dispatch(
                     RULE_CONFLICT_TOTAL.labels(
                         path=el_path, action_a=prior, action_b=action
                     ).inc()
-                except Exception:  # noqa: BLE001 — metrics must never break the pipeline
+                except Exception:  # noqa: BLE001  metrics must never break the pipeline
                     pass
 
         for el in elements_to_process:
@@ -386,7 +386,7 @@ def evaluate_and_dispatch(
                 )
                 # Manifest is recorded at write-back time (run_gpas_batch /
                 # apply_pseudonym_mapping) so the logged action reflects the actual
-                # outcome — pseudonymization or fallback-redact if gPAS failed.
+                # outcome  pseudonymization or fallback-redact if gPAS failed.
                 continue
 
             # Defer NLP actions for batch processing (Pass 1.5)
@@ -434,7 +434,7 @@ def evaluate_and_dispatch(
                         actual_action = "redact"
                     except Exception:
                         audit_log.error(
-                            "fallback_redact_failed path=%s — PHI may be exposed; re-raising",
+                            "fallback_redact_failed path=%s  PHI may be exposed; re-raising",
                             el_path,
                         )
                         raise

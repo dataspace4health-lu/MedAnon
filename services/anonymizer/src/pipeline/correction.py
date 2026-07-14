@@ -1,4 +1,4 @@
-"""Correction stage — explicit, observable handling of resources that fail.
+"""Correction stage  explicit, observable handling of resources that fail.
 
 Historically a resource that could not be processed was emitted as one of two
 *different* error-dict shapes:
@@ -11,7 +11,7 @@ inconsistently, and there was no single, queryable record describing *what* was
 quarantined and *why*.  This module provides one canonical
 :func:`quarantine_record` builder so every producer emits the same shape.
 
-The record is intentionally a superset of the historical shapes — it keeps the
+The record is intentionally a superset of the historical shapes  it keeps the
 exact ``error`` and ``resourceType`` keys every existing consumer reads, and
 adds structured fields (``id``, ``stage``, ``error_type``, ``quarantined``) so a
 correction/audit consumer can reconstruct what happened without parsing prose.

@@ -1,9 +1,9 @@
-"""FhirAdapter — identity source adapter for FHIR JSON / NDJSON / XML.
+"""FhirAdapter  identity source adapter for FHIR JSON / NDJSON / XML.
 
 FHIR is already the engine's intermediate representation, so this adapter is a
 thin wrapper over :mod:`pipeline.io_formats`.  It exists so the FHIR path shares
 the same :class:`~pipeline.sources.protocol.DataSourceAdapter` seam that the
-future CDA / HL7v2 / DICOM / tabular adapters plug into — and so the output
+future CDA / HL7v2 / DICOM / tabular adapters plug into  and so the output
 stage can enforce "only FHIR may target the FHIR server" uniformly.
 """
 

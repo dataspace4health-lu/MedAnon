@@ -1,4 +1,4 @@
-"""pipeline.config.loader — YAML config loading and validation.
+"""pipeline.config.loader  YAML config loading and validation.
 
 Loads de-identification rule profiles from YAML files.  Supports
 ``${VAR:-default}`` environment variable interpolation in values.
@@ -6,8 +6,8 @@ Validates rule shapes and raises ``ValueError`` (never ``sys.exit``) on
 invalid config so callers can handle errors gracefully.
 
 Public API:
-    load_config(path)         — parse and validate a YAML config file
-    load_config_str(yaml_str) — parse from an in-memory YAML string
+    load_config(path)          parse and validate a YAML config file
+    load_config_str(yaml_str)  parse from an in-memory YAML string
 """
 
 import logging
@@ -121,7 +121,7 @@ class Settings:
                 # having to re-derive the YAML + env state at audit time.
                 self.config_hash = self._compute_config_hash(cfg)
 
-                # Attributes managed explicitly below — never let raw YAML keys
+                # Attributes managed explicitly below  never let raw YAML keys
                 # silently overwrite them via setattr (e.g. a YAML key "filename"
                 # would corrupt the LRU cache key; "processing_errors" is
                 # validated and sanitized separately).
@@ -143,7 +143,7 @@ class Settings:
                 # Set values of the dictionary as class attributes
                 for key in cfg:
                     # Reject keys that target Python internals or methods on
-                    # the Settings class — a YAML file containing a key like
+                    # the Settings class  a YAML file containing a key like
                     # ``__class__`` or ``parse`` would otherwise hijack the
                     # object via ``setattr``.
                     if (
@@ -174,7 +174,7 @@ class Settings:
                     _sentinel = object()
                     raw_domain_map = general.get("domain_map", _sentinel)
                     if raw_domain_map is _sentinel:
-                        # Key absent from YAML — inherit the built-in default map.
+                        # Key absent from YAML  inherit the built-in default map.
                         self.domain_map: dict[str, str] = _DEFAULT_DOMAIN_MAP
                     elif isinstance(raw_domain_map, dict):
                         self.domain_map = {
@@ -317,10 +317,10 @@ class Settings:
         """Warn when multiple rules target the same FHIRPath with different actions.
 
         This catches misconfigurations like one rule hashing Patient.id and
-        another redacting it — only the first (by YAML order) will take effect
+        another redacting it  only the first (by YAML order) will take effect
         due to duplicate-path prevention.
         """
-        # Mutually exclusive action groups — applying two from the same group
+        # Mutually exclusive action groups  applying two from the same group
         # to the same path is almost certainly a misconfiguration.
         _CONFLICTING_GROUPS = [
             frozenset(
@@ -381,7 +381,7 @@ class Settings:
                 PERSON: 90
                 DATE_TIME: 80
 
-        All fields are optional — an absent ``nlp:`` block means the hard-coded
+        All fields are optional  an absent ``nlp:`` block means the hard-coded
         defaults in ``deidentify.py`` apply unchanged.
         """
         if not isinstance(nlp_cfg, dict):

@@ -1,6 +1,6 @@
 """Data-permit governance endpoints (WS8b, D7.2 §2 / EHDS Arts 45-49).
 
-Thin REST surface over :class:`api.services.permits.PermitService`. All routes
+Thin REST surface over :class:`pipeline.permits.PermitService`. All routes
 require the ``admin`` role (data-governance is a privileged operation). The
 lifecycle is state-machine enforced in the domain layer; illegal transitions
 return HTTP 409.
@@ -12,7 +12,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from api.deps import limiter
-from api.services.permits import (
+from pipeline.permits import (
     PermitNotFoundError,
     PermitService,
     PermitTransitionError,

@@ -42,7 +42,7 @@ if TYPE_CHECKING:
 
 _log = logging.getLogger("medanon.privacy.apply")
 
-# Manifest system URL — reuse the constant from pipeline.manifest.
+# Manifest system URL  reuse the constant from pipeline.manifest.
 _MANIFEST_SYSTEM = "https://medanon.local/transformation-manifest"
 _SUPPRESSED_SYSTEM = "https://medanon.local/privacy-suppressed"
 
@@ -64,7 +64,7 @@ def _set_field(resource: dict, fhir_path: str, value: str) -> None:
         if isinstance(val, list):
             val = val[0] if val else None
         if not isinstance(val, dict):
-            return  # path doesn't exist — skip silently
+            return  # path doesn't exist  skip silently
         obj = val
 
     last = parts[-1]
@@ -126,7 +126,7 @@ def _emit_suppression_audit(resource: dict, patient_id: str, reason: str) -> Non
         from utils.metrics import RESOURCES_SUPPRESSED
 
         RESOURCES_SUPPRESSED.labels(resource_type=rtype, reason=reason).inc()
-    except Exception:  # noqa: BLE001 — metrics must never break the pipeline
+    except Exception:  # noqa: BLE001  metrics must never break the pipeline
         pass
 
     try:
@@ -140,7 +140,7 @@ def _emit_suppression_audit(resource: dict, patient_id: str, reason: str) -> Non
             outcome="success",
             detail={"patient_id_sha256_prefix": pid_hash},
         )
-    except Exception:  # noqa: BLE001 — audit must never break the pipeline
+    except Exception:  # noqa: BLE001  audit must never break the pipeline
         pass
 
 

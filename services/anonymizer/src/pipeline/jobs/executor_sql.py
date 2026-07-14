@@ -1,4 +1,4 @@
-"""SQL-export executor — de-identify selected tables of a source database.
+"""SQL-export executor  de-identify selected tables of a source database.
 
 Two-job-type sibling of :mod:`pipeline.jobs.executor_tabular`.  The user picks a
 saved connection plus a set of tables and a column mapping (a saved profile's
@@ -9,16 +9,16 @@ single result ZIP.
 
 gPAS pseudonymization is consistent across tables (the gPAS TTP persists the
 value→pseudonym mapping), so a foreign key pseudonymized in two tables stays
-joinable — provided both columns are mapped to the same gPAS domain.
+joinable  provided both columns are mapped to the same gPAS domain.
 
 Job params (set by the submit endpoint):
-    connection_id   — saved connection to read from
-    schema          — source schema (default "public")
-    tables          — list of table names to export
-    output_format   — "csv" (default) | "ndjson" | "parquet"
-    config_profile  — profile whose table:/column: rules to apply (when no inline)
-    rules           — inline rule list (takes precedence over config_profile)
-    chunk_size      — rows per read chunk (default 1000)
+    connection_id    saved connection to read from
+    schema           source schema (default "public")
+    tables           list of table names to export
+    output_format    "csv" (default) | "ndjson" | "parquet"
+    config_profile   profile whose table:/column: rules to apply (when no inline)
+    rules            inline rule list (takes precedence over config_profile)
+    chunk_size       rows per read chunk (default 1000)
 
 Per-table isolation: a table that fails to read/process is recorded as a
 ``<table>.error.txt`` entry in the ZIP rather than aborting the whole export.
@@ -34,7 +34,7 @@ import os
 import zipfile
 
 from domain.jobs import JobStatus
-from integrations.storage import publish_result
+from pipeline.jobs.result_publisher import publish_result
 from pipeline.jobs.checkpoint import save_checkpoint
 
 _log = logging.getLogger("medanon.worker")
@@ -258,7 +258,7 @@ def _make_writer(output_format: str):
 
 
 class _CsvWriter:
-    """Streaming CSV writer — header inferred from the first row's columns."""
+    """Streaming CSV writer  header inferred from the first row's columns."""
 
     def __init__(self) -> None:
         self._buf = io.StringIO()
@@ -295,7 +295,7 @@ class _NdjsonWriter:
 class _ParquetWriter:
     """Buffers rows then writes a single Parquet file (requires pyarrow).
 
-    Note: buffers the whole table in memory — adequate for the MVP; very large
+    Note: buffers the whole table in memory  adequate for the MVP; very large
     tables should use CSV/NDJSON streaming.
     """
 

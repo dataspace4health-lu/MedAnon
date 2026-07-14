@@ -1,4 +1,4 @@
-"""Connector services — saved input sources + S3 output destinations.
+"""Connector services  saved input sources + S3 output destinations.
 
 Secrets (FHIR bearer tokens, S3 secret keys) are encrypted before they reach the
 store and decrypted only transiently to test or use a connection. Both stores are
@@ -29,7 +29,7 @@ def _source_store():
     store = get_source_store()
     if store is None:
         raise ConnectorStoreUnavailable(
-            "Input-source store is not initialised — set MEDANON_APP_DB_URL "
+            "Input-source store is not initialised  set MEDANON_APP_DB_URL "
             "(PostgreSQL) to enable saved input sources."
         )
     return store
@@ -41,7 +41,7 @@ def _destination_store():
     store = get_destination_store()
     if store is None:
         raise ConnectorStoreUnavailable(
-            "Output-destination store is not initialised — set MEDANON_APP_DB_URL "
+            "Output-destination store is not initialised  set MEDANON_APP_DB_URL "
             "(PostgreSQL) to enable saved S3 destinations."
         )
     return store

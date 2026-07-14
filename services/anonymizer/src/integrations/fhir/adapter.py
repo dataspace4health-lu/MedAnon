@@ -1,4 +1,4 @@
-"""FHIR client adapter — production implementation of FhirClientPort.
+"""FHIR client adapter  production implementation of FhirClientPort.
 
 Wraps the low-level HTTP functions in ``integrations.fhir.client`` so the
 API layer can depend on the port protocol rather than the transport directly.

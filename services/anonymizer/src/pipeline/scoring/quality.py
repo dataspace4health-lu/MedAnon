@@ -1,21 +1,21 @@
-"""Quality Evaluator — continuous pipeline execution metric.
+"""Quality Evaluator  continuous pipeline execution metric.
 
 Measures correctness of the transformation process. Several sub-evaluators map
 to the Kahn et al. 2016 harmonized DQ framework (conformance / completeness /
 plausibility), the framework named in the project's article:
 
-1. Transformation success rate (with error-rate gates) — pipeline execution
-2. Rule coverage completeness — policy coverage
-3. Lightweight FHIR schema validation — FHIR StructureDefinition conformance
-4. Reference integrity — Kahn *relational conformance* (refs resolve to a
+1. Transformation success rate (with error-rate gates)  pipeline execution
+2. Rule coverage completeness  policy coverage
+3. Lightweight FHIR schema validation  FHIR StructureDefinition conformance
+4. Reference integrity  Kahn *relational conformance* (refs resolve to a
    valid Type/id target; cross-resource version in ``evaluate_batch_refs``)
 5. Real-world data quality (Kahn conformance + completeness + temporal &
    value plausibility)
-6. Terminology binding — Kahn *value conformance*: SNOMED/LOINC/RxNorm codes
+6. Terminology binding  Kahn *value conformance*: SNOMED/LOINC/RxNorm codes
    not corrupted or sentinel-replaced by scrubbing
-7. FHIR cardinality constraints — *conformance*: required (cardinality-1)
+7. FHIR cardinality constraints  *conformance*: required (cardinality-1)
    fields intact after de-id
-8. Structural diff — information-loss signal (NCP/discernibility family):
+8. Structural diff  information-loss signal (NCP/discernibility family):
    element-count shift vs. original flags over-scrubbing
 """
 
@@ -25,7 +25,7 @@ from typing import Any
 
 from pipeline.scoring.models import Evidence, ModuleScore
 
-# Redaction sentinels that count as "still populated / conformant" for DQ —
+# Redaction sentinels that count as "still populated / conformant" for DQ
 # a field replaced with one of these is acceptable (not over-scrubbed).
 _DQ_REDACTED: frozenset[str] = frozenset(
     {"", "[redacted]", "redacted", "unknown", "masked", "removed", "anonymous"}
@@ -150,7 +150,7 @@ class QualityEvaluator:
                 Evidence(
                     check="success_rate",
                     value=0.0,
-                    details={"reason": "no resources processed — insufficient data"},
+                    details={"reason": "no resources processed  insufficient data"},
                 )
             )
             return 0.0
@@ -185,7 +185,7 @@ class QualityEvaluator:
                     check="rule_coverage",
                     value=1.0,
                     details={
-                        "reason": "no settings available — coverage not measurable"
+                        "reason": "no settings available  coverage not measurable"
                     },
                 )
             )
@@ -196,8 +196,8 @@ class QualityEvaluator:
         # Determine which rules are applicable to this resource type AND whose
         # target root field actually exists in the resource.  Without the
         # field-existence check, wildcard rules like ``*.note.text`` are counted
-        # as applicable to every resource type — even those without a ``note``
-        # field — which deflates coverage to ~50%.
+        # as applicable to every resource type  even those without a ``note``
+        # field  which deflates coverage to ~50%.
         applicable: set[str] = set()
         for rule in settings.rules:
             name = rule.get("name", rule.get("match", ""))
@@ -222,7 +222,7 @@ class QualityEvaluator:
 
             # If the rule path has ≥ 3 segments (e.g. *.name.family) the rule
             # requires a nested field inside the root value.  When the root
-            # value is a scalar or null it cannot contain sub-fields — the rule
+            # value is a scalar or null it cannot contain sub-fields  the rule
             # can never fire and should not count as applicable.
             # Concrete case: Organization.name is a plain string, not a
             # HumanName object, so *.name.family is not applicable to it.
@@ -368,10 +368,10 @@ class QualityEvaluator:
         Four output-only dimensions (no original needed → works on every path,
         incl. refs-only staging), each in [0,1]:
 
-        * conformance     — values within valid ranges / value-sets
-        * completeness     — expected fields still populated (not over-scrubbed)
-        * temporal         — dates plausible (no future, birth ≤ death, +ve spans)
-        * value_plausible  — numeric values within plausible clinical bounds
+        * conformance      values within valid ranges / value-sets
+        * completeness      expected fields still populated (not over-scrubbed)
+        * temporal          dates plausible (no future, birth ≤ death, +ve spans)
+        * value_plausible   numeric values within plausible clinical bounds
 
         Dimensions that don't apply to a resource return 1.0 (neutral) so a
         Patient isn't penalised for lacking Observation value ranges.
@@ -418,7 +418,7 @@ class QualityEvaluator:
                 checks.append(isinstance(v, (str, dict)) and bool(v))
 
         # Coded fields should still carry a system+code (de-id must not strip
-        # clinical codes — they're not PII). Checks any CodeableConcept.coding.
+        # clinical codes  they're not PII). Checks any CodeableConcept.coding.
         codings = self._collect_codings(r)
         if codings:
             valid = sum(1 for c in codings if c.get("system") and c.get("code"))
@@ -496,7 +496,7 @@ class QualityEvaluator:
         - Every coding still has a non-empty ``system`` URI.
         - Every coding still has a non-empty ``code`` value.
         - ``system`` URIs that were originally from a known vocabulary
-          (LOINC, SNOMED, RxNorm, ICD-10, UCUM) still carry that URI prefix —
+          (LOINC, SNOMED, RxNorm, ICD-10, UCUM) still carry that URI prefix
           de-id must not have replaced it with a sentinel.
 
         Returns 1.0 when no codings are present (not applicable).
@@ -549,7 +549,7 @@ class QualityEvaluator:
     # ----- 3g: FHIR cardinality constraints ---------------------------------
 
     # Per-resource required fields: (field, min_cardinality, is_array)
-    # Only the most analytically critical constraints are listed — a full
+    # Only the most analytically critical constraints are listed  a full
     # StructureDefinition validator is out of scope here.
     _CARDINALITY_RULES: dict[str, list[tuple[str, int, bool]]] = {
         "Patient": [
@@ -658,7 +658,7 @@ class QualityEvaluator:
         sentinel-replaced.
 
         The cut-offs below are a **heuristic operating point**, not a published
-        threshold — a small drop is expected (e.g. collapsing a multi-entry
+        threshold  a small drop is expected (e.g. collapsing a multi-entry
         ``identifier`` array to one pseudonym), while a large drop indicates the
         config nulls fields instead of replacing them. Tune per profile.
 
@@ -672,7 +672,7 @@ class QualityEvaluator:
                 Evidence(
                     check="structural_diff",
                     value=1.0,
-                    details={"reason": "no original — not measurable"},
+                    details={"reason": "no original  not measurable"},
                 )
             )
             return 1.0

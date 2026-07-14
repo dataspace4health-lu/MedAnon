@@ -11,9 +11,9 @@ Conflict semantics (RFC 9457-aligned):
     * Key seen, body hash differs   → 409 Conflict (key reused for a different request).
 
 Storage backends:
-    * ``LocalIdempotencyStore`` — in-process dict with TTL eviction.  Single-instance
+    * ``LocalIdempotencyStore``  in-process dict with TTL eviction.  Single-instance
       only.  Used when Redis is unavailable.
-    * ``RedisIdempotencyStore`` — shared across replicas via Redis ``SET key val EX ttl``.
+    * ``RedisIdempotencyStore``  shared across replicas via Redis ``SET key val EX ttl``.
       Selected automatically when a Redis client is provided at startup.
 
 The store is intentionally separate from ``utils.cache.CacheBackend`` because
@@ -178,7 +178,7 @@ def lookup_or_conflict(scope: str, key: str, body_hash: str) -> dict | None:
 
     Returns the cached entry (with keys ``status`` and ``body``) on a hit,
     or ``None`` when no entry exists.  Raises :class:`KeyError` when the
-    key was reused with a different body hash — the caller should translate
+    key was reused with a different body hash  the caller should translate
     that into HTTP 409 Conflict.
     """
     store = get_store()

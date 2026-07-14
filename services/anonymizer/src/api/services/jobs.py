@@ -1,10 +1,10 @@
-"""Job queue service — manages async job lifecycle."""
+"""Job queue service  manages async job lifecycle."""
 
 import json
 import logging
 import os
 
-from domain.jobs import (  # noqa: F401 — re-exported for routers
+from domain.jobs import (  # noqa: F401  re-exported for routers
     JobNotComplete,
     JobNotFound,
     JobQueueFull,
@@ -69,7 +69,7 @@ class JobService:
         """Raise ``JobQueueFull`` when the pending-job count exceeds the cap.
 
         We probe with ``limit=cap+1`` so the underlying store only fetches at
-        most one row beyond the threshold — avoids the O(n) scan that a full
+        most one row beyond the threshold  avoids the O(n) scan that a full
         list would cause when the queue is large.
         """
         cap = self._max_pending()
@@ -124,7 +124,7 @@ class JobService:
                 "disclosure"
             ),
             # Risk-driven export: the full Transformation Passport (D7.2 §5.5.1)
-            # — privacy model + achieved k/l/t, tools, privacy-risk assessment,
+            #  privacy model + achieved k/l/t, tools, privacy-risk assessment,
             # and disclosure. Anonymous by construction (no PHI). None otherwise.
             "transformation_passport": checkpoint.get("transformation_passport"),
         }
@@ -227,7 +227,7 @@ class JobService:
 
         *params* carries ``connection_id``, ``schema``, ``tables``,
         ``output_format`` and either ``config_profile`` or inline ``rules``.
-        Credentials are never passed here — only the connection id, resolved from
+        Credentials are never passed here  only the connection id, resolved from
         the encrypted store at execution time.
         """
         store = self._get_store()
@@ -342,7 +342,7 @@ class JobService:
 
         Resets ``status`` to PENDING and clears the ``_retry_count`` checkpoint
         so the worker gives the job a fresh budget.  Caller (admin) accepts
-        responsibility for the retry — typically after fixing the upstream
+        responsibility for the retry  typically after fixing the upstream
         cause (config bug, gPAS outage, malformed input).
 
         Raises:

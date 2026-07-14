@@ -1,4 +1,4 @@
-"""tokenize — format-preserving deterministic pseudonymisation.
+"""tokenize  format-preserving deterministic pseudonymisation.
 
 Replaces matched values with a synthetic token that **keeps the shape** of the
 original (handy when downstream schemas validate the format of an MRN, account
@@ -6,7 +6,7 @@ number, etc.) while revealing nothing about the source value.
 
 The token is a deterministic function of the value, so the **same input always
 produces the same token** (within and across jobs, given the same key and
-namespace) — enabling longitudinal linkage without a shared lookup table.
+namespace)  enabling longitudinal linkage without a shared lookup table.
 Different ``namespace`` values produce independent token spaces for the same
 input, so an MRN and an account number that happen to be equal do not collide.
 
@@ -35,7 +35,7 @@ input length if ``preserve_length`` is true (default), else a fixed 12 chars.
 
 Determinism is provided by ``HMAC-SHA256(MEDANON_HASH_KEY, namespace:value)``.
 Production deployments must set ``MEDANON_HASH_KEY``; plain SHA-256 is only
-permitted when ``MEDANON_HASH_ALLOW_PLAIN=true`` — and never in regulated mode
+permitted when ``MEDANON_HASH_ALLOW_PLAIN=true``  and never in regulated mode
 (EHDS/D7.2 §4.4: an unsalted/unkeyed hash of direct identifiers does not
 qualify as pseudonymisation). When a data-permit context is active
 (``utils.permit_context``) the key is additionally scoped per permit, so
@@ -102,7 +102,7 @@ def _derive_stream(namespace: str, value: str) -> "_Stream":
         with _warned_lock:
             if not _warned_no_key:
                 _log.warning(
-                    "MEDANON_HASH_KEY is unset — tokenization is deterministic but "
+                    "MEDANON_HASH_KEY is unset  tokenization is deterministic but "
                     "unkeyed (plain SHA-256). NOT suitable for production."
                 )
                 _warned_no_key = True
@@ -179,7 +179,7 @@ def tokenize_by_path(resource: dict, el: dict, params: dict) -> None:
     parts = path.split(".")[1:]  # strip resource-type root
     if len(parts) == 0:
         raise ValueError(
-            f"Empty path after removing resource type root in tokenize — "
+            f"Empty path after removing resource type root in tokenize  "
             f"refusing to operate on entire resource (original path: {el['path']!r})"
         )
     ret = find_nodes(resource, parts[:-1], [])

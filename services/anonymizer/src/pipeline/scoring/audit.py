@@ -1,4 +1,4 @@
-"""Scoring audit — concise post-export Markdown report generator.
+"""Scoring audit  concise post-export Markdown report generator.
 
 ``ScoreAuditCollector`` wraps ``ScoreCollector`` and accumulates per-resource
 evidence during scoring.  After processing all resources, call
@@ -55,11 +55,11 @@ class _TypeStats:
         "privacy_fail_reasons",
         "uncovered_hipaa",
         "text_detections",
-        # Per-type detail tracking — powers the "Score Composition" section.
-        "dim_samples",  # dict[str, list[float]] — sub-dim values seen on this type
-        "action_counts",  # Counter — actions actually applied to this type
-        "risk_scores",  # list[float] — per-resource privacy risk
-        "worst_resources",  # list[(composite, resource_id)] — N lowest-scoring
+        # Per-type detail tracking  powers the "Score Composition" section.
+        "dim_samples",  # dict[str, list[float]]  sub-dim values seen on this type
+        "action_counts",  # Counter  actions actually applied to this type
+        "risk_scores",  # list[float]  per-resource privacy risk
+        "worst_resources",  # list[(composite, resource_id)]  N lowest-scoring
     )
 
     def __init__(self) -> None:
@@ -193,7 +193,7 @@ class ScoreAuditCollector:
             elif ev.severity == "critical" and result.decision == "FAIL":
                 ts.privacy_fail_reasons[ev.check] += 1
 
-        # Per-type sub-dimension samples — needed for Score Composition section
+        # Per-type sub-dimension samples  needed for Score Composition section
         if result.utility:
             for ev in result.utility.evidence:
                 bucket = ts.dim_samples.get(ev.check)
@@ -223,7 +223,7 @@ class ScoreAuditCollector:
         for entry in manifest_entries:
             action = entry.get("action", "unknown")
             self._action_totals[action] += 1
-            # Per-type action counts — drives the "actions on this resource type" view
+            # Per-type action counts  drives the "actions on this resource type" view
             entry_path = entry.get("path") or ""
             entry_rtype = entry_path.split(".", 1)[0] if entry_path else ""
             if entry_rtype == rtype or not entry_rtype:
@@ -346,7 +346,7 @@ def _render_report(
             issues.append(
                 (
                     "LOW",
-                    f"{len(uncovered_hipaa)} HIPAA paths partially uncovered (below risk threshold — all resources passed)",
+                    f"{len(uncovered_hipaa)} HIPAA paths partially uncovered (below risk threshold  all resources passed)",
                 )
             )
     if text_pattern_counts:
@@ -395,19 +395,19 @@ def _render_report(
 
     # Overall verdict
     if fail_count == 0 and not issues:
-        W(f"## PASS — Grade {grade} — No Issues")
+        W(f"## PASS  Grade {grade}  No Issues")
         W("")
         W(
             f"All {total:,} resources passed privacy checks. Composite score: **{avg_composite:.1f}%**"
         )
     elif fail_count == 0:
-        W(f"## PASS — Grade {grade} — {len(issues)} Issue(s)")
+        W(f"## PASS  Grade {grade}  {len(issues)} Issue(s)")
         W("")
         W(
             "All resources passed privacy gate, but there are optimization opportunities."
         )
     else:
-        W(f"## FAIL — Grade {grade} — {fail_count:,} Resources Failed")
+        W(f"## FAIL  Grade {grade}  {fail_count:,} Resources Failed")
         W("")
         pct_fail = fail_count / max(total, 1) * 100
         W(f"**{pct_fail:.0f}%** of resources failed the privacy gate (composite = 0).")
@@ -431,7 +431,7 @@ def _render_report(
     W(f"| Pass / Fail | {pass_count:,} / {fail_count:,} |")
     W("")
 
-    # Sub-dimension averages — all 8 dimensions with their module and weight.
+    # Sub-dimension averages  all 8 dimensions with their module and weight.
     # Uses module-level _DIM_META (single source of truth shared with the
     # Methodology and Score Composition sections below).
     if total > 0 and any(dim_samples.get(d) for d, _, _ in _DIM_META):
@@ -453,12 +453,12 @@ def _render_report(
         W("")
 
     #    # -----------------------------------------------------------------------
-    #    # Scoring Methodology — explain WHAT we measured and HOW it was computed.
+    #    # Scoring Methodology  explain WHAT we measured and HOW it was computed.
     #    # Always rendered so every report is self-documenting.
     #    # -----------------------------------------------------------------------
     #    W("### How These Numbers Are Computed")
     #    W("")
-    #    W("**Composite formula (multiplicative — no dimension compensates for another):**")
+    #    W("**Composite formula (multiplicative  no dimension compensates for another):**")
     #    W("")
     #    W("```")
     #    W("composite = privacy_score × utility_score × quality_score      (range 0..1)")
@@ -469,19 +469,19 @@ def _render_report(
     #    W("")
     #    W("**What each module measures:**")
     #    W("")
-    #    W(f"- **Privacy** (gate) — runs 4 sub-evaluators per resource (attacker model, identifier coverage, config coverage, text-PII scan). The maximum risk across all of them must be ≤ `{RISK_THRESHOLD}` (configurable via `MEDANON_SCORE_RISK_THRESHOLD`) or the resource FAILs.")
-    #    W("- **Utility** (informational) — how much analytical value survived the de-identification.")
-    #    W("- **Quality** (informational) — how well the rule pipeline executed and produced valid FHIR.")
+    #    W(f"- **Privacy** (gate)  runs 4 sub-evaluators per resource (attacker model, identifier coverage, config coverage, text-PII scan). The maximum risk across all of them must be ≤ `{RISK_THRESHOLD}` (configurable via `MEDANON_SCORE_RISK_THRESHOLD`) or the resource FAILs.")
+    #    W("- **Utility** (informational)  how much analytical value survived the de-identification.")
+    #    W("- **Quality** (informational)  how well the rule pipeline executed and produced valid FHIR.")
     #    W("")
     #    W("**Letter grade scale (applied to composite):**")
     #    W("`A ≥ 90%` · `B ≥ 75%` · `C ≥ 60%` · `D ≥ 40%` · `F < 40%`")
     #    W("")
     #
     #    # -----------------------------------------------------------------------
-    #    # Problems Only — skip sections with no issues
+    #    # Problems Only  skip sections with no issues
     #    # -----------------------------------------------------------------------
 
-    # Uncovered HIPAA paths — grouped by resource type with qualified paths
+    # Uncovered HIPAA paths  grouped by resource type with qualified paths
     if uncovered_hipaa:
         W("---")
         W("")
@@ -510,7 +510,7 @@ def _render_report(
             W("")
             W(
                 f"**{len(uncovered_hipaa)} fields** across **{failing_type_count} resource type(s)** "
-                f"had no rule but risk stayed below threshold — **no failures**. Often means a conditional "
+                f"had no rule but risk stayed below threshold  **no failures**. Often means a conditional "
                 f"rule (`nlp_detect_act`) passed because no PII was detected."
             )
         W("")
@@ -531,14 +531,14 @@ def _render_report(
             key=lambda rt: -by_type[rt].fail_count,
         )
         if failing_types_ordered:
-            W("**Rules to add — by resource type:**")
+            W("**Rules to add  by resource type:**")
             W("")
             for rtype in failing_types_ordered[:5]:
                 ts = by_type[rtype]
                 rows_for_type = [
                     (qp, bp) for rt, qp, bp, _ in type_path_rows if rt == rtype
                 ]
-                W(f"**`{rtype}`** — {ts.fail_count:,}/{ts.total:,} failed:")
+                W(f"**`{rtype}`**  {ts.fail_count:,}/{ts.total:,} failed:")
                 W("```yaml")
                 for qualified, bare in rows_for_type[:6]:
                     action, note = _suggest_action(bare)
@@ -565,9 +565,9 @@ def _render_report(
         for ex in text_detection_examples:
             ptype = ex.get("type", "?")
             if ptype not in shown:
-                shown[ptype] = ex.get("value_preview", "—")[:30]
+                shown[ptype] = ex.get("value_preview", "")[:30]
         for pattern, count in text_pattern_counts.most_common(5):
-            W(f"| `{pattern}` | {count:,} | `{shown.get(pattern, '—')}` |")
+            W(f"| `{pattern}` | {count:,} | `{shown.get(pattern, '')}` |")
         W("")
         W("**Fix:**")
         W("```yaml")
@@ -593,7 +593,7 @@ def _render_report(
                     W("## k-Anonymity Risk")
                     W("")
                     W(
-                        f"**min_k = {min_k}** — {singletons} patient(s) are uniquely identifiable."
+                        f"**min_k = {min_k}**  {singletons} patient(s) are uniquely identifiable."
                     )
                     W("")
                     W("| Metric | Value |")
@@ -617,7 +617,7 @@ def _render_report(
         W("## High Information Loss")
         W("")
         W(
-            f"**{_pct(1 - il_avg)} of analytical value lost** — utility may be too low for research."
+            f"**{_pct(1 - il_avg)} of analytical value lost**  utility may be too low for research."
         )
         W("")
         # Show action breakdown
@@ -706,7 +706,7 @@ def _render_report(
         W("")
 
     # -----------------------------------------------------------------------
-    # Resource Type Breakdown — all types, highlight problems
+    # Resource Type Breakdown  all types, highlight problems
     # -----------------------------------------------------------------------
     if by_type:
         W("---")
@@ -730,7 +730,7 @@ def _render_report(
                 reason = ts.privacy_fail_reasons.most_common(1)[0][0]
                 note = _brief_reason(reason, ts, rtype)
             elif ts.pass_count > 0 and avg_priv < 0.6:
-                note = f"privacy score low ({avg_priv * 100:.0f}%) — residual risk near threshold"
+                note = f"privacy score low ({avg_priv * 100:.0f}%)  residual risk near threshold"
             elif ts.pass_count > 0 and avg_u < 0.70:
                 note = f"low utility ({avg_u * 100:.0f}%)"
             elif ts.pass_count > 0 and avg_q < 0.70:
@@ -744,7 +744,7 @@ def _render_report(
         W("")
 
     # -----------------------------------------------------------------------
-    # Score Composition — show the exact arithmetic for every type that did
+    # Score Composition  show the exact arithmetic for every type that did
     # not earn an A grade. This is the "WHY did this type score lower" view.
     # -----------------------------------------------------------------------
     weak_types = [
@@ -755,7 +755,7 @@ def _render_report(
     if weak_types:
         W("---")
         W("")
-        W("## Score Composition — Why Some Types Scored Lower")
+        W("## Score Composition  Why Some Types Scored Lower")
         W("")
         W(
             "For every resource type that did not earn an A, this section shows the exact"
@@ -772,7 +772,7 @@ def _render_report(
                 sum(ts.risk_scores) / len(ts.risk_scores) if ts.risk_scores else 0.0
             )
 
-            W(f"### `{rtype}` — Grade {grade} ({avg_comp:.1f}%)")
+            W(f"### `{rtype}`  Grade {grade} ({avg_comp:.1f}%)")
             W("")
             W("**Composite arithmetic (multiplicative):**")
             W("")
@@ -790,14 +790,14 @@ def _render_report(
             W("```")
             W("")
 
-            # Sub-dimension breakdown — show the weighted contribution of each
+            # Sub-dimension breakdown  show the weighted contribution of each
             # sub-dim to its module score. This pinpoints WHICH sub-dim dragged
             # the overall score down.
             util_dims = [(d, w) for d, m, w in _DIM_META if m == "utility"]
             qual_dims = [(d, w) for d, m, w in _DIM_META if m == "quality"]
 
             def _dim_block(label: str, dims: list[tuple[str, float]]) -> None:
-                W(f"**{label} — sub-dimension contributions:**")
+                W(f"**{label}  sub-dimension contributions:**")
                 W("")
                 W("| Sub-dimension | Weight | Avg Value | Weighted | Verdict |")
                 W("|---|---|---|---|---|")
@@ -823,7 +823,7 @@ def _render_report(
             _dim_block("Utility", util_dims)
             _dim_block("Quality", qual_dims)
 
-            # Top actions applied to this type — explains the information_loss
+            # Top actions applied to this type  explains the information_loss
             # sub-dim concretely (which actions did the work).
             if ts.action_counts:
                 W("**Actions applied to this resource type (top 5):**")
@@ -840,7 +840,7 @@ def _render_report(
                     )
                 W("")
 
-            # Worst N resources — concrete IDs the operator can investigate.
+            # Worst N resources  concrete IDs the operator can investigate.
             if ts.worst_resources:
                 W("**Lowest-scoring resources of this type (drill down candidates):**")
                 W("")
@@ -851,7 +851,7 @@ def _render_report(
                 W("")
 
     # -----------------------------------------------------------------------
-    # Scoring Reference Appendix — definitions for every action weight,
+    # Scoring Reference Appendix  definitions for every action weight,
     # sub-dimension formula, and threshold used above.
     # -----------------------------------------------------------------------
     W("---")
@@ -874,7 +874,7 @@ def _render_report(
         "scrub_text": "free-text replaced with `[REDACTED]`",
         "nlp_scrub": "NLP-detected entities removed",
         "nlp_detect": "legacy alias for nlp_scrub",
-        "nlp_detect_act": "conditional NLP — entity-specific action",
+        "nlp_detect_act": "conditional NLP  entity-specific action",
         "nlp_detect_act/clean": "no action (entity passes through)",
         "nlp_detect_act/redact": "matched entity redacted",
         "nlp_detect_act/generalize": "matched entity generalized",
@@ -882,7 +882,7 @@ def _render_report(
         "generalize": "value coarsened (e.g. date → year)",
         "substitute": "fixed replacement (e.g. `[REDACTED]`)",
         "perturb": "small numeric noise added",
-        "cryptohash": "deterministic HMAC — preserves linkage",
+        "cryptohash": "deterministic HMAC  preserves linkage",
         "gpas_pseudonymize": "external TTP pseudonymization",
         "encrypt": "reversible RSA encryption",
     }
@@ -895,41 +895,41 @@ def _render_report(
     W("### Sub-dimension formulas")
     W("")
     W(
-        "- **field_retention** — `1 − (fields_removed / fields_in_input)`. Penalises hard `redact`."
+        "- **field_retention**  `1 − (fields_removed / fields_in_input)`. Penalises hard `redact`."
     )
     W(
-        "- **semantic_preservation** — share of clinical codes (SNOMED/LOINC/RxNorm/ICD) preserved verbatim. `1.0` when codes are untouched."
+        "- **semantic_preservation**  share of clinical codes (SNOMED/LOINC/RxNorm/ICD) preserved verbatim. `1.0` when codes are untouched."
     )
     W(
-        "- **temporal_consistency** — share of date/period fields whose chronological ordering survived generalization."
+        "- **temporal_consistency**  share of date/period fields whose chronological ordering survived generalization."
     )
     W(
-        "- **information_loss** — `1 − weighted_avg(action_loss_weights)` across all actions applied to the resource."
+        "- **information_loss**  `1 − weighted_avg(action_loss_weights)` across all actions applied to the resource."
     )
-    W("- **success_rate** — `1 − (errors / total_actions)` for this resource.")
+    W("- **success_rate**  `1 − (errors / total_actions)` for this resource.")
     W(
-        "- **rule_coverage** — share of declared rules that fired on at least one path in this resource."
-    )
-    W(
-        "- **schema_validation** — `1.0` if the de-identified resource still conforms to FHIR R4 base schema, else `0.0`."
+        "- **rule_coverage**  share of declared rules that fired on at least one path in this resource."
     )
     W(
-        "- **reference_integrity** — share of `Reference` fields whose target ID was either rewritten or already valid."
+        "- **schema_validation**  `1.0` if the de-identified resource still conforms to FHIR R4 base schema, else `0.0`."
+    )
+    W(
+        "- **reference_integrity**  share of `Reference` fields whose target ID was either rewritten or already valid."
     )
     W("")
     W("### Privacy sub-evaluators (max risk wins)")
     W("")
     W(
-        "- **attacker_model** — per-resource quasi-identifier suppression score. Patient with all 3 QI fields (gender, birth_year, zip_prefix_3) suppressed → `risk = 0.0`. Each remaining QI raises risk."
+        "- **attacker_model**  per-resource quasi-identifier suppression score. Patient with all 3 QI fields (gender, birth_year, zip_prefix_3) suppressed → `risk = 0.0`. Each remaining QI raises risk."
     )
     W(
-        "- **attacker_model_batch** — full k-anonymity computed across all Patients. `min_k < 5` triggers an issue."
+        "- **attacker_model_batch**  full k-anonymity computed across all Patients. `min_k < 5` triggers an issue."
     )
     W(
-        "- **identifier_coverage** — every HIPAA-sensitive path defined in `HIPAA_SENSITIVE_PATHS` must have a matching transformation in the manifest. Missing paths add risk proportional to severity."
+        "- **identifier_coverage**  every HIPAA-sensitive path defined in `HIPAA_SENSITIVE_PATHS` must have a matching transformation in the manifest. Missing paths add risk proportional to severity."
     )
     W(
-        "- **text_risk** — regex (SSN/phone/email/IP/MRN/dates) + optional Presidio NER over all string fields ≥ 20 chars. Each detection adds `0.15` to risk."
+        "- **text_risk**  regex (SSN/phone/email/IP/MRN/dates) + optional Presidio NER over all string fields ≥ 20 chars. Each detection adds `0.15` to risk."
     )
     W("")
     W(
@@ -977,5 +977,5 @@ def _brief_reason(reason: str, ts: _TypeStats, rtype: str = "") -> str:
     if reason == "text_risk":
         return "PII detected in text fields"
     if reason == "attacker_model":
-        return "k-anonymity failure — patient re-identifiable"
+        return "k-anonymity failure  patient re-identifiable"
     return reason.replace("_", " ")

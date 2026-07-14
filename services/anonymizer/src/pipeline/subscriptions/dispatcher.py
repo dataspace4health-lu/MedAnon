@@ -28,9 +28,9 @@ def _matches_criteria(subscription: dict, resource_type: str | None) -> bool:
     """Return True if the subscription criteria matches this resource type.
 
     Supports simple criteria formats:
-    - "Patient" or "Patient?" — matches resourceType == "Patient"
-    - "Observation?category=vital-signs" — matches resourceType == "Observation" (type-only match)
-    - "http://hl7.org/fhir/StructureDefinition/Patient" — profile URL (not supported, returns False)
+    - "Patient" or "Patient?"  matches resourceType == "Patient"
+    - "Observation?category=vital-signs"  matches resourceType == "Observation" (type-only match)
+    - "http://hl7.org/fhir/StructureDefinition/Patient"  profile URL (not supported, returns False)
     """
     if not resource_type:
         return False
@@ -70,7 +70,7 @@ def _build_notification_bundle(resource: dict) -> str:
 def _deliver_webhook(subscription: dict, resource: dict) -> None:
     """Synchronously deliver a webhook to the subscription endpoint.
 
-    Any failure is logged but never re-raised — subscription delivery
+    Any failure is logged but never re-raised  subscription delivery
     failures must not affect the primary de-identification response.
     """
     endpoint = subscription.get("channel", {}).get("endpoint", "")
@@ -100,7 +100,7 @@ def _deliver_webhook(subscription: dict, resource: dict) -> None:
             url=endpoint, data=payload, headers=headers, method="POST"
         )
         with urllib.request.urlopen(req, timeout=_WEBHOOK_TIMEOUT):  # nosec B310
-            pass  # Success — response body not consumed
+            pass  # Success  response body not consumed
         _dispatch_log.info(
             "subscription_delivered sub=%s endpoint=%s",
             subscription.get("id"),
@@ -125,7 +125,7 @@ def _deliver_webhook(subscription: dict, resource: dict) -> None:
 def dispatch_subscriptions(resource: Any) -> None:
     """Dispatch subscriptions matching the given resource.
 
-    Called after successful processing. Never raises — all errors are logged only.
+    Called after successful processing. Never raises  all errors are logged only.
     This is designed to be a best-effort, fire-and-forget notification.
     """
     from pipeline.subscriptions import get_subscription_store

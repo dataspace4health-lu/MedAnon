@@ -2,7 +2,7 @@
 
 Module-level holder for the active :class:`PostgresSqlConnectionStore`,
 initialised during FastAPI startup when the app database (PostgreSQL) is
-available.  The store is PostgreSQL-only — there is no SQLite fallback for saved
+available.  The store is PostgreSQL-only  there is no SQLite fallback for saved
 connection credentials.
 """
 

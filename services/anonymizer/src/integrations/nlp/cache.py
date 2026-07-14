@@ -26,13 +26,13 @@ Storage
 Values
 ------
 Detection results are stored as a compact JSON list of ``[start, end, type]``
-triples.  Empty list = "no PII detected" (still cached — a clean text being
+triples.  Empty list = "no PII detected" (still cached  a clean text being
 fed to NLP again is wasted work).
 
 Safety
 ------
 The cache is **per content**: a hash collision would be cryptographically
-implausible.  Even on collision the failure mode is benign — at worst, an
+implausible.  Even on collision the failure mode is benign  at worst, an
 NLP detection from one text would be applied to another, which scrubs more
 than necessary.  It cannot cause text to leak (it can only over-redact).
 """
@@ -48,7 +48,7 @@ from utils.json_fast import dumps as _json_dumps
 
 _log = logging.getLogger("medanon.nlp.cache")
 
-# Versioned cache namespace — bump when the NLP model or detection contract
+# Versioned cache namespace  bump when the NLP model or detection contract
 # changes so stale entries are not reused.
 _NLP_MODEL_VERSION = os.environ.get("NLP_MODEL_VERSION", "v1").strip() or "v1"
 
@@ -61,7 +61,7 @@ _NLP_CACHE_ENABLED = os.environ.get(
     "yes",
 )
 
-# Lazily constructed singletons — kept module-private.
+# Lazily constructed singletons  kept module-private.
 _l1: object | None = None
 _l2: object | None = None
 
@@ -82,7 +82,7 @@ def _get_l2():
         return _l2 if _l2 is not False else None
     redis_url = os.environ.get("MEDANON_REDIS_URL", "").strip()
     if not redis_url:
-        _l2 = False  # sentinel — don't keep retrying
+        _l2 = False  # sentinel  don't keep retrying
         return None
     try:
         from utils.cache import RedisCache
@@ -132,7 +132,7 @@ def lookup_many(
     Returns
     -------
     cached : list[list[(start, end, type)] | None]
-        Same length as ``texts`` — None entries are misses.
+        Same length as ``texts``  None entries are misses.
     keys : list[tuple]
         Cache keys aligned to ``texts`` (used by ``store_many`` to write back).
     """
@@ -155,7 +155,7 @@ def lookup_many(
     out: list[list[tuple[int, int, str]] | None] = []
     try:
         from utils.metrics import NLP_CACHE_HITS, NLP_CACHE_MISSES
-    except Exception:  # pragma: no cover — metrics optional in tests
+    except Exception:  # pragma: no cover  metrics optional in tests
         NLP_CACHE_HITS = NLP_CACHE_MISSES = None
 
     for k in keys:
@@ -171,7 +171,7 @@ def lookup_many(
             if NLP_CACHE_HITS is not None:
                 NLP_CACHE_HITS.inc()
         except Exception as exc:
-            # Corrupt entry — treat as miss; do not poison the pipeline.
+            # Corrupt entry  treat as miss; do not poison the pipeline.
             _log.warning("nlp_cache_decode_failed: %s", exc)
             out.append(None)
             if NLP_CACHE_MISSES is not None:

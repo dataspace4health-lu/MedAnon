@@ -1,9 +1,9 @@
-"""Internal DAG engine — runs workflow steps through the existing job system.
+"""Internal DAG engine  runs workflow steps through the existing job system.
 
 Design constraints (from the approved plan):
 * The Postgres workflow store is the durable ledger; this engine is stateless
   logic over it.
-* Steps are executed as ordinary ``Job``\\ s by the EXISTING worker — no new
+* Steps are executed as ordinary ``Job``\\ s by the EXISTING worker  no new
   executor code. A step's job carries ``params["__workflow"] = {workflow_id,
   step_id}`` so the worker's terminal hook can route completion back here.
 * Step status transitions go through the store's compare-and-set so a worker
@@ -75,7 +75,7 @@ class WorkflowEngine:
         """Advance the owning workflow when a step's job reaches a terminal state.
 
         No-op for jobs that aren't part of a workflow. Safe to call for every
-        job — the ``__workflow`` marker gates the work.
+        job  the ``__workflow`` marker gates the work.
         """
         marker = (job.params or {}).get(WORKFLOW_PARAM_KEY)
         if not marker:
@@ -89,14 +89,14 @@ class WorkflowEngine:
             self._on_step_done(workflow_id, step_id, job)
         elif job.status in _JOB_FAILURE:
             self._on_step_failed(workflow_id, step_id, job)
-        # RUNNING/PENDING are not terminal — ignore.
+        # RUNNING/PENDING are not terminal  ignore.
 
     def _on_step_done(self, workflow_id: str, step_id: str, job: Job) -> None:
         changed = self._wstore.compare_and_set_step_status(
             workflow_id, step_id, StepStatus.RUNNING, StepStatus.DONE
         )
         if not changed:
-            # Already advanced (duplicate callback / sweep race) — nothing to do.
+            # Already advanced (duplicate callback / sweep race)  nothing to do.
             return
         workflow = self._wstore.get(workflow_id)
         if workflow is None:
@@ -257,7 +257,7 @@ class WorkflowEngine:
             workflow_id, WorkflowStatus.PENDING, WorkflowStatus.CANCELLED
         )
         if not claimed and workflow.status != WorkflowStatus.CANCELLED:
-            # Already terminal (DONE/ERROR) — nothing to cancel.
+            # Already terminal (DONE/ERROR)  nothing to cancel.
             return False
         for step in workflow.steps:
             if step.status in (StepStatus.RUNNING, StepStatus.READY) and step.job_id:

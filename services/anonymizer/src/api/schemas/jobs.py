@@ -176,7 +176,7 @@ class BulkImportJobRequest(BaseModel):
             raise ValueError("Either 'job_id' or 'ndjson_path' must be provided.")
         if self.ndjson_path:
             path = self.ndjson_path
-            # S3 paths are handled by the S3 backend — no local traversal risk
+            # S3 paths are handled by the S3 backend  no local traversal risk
             if not path.startswith("s3://"):
                 allowed_dir = os.environ.get("MEDANON_OUTPUT_DIR", "/output")
                 resolved = os.path.realpath(path)
@@ -292,7 +292,7 @@ class SqlExportJobRequest(BaseModel):
     """Request body for POST /jobs/sql-export.
 
     De-identifies selected tables of a saved SQL source connection to files
-    (one per table) in a result ZIP. Credentials are never sent here — only the
+    (one per table) in a result ZIP. Credentials are never sent here  only the
     saved ``connection_id`` (resolved from the encrypted store at run time).
     Provide either a saved ``config_profile`` (with ``table:``/``column:`` rules)
     or inline ``rules``.

@@ -1,7 +1,7 @@
 """HL7 v2 de-identification endpoints.
 
-POST /process/hl7v2        — de-identify a single HL7 v2 message
-POST /process/hl7v2/batch  — de-identify a batch of HL7 v2 messages
+POST /process/hl7v2         de-identify a single HL7 v2 message
+POST /process/hl7v2/batch   de-identify a batch of HL7 v2 messages
 """
 
 import logging

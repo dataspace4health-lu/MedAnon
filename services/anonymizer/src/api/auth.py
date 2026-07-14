@@ -103,18 +103,18 @@ ENDPOINT_ROLES: dict[str, str] = {
     "/v1/process/bulk-export": "admin",
     "/v1/process/cohort": "analyst",
     "/v1/jobs": "analyst",
-    # Workflow (DAG) orchestration — base role analyst; admin-only step types
+    # Workflow (DAG) orchestration  base role analyst; admin-only step types
     # (bulk-export/cohort/bulk-import) are enforced per-request in the router
     # since the requirement depends on the submitted graph.
     "/v1/workflows": "analyst",
     "/v1/workflows/template": "analyst",
-    # Config profile management — list/read open to viewer; writes require admin
-    # NOTE: POST /v1/configs requires admin — enforced via prefix match below.
+    # Config profile management  list/read open to viewer; writes require admin
+    # NOTE: POST /v1/configs requires admin  enforced via prefix match below.
     "/v1/configs": "viewer",
     # FHIR Bulk Data Access IG
     "/fhir/$export": "admin",
     "/fhir/Patient/$export": "analyst",
-    # FHIR Subscriptions — list requires admin; CRUD handled by prefix below
+    # FHIR Subscriptions  list requires admin; CRUD handled by prefix below
     "/fhir/Subscription": "admin",
     # SMART token introspection
     "/oauth2/introspect": "analyst",
@@ -133,7 +133,7 @@ ENDPOINT_ROLES: dict[str, str] = {
     "/v1/dashboard/summary": "viewer",
     # Per-client API key management (admin-only)
     "/v1/api-keys": "admin",
-    # Instance settings — admin-only on read and write (no non-admin access)
+    # Instance settings  admin-only on read and write (no non-admin access)
     "/v1/settings": "admin",
 }
 
@@ -143,16 +143,16 @@ ENDPOINT_ROLE_PREFIXES: dict[str, str] = {
     "/v1/admin/": "admin",
     "/v1/permits": "admin",  # data-permit governance (list/create/{id}/lifecycle)
     "/v1/reports": "analyst",  # transformation-passport reports (anonymous, read-only)
-    "/v1/jobs/bulk-export": "admin",  # exact — listed first for priority
-    "/v1/jobs/bulk-import": "admin",  # uploads to target FHIR server — requires admin
+    "/v1/jobs/bulk-export": "admin",  # exact  listed first for priority
+    "/v1/jobs/bulk-import": "admin",  # uploads to target FHIR server  requires admin
     "/v1/jobs/batch-patient-export": "analyst",
     "/v1/jobs/cohort": "analyst",
-    "/v1/jobs/tabular-batch": "analyst",  # local file de-id — no target upload
-    "/v1/jobs/sql-export": "analyst",  # DB → file de-id — no target upload
-    "/v1/jobs/dead": "analyst",  # DLQ list — read-only triage view
+    "/v1/jobs/tabular-batch": "analyst",  # local file de-id  no target upload
+    "/v1/jobs/sql-export": "analyst",  # DB → file de-id  no target upload
+    "/v1/jobs/dead": "analyst",  # DLQ list  read-only triage view
     "/v1/jobs/": "analyst",  # covers /v1/jobs/{id} and /v1/jobs/{id}/result
     "/v1/workflows/": "analyst",  # covers /v1/workflows/{id}; admin step types enforced in router
-    "/v1/configs/": "viewer",  # covers /v1/configs/{name} — writes enforce admin in router
+    "/v1/configs/": "viewer",  # covers /v1/configs/{name}  writes enforce admin in router
     "/v1/sql-connections": "analyst",  # list/test; create/delete enforce admin in router
     "/v1/source-connections": "analyst",  # list/test; create/delete enforce admin in router
     "/v1/output-destinations": "analyst",  # list/test; create/delete enforce admin in router
@@ -239,7 +239,7 @@ def get_auth_context(request: Request) -> AuthContext:
 
         if isinstance(exc, _HTTPException):
             raise
-        log.error("auth_provider_failed: %s — falling back to legacy mode", exc)
+        log.error("auth_provider_failed: %s  falling back to legacy mode", exc)
 
     api_key_header = request.headers.get("X-API-Key", "")
     bearer_token = _extract_bearer(request)
@@ -253,7 +253,7 @@ def get_auth_context(request: Request) -> AuthContext:
             try:
                 _api_key_store.touch_last_used(row["id"])
             except Exception:
-                pass  # best-effort — never block auth
+                pass  # best-effort  never block auth
             return AuthContext(
                 subject=row["client_id"],
                 roles=frozenset({row["role"]}),
@@ -323,7 +323,7 @@ def _resolve_bearer_context(token: str) -> AuthContext:
         except HTTPException:
             raise
         except urllib.error.URLError as exc:
-            # Network-level failure (DNS, timeout, connection refused) — report
+            # Network-level failure (DNS, timeout, connection refused)  report
             # as a service unavailability, not a 401.
             log.warning(
                 "smart_introspection_unreachable url=%s: %s", introspection_url, exc

@@ -1,4 +1,4 @@
-"""Pre-privacy intake barrier — the symmetric counterpart to ``validation.py``.
+"""Pre-privacy intake barrier  the symmetric counterpart to ``validation.py``.
 
 Where ``pipeline/validation.py`` gates what *leaves* the pipeline (output PII /
 score barrier), this module gates what *enters* it. It calls the Trust Gate
@@ -10,12 +10,12 @@ BLOCK decision.
 Enforcement is governed by ``TRUST_GATE_MODE`` (mirrors
 ``MEDANON_GATE_IDENTIFIER_MODE``):
 
-  - ``warn`` (default) — always assess + attach the passport; never block.
-  - ``block``          — raise :class:`IntakeBlocked` when the decision is BLOCK.
-  - ``off``            — no-op (also the behaviour when no service is configured).
+  - ``warn`` (default)  always assess + attach the passport; never block.
+  - ``block``           raise :class:`IntakeBlocked` when the decision is BLOCK.
+  - ``off``             no-op (also the behaviour when no service is configured).
 
 Fail-soft: if the Trust Gate is unreachable, the verdict degrades to an advisory
-CONDITIONAL_PASS — never a silent PASS, and (in block mode) never a hard block on
+CONDITIONAL_PASS  never a silent PASS, and (in block mode) never a hard block on
 the gate's own outage.
 """
 
@@ -63,7 +63,7 @@ def _degraded_passport(reason: str, resource_count: int, config_profile: str) ->
         "blockers": [],
         "rule_results": [],
         "approved_for": [],
-        "not_approved_for": ["unverified — Trust Gate unavailable"],
+        "not_approved_for": ["unverified  Trust Gate unavailable"],
         "privacy_processing_allowed": True,
         "resource_count": resource_count,
         "config_profile": config_profile,
@@ -143,7 +143,7 @@ def assess_intake(
             full_urls=full_urls,
         )
     except TrustGateRemoteError as exc:
-        _log.warning("intake gate degraded — Trust Gate unavailable: %s", exc)
+        _log.warning("intake gate degraded  Trust Gate unavailable: %s", exc)
         return IntakeVerdict(
             approved=True,
             passport=_degraded_passport(str(exc), len(valid), config_profile),
@@ -171,7 +171,7 @@ def assess_intake(
             approved=False, passport=passport, reasons=blockers, message=message
         )
 
-    # warn mode, or CONDITIONAL_PASS / PASS — allow, attach passport.
+    # warn mode, or CONDITIONAL_PASS / PASS  allow, attach passport.
     if decision != "PASS":
         _log.info(
             "intake_gate decision=%s score=%s profile=%s (advisory)",

@@ -1,4 +1,4 @@
-"""Risk analysis service — orchestrates local or proxied risk assessment."""
+"""Risk analysis service  orchestrates local or proxied risk assessment."""
 
 import asyncio
 import json
@@ -15,7 +15,7 @@ class RiskAnalysisService:
     """Computes re-identification risk metrics on FHIR resources."""
 
     async def analyse_risk(self, body: bytes, content_type: str) -> dict:
-        """Run risk analysis — proxy when ANALYTICS_SERVICE_URL is set, else local.
+        """Run risk analysis  proxy when ANALYTICS_SERVICE_URL is set, else local.
 
         Returns the risk report dict.
 
@@ -42,7 +42,7 @@ class RiskAnalysisService:
 
         Unlike :meth:`analyse_risk`, the body is a plain JSON object
         (``{"resources": [...], "synthetic": [...]?, "privacy_model": {...}?}``),
-        not FHIR-format-detected content — proxy when ANALYTICS_SERVICE_URL is
+        not FHIR-format-detected content  proxy when ANALYTICS_SERVICE_URL is
         set, else local.
 
         Raises:

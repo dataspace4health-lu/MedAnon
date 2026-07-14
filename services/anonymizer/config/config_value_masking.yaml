@@ -2,7 +2,7 @@
 # MedAnon Value-Masking De-identification Profile
 # =============================================================================
 # Version: 2.0
-# Use case: Field-complete de-identification — every field present in the input
+# Use case: Field-complete de-identification  every field present in the input
 #           resource is present in the output. PII values are replaced in place;
 #           no fields or array elements are removed.
 #           Suitable for downstream systems that validate FHIR structure (e.g.
@@ -10,7 +10,7 @@
 #           exact shape of a resource must be preserved for processing.
 #
 # Key properties:
-#   - Every field stays present — no redact (field-removal) actions
+#   - Every field stays present  no redact (field-removal) actions
 #   - IDs and cross-references: gPAS pseudonymization (deterministic, reversible)
 #   - PII string values (names, addresses, telecom): replaced with [REDACTED]
 #   - Boolean PHI (deceasedBoolean, multipleBirthBoolean): masked to false
@@ -36,7 +36,7 @@ nlp:
 rules:
 
 # ==============================================================
-# 1. RESOURCE IDS — pseudonymize across all resource types
+# 1. RESOURCE IDS  pseudonymize across all resource types
 # ==============================================================
 
 - name: pseudonymize resource ids
@@ -49,7 +49,7 @@ rules:
     gpas_timeout_sec: ${GPAS_TIMEOUT_SEC:-30}
 
 # ==============================================================
-# 2. IDENTIFIERS — pseudonymize across all resource types
+# 2. IDENTIFIERS  pseudonymize across all resource types
 # ==============================================================
 
 # Identifier type labels disclose PHI categories even when values are pseudonymized
@@ -67,7 +67,7 @@ rules:
   params: *gpas
 
 # ==============================================================
-# 3. NAMES — mask all HumanName fields across all resource types
+# 3. NAMES  mask all HumanName fields across all resource types
 #    Covers: Patient, Practitioner, RelatedPerson, Person, etc.
 # ==============================================================
 
@@ -88,7 +88,7 @@ rules:
   params: *redacted
 
 # ==============================================================
-# 4. TELECOM — mask across all resource types
+# 4. TELECOM  mask across all resource types
 # ==============================================================
 
 - name: mask all telecom values
@@ -97,7 +97,7 @@ rules:
   params: *redacted
 
 # ==============================================================
-# 5. ADDRESSES — mask across all resource types
+# 5. ADDRESSES  mask across all resource types
 #    Covers: Patient, Practitioner, Organization, Location, etc.
 # ==============================================================
 
@@ -130,10 +130,10 @@ rules:
 
 # ==============================================================
 # 6. REFERENCE DISPLAY NAMES
-#    Person-type references (patient, participant) carry a person name —
+#    Person-type references (patient, participant) carry a person name 
 #    substitute with [REDACTED] to keep the field present but mask the value.
 #    Org/facility/mixed references (performer, author, location …) may carry
-#    either a person name or an institutional label — NLP-scrub so only
+#    either a person name or an institutional label  NLP-scrub so only
 #    detected entities are replaced; non-PHI labels are preserved intact.
 # ==============================================================
 
@@ -171,7 +171,7 @@ rules:
   params:
     entities: healthcare
 
-# Participant — always an individual (Practitioner / Patient / RelatedPerson)
+# Participant  always an individual (Practitioner / Patient / RelatedPerson)
 - name: mask participant display
   match: "*.participant.individual.display"
   action: substitute
@@ -184,14 +184,14 @@ rules:
   params:
     entities: healthcare
 
-# Service provider / facility — Organization; always substitute so hospital/
+# Service provider / facility  Organization; always substitute so hospital/
 # facility names do not appear in de-identified output.
 - name: mask service provider display
   match: "*.serviceProvider.display"
   action: substitute
   params: *redacted
 
-# Location reference display — facility name; always substitute so hospital/
+# Location reference display  facility name; always substitute so hospital/
 # facility names do not appear in de-identified output.
 - name: mask location display
   match: "*.location.display"
@@ -208,7 +208,7 @@ rules:
 
 
 # ==============================================================
-# 7. CLINICAL DATES — generalise to year
+# 7. CLINICAL DATES  generalise to year
 # ==============================================================
 
 - name: generalise effective date to year
@@ -322,11 +322,11 @@ rules:
 # 9. ATTACHMENTS & BINARY
 #    text/* payloads: Base64-decoded → NLP-scrubbed → re-encoded.
 #    Non-text MIME types (image/*, application/pdf …): data field cleared.
-#    Photos always cleared (biometric identifier — not scrubable).
+#    Photos always cleared (biometric identifier  not scrubable).
 # ==============================================================
 
-# DocumentReference — clinical notes (content[*].attachment, nested one level)
-# DocumentReference.custodian is the Organisation responsible for the document—
+# DocumentReference  clinical notes (content[*].attachment, nested one level)
+# DocumentReference.custodian is the Organisation responsible for the document
 # its display may contain an organisation name (potential PHI); NLP-scrub only.
 - name: mask document reference custodian display
   match: DocumentReference.custodian.display
@@ -343,7 +343,7 @@ rules:
     threshold: 0.4
 
 
-# DiagnosticReport, QuestionnaireResponse — presentedForm is Attachment directly
+# DiagnosticReport, QuestionnaireResponse  presentedForm is Attachment directly
 - name: mask presented form text
   match: "*.presentedForm.data"
   action: nlp_detect_act
@@ -353,7 +353,7 @@ rules:
     threshold: 0.4
 
 
-# Observation, Task — valueAttachment
+# Observation, Task  valueAttachment
 - name: mask value attachment text
   match: "*.valueAttachment.data"
   action: nlp_detect_act
@@ -395,13 +395,13 @@ rules:
 # ==============================================================
 # 10. SDOH / PRAPARE QUASI-IDENTIFIERS
 # Income (63586-2) and household size (63512-8) are valueQuantity numerics
-# with no other rule coverage — components removed (necessary exception to
+# with no other rule coverage  components removed (necessary exception to
 # the no-removal contract; selective substitute for numeric quantities is
 # not possible without also altering vital-sign measurements).
 # Education (82589-3), language (54899-0), employment (67875-5) are coded
-# valueCodeableConcept — already handled by *.component.valueCodeableConcept
+# valueCodeableConcept  already handled by *.component.valueCodeableConcept
 # rules in section 11 (text → [REDACTED], coding.display → cryptohash).
-# Street address (56799-0) is valueString — caught by scrub_text below.
+# Street address (56799-0) is valueString  caught by scrub_text below.
 # ==============================================================
 
 - name: redact PRAPARE annual income
@@ -413,7 +413,7 @@ rules:
   action: redact
 
 # ==============================================================
-# 11. FREE-TEXT NARRATIVE — NLP entity detection
+# 11. FREE-TEXT NARRATIVE  NLP entity detection
 #     Conditional: fires only when PII is detected.
 #     Covers Resource.text, notes, comments, valueString, etc.
 # ==============================================================
@@ -426,7 +426,7 @@ rules:
     threshold: 0.4
 
 # Composition.section[].text is a nested Narrative (BackboneElement) that the
-# wildcard `*.text` rule above does NOT reach — `*.text` expands to
+# wildcard `*.text` rule above does NOT reach  `*.text` expands to
 # `Composition.text` (top-level only) and the rule-matcher does not auto-descend
 # into BackboneElement arrays.  Explicitly target the section narrative so the
 # discharge-summary / clinical-document free text is NLP-scrubbed.
@@ -435,7 +435,7 @@ rules:
   action: nlp_detect_act
   params: *nlp
 
-# Street address pattern — fires on any valueString containing a recognizable
+# Street address pattern  fires on any valueString containing a recognizable
 # address regardless of LOINC code or resource structure (covers PRAPARE 56799-0,
 # custom SDOH panels, and any other free-text fields with address content).
 # Two rules: one for top-level valueString, one for component.valueString
@@ -487,7 +487,7 @@ rules:
   params:
     threshold: 0.4
 
-# MedicationRequest uses dosageInstruction[] (FHIR R4) — distinct from
+# MedicationRequest uses dosageInstruction[] (FHIR R4)  distinct from
 # MedicationStatement/MedicationAdministration which use dosage[].
 - name: nlp scrub dosage instruction text
   match: "*.dosageInstruction.text"
@@ -503,7 +503,7 @@ rules:
     threshold: 0.4
 
 # ==============================================================
-# 12. PATIENT-SPECIFIC — fields unique to Patient
+# 12. PATIENT-SPECIFIC  fields unique to Patient
 # ==============================================================
 
 - name: mask patient Patient.birthGender
@@ -608,7 +608,7 @@ rules:
   params: *redacted
 
 # ==============================================================
-# 13. PATIENT EXTENSIONS — mask values, keep extension objects
+# 13. PATIENT EXTENSIONS  mask values, keep extension objects
 # ==============================================================
 
 # US Core Race
@@ -647,7 +647,7 @@ rules:
   params: *redacted
 
 
-# Geolocation — Patient.address carries a geolocation extension with nested
+# Geolocation  Patient.address carries a geolocation extension with nested
 # latitude/longitude as valueDecimal; mask to 0.0 to preserve structure.
 - name: mask patient address geolocation latitude
   match: Patient.address.extension.where(url='http://hl7.org/fhir/StructureDefinition/geolocation').extension.where(url='latitude').valueDecimal
@@ -691,7 +691,7 @@ rules:
   action: substitute
   params: *redacted
 
-# Synthea metrics — replace with 0.0
+# Synthea metrics  replace with 0.0
 - name: mask synthea disability adjusted life years
   match: Patient.extension.where(url='http://synthetichealth.github.io/synthea/disability-adjusted-life-years').valueDecimal
   action: substitute
@@ -752,7 +752,7 @@ rules:
   action: cryptohash
 
 # ==============================================================
-# 15. ORGANIZATION / LOCATION — type-specific fields
+# 15. ORGANIZATION / LOCATION  type-specific fields
 # ==============================================================
 
 - name: mask organization name

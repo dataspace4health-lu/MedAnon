@@ -1,4 +1,4 @@
-"""Instance-settings service — deployment-wide admin-managed application defaults.
+"""Instance-settings service  deployment-wide admin-managed application defaults.
 
 Thin business layer over :class:`~integrations.postgres.settings_store.PostgresSettingsStore`.
 Holds no secrets (FHIR credentials live encrypted in the connector store).
@@ -41,7 +41,7 @@ class SettingsService:
         store = get_settings_store()
         if store is None:
             raise SettingsStoreUnavailable(
-                "Settings store is not initialised — set MEDANON_APP_DB_URL "
+                "Settings store is not initialised  set MEDANON_APP_DB_URL "
                 "(PostgreSQL) to persist instance settings."
             )
         return store.update(fields, updated_by=updated_by)

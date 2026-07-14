@@ -135,7 +135,7 @@ class PostgresReleaseLedger:
     ) -> list[dict]:
         """Load prior release rows scoped to a permit and/or recipient.
 
-        At least one of ``permit_id`` / ``recipient`` must be given — cumulative
+        At least one of ``permit_id`` / ``recipient`` must be given  cumulative
         exposure is only meaningful within a governance scope, never globally.
         """
         if not permit_id and not recipient:

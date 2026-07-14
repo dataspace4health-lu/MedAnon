@@ -4,7 +4,7 @@ Conversational Q&A about FHIR de-identification configurations. Answers
 questions like "why redact birthDate?", "what action fits an SSN?", or
 "is this HIPAA Safe Harbor compliant?" with the current config as context.
 
-Safe for any local LLM — config YAML contains rule definitions only, no PHI.
+Safe for any local LLM  config YAML contains rule definitions only, no PHI.
 Streams chunks for a responsive UI; falls back to a static message when the
 provider is unavailable.
 """
@@ -42,7 +42,7 @@ def _truncate_field_lines(text: str, max_len: int) -> str:
         return text
     kept: list[str] = []
     used = 0
-    marker = "\n… (field list truncated — narrow the resource scope for full coverage)"
+    marker = "\n… (field list truncated  narrow the resource scope for full coverage)"
     budget = max_len - len(marker)
     for line in text.splitlines():
         if used + len(line) + 1 > budget:
@@ -54,7 +54,7 @@ def _truncate_field_lines(text: str, max_len: int) -> str:
 
 # Fixed refusal returned for off-topic requests (matches the system prompt).
 _OFF_TOPIC_REPLY = (
-    "I can only help with FHIR de-identification configuration — rules, "
+    "I can only help with FHIR de-identification configuration  rules, "
     "actions, FHIRPath expressions, and compliance mapping. Please ask about "
     "your config."
 )
@@ -62,7 +62,7 @@ _OFF_TOPIC_REPLY = (
 # Vocabulary that signals a question is about de-identification config. Used as
 # a cheap, deterministic on-topic gate BEFORE calling the model, so blatantly
 # off-topic prompts ("write me a poem") never reach the LLM. This is a recall
-# filter, not precision — anything plausibly on-topic passes through and the
+# filter, not precision  anything plausibly on-topic passes through and the
 # system-prompt scope rule does the finer enforcement.
 _ON_TOPIC_TERMS = (
     "config",
@@ -145,7 +145,7 @@ def _is_on_topic(question: str) -> bool:
     """Permissive gate: block only blatantly off-topic prompts.
 
     Returns False ONLY when an explicit off-topic signal phrase is present.
-    Everything else passes through to the model — the system prompt's scope
+    Everything else passes through to the model  the system prompt's scope
     rule handles borderline cases. Short follow-ups ("why?", "and that one?")
     always pass because they depend on conversation context.
     """
@@ -153,7 +153,7 @@ def _is_on_topic(question: str) -> bool:
     if len(q.split()) <= 3:
         return True  # short follow-ups depend on prior turns
     if any(sig in q for sig in _OFF_TOPIC_SIGNALS):
-        # Still allow if it ALSO references config — e.g. "translate this rule".
+        # Still allow if it ALSO references config  e.g. "translate this rule".
         if any(re.search(rf"\b{re.escape(t)}\b", q) for t in _ON_TOPIC_TERMS):
             return True
         return False
@@ -165,7 +165,7 @@ You are a healthcare data-privacy engineer helping a user build FHIR \
 de-identification configuration profiles for the SPE FHIR BlackBox engine.
 
 RESPONSE STYLE:
-- Answer as thoroughly as needed — short for simple questions, detailed for \
+- Answer as thoroughly as needed  short for simple questions, detailed for \
 complex ones. Explain your choices.
 - If the user asks which fields are PII, list them inside a YAML block \
 (not as prose bullets). One rule per field.
@@ -185,10 +185,10 @@ generalize, scrub_text, nlp_scrub, nlp_detect_act, gpas_pseudonymize.
 
 Regulatory anchors: HIPAA Safe Harbor 45 CFR 164.514(b); GDPR Art. 4(5).
 
-PROPOSING RULES — ALWAYS USE YAML:
+PROPOSING RULES  ALWAYS USE YAML:
 Whenever you propose, list, suggest, or generate rules (even for a single \
 field), emit them as a ```yaml code block with a ``rules:`` key. Do NOT list \
-rules as prose bullets or markdown tables — always use YAML so the user can \
+rules as prose bullets or markdown tables  always use YAML so the user can \
 approve them with one click. After the YAML block write ONE sentence summarising \
 what the rules do.
 
@@ -209,7 +209,7 @@ Patient.address.postalCode → generalize (zip_prefix).
 NESTED / STRUCTURED PII FIELDS:
 When a field contains PII inside a structured object (e.g. ``address``, \
 ``name``, ``telecom``, ``contact``, ``identifier``), DO NOT redact the parent \
-key — redact ONLY the PII leaf sub-fields. This preserves the structural \
+key  redact ONLY the PII leaf sub-fields. This preserves the structural \
 skeleton (all keys remain present) while blanking the identifying values. \
 For example, for ``Patient.address`` emit separate rules for each PII leaf:
   - ``Patient.address.line`` → redact (street is a direct identifier)
@@ -245,27 +245,27 @@ rules:
 # no FHIR schema dependency is needed.
 _GRANULARITY_DIRECTIVE = {
     "values": (
-        "FIELD GRANULARITY — VALUES-ONLY (STRICT). Follow these rules exactly:\n"
+        "FIELD GRANULARITY  VALUES-ONLY (STRICT). Follow these rules exactly:\n"
         "1. Use ONLY paths that appear verbatim in the field tree above. NEVER "
         "invent a path. (Patient.name.family exists; Patient.family does NOT.)\n"
-        "2. A line marked `(container)` is a structural parent — NEVER emit a "
+        "2. A line marked `(container)` is a structural parent  NEVER emit a "
         "rule whose match is a `(container)` path. Skip it entirely.\n"
         "3. For each `(container)` that holds PII, emit one rule per identifying "
         "LEAF path under it (the non-container lines). E.g. for the container "
         "Patient.name emit rules ONLY for Patient.name.family, "
-        "Patient.name.given, Patient.name.text — and DO NOT emit a rule for "
+        "Patient.name.given, Patient.name.text  and DO NOT emit a rule for "
         "Patient.name itself.\n"
         "4. Primitive scalar fields with no children (e.g. Patient.birthDate) "
         "get a single rule.\n"
         "Emitting a `(container)` rule alongside its leaves is WRONG."
     ),
     "whole": (
-        "FIELD GRANULARITY — WHOLE FIELD. Follow these rules exactly:\n"
+        "FIELD GRANULARITY  WHOLE FIELD. Follow these rules exactly:\n"
         "1. Use ONLY paths that appear verbatim in the field tree above. NEVER "
         "invent a path.\n"
         "2. For a structured field marked `(container)` that holds PII, emit ONE "
         "rule on that `(container)` path and DO NOT emit rules for its leaf "
-        "sub-fields. E.g. for Patient.name emit a single rule on Patient.name — "
+        "sub-fields. E.g. for Patient.name emit a single rule on Patient.name  "
         "NOT separate rules on Patient.name.family / .given.\n"
         "3. Primitive scalar fields get a single rule."
     ),
@@ -277,7 +277,7 @@ def _format_intake(intake: dict | None) -> str:
 
     Returns "" when intake is absent or empty so no system turn is added.
     Values are user-supplied free text, so they are sanitized by the caller's
-    prompt-guard before injection — here we only assemble the prose.
+    prompt-guard before injection  here we only assemble the prose.
     """
     if not intake:
         return ""
@@ -339,8 +339,8 @@ def _build_messages(
         # live FHIR server. Paths + types by default; with include_values each
         # leaf also carries a truncated sample value (the caller engages the PHI
         # local-guard in that case). Either way the tree is server-derived and
-        # UNTRUSTED — a resource could smuggle an injection string in a path or
-        # value — so sanitize control/invisible chars and wrap in data tags so
+        # UNTRUSTED  a resource could smuggle an injection string in a path or
+        # value  so sanitize control/invisible chars and wrap in data tags so
         # the model treats it as data. Smart-truncate to keep whole lines.
         safe_tree = sanitize_untrusted(field_context, max_len=_FIELD_CONTEXT_MAX)
         safe_tree = _truncate_field_lines(safe_tree, _FIELD_CONTEXT_MAX)
@@ -349,7 +349,7 @@ def _build_messages(
             "sample value after ` = ` (use the values to ground your answers). "
             if include_values
             else "Field paths present in the user's FHIR resources "
-            "(path: type only — no patient values). "
+            "(path: type only  no patient values). "
         )
         messages.append(
             {
@@ -362,7 +362,7 @@ def _build_messages(
                 ),
             },
         )
-    # Field granularity directive — placed after the field tree so the
+    # Field granularity directive  placed after the field tree so the
     # "leaf paths above" reference resolves. Falls back to the values-only
     # directive for any unrecognised value.
     directive = _GRANULARITY_DIRECTIVE.get(
@@ -370,7 +370,7 @@ def _build_messages(
     )
     messages.append({"role": "system", "content": directive})
 
-    # Action-selection policy — tells the model to pick the action that fits the
+    # Action-selection policy  tells the model to pick the action that fits the
     # field class (pseudonymise IDs, generalise dates, NLP-scrub free text, leave
     # coded data) instead of redacting everything. Single source of truth shared
     # with the field scanner. Identifier action adapts to gPAS availability.
@@ -385,13 +385,13 @@ def _build_messages(
     if source_context.strip():
         # PHI-free resource-type/count snapshot of the source server. Lets the
         # assistant ground suggestions in the user's actual data ("you have 47
-        # DocumentReferences — those carry free-text notes, scrub them").
+        # DocumentReferences  those carry free-text notes, scrub them").
         messages.append(
             {
                 "role": "system",
                 "content": (
                     "Context about the user's SOURCE FHIR server (resource "
-                    "types and counts only — no patient data):\n"
+                    "types and counts only  no patient data):\n"
                     f"{source_context.strip()[:4000]}\n"
                     "Use this to tailor suggestions to the resources they "
                     "actually have."
@@ -485,7 +485,7 @@ def chat_config(
     try:
         # Config questions + YAML rules carry no resource content (phi_payload=
         # False). With include_values the field tree carries sample values, so
-        # it is a PHI payload and the provider's local-guard is engaged — a
+        # it is a PHI payload and the provider's local-guard is engaged  a
         # non-local endpoint then raises ProviderUnavailableError (values never
         # leave a self-hosted model). A user-supplied model_override is also
         # locality-checked when MEDANON_AI_REQUIRE_LOCAL=true (site-wide lock).

@@ -6,12 +6,12 @@ and walked it. Two problems with that:
 
 1. **Volume.** A 200 MB export is not a slow render, it is a dead tab. And since
    the detail cache was only written *after* a successful client-side parse, a
-   job too large to parse could never populate it — so it re-downloaded and
+   job too large to parse could never populate it  so it re-downloaded and
    re-failed on every open, permanently.
 2. **Correctness.** The PII map is derived *solely* from each resource's
    transformation manifest (``meta.tag``). Released NDJSON no longer carries that
-   tag — :func:`pipeline.manifest.strip_manifest_tag` removes it so the manifest
-   ships as a separate artifact — so a browser-side parse of the released data now
+   tag  :func:`pipeline.manifest.strip_manifest_tag` removes it so the manifest
+   ships as a separate artifact  so a browser-side parse of the released data now
    yields an empty PII map. The worker is the only place the manifest and the
    resource are both in hand.
 
@@ -143,7 +143,7 @@ class JobDetailAccumulator:
         self._type_counts[rtype] += 1
 
         # PII map: manifest is the sole authoritative record of what was
-        # transformed. Never infer from output values — that mislabels untouched
+        # transformed. Never infer from output values  that mislabels untouched
         # fields (a 64-hex coding.display read as "cryptohash").
         if manifest_entries:
             seen: set[str] = set()

@@ -1,9 +1,9 @@
-"""gPAS client — public API for pseudonymization and de-pseudonymization.
+"""gPAS client  public API for pseudonymization and de-pseudonymization.
 
 Internal implementation is split across focused sub-modules:
-  .circuit_breaker — _CircuitBreaker state machine + singleton
-  .protocol        — FHIR Parameters builders and response parsers
-  .transport       — HTTP retry loop, URL resolution, cache helpers, domain listing
+  .circuit_breaker  _CircuitBreaker state machine + singleton
+  .protocol         FHIR Parameters builders and response parsers
+  .transport        HTTP retry loop, URL resolution, cache helpers, domain listing
 
 All call sites import from this module; the sub-modules are internal.
 """
@@ -15,9 +15,9 @@ from concurrent.futures import as_completed, ThreadPoolExecutor
 
 from utils.fhirpath import find_nodes
 from utils.thread_pool import get_executor
-from actions.substitute import _substitute_nodes
+from utils.fhirpath import _substitute_nodes
 
-from .circuit_breaker import GpasUnavailableError  # noqa: F401 — re-exported for callers
+from .circuit_breaker import GpasUnavailableError  # noqa: F401  re-exported for callers
 from .transport import (
     _resolve_gpas_base,
     _is_cache_enabled,
@@ -25,7 +25,7 @@ from .transport import (
     _cache_get_many,
     _cache_set_many,
     _call_gpas_operation,
-    list_gpas_domains,  # noqa: F401 — re-exported for callers
+    list_gpas_domains,  # noqa: F401  re-exported for callers
 )
 from .protocol import (
     _build_pseudonymize_params,
@@ -48,7 +48,7 @@ _log = logging.getLogger("medanon.gpas")
 # originated.
 #
 # Default 8: at the default batch size of 1000 there are at most 2 gPAS
-# sub-batches (ceil(1000/500)), so 8 workers is already surplus — it covers
+# sub-batches (ceil(1000/500)), so 8 workers is already surplus  it covers
 # future batch-size increases without wasting thread budget now.  Raise to 16
 # only when MEDANON_BATCH_SIZE ≥ 5000 and gPAS can absorb the load.
 # Override via GPAS_SUBBATCH_PARALLEL.
@@ -124,7 +124,7 @@ def gpas_pseudonymize_batch(values, params):
             return _parse_pseudonymize_response(resp_json)
 
         if len(unique_uncached) <= _GPAS_MAX_BATCH:
-            # Single batch — common fast path
+            # Single batch  common fast path
             mapping = _call_chunk(unique_uncached)
         else:
             # Split into sub-batches and submit them to the dedicated
@@ -163,7 +163,7 @@ def gpas_pseudonymize_batch(values, params):
                 except Exception as exc:
                     failed_chunk = futures[future]
                     _log.warning(
-                        "gpas sub-batch failed (%d values): %s — will retry",
+                        "gpas sub-batch failed (%d values): %s  will retry",
                         len(failed_chunk),
                         type(exc).__name__,
                     )
@@ -255,9 +255,9 @@ def gpas_depseudonymize_by_path(resource, el, params):
     if len(path) == 0:
         # Empty path after stripping resourceType means the rule targeted the
         # root resource itself.  Clearing the entire resource silently was the
-        # bug — fail loudly so callers can fix the rule expression.
+        # bug  fail loudly so callers can fix the rule expression.
         raise ValueError(
-            f"Empty path after removing resource type root in gpas_depseudonymize — "
+            f"Empty path after removing resource type root in gpas_depseudonymize  "
             f"refusing to clear entire resource (original path: {el['path']!r})"
         )
     ret = find_nodes(resource, path[:-1], [])
@@ -286,7 +286,7 @@ def gpas_depseudonymize_batch(values, params):
             "gPAS domain is required (params.gpas_domain or env GPAS_DOMAIN)"
         )
 
-    # De-pseudonymize results are NEVER cached — the cache value would be the
+    # De-pseudonymize results are NEVER cached  the cache value would be the
     # original patient identifier (PHI).  Always fetch directly from gPAS.
     uncached = [str(val) for val in values]
 
@@ -320,7 +320,7 @@ def gpas_depseudonymize_batch(values, params):
                 except Exception as exc:
                     failed_chunk = futures[future]
                     _log.warning(
-                        "gpas depseudonymize sub-batch failed (%d values): %s — skipping",
+                        "gpas depseudonymize sub-batch failed (%d values): %s  skipping",
                         len(failed_chunk),
                         type(exc).__name__,
                     )

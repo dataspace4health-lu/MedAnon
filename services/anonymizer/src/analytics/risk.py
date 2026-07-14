@@ -5,7 +5,7 @@ journalist, marketer) on the *output* of a de-identification pipeline.
 
 Why this is needed alongside gPAS pseudonymization
 ---------------------------------------------------
-gPAS replaces direct identifiers (Patient.id, MRN) with reversible pseudonyms —
+gPAS replaces direct identifiers (Patient.id, MRN) with reversible pseudonyms
 this protects against lookup attacks on known IDs.  However, the de-identified
 output still contains quasi-identifiers (birth year, gender, zip prefix) and
 sensitive attributes (Condition codes) that can be combined to re-identify
@@ -54,7 +54,7 @@ _QI_SUPPRESSED_VALUES: frozenset[str] = frozenset(
 _DECADE_DATE_RE = re.compile(r"^\d{3}x$")
 # Decade-aligned 4-digit year emitted by the ``date_decade`` generalize strategy
 # (e.g. "1940", "1990"). These are coarse buckets, not real birth years, so they
-# should be treated as suppressed for k-anonymity purposes — otherwise small
+# should be treated as suppressed for k-anonymity purposes  otherwise small
 # datasets with patients spread across multiple decades produce false-positive
 # k=1 singletons.
 _DECADE_YEAR_RE = re.compile(r"^\d{3}0$")
@@ -151,7 +151,7 @@ def build_conditions_map(resources: list[dict]) -> dict[str, set[str]]:
         patient_id = subject_ref.split("/")[-1] if subject_ref else ""
         if not patient_id:
             continue
-        # Extract SNOMED/ICD code — prefer coding[0].code, fall back to text
+        # Extract SNOMED/ICD code  prefer coding[0].code, fall back to text
         code_obj = r.get("code") or {}
         codings = code_obj.get("coding") or []
         code_str = ""
@@ -242,7 +242,7 @@ def _risk_level_for(min_k: int, thresholds: dict[str, int] | None) -> str:
 def _read_path(resource: dict, path: str) -> str:
     """Read a scalar value at a dotted FHIRPath, walking first list elements.
 
-    Mirrors the light path reader used by ``pipeline.privacy.apply`` — no
+    Mirrors the light path reader used by ``pipeline.privacy.apply``  no
     fhirpathpy dependency (the analytics service is dependency-slim). The
     resource-type prefix (``Patient.``) is stripped when present.
     """
@@ -402,7 +402,7 @@ def compute_l_diversity(
     if not conditions_by_patient:
         return {
             "computed": False,
-            "reason": "No Condition resources found in input — include Patient + Condition NDJSON for l-diversity",
+            "reason": "No Condition resources found in input  include Patient + Condition NDJSON for l-diversity",
         }
 
     # Build group → set of codes
@@ -481,7 +481,7 @@ def assess_risk_resources(
 
     if patient_count == 0:
         warnings.append(
-            "No Patient resources found in input — risk metrics require Patient resources."
+            "No Patient resources found in input  risk metrics require Patient resources."
         )
         k_result = compute_k_anonymity([], thresholds=pm_thresholds)
         return {
@@ -505,7 +505,7 @@ def assess_risk_resources(
         qi_tuples = extract_quasi_identifiers(patients)
         qi_labels = DEFAULT_QI_FIELDS
 
-    # Sensitive attribute for l-diversity — configurable per D7.2 §5.5.4
+    # Sensitive attribute for l-diversity  configurable per D7.2 §5.5.4
     # (``privacy_model.sensitive_attributes``); defaults to Condition codes.
     pm_sensitive = (privacy_model or {}).get("sensitive_attributes") or None
     conditions_by_patient = build_sensitive_map(resources, pm_sensitive)
@@ -516,7 +516,7 @@ def assess_risk_resources(
         warnings.append(
             f"{missing_count} Patient record(s) have one or more missing "
             f"quasi-identifier fields ({', '.join(qi_labels)}). "
-            "They are grouped under sentinel values — risk may be underestimated."
+            "They are grouped under sentinel values  risk may be underestimated."
         )
 
     k_result = compute_k_anonymity(
@@ -549,7 +549,7 @@ def assess_risk_rows(
 ) -> dict[str, Any]:
     """Re-identification risk over flat **tabular** rows (one subject per row).
 
-    D7.2 §2.1.1 scopes all structured data, standard or not — SQL/CSV, CDA and
+    D7.2 §2.1.1 scopes all structured data, standard or not  SQL/CSV, CDA and
     HL7 v2 outputs are row-based, not FHIR Patient resources, so the Patient-only
     :func:`assess_risk_resources` cannot assess them. Here *quasi_identifiers*
     are column names and *sensitive_attribute* (optional) is the column whose

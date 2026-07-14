@@ -3,13 +3,13 @@
 # =============================================================================
 #
 # Legal basis: Health Insurance Portability and Accountability Act (HIPAA)
-#   45 CFR § 164.514(b) — Safe Harbor method for de-identification
+#   45 CFR § 164.514(b)  Safe Harbor method for de-identification
 #
 # The Safe Harbor method requires removal (or generalization) of all 18
 # categories of protected health information (PHI) listed in the regulation:
 #
 #   1.  Names
-#   2.  Geographic data finer than state (street, city, zip — except 3-digit
+#   2.  Geographic data finer than state (street, city, zip  except 3-digit
 #       zip prefix where the area population is ≥ 20,000)
 #   3.  Dates (except year) for ages under 90; full date for ages ≥ 90
 #   4.  Telephone numbers
@@ -35,7 +35,7 @@
 #
 # Clinical data preserved:
 #   Condition codes, Observation values, Procedure codes, Medication codes,
-#   DiagnosticReport results — all retained unmodified.
+#   DiagnosticReport results  all retained unmodified.
 #
 # Not suitable for:
 #   - Research datasets requiring date-level precision (use config_research_pseudonymous.yaml)
@@ -62,7 +62,7 @@ nlp:
 rules:
 
   # ===========================================================================
-  # 1. PATIENT — PRIMARY PHI CARRIER
+  # 1. PATIENT  PRIMARY PHI CARRIER
   # ===========================================================================
 
   # Identifier 1: Names (legal, maiden, nickname)
@@ -73,7 +73,7 @@ rules:
     action: redact
 
   # Identifier 2: Geographic data below state level
-  # Keep state (Patient.address.state) — Safe Harbor allows state-level data.
+  # Keep state (Patient.address.state)  Safe Harbor allows state-level data.
   # Generalize postal code to first 3 digits (zip_prefix strategy).
   # Redact street address lines and city.
   - match: Patient.address.line
@@ -91,12 +91,12 @@ rules:
       strategy: zip_prefix
       prefix_length: 3
 
-  # Geolocation (lat/lon) nested inside Patient.address.extension — re-identification PHI
+  # Geolocation (lat/lon) nested inside Patient.address.extension  re-identification PHI
   - name: redact patient address geolocation
     match: Patient.address.extension
     action: redact
 
-  # Identifier 3: Dates — generalize to year only
+  # Identifier 3: Dates  generalize to year only
   # Ages 90+ are at higher re-identification risk; this profile truncates to year
   # for all ages. Organisations with patients ≥ 90 should additionally redact
   # birthDate entirely (or use the age_bracket strategy).
@@ -117,8 +117,8 @@ rules:
   - match: Patient.contact.telecom
     action: redact
 
-  # Identifier 7: SSN — typically in Patient.identifier; redact all identifiers
-  # (covers MRN, SSN, health plan beneficiary, account, certificate, license —
+  # Identifier 7: SSN  typically in Patient.identifier; redact all identifiers
+  # (covers MRN, SSN, health plan beneficiary, account, certificate, license 
   # identifiers 7–11)
   - match: Patient.identifier
     action: redact
@@ -151,7 +151,7 @@ rules:
   - match: Patient.link
     action: redact
 
-  # Quasi-identifiers — demographic combinations aid re-identification (HIPAA
+  # Quasi-identifiers  demographic combinations aid re-identification (HIPAA
   # identifier 18: "any other unique identifying number, characteristic, or code")
   - match: Patient.maritalStatus
     action: redact
@@ -159,7 +159,7 @@ rules:
   - match: Patient.communication
     action: redact
 
-  # Patient notes — dual-pass scrub for PHI in free text
+  # Patient notes  dual-pass scrub for PHI in free text
   - match: Patient.text
     action: scrub_text
     params:
@@ -350,7 +350,7 @@ rules:
     action: redact
 
   # ===========================================================================
-  # 7. TEXT SCRUBBING (HIPAA Identifier 18 — any unique identifying content)
+  # 7. TEXT SCRUBBING (HIPAA Identifier 18  any unique identifying content)
   # Dual-pass: regex catches structured PHI (dates, phones, SSN patterns);
   # NLP catches unstructured names and locations in clinical notes.
   # ===========================================================================
@@ -374,7 +374,7 @@ rules:
       mode: tokenize
       threshold: 0.4
 
-  # Street address pattern — fires on any valueString containing a recognizable
+  # Street address pattern  fires on any valueString containing a recognizable
   # address regardless of LOINC code or resource structure (covers PRAPARE 56799-0,
   # custom SDOH panels, and any other free-text fields with address content).
   # Two rules: one for top-level valueString, one for component.valueString
@@ -422,13 +422,13 @@ rules:
   # text/* payloads: Base64-decoded → NLP-scrubbed → re-encoded.
   #   Catches names, dates, MRNs in clinical notes (identifier 18 catch-all).
   # Non-text MIME types (image/*, application/pdf …): data field redacted
-  #   (biometric identifiers — HIPAA identifier 16/17).
+  #   (biometric identifiers  HIPAA identifier 16/17).
   # Attachment URL/title/hash always redacted (URL = identifier 14).
-  # NOTE: *.attachment.data does NOT match DocumentReference — the attachment is
+  # NOTE: *.attachment.data does NOT match DocumentReference  the attachment is
   # nested under content[*].attachment, so specific paths are required per resource.
   # ===========================================================================
 
-  # DocumentReference — clinical notes (content[*].attachment, nested one level)
+  # DocumentReference  clinical notes (content[*].attachment, nested one level)
   - name: scrub document reference attachment text
     match: DocumentReference.content.attachment.data
     action: nlp_detect_act
@@ -449,7 +449,7 @@ rules:
     match: DocumentReference.content.attachment.hash
     action: redact
 
-  # DiagnosticReport, QuestionnaireResponse — presentedForm is Attachment directly
+  # DiagnosticReport, QuestionnaireResponse  presentedForm is Attachment directly
   - name: scrub presented form text
     match: "*.presentedForm.data"
     action: nlp_detect_act
@@ -466,7 +466,7 @@ rules:
     match: "*.presentedForm.title"
     action: redact
 
-  # Observation, Task — valueAttachment
+  # Observation, Task  valueAttachment
   - name: scrub value attachment text
     match: "*.valueAttachment.data"
     action: nlp_detect_act
@@ -479,7 +479,7 @@ rules:
     match: "*.valueAttachment.url"
     action: redact
 
-  # Photos — biometric identifiers (HIPAA #16/17), never NLP-scrubable
+  # Photos  biometric identifiers (HIPAA #16/17), never NLP-scrubable
   - name: redact photo data
     match: "*.photo.data"
     action: redact

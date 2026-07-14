@@ -8,7 +8,7 @@ against an **active** permit, which is what makes pseudonyms and releases
 
 This module is pure domain logic (no I/O): a state machine with validated
 transitions plus dict (de)serialisation, so it is trivially testable and can be
-backed by any store (in-memory for tests, Postgres in production — see
+backed by any store (in-memory for tests, Postgres in production  see
 ``pipeline.governance.store``).
 
 Lifecycle::

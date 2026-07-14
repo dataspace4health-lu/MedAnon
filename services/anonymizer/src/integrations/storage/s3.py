@@ -6,7 +6,7 @@ Configuration env vars: ``MINIO_ENDPOINT``, ``MINIO_ROOT_USER``,
 
 Result keys are stored as ``s3://<bucket>/<job_id>.ndjson`` in ``job.result_path``.
 When ``GET /v1/jobs/{id}/result`` is requested the API generates a presigned URL
-and returns HTTP 307 — the client downloads directly from MinIO, bypassing
+and returns HTTP 307  the client downloads directly from MinIO, bypassing
 the anonymizer.
 """
 
@@ -48,7 +48,7 @@ def make_minio_client(
 
 
 # Content types by artifact suffix. The delivered set is NDJSON data, a gzipped
-# manifest sidecar, an audit JSON, and (tabular/sql jobs) a ZIP — labelling them
+# manifest sidecar, an audit JSON, and (tabular/sql jobs) a ZIP  labelling them
 # all as NDJSON makes the audit record undownloadable in a browser and confuses
 # any consumer that dispatches on Content-Type.
 _CONTENT_TYPES = (

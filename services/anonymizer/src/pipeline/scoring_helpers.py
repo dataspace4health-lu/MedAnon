@@ -65,7 +65,7 @@ def _get_config_profile(settings) -> str:
 def score_json_line(collector, line: str, settings=None) -> None:
     """Parse a JSON line and feed to the ScoreCollector.
 
-    Silently catches all errors — scoring must never break the response stream.
+    Silently catches all errors  scoring must never break the response stream.
     """
     if collector is None:
         return
@@ -74,7 +74,7 @@ def score_json_line(collector, line: str, settings=None) -> None:
         if not isinstance(resource, dict):
             return
         if "__stream_complete" in resource:
-            return  # trailer line — not a real resource
+            return  # trailer line  not a real resource
         if "error" in resource:
             collector.record_error()
             return
@@ -247,7 +247,7 @@ def apply_pii_leak_override(score: dict) -> "dict | None":
     when a leak is detected, or ``None`` when the output is clean.
 
     Mutates *score* directly so the persisted processing-run record reflects the
-    leak — privacy is forced to failed and composite to 0.  This is called by
+    leak  privacy is forced to failed and composite to 0.  This is called by
     both the non-streaming ``check_and_persist_with_leak`` path and the
     streaming ``/process/ndjson`` + ``/process/batch`` generators (which cannot
     block output after it has already been sent, but can embed the leak signal
@@ -285,14 +285,14 @@ def _identifier_coverage_blocks() -> bool:
     """Whether a HIPAA-coverage gap (identifier_risk) hard-blocks output.
 
     ``text_risk`` is *detected* PII in the output text (a real leak) and always
-    blocks.  ``identifier_risk`` is a *coverage* signal — a HIPAA-sensitive field
+    blocks.  ``identifier_risk`` is a *coverage* signal  a HIPAA-sensitive field
     is present but no rule named it, so its value passes through unchanged.  In
     strict mode (default) that is also a hard block.  Operators who want a weak
-    config to *warn* rather than block — surfacing the gap without withholding
-    output — set ``MEDANON_GATE_IDENTIFIER_MODE=warn``.
+    config to *warn* rather than block  surfacing the gap without withholding
+    output  set ``MEDANON_GATE_IDENTIFIER_MODE=warn``.
 
-        block (default) — uncovered HIPAA fields block output (current behaviour)
-        warn            — uncovered HIPAA fields warn only; only detected PII
+        block (default)  uncovered HIPAA fields block output (current behaviour)
+        warn             uncovered HIPAA fields warn only; only detected PII
                           (text_risk) in the output blocks
     """
     from utils.regulated import gate_identifier_mode
@@ -332,7 +332,7 @@ def extract_pii_leak_info(score: dict | None) -> "dict | None":
         )
     if id_hits > 0:
         # Phrase the coverage gap as a leak when it blocks, as a warning when it
-        # only warns — the wording drives what the UI shows the operator.
+        # only warns  the wording drives what the UI shows the operator.
         if id_blocks:
             msgs.append(
                 f"{id_hits} resource(s) still contain HIPAA-sensitive fields "

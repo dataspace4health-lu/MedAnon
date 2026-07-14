@@ -50,7 +50,7 @@ class SubscriptionService:
         parsed = urllib.parse.urlparse(endpoint)
         hostname = parsed.hostname or ""
         if hostname:
-            from api.deps import check_hostname_ssrf
+            from utils.ssrf import check_hostname_ssrf
 
             ssrf_error = check_hostname_ssrf(hostname)
             if ssrf_error:

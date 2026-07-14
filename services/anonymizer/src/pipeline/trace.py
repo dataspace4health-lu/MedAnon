@@ -1,16 +1,16 @@
-"""Trace layer — correlation IDs + machine-readable per-resource trace records.
+"""Trace layer  correlation IDs + machine-readable per-resource trace records.
 
 Two complementary mechanisms, decoupled from the human-facing transformation
 manifest (``pipeline/manifest.py``, which lives inside ``meta.tag`` of the FHIR
 output and is capped at 200 chars by HAPI):
 
-  - **Correlation ID** — a ``contextvar`` minted at the entry point and read
+  - **Correlation ID**  a ``contextvar`` minted at the entry point and read
     wherever a span or log line wants to tie work back to one request/job.
     Because it is a ``contextvar`` it propagates to the gPAS caller thread and,
     via the Phase-1 ``run_with_current_context`` OTel wrapper, to the NLP
     daemon thread.  ``_stage_span`` stamps it onto every pipeline span.
 
-  - **Machine-readable trace record** — an out-of-band, append-only per-resource
+  - **Machine-readable trace record**  an out-of-band, append-only per-resource
     record ``{correlation_id, resource_id, resource_type, stages: [...]}`` that a
     debugging/audit consumer can query without parsing prose or scraping
     ``meta.tag``.  Emission is opt-in (``MEDANON_TRACE_RECORDS_ENABLED``) and
@@ -45,7 +45,7 @@ def reset_correlation_id(token: contextvars.Token) -> None:
     try:
         _correlation_id.reset(token)
     except (ValueError, LookupError):
-        # Token from a different context (e.g. crossed a thread boundary) —
+        # Token from a different context (e.g. crossed a thread boundary)
         # best-effort reset; never raise from a trace helper.
         pass
 
@@ -101,7 +101,7 @@ def build_trace_record(
     Kept deliberately small and JSON-serialisable.  ``stages`` is a list of
     ``{"stage": ..., "status": ..., ...}`` entries the caller assembles; this
     function just frames them with the correlation id and resource identity.
-    The record is NOT embedded in the FHIR output — it is meant for an
+    The record is NOT embedded in the FHIR output  it is meant for an
     out-of-band sink (log stream, trace store).
     """
     rid = None

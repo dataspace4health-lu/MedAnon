@@ -1,7 +1,7 @@
 """Tabular (CSV / Excel / Parquet) de-identification endpoints.
 
-POST /process/tabular/inspect — preview columns + sample values (no de-id)
-POST /process/tabular         — de-identify by column rule, return same format
+POST /process/tabular/inspect  preview columns + sample values (no de-id)
+POST /process/tabular          de-identify by column rule, return same format
 
 De-identification targets columns via the ``column:<name>`` matcher.  Rules
 come from a saved ``config_profile`` OR from an inline ``rules`` JSON query

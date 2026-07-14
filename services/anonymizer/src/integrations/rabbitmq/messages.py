@@ -1,8 +1,8 @@
-"""Stage message schema — versioned, metadata-only work pointers.
+"""Stage message schema  versioned, metadata-only work pointers.
 
 A message identifies a unit of work (a partition of a job at a given stage). It
 deliberately carries NO patient data, NO FHIR resource bodies, and NO source
-URLs that could embed identifiers — only the keys a consumer needs to claim the
+URLs that could embed identifiers  only the keys a consumer needs to claim the
 work from the Postgres ledger and re-fetch/process it.
 
 Security invariant (enforce in code review): every field here must be a
@@ -22,7 +22,7 @@ STAGES = ("fetch", "deid", "score", "upload")
 # convenience so callers importing the package get both.
 STAGE_QUEUES = {s: f"medanon.stage.{s}" for s in STAGES}
 
-# Schema version — bump when the field set changes so consumers can branch.
+# Schema version  bump when the field set changes so consumers can branch.
 SCHEMA_VERSION = 1
 
 

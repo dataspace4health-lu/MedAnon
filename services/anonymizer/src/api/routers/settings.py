@@ -1,4 +1,4 @@
-"""Instance-settings endpoints — deployment-wide admin-managed application defaults.
+"""Instance-settings endpoints  deployment-wide admin-managed application defaults.
 
 One shared settings row per deployment: which FHIR source/target the app is wired
 to, the default de-identification rule profile, and the assessment defaults the UI
@@ -41,7 +41,7 @@ def _require_admin(request: Request) -> AuthContext:
 
 
 class SettingsUpdate(BaseModel):
-    """Partial update — only the provided fields change (PATCH semantics)."""
+    """Partial update  only the provided fields change (PATCH semantics)."""
 
     config_profile: str | None = Field(default=None, min_length=1, max_length=128)
     fhir_page_size: int | None = Field(default=None, ge=50, le=1000)
@@ -65,7 +65,7 @@ async def update_settings(body: SettingsUpdate, request: Request):
     """Merge a partial update into the deployment-wide settings row. Admin only."""
     auth = _require_admin(request)
     fields = body.model_dump(exclude_unset=True)
-    # A stored config_profile that no job could load is a silent foot-gun — the
+    # A stored config_profile that no job could load is a silent foot-gun  the
     # setting looks applied but every default-profile run would fail. Reject an
     # unknown profile here (built-in alias or an existing user config only).
     profile = fields.get("config_profile")

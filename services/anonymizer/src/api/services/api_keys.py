@@ -21,11 +21,11 @@ class ApiKeyAlreadyRevoked(Exception):
 
 def _get_store():
     """Fetch the API key store singleton (set by api/main.py _startup())."""
-    import api.auth as _auth  # lazy import — avoids circular dependency at module load
+    import api.auth as _auth  # lazy import  avoids circular dependency at module load
 
     if _auth._api_key_store is None:
         raise ApiKeyStoreUnavailable(
-            "API key store not initialised — MEDANON_APP_DB_URL required"
+            "API key store not initialised  MEDANON_APP_DB_URL required"
         )
     return _auth._api_key_store
 

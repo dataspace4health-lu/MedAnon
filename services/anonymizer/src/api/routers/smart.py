@@ -3,15 +3,15 @@
 Implements the minimal endpoint set for SMART App Launch Framework
 compatibility (HL7 FHIR SMART App Launch 2.0):
 
-    GET  /.well-known/smart-configuration  — server capability discovery (RFC 8414)
-    POST /oauth2/introspect                — token introspection (RFC 7662)
+    GET  /.well-known/smart-configuration   server capability discovery (RFC 8414)
+    POST /oauth2/introspect                 token introspection (RFC 7662)
 
 Configuration env vars (all optional):
-    SMART_AUTHORIZATION_URL  — OAuth2 authorization endpoint
-    SMART_TOKEN_URL          — OAuth2 token endpoint
-    SMART_INTROSPECTION_URL  — Upstream introspection endpoint to proxy to
-    SMART_JWKS_URL           — JWKS URI for token verification
-    SMART_ISSUER             — Token issuer (iss claim); defaults to request base URL
+    SMART_AUTHORIZATION_URL   OAuth2 authorization endpoint
+    SMART_TOKEN_URL           OAuth2 token endpoint
+    SMART_INTROSPECTION_URL   Upstream introspection endpoint to proxy to
+    SMART_JWKS_URL            JWKS URI for token verification
+    SMART_ISSUER              Token issuer (iss claim); defaults to request base URL
 """
 
 import asyncio

@@ -8,7 +8,7 @@ Output checking for an SPE export. JSON body::
       "declared_paths": [ "Patient.birthDate", ... ],     # optional (purpose)
       "thresholds":     { "min_k": 5 }                    # optional
       "permit_id":      "permit-abc123",                  # optional (D7.2 §4.4/§4.8)
-      "recipient":      "hospital-x"                      # optional — checked
+      "recipient":      "hospital-x"                      # optional  checked
                                                             # against the permit
     }
 
@@ -17,7 +17,7 @@ permit (WS4/WS8 permit-scoping, rules R6-R8 in
 :func:`pipeline.disclosure.assess_export_decision`): the permit must exist
 (422 if not), and its active/recipient/scope status feeds the decision
 record's rule-level rationale rather than short-circuiting as a bare HTTP
-error — a REVOKED or expired permit still produces a documented REFUSE, which
+error  a REVOKED or expired permit still produces a documented REFUSE, which
 is what a Transformation Passport needs to show.
 
 Returns an export-decision record (approve / refer / refuse) with the rule-level
@@ -37,12 +37,12 @@ logger = logging.getLogger("medanon")
 
 
 def _resolve_permit_for_decision(permit_id: str | None):
-    """Look up *permit_id* (existence only — inactive permits are returned,
+    """Look up *permit_id* (existence only  inactive permits are returned,
     not rejected, so the disclosure engine can report R6/R7/R8 in the
     decision record itself)."""
     if not permit_id:
         return None
-    from api.services.permits import PermitNotFoundError, PermitService
+    from pipeline.permits import PermitNotFoundError, PermitService
 
     try:
         return PermitService().get(permit_id)

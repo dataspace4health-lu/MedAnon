@@ -1,4 +1,4 @@
-"""Per-upstream bulkheads — fast-fail isolation between integrations.
+"""Per-upstream bulkheads  fast-fail isolation between integrations.
 
 Complements the process-wide :mod:`utils.thread_pool` semaphore with a small
 named-semaphore registry: each upstream service (gPAS, NLP, FHIR, analytics,
@@ -122,7 +122,7 @@ def bulkhead(name: str, *, wait_sec: float = 0.0):
 
 
 def stats() -> dict[str, dict[str, int]]:
-    """Return a snapshot of bulkhead capacities — used by /ready and tests."""
+    """Return a snapshot of bulkhead capacities  used by /ready and tests."""
     out: dict[str, dict[str, int]] = {}
     for name, cap in _CAPACITY.items():
         out[name] = {"capacity": cap}

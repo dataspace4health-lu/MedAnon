@@ -4,10 +4,10 @@ These three pieces are independent of the batch-orchestration state in
 :mod:`pipeline.processor` and are imported widely (the API service/router
 layer catches :class:`PiiLeakError`):
 
-- :class:`PiiLeakError`        — raised when the raw-PII gate blocks output.
-- :func:`run_pii_gate`         — the raw-resource PII scan half of the unified
+- :class:`PiiLeakError`         raised when the raw-PII gate blocks output.
+- :func:`run_pii_gate`          the raw-resource PII scan half of the unified
   output barrier (see :mod:`pipeline.validation`).
-- :func:`quarantine_info_for`  — PHI-free identity fields for a quarantine record.
+- :func:`quarantine_info_for`   PHI-free identity fields for a quarantine record.
 
 ``processor`` re-exports all three under their historical names
 (``PiiLeakError``, ``_run_pii_gate``, ``_quarantine_info_for``) so existing
@@ -50,7 +50,7 @@ def _source_blocks(detection: dict) -> bool:
 
     ``regex`` and ``structural`` are deterministic and always block (subject to
     the severity filter).  ``ner`` is statistical: see
-    :func:`utils.regulated.ner_gate_mode`.  ``ai`` never reaches this function —
+    :func:`utils.regulated.ner_gate_mode`.  ``ai`` never reaches this function
     the blocking gate calls ``detect_pii_fast``, which runs no LLM layer.
     """
     if detection.get("source") != "ner":
@@ -112,7 +112,7 @@ def raw_detections(
         )
     except ImportError:
         # The detector is optional; absence must not crash the pipeline.
-        audit_log.debug("pii_detector_unavailable — skipping raw PII scan")
+        audit_log.debug("pii_detector_unavailable  skipping raw PII scan")
         return [], []
 
     from pipeline.identifier_gate import structural_detections
@@ -182,7 +182,7 @@ def run_pii_gate(
     API, NDJSON streaming, async bulk/cohort jobs, staged worker, Bundle inner
     processing).  ON by default; ``MEDANON_OUTPUT_GATE_ENABLED=false`` disables
     the barrier and the legacy ``MEDANON_PII_GATE=false`` opts the raw scan out
-    individually — neither is honoured in regulated mode.
+    individually  neither is honoured in regulated mode.
 
     Pass *manifest_entries_list* (index-aligned with *results*) and *settings* to
     enable the structural coverage check; without them only the free-text
@@ -210,7 +210,7 @@ def quarantine_info_for(resource, exc: BaseException) -> dict:
 
     Captured at the match-stage catch site (where the resource and exception
     are still in scope) so the quarantine record emitted in finalize can be
-    tied back to a source resource. The resource id is hashed — quarantine
+    tied back to a source resource. The resource id is hashed  quarantine
     records travel in output streams and audit logs, so the raw id
     (potentially identifying) must not leak.
     """

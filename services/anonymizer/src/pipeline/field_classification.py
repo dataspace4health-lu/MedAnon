@@ -4,8 +4,8 @@ Labels a leaf path as ``direct`` (HIPAA Safe Harbor direct identifier),
 ``quasi`` (k-anonymity quasi-identifier), or ``non`` (not identifying). This is
 the AUTHORITATIVE source the Resource Explorer consumes, so its per-field labels
 match what the engine actually enforces: it reuses ``HIPAA_SENSITIVE_PATHS`` and
-the severity grading from :mod:`pipeline.identifier_gate` — the same catalog the
-structural output gate blocks on — and adds the standard demographic
+the severity grading from :mod:`pipeline.identifier_gate`  the same catalog the
+structural output gate blocks on  and adds the standard demographic
 quasi-identifiers that Safe Harbor's *direct*-only list omits.
 
 Grounding
@@ -14,13 +14,13 @@ Grounding
   graded ``critical``/``high`` by ``identifier_gate.path_severity``): names,
   identifiers, telecom, street address line, photo, precise geolocation, record
   links, plus the resource ``id``.
-- **Quasi**: the k-anonymity quasi-identifier set (Sweeney 2002 — date of birth,
-  sex, ZIP re-identify ~87% of the US population — plus race/ethnicity, marital
+- **Quasi**: the k-anonymity quasi-identifier set (Sweeney 2002  date of birth,
+  sex, ZIP re-identify ~87% of the US population  plus race/ethnicity, marital
   status, language) and the temporal ``medium`` HIPAA paths (dates/periods) and
   provenance links.
 - **Non**: clinical codes, coding systems, structural qualifiers, narrative.
 
-Deterministic, no model, a handful of dict lookups — safe to call per field.
+Deterministic, no model, a handful of dict lookups  safe to call per field.
 ``pipeline/scoring/`` is imported read-only (kept in sync with
 ``services/scoring/src/`` by ``scripts/sync_shared_code.sh``); nothing here
 modifies it.
@@ -41,7 +41,7 @@ IdentifierClass = str
 _QUALIFIER_LEAVES = frozenset({"system", "use", "url", "version"})
 
 # Demographic quasi-identifiers NOT in Safe Harbor's direct list. Matched on the
-# element leaf name, or a keyword anywhere in the path/URL — race and ethnicity
+# element leaf name, or a keyword anywhere in the path/URL  race and ethnicity
 # live in URL-keyed extensions (``extension.where(url='…us-core-race')``), so the
 # keyword must be sought in the full, un-stripped path.
 _DEMOGRAPHIC_QUASI_LEAVES = frozenset({"gender", "birthsex", "sex"})
@@ -86,7 +86,7 @@ def classify_path(resource_type: str, fhir_path: str) -> IdentifierClass:
     if leaf in _QUALIFIER_LEAVES:
         return "non"
 
-    # HIPAA Safe Harbor catalog — the same source the structural gate enforces.
+    # HIPAA Safe Harbor catalog  the same source the structural gate enforces.
     sensitive = list(HIPAA_SENSITIVE_PATHS.get(resource_type, ()))
     sensitive += list(HIPAA_SENSITIVE_PATHS.get("*", ()))
     for sp in sensitive:
@@ -97,7 +97,7 @@ def classify_path(resource_type: str, fhir_path: str) -> IdentifierClass:
         # identifier class of its own.
         if spl == "text":
             return "non"
-        # Address: refine per sub-leaf — street line stays direct, ZIP/city
+        # Address: refine per sub-leaf  street line stays direct, ZIP/city
         # generalise as quasi, state/country are permitted.
         if spl.endswith("address"):
             if leaf in _GEO_QUASI_LEAVES:
@@ -109,7 +109,7 @@ def classify_path(resource_type: str, fhir_path: str) -> IdentifierClass:
             return "direct"
         # medium HIPAA paths: the resource id is a unique record identifier;
         # dates/periods are temporal quasi-identifiers; the rest are provenance
-        # links (indirect) — all quasi except the id.
+        # links (indirect)  all quasi except the id.
         if leaf == "id":
             return "direct"
         return "quasi"

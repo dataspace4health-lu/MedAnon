@@ -1,4 +1,4 @@
-"""Read-side FHIR operations — search, $everything, cohort export.
+"""Read-side FHIR operations  search, $everything, cohort export.
 
 All functions use the shared transport layer from ``_transport`` for HTTP
 communication, pagination, and input validation.
@@ -77,7 +77,7 @@ def preflight_resource_count(base_url, resource_type=None, token=None, timeout=1
         return bundle.get("total", 0)
     except Exception as exc:
         log.warning("preflight_resource_count failed (%s), skipping pre-check", exc)
-        # If the pre-check fails, don't block — let the real export run.
+        # If the pre-check fails, don't block  let the real export run.
         return -1
 
 
@@ -87,7 +87,7 @@ def preflight_system_count(base_url, resource_types=None, token=None, timeout=10
     Many FHIR servers (incl. HAPI) reject a bare ``GET {base}?_summary=count``
     (system-wide) with HTTP 400, so we sum per-type counts instead. Unlike
     :func:`preflight_resource_count` (which proxies system size by Patient count ×
-    a fixed factor), this returns the *actual* total — used to route bulk exports
+    a fixed factor), this returns the *actual* total  used to route bulk exports
     to the staged path correctly for dense datasets where ``patient_count × 15``
     badly under-counts (~70× on real data).
 
@@ -100,7 +100,7 @@ def preflight_system_count(base_url, resource_types=None, token=None, timeout=10
     base = base_url.rstrip("/")
     try:
         if resource_types is None:
-            from pipeline.jobs.staged_worker._core import _INFRA
+            from domain.fhir import INFRA_RESOURCE_TYPES as _INFRA
 
             all_types = get_capability_statement(base, token=token, timeout=timeout)
             resource_types = [t for t in all_types if t not in _INFRA]
@@ -220,7 +220,7 @@ def fetch_resources_by_ids(
     pagination.  Returns a flat list of FHIR resource dicts.
 
     Used by the staged executor to re-fetch resources from the source FHIR server
-    in Phase 2 — this keeps patient data out of our databases by re-fetching on
+    in Phase 2  this keeps patient data out of our databases by re-fetching on
     demand rather than caching raw FHIR resources in PostgreSQL.
 
     Args:
@@ -332,7 +332,7 @@ def fetch_everything(
             if resource:
                 yield resource
 
-        # Follow next page link — validate same-origin to prevent SSRF
+        # Follow next page link  validate same-origin to prevent SSRF
         url = None
         for link in bundle.get("link", []):
             if link.get("relation") == "next":
@@ -356,7 +356,7 @@ def fetch_all_resource_types(
     """Generator that yields (resource_type, resource_dict) for all given types.
 
     When ``MEDANON_FHIR_FETCH_PARALLEL`` > 1, resource types are fetched
-    concurrently — each type runs in its own thread — and results are merged
+    concurrently  each type runs in its own thread  and results are merged
     via a thread-safe queue.  Order across types is non-deterministic but all
     resources for each type are yielded in pagination order.
 
@@ -416,11 +416,11 @@ def fetch_all_resource_types(
             ):
                 result_q.put((rt, resource))
         except Exception as exc:
-            # Log the failure but do NOT abort — other resource types continue.
+            # Log the failure but do NOT abort  other resource types continue.
             # The failed type is recorded in failed_rts and logged at the end
             # so operators can see exactly which types are missing.
             _log.warning(
-                "fhir_fetch_partial_failure rt=%s — resources from this type "
+                "fhir_fetch_partial_failure rt=%s  resources from this type "
                 "will be missing from the export: %s",
                 rt,
                 exc,
@@ -430,7 +430,7 @@ def fetch_all_resource_types(
             result_q.put(_SENTINEL)
 
     # Use a DEDICATED thread pool capped at _FHIR_FETCH_PARALLEL threads.
-    # Critical: do NOT use get_executor() here — that is the global pipeline pool
+    # Critical: do NOT use get_executor() here  that is the global pipeline pool
     # shared with rule-evaluation threads.  Submitting 268 FHIR-fetch tasks to the
     # global pool starves rule evaluation and makes de-identification slower, not
     # faster.  A private pool with _FHIR_FETCH_PARALLEL threads saturates the FHIR
@@ -443,7 +443,7 @@ def fetch_all_resource_types(
     )
     for rt in pending_rts:
         _fetch_pool.submit(_fetch_one, rt)
-    # Do not call _fetch_pool.shutdown() here — the pool must remain alive until
+    # Do not call _fetch_pool.shutdown() here  the pool must remain alive until
     # all _fetch_one workers finish, which we detect via the sentinel counter below.
     finished = 0
     try:
@@ -453,17 +453,17 @@ def fetch_all_resource_types(
             except _queue.Empty:
                 raise ValueError(
                     f"FHIR fetch stalled: no data received for "
-                    f"{_QUEUE_GET_TIMEOUT_SEC}s — possible thread crash"
+                    f"{_QUEUE_GET_TIMEOUT_SEC}s  possible thread crash"
                 )
             if item is _SENTINEL:
                 finished += 1
                 continue
-            # Error sentinel: (SENTINEL, rt, exc) tuple — log and skip this type.
+            # Error sentinel: (SENTINEL, rt, exc) tuple  log and skip this type.
             if isinstance(item, tuple) and len(item) == 3 and item[0] is _SENTINEL:
                 _, failed_rt, exc = item
                 failed_rts.append(failed_rt)
                 _log.error(
-                    "fhir_fetch_type_failed rt=%s error=%s — resources from "
+                    "fhir_fetch_type_failed rt=%s error=%s  resources from "
                     "this type will be missing from the output",
                     failed_rt,
                     exc,
@@ -475,7 +475,7 @@ def fetch_all_resource_types(
 
     if failed_rts:
         _log.error(
-            "fhir_fetch_incomplete failed_types=%s — export is missing resources "
+            "fhir_fetch_incomplete failed_types=%s  export is missing resources "
             "from %d type(s). Re-run with MEDANON_FHIR_FETCH_PARALLEL=1 to use "
             "serial fetch which is crash-safe.",
             failed_rts,
@@ -592,7 +592,7 @@ def fetch_cohort(
                 except _queue.Empty:
                     raise ValueError(
                         f"Cohort fetch stalled: no data received for "
-                        f"{_QUEUE_GET_TIMEOUT_SEC}s — possible thread crash"
+                        f"{_QUEUE_GET_TIMEOUT_SEC}s  possible thread crash"
                     )
                 if item is _SENTINEL:
                     finished += 1
@@ -693,7 +693,7 @@ def fetch_patients_everything(
                 except _queue.Empty:
                     raise ValueError(
                         f"Batch patient fetch stalled: no data received for "
-                        f"{_QUEUE_GET_TIMEOUT_SEC}s — possible thread crash"
+                        f"{_QUEUE_GET_TIMEOUT_SEC}s  possible thread crash"
                     )
                 if item is _SENTINEL:
                     finished += 1

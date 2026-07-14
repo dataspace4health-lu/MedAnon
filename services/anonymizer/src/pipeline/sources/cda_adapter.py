@@ -1,13 +1,13 @@
-"""CdaAdapter — map CDA (HL7 v3) patient demographics onto the FHIR IR.
+"""CdaAdapter  map CDA (HL7 v3) patient demographics onto the FHIR IR.
 
 Unlike the legacy ``formats/cda.py`` scrubber (which blanks fixed elements),
 this adapter maps the ``recordTarget/patientRole/patient`` demographics onto a
 FHIR-shaped ``Patient`` resource, runs the *full* rule engine over it (so a
 patient ID can be gPAS-pseudonymised, a name NLP-scrubbed, a birthTime
-generalised — not merely blanked), then writes the de-identified values back
+generalised  not merely blanked), then writes the de-identified values back
 into the original XML elements by reference.
 
-Scope: the highest-value patient demographics in ``recordTarget`` — name,
+Scope: the highest-value patient demographics in ``recordTarget``  name,
 birthTime, address, and patient ID.  Author / participant PHI is left to the
 legacy ``formats/cda.py`` scrubber for now; this adapter establishes the
 engine-driven path on the new normalization seam.
@@ -133,7 +133,7 @@ class CdaAdapter:
 
         # Name: if the IR name is gone/redacted, blank all name part elements;
         # otherwise we cannot losslessly split a transformed single string back
-        # into given/family, so a *changed* name blanks the parts (fail-safe —
+        # into given/family, so a *changed* name blanks the parts (fail-safe
         # the original PHI must not survive).
         new_name = _first_text(patient.get("name") or [])
         if self._name_parts:
@@ -142,7 +142,7 @@ class CdaAdapter:
                 for e in self._name_parts:
                     e.text = None
 
-        # Address: same fail-safe — if the IR address changed, blank the parts.
+        # Address: same fail-safe  if the IR address changed, blank the parts.
         new_addr = _first_text(patient.get("address") or [])
         if self._addr_parts:
             original_addr = " ".join(e.text for e in self._addr_parts if e.text)
@@ -167,7 +167,7 @@ class CdaAdapter:
         return _ET_WRITE.tostring(self._root, encoding="utf-8")
 
     def can_target_fhir_server(self) -> bool:
-        # CDA output is not FHIR — never upload to the FHIR target server.
+        # CDA output is not FHIR  never upload to the FHIR target server.
         return False
 
 

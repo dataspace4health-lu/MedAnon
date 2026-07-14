@@ -1,4 +1,4 @@
-"""decrypt — RSA-OAEP field decryption action.
+"""decrypt  RSA-OAEP field decryption action.
 
 Decrypts field values that were previously encrypted by the ``encrypt`` action,
 using the private key at ``MEDANON_RSA_PRIVATE_KEY``.  Intended for
@@ -62,7 +62,7 @@ def decrypt_by_path(resource: dict, el: dict, params: dict) -> None:
     path = path.split(".")[1:]  # Remove root
     if len(path) == 0:
         raise ValueError(
-            f"Empty path after removing resource type root in decrypt — "
+            f"Empty path after removing resource type root in decrypt  "
             f"refusing to clear entire resource (original path: {el['path']!r})"
         )
     ret = find_nodes(ret, path[:-1], [])

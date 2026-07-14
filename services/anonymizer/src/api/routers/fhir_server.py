@@ -29,7 +29,7 @@ from api.schemas.fhir_ops import (
     UploadToTargetRequest,
 )
 from api.services import stream_trailer
-from api.services.scoring_helpers import (
+from pipeline.scoring_helpers import (
     _is_scoring_enabled,
     _get_config_profile,
     make_collector,
@@ -82,7 +82,7 @@ async def process_from_server(
     }
     ```
 
-    Returns streaming NDJSON — one anonymized resource per line.
+    Returns streaming NDJSON  one anonymized resource per line.
     """
     server_url = await _get_url_from_request_or_env(req.server_url, "FHIR_SOURCE_URL")
     token = req.token or os.environ.get("FHIR_SOURCE_TOKEN")
@@ -160,7 +160,7 @@ async def process_everything(
     }
     ```
 
-    Returns streaming NDJSON — one anonymized resource per line.
+    Returns streaming NDJSON  one anonymized resource per line.
     """
     server_url = await _get_url_from_request_or_env(req.server_url, "FHIR_SOURCE_URL")
     token = req.token or os.environ.get("FHIR_SOURCE_TOKEN")
@@ -305,7 +305,7 @@ async def process_round_trip(
     If ``resource_types`` is omitted, types are auto-discovered from
     the source server's ``/metadata`` capability statement.
 
-    Returns streaming NDJSON — one status line per resource.
+    Returns streaming NDJSON  one status line per resource.
     """
     from pipeline.config.service import get_settings as _get_settings
 
@@ -401,7 +401,7 @@ async def process_bulk_export(
     }
     ```
 
-    Returns streaming NDJSON — one anonymized resource per line.
+    Returns streaming NDJSON  one anonymized resource per line.
     """
     server_url = await _get_url_from_request_or_env(req.server_url, "FHIR_SOURCE_URL")
     if req.level == "type" and not req.resource_type:
@@ -479,7 +479,7 @@ async def process_cohort(
     }
     ```
 
-    Returns streaming NDJSON — one anonymized resource per line.
+    Returns streaming NDJSON  one anonymized resource per line.
     """
     server_url = await _get_url_from_request_or_env(req.server_url, "FHIR_SOURCE_URL")
     token = req.token or os.environ.get("FHIR_SOURCE_TOKEN")
@@ -536,7 +536,7 @@ async def upload_to_target(
 ):
     """Upload already-de-identified FHIR resources to the target FHIR server.
 
-    No re-processing is performed — resources are uploaded as-is via idempotent PUT.
+    No re-processing is performed  resources are uploaded as-is via idempotent PUT.
     Use this after reviewing de-identified results in the UI.
 
     - Falls back to ``FHIR_TARGET_URL`` env when ``target_server_url`` is not provided.

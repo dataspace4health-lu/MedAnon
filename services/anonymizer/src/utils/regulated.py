@@ -1,4 +1,4 @@
-"""Regulated-mode switch — one flag that tightens fail-soft defaults.
+"""Regulated-mode switch  one flag that tightens fail-soft defaults.
 
 EHDS/TEHDAS2 D7.2 assurance expects a deployment posture where "not assessed"
 (NA) and "warn" degradations are not acceptable for a clean release. Setting
@@ -12,7 +12,7 @@ across the stack, for example:
 - the output/disclosure barrier cannot be disabled.
 
 The flag is read at call time (never cached at import) so operators and tests
-can toggle it without re-importing modules — matching the convention used by
+can toggle it without re-importing modules  matching the convention used by
 ``pipeline.validation._gate_enabled``.
 """
 
@@ -81,13 +81,13 @@ def ner_gate_mode() -> str:
     The raw scan has three detection sources.  ``regex`` and ``structural`` are
     deterministic: a matched SSN, or a direct-identifier path present with no
     transformation recorded, is a fact.  ``ner`` is a statistical model, and it
-    is the *same* Presidio model that just scrubbed the text — so a hit means
+    is the *same* Presidio model that just scrubbed the text  so a hit means
     either a genuine miss or a threshold/entity-set mismatch, and it
     false-positives on clinical prose (drug names, eponyms, hospital names read
     as PERSON/LOCATION).
 
     Default ``warn``: NER hits are counted and audit-logged but do not block.
-    Regulated mode forces ``block`` — no soft release.
+    Regulated mode forces ``block``  no soft release.
     """
     if regulated_mode():
         return "block"

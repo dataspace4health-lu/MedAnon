@@ -78,7 +78,7 @@ async def analyse_privacy_risk(request: Request):
     are additionally computed against it.
 
     When ``ANALYTICS_SERVICE_URL`` is set, proxies to the analytics microservice
-    (this was previously reachable only on that microservice directly — this
+    (this was previously reachable only on that microservice directly  this
     endpoint makes it a first-class part of the anonymizer's own API surface).
     """
     body = await request.body()

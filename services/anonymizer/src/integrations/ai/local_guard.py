@@ -1,4 +1,4 @@
-"""Local-endpoint enforcement for LLM calls (C4 — PHI must not leave the host).
+"""Local-endpoint enforcement for LLM calls (C4  PHI must not leave the host).
 
 Single source of truth for deciding whether an LLM endpoint is provably
 local/self-hosted. Used by ``LLMProvider.complete()`` / ``complete_streaming()``
@@ -6,7 +6,7 @@ as the unconditional chokepoint and by ``agents/pii_detector.py`` for its
 early, caller-side check (nicer error message before any work is done).
 
 This module must stay free of imports from ``integrations.ai.provider`` or
-``integrations.ai.agents.*`` — the provider imports *us*.
+``integrations.ai.agents.*``  the provider imports *us*.
 
 Enforcement matrix (see :func:`require_local`):
 
@@ -44,14 +44,14 @@ _DEFAULT_LOCAL_PREFIXES: tuple[str, ...] = (
 
 # Hostnames treated as local without DNS resolution. "ollama" is the
 # docker-compose service name (resolves to a private bridge IP in the stack,
-# unresolvable from the host/test environment — both must pass).
+# unresolvable from the host/test environment  both must pass).
 _DEFAULT_LOCAL_HOSTS: tuple[str, ...] = (
     "ollama",
     "localhost",
     "host.docker.internal",
 )
 
-# Loopback + RFC1918 + link-local — addresses treated as "self-hosted".
+# Loopback + RFC1918 + link-local  addresses treated as "self-hosted".
 _LOCAL_NETS = [
     ipaddress.ip_network(cidr)
     for cidr in (
@@ -143,7 +143,7 @@ def _host_is_local(hostname: str) -> bool:
 def assert_endpoint_local(model: str, api_base: str | None) -> None:
     """Raise unless the effective (model, api_base) is provably local.
 
-    Unconditional — callers decide *whether* to enforce via
+    Unconditional  callers decide *whether* to enforce via
     :func:`require_local`. The caller MUST treat a raise as fail-closed
     (do not send the payload).
     """

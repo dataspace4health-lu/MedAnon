@@ -2,7 +2,7 @@
 
 Two implementations:
 
-- ``LocalLruCache``: per-process sharded LRU dict (default — preserves existing behaviour).
+- ``LocalLruCache``: per-process sharded LRU dict (default  preserves existing behaviour).
 - ``RedisCache``: opt-in Redis-backed L2 cache for cross-replica pseudonym sharing.
 
 Injection point: call ``configure_cache(RedisCache(...))`` once from the
@@ -23,12 +23,12 @@ _cache_log = logging.getLogger("medanon.cache")
 # cross-resource references). The LRU must hold the entire working set to avoid
 # evictions that force re-fetches from gPAS (~150 ms each).
 # Default raised from 50K → 300K; tune via MEDANON_CACHE_MAX_ENTRIES.
-# Memory: ~150 bytes/entry × 300K ≈ 45 MB — well within the 3 GB anonymizer budget.
+# Memory: ~150 bytes/entry × 300K ≈ 45 MB  well within the 3 GB anonymizer budget.
 _DEFAULT_MAX = int(os.environ.get("MEDANON_CACHE_MAX_ENTRIES", "300000"))
 
 
 # ---------------------------------------------------------------------------
-# Protocol (structural typing — no ABC overhead)
+# Protocol (structural typing  no ABC overhead)
 # ---------------------------------------------------------------------------
 
 
@@ -42,7 +42,7 @@ class CacheBackend(Protocol):
 
 
 # ---------------------------------------------------------------------------
-# Local sharded LRU (default — 8 shards with independent locks)
+# Local sharded LRU (default  8 shards with independent locks)
 # ---------------------------------------------------------------------------
 
 _NUM_SHARDS = 8
@@ -155,10 +155,10 @@ class RedisCache:
     Unit Separator (0x1f) as delimiter.
 
     TTL behaviour:
-      ttl=None (default) — entries are written with no expiry.  Correct for
+      ttl=None (default)  entries are written with no expiry.  Correct for
         pseudonym mappings, which are permanent facts derived from the gPAS
         vault.  Entries survive Redis restarts when AOF persistence is enabled.
-      ttl=<seconds>      — entries expire after the given number of seconds.
+      ttl=<seconds>       entries expire after the given number of seconds.
         Use only for non-permanent data (e.g. session tokens, rate-limit keys).
 
     Redis errors are swallowed with a warning log so a Redis outage degrades
@@ -178,14 +178,14 @@ class RedisCache:
 
         client = get_redis(redis_url, decode_responses=True)
         if client is None:
-            # redis package missing — caller must handle by falling back to L1
+            # redis package missing  caller must handle by falling back to L1
             raise RuntimeError("redis package not installed; cannot create RedisCache")
         self._client = client
         self._ttl = ttl
         self._prefix = key_prefix
 
     def _make_key(self, key: tuple) -> str:
-        # Use ASCII Unit Separator (\\x1f) as delimiter — faster than JSON serialization
+        # Use ASCII Unit Separator (\\x1f) as delimiter  faster than JSON serialization
         # and safe because FHIR values, URIs, and domain names never contain this byte.
         return self._prefix + "\x1f".join(str(x) for x in key)
 
@@ -262,7 +262,7 @@ class RedisCache:
 
 
 class TieredCache:
-    """L1 local LRU in front of L2 Redis — read: L1 → L2 → miss (promote on L2 hit), write: both."""
+    """L1 local LRU in front of L2 Redis  read: L1 → L2 → miss (promote on L2 hit), write: both."""
 
     def __init__(self, l1: LocalLruCache, l2: RedisCache) -> None:
         self._l1 = l1

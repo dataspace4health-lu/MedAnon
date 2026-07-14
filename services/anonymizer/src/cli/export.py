@@ -1,4 +1,4 @@
-"""CLI export subcommand — FHIR Bulk Data Export ($export)."""
+"""CLI export subcommand  FHIR Bulk Data Export ($export)."""
 
 import json
 import os

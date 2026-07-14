@@ -1,4 +1,4 @@
-"""Shared FastAPI dependencies — rate limiter, settings loader, SSRF protection, helpers.
+"""Shared FastAPI dependencies  rate limiter, settings loader, SSRF protection, helpers.
 
 Imported by main.py and all router modules. No imports from api.main or api.routers
 to keep the dependency graph acyclic.
@@ -7,7 +7,6 @@ to keep the dependency graph acyclic.
 import asyncio
 import ipaddress
 import os
-import socket
 import urllib.parse
 from typing import Any
 
@@ -18,7 +17,8 @@ from pydantic import ValidationError as _ValidationError
 from api.schemas.processing import DynamicSettings as _DynamicSettings
 
 import pipeline.config as config
-from pipeline.config.service import get_settings  # noqa: F401 — re-exported for router imports
+from pipeline.config.service import get_settings  # noqa: F401  re-exported for router imports
+from utils.ssrf import PRIVATE_NETS, check_hostname_ssrf, effective_ip
 
 # ---------------------------------------------------------------------------
 # Rate limiting (slowapi dependency)
@@ -28,7 +28,7 @@ try:
     from slowapi.errors import RateLimitExceeded
     from slowapi.util import get_remote_address
 except ImportError:
-    # slowapi is optional — no-op fallback for tests and lightweight deployments.
+    # slowapi is optional  no-op fallback for tests and lightweight deployments.
     class _NoOpLimiter:
         def __init__(self, **kw):
             pass
@@ -65,7 +65,7 @@ def _get_client_ip(request) -> str:
     real_ip = request.headers.get("x-real-ip", "").strip()
     if real_ip:
         return real_ip
-    # ASGI direct-connection IP — safe when no trusted proxy is in front.
+    # ASGI direct-connection IP  safe when no trusted proxy is in front.
     client = getattr(request, "client", None)
     if client and client.host:
         return client.host
@@ -90,38 +90,10 @@ limiter = Limiter(
 # Maximum accepted request body size (10 MB default).
 MAX_BODY_BYTES = int(os.environ.get("MEDANON_MAX_BODY_BYTES", 10 * 1024 * 1024))
 
+
 # ---------------------------------------------------------------------------
-# SSRF protection — reject server_url values targeting private/loopback space
+# SSRF protection  reject server_url values targeting private/loopback space
 # ---------------------------------------------------------------------------
-_PRIVATE_NETS = [
-    ipaddress.ip_network("10.0.0.0/8"),
-    ipaddress.ip_network("172.16.0.0/12"),
-    ipaddress.ip_network("192.168.0.0/16"),
-    ipaddress.ip_network("127.0.0.0/8"),
-    ipaddress.ip_network("169.254.0.0/16"),  # link-local / AWS metadata
-    ipaddress.ip_network("100.64.0.0/10"),  # RFC 6598 carrier-grade NAT
-    ipaddress.ip_network("0.0.0.0/8"),
-    ipaddress.ip_network("::1/128"),
-    ipaddress.ip_network("fc00::/7"),
-    ipaddress.ip_network("fe80::/10"),  # IPv6 link-local
-    ipaddress.ip_network("::ffff:0:0/96"),  # IPv4-mapped IPv6 (belt-and-suspenders)
-]
-
-
-def _effective_ip(
-    addr: ipaddress.IPv4Address | ipaddress.IPv6Address,
-) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
-    """Return the canonical IP for SSRF checks.
-
-    IPv4-mapped IPv6 addresses (``::ffff:x.x.x.x``) are unmapped to their
-    underlying IPv4 form so that private-range checks against IPv4 networks
-    (e.g. ``127.0.0.0/8``) are not silently bypassed.
-    """
-    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
-        return addr.ipv4_mapped
-    return addr
-
-
 async def _validate_server_url(url: str) -> str:
     """Raise HTTP 422 if *url* is not a safe http(s) URL.
 
@@ -145,14 +117,14 @@ async def _validate_server_url(url: str) -> str:
             status_code=422, detail="server_url must contain a hostname"
         )
     try:
-        addr = _effective_ip(ipaddress.ip_address(hostname))
-        if any(addr in net for net in _PRIVATE_NETS):
+        addr = effective_ip(ipaddress.ip_address(hostname))
+        if any(addr in net for net in PRIVATE_NETS):
             raise HTTPException(
                 status_code=422,
                 detail="server_url must not target private or loopback addresses",
             )
     except ValueError:
-        # hostname is a DNS name — resolve and check against private ranges.
+        # hostname is a DNS name  resolve and check against private ranges.
         # DNS resolution failure is not an SSRF concern (host simply doesn't
         # exist from this network); the connection will fail at request time.
         err = await asyncio.to_thread(check_hostname_ssrf, hostname)
@@ -162,29 +134,6 @@ async def _validate_server_url(url: str) -> str:
                 detail=f"server_url rejected: {err}",
             )
     return url
-
-
-def check_hostname_ssrf(hostname: str) -> str | None:
-    """Resolve *hostname* via DNS and check all addresses against private ranges.
-
-    Returns an error message if any resolved address is private/loopback,
-    or ``None`` when the hostname is safe.
-    """
-    try:
-        results = socket.getaddrinfo(
-            hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM
-        )
-    except socket.gaierror:
-        return f"Cannot resolve hostname: {hostname}"
-    for family, _, _, _, sockaddr in results:
-        ip_str = sockaddr[0]
-        try:
-            addr = _effective_ip(ipaddress.ip_address(ip_str))
-            if any(addr in net for net in _PRIVATE_NETS):
-                return f"Hostname {hostname} resolves to private address {ip_str}"
-        except ValueError:
-            continue
-    return None
 
 
 async def _get_url_from_request_or_env(
@@ -212,7 +161,7 @@ async def _get_url_from_request_or_env(
 
 
 # ---------------------------------------------------------------------------
-# settings validation — prevents SSRF via FHIR Parameters wrapper
+# settings validation  prevents SSRF via FHIR Parameters wrapper
 # ---------------------------------------------------------------------------
 
 
@@ -246,7 +195,7 @@ def require_admin_for_reversal(request: Request, settings) -> None:
     TEHDAS2 D7.2 §4.4 / EHDS Art 66(3): reversibility of pseudonymisation "can
     only be implemented by the HDAB or a designated TTP and not by the data
     user". MedAnon maps the HDAB/TTP operator to the ``admin`` role and the
-    data user to ``analyst`` — a config profile containing
+    data user to ``analyst``  a config profile containing
     ``gpas_depseudonymize`` or ``decrypt`` rules is therefore admin-only,
     regardless of which endpoint executes it.
     """
@@ -271,14 +220,14 @@ def resolve_active_permit(permit_id: str | None):
     """Look up *permit_id* and require it to be active; return None if absent.
 
     Raises HTTP 422 when *permit_id* is supplied but does not resolve to an
-    ``APPROVED`` permit that is currently within its validity window — this
+    ``APPROVED`` permit that is currently within its validity window  this
     gives callers a clear error at the request boundary rather than the
     deep, generic ``PermitRequiredError`` raised mid-pipeline by
     ``utils.permit_context`` when regulated mode requires one.
     """
     if not permit_id:
         return None
-    from api.services.permits import PermitNotFoundError, PermitService
+    from pipeline.permits import PermitNotFoundError, PermitService
 
     try:
         permit = PermitService().get(permit_id)
@@ -304,7 +253,7 @@ def get_settings_dep(
     """FastAPI dependency that reads config_profile from the query string.
 
     Also enforces the D7.2 §4.4 admin-only-reversal RBAC check (see
-    :func:`require_admin_for_reversal`) — every router using this dependency
+    :func:`require_admin_for_reversal`)  every router using this dependency
     gets that check for free.
     """
     settings = get_settings(config_profile)

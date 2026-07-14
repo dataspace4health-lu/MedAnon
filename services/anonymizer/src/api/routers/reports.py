@@ -3,7 +3,7 @@
 Read-only access to the durable passport reports a risk-driven export produced.
 Requires a Postgres report store (``MEDANON_APP_DB_URL``); without it the list
 is empty (per-job passports remain visible via ``GET /v1/jobs/{id}``). Reports
-are anonymous by construction — no PHI.
+are anonymous by construction  no PHI.
 """
 
 import logging
@@ -12,7 +12,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from api.deps import limiter
-from api.services.reports import get_passport_store
+from pipeline.reports import get_passport_store
 
 router = APIRouter()
 logger = logging.getLogger("medanon")

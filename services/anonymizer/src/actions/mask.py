@@ -1,4 +1,4 @@
-"""mask — partial value masking action.
+"""mask  partial value masking action.
 
 Unlike ``redact`` (which removes the whole field) ``mask`` keeps a recognisable
 structure while hiding the sensitive characters.  Useful for phone numbers,
@@ -11,9 +11,9 @@ Strategies
                  ``+33612345678`` → ``+336********`` (keep_chars=4)
 ``keep_suffix``  keep the last ``keep_chars`` characters, mask the rest
                  ``4111111111111234`` → ``************1234`` (keep_chars=4)
-``keep_domain``  email-aware — mask local part, keep ``@domain``
+``keep_domain``  email-aware  mask local part, keep ``@domain``
                  ``user@hospital.fr`` → ``****@hospital.fr``
-``keep_country_code``  phone-aware — keep a leading ``+NN`` country code,
+``keep_country_code``  phone-aware  keep a leading ``+NN`` country code,
                  mask the national number
                  ``+33612345678`` → ``+33*********``
 ``full``         mask every character (equivalent to redact but length-preserving)
@@ -68,7 +68,7 @@ def _mask_value(value: str, strategy: str, params: dict) -> str:
 
     if strategy == "keep_prefix":
         if keep_chars >= len(value):
-            # Nothing left to hide — fail closed: mask the whole value rather
+            # Nothing left to hide  fail closed: mask the whole value rather
             # than leak a short identifier verbatim.
             return _mask_run(len(value), mask_char, preserve_length)
         kept = value[:keep_chars]
@@ -84,7 +84,7 @@ def _mask_value(value: str, strategy: str, params: dict) -> str:
         # Email-aware: mask the local part, keep "@domain".
         at = value.rfind("@")
         if at <= 0:
-            # No local part to keep — mask the whole thing.
+            # No local part to keep  mask the whole thing.
             return _mask_run(len(value), mask_char, preserve_length)
         local = value[:at]
         domain = value[at:]  # includes "@"
@@ -99,11 +99,11 @@ def _mask_value(value: str, strategy: str, params: dict) -> str:
                 idx += 1
             kept = value[:idx]
             return kept + _mask_run(len(value) - idx, mask_char, preserve_length)
-        # No country code present — fall back to keep_prefix semantics.
+        # No country code present  fall back to keep_prefix semantics.
         return _mask_value(value, "keep_prefix", params)
 
-    # Unknown strategy — fail safe by masking everything.
-    _log.warning("mask: unknown strategy %r — masking full value", strategy)
+    # Unknown strategy  fail safe by masking everything.
+    _log.warning("mask: unknown strategy %r  masking full value", strategy)
     return _mask_run(len(value), mask_char, preserve_length)
 
 
@@ -126,7 +126,7 @@ def mask_by_path(resource: dict, el: dict, params: dict) -> None:
     strategy = str(params.get("strategy", "keep_suffix"))
     if strategy not in _VALID_STRATEGIES:
         _log.warning(
-            "mask: invalid strategy %r (valid: %s) — defaulting to keep_suffix",
+            "mask: invalid strategy %r (valid: %s)  defaulting to keep_suffix",
             strategy,
             ", ".join(sorted(_VALID_STRATEGIES)),
         )
@@ -136,7 +136,7 @@ def mask_by_path(resource: dict, el: dict, params: dict) -> None:
     parts = path.split(".")[1:]  # Remove resource-type root
     if len(parts) == 0:
         raise ValueError(
-            f"Empty path after removing resource type root in mask — "
+            f"Empty path after removing resource type root in mask  "
             f"refusing to mask entire resource (original path: {el['path']!r})"
         )
     ret = find_nodes(resource, parts[:-1], [])

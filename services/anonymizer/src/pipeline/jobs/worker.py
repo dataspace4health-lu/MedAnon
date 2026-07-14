@@ -1,14 +1,14 @@
-"""Background worker — event-driven (Redis) or polling (SQLite) job executor.
+"""Background worker  event-driven (Redis) or polling (SQLite) job executor.
 
 Call ``init_worker(store, max_concurrent)`` then
 ``asyncio.create_task(worker_loop())`` from the FastAPI startup event.
 
 Supported job types:
-    ``bulk-export``    — fetch + de-identify via gPAS bulk export, write NDJSON.
-    ``cohort``         — cohort export ($everything per matching patient), write NDJSON.
-    ``patient-export`` — patient $everything export, write NDJSON.
-    ``bulk-import``    — read a completed NDJSON and upload to a target FHIR server.
-    ``reprocess``      — re-run de-identification on staged rows with a new config profile.
+    ``bulk-export``     fetch + de-identify via gPAS bulk export, write NDJSON.
+    ``cohort``          cohort export ($everything per matching patient), write NDJSON.
+    ``patient-export``  patient $everything export, write NDJSON.
+    ``bulk-import``     read a completed NDJSON and upload to a target FHIR server.
+    ``reprocess``       re-run de-identification on staged rows with a new config profile.
 """
 
 from __future__ import annotations
@@ -250,10 +250,10 @@ async def _stale_recovery_loop() -> None:
     """Periodically reclaim staged rows and partitions stuck in-progress.
 
     Two recovery paths:
-    1. Rows stuck in ``processing`` — a worker that crashes between
+    1. Rows stuck in ``processing``  a worker that crashes between
        ``get_pending_batch`` and ``mark_done`` leaves rows invisible to all
        other workers.  ``recover_stale_processing`` resets them to ``pending``.
-    2. Partitions stuck in ``claimed`` — a worker that crashes mid-shard
+    2. Partitions stuck in ``claimed``  a worker that crashes mid-shard
        without reaching its ``release_partition`` exception handler leaves the
        partition locked forever.  ``recover_stale_partitions`` resets those to
        ``unclaimed`` so another worker or Argo retry pod can reclaim them.
@@ -449,13 +449,13 @@ async def _run_job(job: Job) -> None:
 
     # Re-fetch current state before starting: an external CANCELLED (or a
     # delete) between enqueue and execution must not be overwritten with
-    # RUNNING — the stale queue snapshot would clobber the cancel and the
+    # RUNNING  the stale queue snapshot would clobber the cancel and the
     # executor would run anyway. The refreshed record also carries the latest
     # retry count for the poison-job check below.
     try:
         refreshed = _store.get(job.id)
     except Exception as exc:
-        # Store blip — proceed with the snapshot rather than dropping the job.
+        # Store blip  proceed with the snapshot rather than dropping the job.
         _worker_log.warning("job_refresh_failed id=%s: %s", job.id, type(exc).__name__)
         refreshed = job
     if refreshed is None:
@@ -517,12 +517,12 @@ async def _run_job(job: Job) -> None:
         job.error = str(exc) if gate_blocked else _sanitize_error(exc)
 
         if gate_blocked:
-            # Quality gate block — output is intentionally deleted.  Do NOT
+            # Quality gate block  output is intentionally deleted.  Do NOT
             # increment the retry counter: the input data hasn't changed, so
             # re-running without config changes would produce the same result.
             # Persist the structured block report so the job record can show the
             # UI *what leaked and what to fix* (download stays blocked, output
-            # stays deleted — only the explanation is now machine-readable).
+            # stays deleted  only the explanation is now machine-readable).
             report = getattr(exc, "report", None)
             if report:
                 cp = (
@@ -559,7 +559,7 @@ async def _run_job(job: Job) -> None:
         _job_span.__exit__(None, None, None)
         WORKER_JOB_DURATION.labels(job_type=job.type).observe(_time.monotonic() - _t0)
         WORKER_ACTIVE_JOBS.dec()
-        # Always persist terminal status — even if the success/error handler above
+        # Always persist terminal status  even if the success/error handler above
         # raises, the job must not remain stuck in RUNNING indefinitely.
         try:
             _store.update(job)
@@ -598,7 +598,7 @@ async def _run_and_release(job: Job, message_id: str | None = None) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Worker loop — event-driven for Redis, polling for SQLite
+# Worker loop  event-driven for Redis, polling for SQLite
 # ---------------------------------------------------------------------------
 
 
@@ -611,7 +611,7 @@ _DLQ_STREAM_MAXLEN = int(os.environ.get("MEDANON_DLQ_STREAM_MAXLEN", "10000"))
 def _emit_dlq_stream(job, retry_count: int) -> None:
     """Best-effort: append a poison-job marker to the DLQ Redis Stream.
 
-    Silent on Redis unavailability — the job is already persisted with
+    Silent on Redis unavailability  the job is already persisted with
     ``status=DEAD`` in the job store, so the stream is purely an
     observability aid.
     """
@@ -648,7 +648,7 @@ def _route_to_dlq(job, retry_count: int) -> None:
     if _store is not None:
         _store.update(job)
     _worker_log.error(
-        "job_poison id=%s retries=%d type=%s — routed to DLQ",
+        "job_poison id=%s retries=%d type=%s  routed to DLQ",
         job.id,
         retry_count,
         job.type,
@@ -698,7 +698,7 @@ def _recover_running_jobs() -> int:
     timeout. We must NOT use ``min_idle_ms=0`` here: this worker may be ONE of
     several replicas (``--scale worker=N`` / HPA), and a freshly-started worker
     grabbing every in-flight message would steal jobs actively running on
-    siblings — re-queuing them and causing concurrent double-runs (observed: a
+    siblings  re-queuing them and causing concurrent double-runs (observed: a
     long staged export reclaimed by a late-booting worker → racing shard writes
     → empty output). Messages idle < the timeout are presumed alive elsewhere
     and are left to their owner (whose heartbeat keeps refreshing the claim).
@@ -731,7 +731,7 @@ def _recover_running_jobs() -> int:
             for job_id, message_id in stale_pairs:
                 job = _store.get(job_id)
                 if job is None or job.status in _TERMINAL:
-                    # Already finished — the previous worker ACK'd the job record
+                    # Already finished  the previous worker ACK'd the job record
                     # but crashed before ACKing the stream message. ACK now so this
                     # entry doesn't accumulate in the PEL across every restart.
                     try:
@@ -761,7 +761,7 @@ def _recover_running_jobs() -> int:
                 # PENDING jobs are handled by notify_new_job below; no ACK here.
         except Exception as exc:
             _worker_log.warning("recovery_claim_failed: %s", type(exc).__name__)
-    # Also scan for RUNNING jobs in the status index — covers jobs queued via BLPOP
+    # Also scan for RUNNING jobs in the status index  covers jobs queued via BLPOP
     # before the Streams migration, and edge cases where the stream was reset.
     try:
         stuck = _store.list_jobs(status="running", limit=100)
@@ -787,7 +787,7 @@ def _recover_running_jobs() -> int:
             try:
                 _store.notify_new_job(job.id)
                 recovered += 1
-                _worker_log.info("recover_pending job=%s — re-queued", job.id)
+                _worker_log.info("recover_pending job=%s  re-queued", job.id)
             except Exception as exc:
                 _worker_log.warning(
                     "recover_pending_notify_failed job=%s: %s", job.id, exc
@@ -814,7 +814,7 @@ async def _get_next_job(is_event_driven: bool) -> tuple[Job | None, str | None]:
             job_id, message_id = result, None
         job = _store.get(job_id)
         if job is None or job.status != JobStatus.PENDING:
-            # Phantom / stale message — ACK it immediately so it doesn't block the queue
+            # Phantom / stale message  ACK it immediately so it doesn't block the queue
             if message_id and hasattr(_store, "ack_job"):
                 try:
                     _store.ack_job(message_id)
@@ -847,7 +847,7 @@ async def worker_loop() -> None:
         try:
             loop.add_signal_handler(sig, _shutdown_event.set)
         except (NotImplementedError, OSError):
-            # Windows or non-main thread — signals won't be caught
+            # Windows or non-main thread  signals won't be caught
             pass
 
     is_event_driven = hasattr(_store, "wait_for_job")
@@ -872,7 +872,7 @@ async def worker_loop() -> None:
             "staging_cleanup scheduled interval_sec=%d", _STAGING_CLEANUP_INTERVAL_SEC
         )
         # PR #7: Periodic stale-`processing` row recovery.  Mandatory for
-        # multi-worker safety — without it, a crashed worker leaves staged
+        # multi-worker safety  without it, a crashed worker leaves staged
         # rows stuck in ``processing`` until manual intervention.
         if _STALE_RECOVERY_INTERVAL_SEC > 0:
             retain_task(_stale_recovery_loop(), name="stale_recovery")
@@ -893,10 +893,10 @@ async def worker_loop() -> None:
         )
     else:
         _worker_log.warning(
-            "result_cleanup disabled (MEDANON_RESULT_TTL_SEC=0) — NDJSON files will accumulate"
+            "result_cleanup disabled (MEDANON_RESULT_TTL_SEC=0)  NDJSON files will accumulate"
         )
 
-    # Claim heartbeat — refresh in-flight stream claims so long jobs aren't
+    # Claim heartbeat  refresh in-flight stream claims so long jobs aren't
     # reclaimed as stale (no-op for non-Redis backends).
     if _store is not None and hasattr(_store, "refresh_claim"):
         from utils.tasks import retain_task
@@ -906,7 +906,7 @@ async def worker_loop() -> None:
             "claim_heartbeat scheduled interval_sec=%d", _CLAIM_HEARTBEAT_SEC
         )
 
-    # Periodic Redis index orphan sweep — no-op for non-Redis backends.
+    # Periodic Redis index orphan sweep  no-op for non-Redis backends.
     if _store is not None and hasattr(_store, "cleanup_orphan_index"):
         from utils.tasks import retain_task
 
@@ -916,7 +916,7 @@ async def worker_loop() -> None:
             _REDIS_INDEX_SWEEP_INTERVAL_SEC,
         )
 
-    # Workflow reconciliation sweep — no-op when the engine isn't configured.
+    # Workflow reconciliation sweep  no-op when the engine isn't configured.
     if _WORKFLOW_RECONCILE_INTERVAL_SEC > 0:
         from pipeline.workflows import get_workflow_engine
 
@@ -932,7 +932,7 @@ async def worker_loop() -> None:
     _poll_count = 0
     _touch_heartbeat()
 
-    # Background heartbeat task — runs independently of the semaphore so that
+    # Background heartbeat task  runs independently of the semaphore so that
     # the heartbeat file stays fresh even when all job slots are occupied.
     async def _heartbeat_loop():
         while not _shutdown_event.is_set():
@@ -1012,10 +1012,10 @@ async def worker_loop() -> None:
         )
         if pending:
             _worker_log.warning(
-                "worker_drain_timeout remaining=%d — exiting with jobs still running",
+                "worker_drain_timeout remaining=%d  exiting with jobs still running",
                 len(pending),
             )
         else:
-            _worker_log.info("worker_drain_complete — all jobs finished")
+            _worker_log.info("worker_drain_complete  all jobs finished")
     else:
-        _worker_log.info("worker_shutdown — no active jobs")
+        _worker_log.info("worker_shutdown  no active jobs")

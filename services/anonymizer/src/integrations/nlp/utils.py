@@ -1,9 +1,9 @@
-"""NLP utilities — no Presidio/spaCy dependency.
+"""NLP utilities  no Presidio/spaCy dependency.
 
 Contains the entity catalogue, entity-spec resolver, surrogate-token helpers,
 and the XHTML text-node walker used by the pipeline.
 
-IMPORTANT — ENTITY CATALOGUE SYNC:
+IMPORTANT  ENTITY CATALOGUE SYNC:
     This file is the canonical source for ``HEALTHCARE_ENTITIES``.
     The NLP service mirror is ``services/nlp/src/recognizers.py``.
     Any addition here MUST also be added to the NLP service recognizers list,
@@ -75,12 +75,12 @@ HEALTHCARE_ENTITIES: list[str] = [
     "EU_DATE_WRITTEN",
     # Synthetic data artifacts
     "SYNTHEA_SEED",
-    # Clinical note PHI — inline demographic / administrative
+    # Clinical note PHI  inline demographic / administrative
     "GENDER",  # inline patient gender (male/female/non-binary etc.)
     "RACE_ETHNICITY",  # bare inline race/ethnicity (not label-prefixed)
     "INSURANCE_STATUS",  # coverage status, named payers
     "GEO_COORDINATES",  # decimal/DMS lat-long pairs
-    # Organizations (hospitals, clinics, payers) — relies on spaCy NER
+    # Organizations (hospitals, clinics, payers)  relies on spaCy NER
     "ORGANIZATION",
     # Financial / fiscal identifiers
     "SWIFT_BIC",
@@ -97,7 +97,7 @@ HEALTHCARE_ENTITIES: list[str] = [
     "UUID",
     "BEARER_TOKEN",
     "USERNAME_HANDLE",
-    # GDPR Art.9 — genetic data
+    # GDPR Art.9  genetic data
     "GENETIC_VARIANT",
 ]
 
@@ -135,7 +135,7 @@ def _evict_if_needed(token_state: dict, limit: int = _TOKEN_STATE_MAX_ENTRIES) -
 
 
 def _tokenize_unlocked(value: str, entity_type: str, token_state: dict) -> str:
-    """Assign or retrieve the surrogate token — assumes any lock is already held."""
+    """Assign or retrieve the surrogate token  assumes any lock is already held."""
     key = (entity_type, value)
     if key in token_state["map"]:
         return token_state["map"][key]

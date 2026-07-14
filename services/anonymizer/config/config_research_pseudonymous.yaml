@@ -23,7 +23,7 @@
 #   generalize      → date_year_month for all date fields; zip_prefix for
 #                     postal codes
 #
-# WARNING — This profile is NOT suitable for:
+# WARNING  This profile is NOT suitable for:
 #   - External data sharing or publication without further review
 #   - Compliance with HIPAA Safe Harbor (dates retain month; use
 #     config_hipaa_safe_harbor.yaml for that)
@@ -55,17 +55,17 @@ nlp:
 rules:
 
   # ===========================================================================
-  # 1. PATIENT — DIRECT IDENTIFIERS (redact completely)
+  # 1. PATIENT  DIRECT IDENTIFIERS (redact completely)
   # ===========================================================================
 
-  # Names — always redact (direct identifier)
+  # Names  always redact (direct identifier)
   - match: Patient.name
     action: redact
 
   - match: Patient.contact.name
     action: redact
 
-  # Contact details — redact (phone, fax, email, URL)
+  # Contact details  redact (phone, fax, email, URL)
   - match: Patient.telecom
     action: redact
 
@@ -103,7 +103,7 @@ rules:
   - match: Patient.extension.where(url.startsWith('http://synthetichealth.github.io/synthea/'))
     action: redact
 
-  # Quasi-identifiers — marital status and language are demographic attributes
+  # Quasi-identifiers  marital status and language are demographic attributes
   # that combine with clinical data to enable re-identification in small cohorts.
   - match: Patient.maritalStatus
     action: redact
@@ -112,11 +112,11 @@ rules:
     action: redact
 
   # ===========================================================================
-  # 2. PATIENT — QUASI-IDENTIFIERS (generalize, not redact)
+  # 2. PATIENT  QUASI-IDENTIFIERS (generalize, not redact)
   # Preserves statistical utility for cohort and temporal analysis.
   # ===========================================================================
 
-  # Date of birth — year + month only (finer than Safe Harbor for temporal work)
+  # Date of birth  year + month only (finer than Safe Harbor for temporal work)
   - match: Patient.birthDate
     action: generalize
     params:
@@ -127,7 +127,7 @@ rules:
     params:
       strategy: date_year_month
 
-  # Postal code — 3-digit prefix (safe quasi-identifier for geographic analysis)
+  # Postal code  3-digit prefix (safe quasi-identifier for geographic analysis)
   - match: Patient.address.postalCode
     action: generalize
     params:
@@ -144,7 +144,7 @@ rules:
   - match: Patient.address.district
     action: redact
 
-  # Geolocation (lat/lon) nested inside Patient.address.extension — re-identification PHI
+  # Geolocation (lat/lon) nested inside Patient.address.extension  re-identification PHI
   - name: redact patient address geolocation
     match: Patient.address.extension
     action: redact
@@ -210,7 +210,7 @@ rules:
 
   # ===========================================================================
   # 4. CROSS-RESOURCE WILDCARDS
-  # Pseudonymize all resource IDs with cryptohash — preserves referential
+  # Pseudonymize all resource IDs with cryptohash  preserves referential
   # integrity across resources in longitudinal / multi-resource datasets.
   # ===========================================================================
 
@@ -324,7 +324,7 @@ rules:
       mode: tokenize
       threshold: 0.4
 
-  # Street address pattern — fires on any valueString containing a recognizable
+  # Street address pattern  fires on any valueString containing a recognizable
   # address regardless of LOINC code or resource structure (covers PRAPARE 56799-0,
   # custom SDOH panels, and any other free-text fields with address content).
   # Two rules: one for top-level valueString, one for component.valueString
@@ -363,16 +363,16 @@ rules:
       threshold: 0.4
 
   # ===========================================================================
-  # DOCUMENTS / ATTACHMENTS — IRB-grade scrubbing
+  # DOCUMENTS / ATTACHMENTS  IRB-grade scrubbing
   # text/* payloads: Base64-decoded → NLP-scrubbed → re-encoded.
   # Longitudinal linkage is preserved via gPAS ID pseudonymisation; attachment
   # free text must be scrubbed to remove residual direct identifiers.
   # Non-text MIME types (image/*, application/pdf …): data field redacted.
-  # NOTE: *.attachment.data does NOT match DocumentReference — the attachment is
+  # NOTE: *.attachment.data does NOT match DocumentReference  the attachment is
   # nested under content[*].attachment, so specific paths are required per resource.
   # ===========================================================================
 
-  # DocumentReference — clinical notes (content[*].attachment, nested one level)
+  # DocumentReference  clinical notes (content[*].attachment, nested one level)
   - name: scrub document reference attachment text
     match: DocumentReference.content.attachment.data
     action: nlp_detect_act
@@ -393,7 +393,7 @@ rules:
     match: DocumentReference.content.attachment.hash
     action: redact
 
-  # DiagnosticReport, QuestionnaireResponse — presentedForm is Attachment directly
+  # DiagnosticReport, QuestionnaireResponse  presentedForm is Attachment directly
   - name: scrub presented form text
     match: "*.presentedForm.data"
     action: nlp_detect_act
@@ -410,7 +410,7 @@ rules:
     match: "*.presentedForm.title"
     action: redact
 
-  # Observation, Task — valueAttachment
+  # Observation, Task  valueAttachment
   - name: scrub value attachment text
     match: "*.valueAttachment.data"
     action: nlp_detect_act
@@ -423,7 +423,7 @@ rules:
     match: "*.valueAttachment.url"
     action: redact
 
-  # Photos — biometric identifiers, never NLP-scrubable
+  # Photos  biometric identifiers, never NLP-scrubable
   - name: redact photo data
     match: "*.photo.data"
     action: redact

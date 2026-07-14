@@ -1,4 +1,4 @@
-"""Audit artifact — the machine-readable record released alongside every export.
+"""Audit artifact  the machine-readable record released alongside every export.
 
 One ``*.audit.json`` accompanies the de-identified data and the transformation
 manifest in S3 (distinct ``audit/`` prefix, shared job-id stem). It answers *what
@@ -44,7 +44,7 @@ def build_audit(
     """Build the audit record for *job*.
 
     ``summary`` is the job summary (``JobSummaryCollector.to_dict()``) when the
-    caller has it — its ``score``/``block_report`` are carried through. Falls
+    caller has it  its ``score``/``block_report`` are carried through. Falls
     back to the job's stored ``checkpoint_data['summary']`` otherwise.
     ``delivered`` is the ``{data,manifest,audit}`` s3 key map recorded on the job.
     """

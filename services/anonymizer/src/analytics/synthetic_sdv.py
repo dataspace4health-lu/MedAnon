@@ -4,7 +4,7 @@ Uses the Synthetic Data Vault (SDV) library with GaussianCopulaSynthesizer to
 generate synthetic FHIR Patient and Condition resources that preserve the
 multivariate correlations of the input dataset.
 
-This module is optional — it requires the ``sdv`` package (and its transitive
+This module is optional  it requires the ``sdv`` package (and its transitive
 dependencies: scipy, numpy, pandas, etc.).  When SDV is not installed, callers
 should fall back to the stdlib-based generator in ``analytics.synthetic``.
 
@@ -226,7 +226,7 @@ def generate_synthetic_patients_sdv(
 
     The GaussianCopulaSynthesizer learns multivariate correlations between
     attributes (gender, birth year, zip prefix, marital status, language) and
-    generates new rows that preserve those correlations — a significant
+    generates new rows that preserve those correlations  a significant
     improvement over independent per-attribute sampling.
 
     Args:
@@ -247,7 +247,7 @@ def generate_synthetic_patients_sdv(
         )
     if not patients:
         raise ValueError(
-            "patients list must not be empty — no distribution to sample from"
+            "patients list must not be empty  no distribution to sample from"
         )
     if count < 1 or count > 10_000:
         raise ValueError(f"count must be between 1 and 10 000, got {count}")

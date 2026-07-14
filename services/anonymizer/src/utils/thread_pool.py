@@ -15,7 +15,7 @@ Usage::
         result = fut.result()
 
 The pool is created lazily on first access and lives for the process lifetime.
-Never call ``shutdown()`` on the returned executor — it is shared.
+Never call ``shutdown()`` on the returned executor  it is shared.
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 _MAX_THREADS: int = int(os.environ.get("MEDANON_GLOBAL_MAX_THREADS", "64"))
 
 # Maximum pending tasks beyond the active workers before submit() blocks.
-# Default: 1× max_workers (was 2× — a deeper queue absorbed bursts but also
+# Default: 1× max_workers (was 2×  a deeper queue absorbed bursts but also
 # stockpiled requests during upstream degradation, then released them all
 # at once on recovery, causing thundering-herd spikes against gPAS/NLP).
 # A 1× queue keeps the in-flight + pending budget at 2× workers, which is
@@ -42,7 +42,7 @@ _QUEUE_DEPTH: int = int(os.environ.get("MEDANON_POOL_QUEUE_DEPTH", str(_MAX_THRE
 
 # How long submit() waits for a semaphore slot before raising TimeoutError.
 # Default 5 s gives upstream services a chance to drain a brief spike but
-# fails fast under sustained saturation — holding the caller for longer
+# fails fast under sustained saturation  holding the caller for longer
 # (the previous 60 s default) just causes HTTP clients to time out and
 # retry, amplifying the load on a degraded upstream.  Override via
 # MEDANON_POOL_SUBMIT_TIMEOUT (legacy installs may want the older 60 s).
@@ -74,7 +74,7 @@ class _BoundedExecutor(ThreadPoolExecutor):
         if not acquired:
             raise TimeoutError(
                 f"Thread pool saturated: could not acquire a slot within "
-                f"{_SUBMIT_TIMEOUT_SEC}s — upstream service may be degraded"
+                f"{_SUBMIT_TIMEOUT_SEC}s  upstream service may be degraded"
             )
         try:
             future = super().submit(fn, *args, **kwargs)
@@ -90,9 +90,9 @@ def submit_with_context(pool: ThreadPoolExecutor, fn, *args, **kwargs) -> Future
 
     ``ThreadPoolExecutor.submit`` does **not** copy the calling thread's
     ``contextvars.Context`` into the worker thread (unlike ``asyncio.to_thread``
-    / ``loop.run_in_executor``, which do). Any contextvar the caller has set —
+    / ``loop.run_in_executor``, which do). Any contextvar the caller has set
     the correlation id (:mod:`pipeline.trace`), the active data-permit id
-    (:mod:`utils.permit_context`) — would silently reset to its default
+    (:mod:`utils.permit_context`)  would silently reset to its default
     inside the worker thread, which is a correctness bug for permit-scoped
     pseudonymisation keys/domains (they would derive as *unscoped*, or raise
     the regulated-mode "no permit" error, depending on context).
@@ -108,7 +108,7 @@ def submit_with_context(pool: ThreadPoolExecutor, fn, *args, **kwargs) -> Future
 def get_executor() -> _BoundedExecutor:
     """Return (lazily creating) the process-wide bounded thread pool.
 
-    Thread-safe via double-check locking — prevents orphaned pools.
+    Thread-safe via double-check locking  prevents orphaned pools.
     """
     global _executor
     if _executor is None:

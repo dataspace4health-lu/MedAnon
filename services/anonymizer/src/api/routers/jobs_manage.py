@@ -74,7 +74,7 @@ async def list_jobs(
 
 @router.get("/jobs/dead")
 async def list_dead_jobs(limit: int = Query(50, ge=1, le=200)):
-    """List jobs in the DLQ — those that exceeded ``MEDANON_JOB_MAX_RETRIES``.
+    """List jobs in the DLQ  those that exceeded ``MEDANON_JOB_MAX_RETRIES``.
 
     Returned shape matches the regular job dict.  Operators typically use this
     to triage upstream failures (gPAS down, malformed config, poisoned input)
@@ -155,7 +155,7 @@ async def get_job_result(job_id: str):
     - 410 if the result file has been cleaned up.
     - S3-backed results (``MEDANON_RESULT_STORAGE=s3``) are proxied through this
       endpoint as a chunked stream. Set ``MEDANON_S3_PRESIGNED_REDIRECT=true`` to
-      307-redirect to a presigned URL instead — only valid when the object store
+      307-redirect to a presigned URL instead  only valid when the object store
       is reachable by the client.
     """
     try:
@@ -257,7 +257,7 @@ async def upload_job_to_target(job_id: str, req: UploadToTargetRequest | None = 
     """Upload a completed job's de-identified resources to the target FHIR server.
 
     Uses idempotent PUT so repeated calls are safe (no duplicates).
-    Reads the NDJSON result server-side — no client round-trip for large files.
+    Reads the NDJSON result server-side  no client round-trip for large files.
 
     - Falls back to ``FHIR_TARGET_URL`` env when ``target_url`` is not provided.
     - 404 if the job does not exist.
@@ -340,7 +340,7 @@ def _get_detail_store():
 async def get_job_detail(job_id: str):
     """Return cached parsed-result detail for a completed job.
 
-    Returns 404 when no detail has been saved yet — the client should then
+    Returns 404 when no detail has been saved yet  the client should then
     download and parse the NDJSON result, then POST the parsed data back.
     """
     store = _get_detail_store()
@@ -356,7 +356,7 @@ async def save_job_detail(job_id: str, body: _JobDetailBody):
 
     Called by the frontend after parsing the NDJSON output so subsequent
     selections of this job load instantly without re-downloading the file.
-    Upserts — safe to call multiple times.
+    Upserts  safe to call multiple times.
     """
     store = _get_detail_store()
     await asyncio.to_thread(store.set, job_id, body.model_dump())

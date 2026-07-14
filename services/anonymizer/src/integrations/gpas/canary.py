@@ -2,7 +2,7 @@
 
 At startup, pseudonymizes a well-known canary value via gPAS.  If the
 returned pseudonym differs from the one stored in Redis, the gPAS DB
-has been wiped and all cached pseudonyms are stale — flush immediately.
+has been wiped and all cached pseudonyms are stale  flush immediately.
 """
 
 from __future__ import annotations
@@ -20,9 +20,9 @@ def check_gpas_cache_coherence(redis_url: str | None = None) -> dict:
     """Run the canary probe and flush caches if staleness is detected.
 
     Returns a dict with:
-        checked: bool   — whether the probe ran
-        flushed: bool   — whether caches were flushed
-        reason: str     — human-readable explanation
+        checked: bool    whether the probe ran
+        flushed: bool    whether caches were flushed
+        reason: str      human-readable explanation
     """
     if os.environ.get("MEDANON_GPAS_CANARY_ENABLED", "true").lower() in (
         "false",
@@ -76,7 +76,7 @@ def _run_canary_probe(redis_url: str, gpas_url: str, domain: str) -> dict:
             "reason": "canary not returned by gPAS",
         }
 
-    # 2. Compare with stored canary in Redis (shared pool — no per-call client)
+    # 2. Compare with stored canary in Redis (shared pool  no per-call client)
     canary_key = CANARY_KEY_PREFIX + domain
     from utils.redis_pool import get_redis
 
@@ -90,7 +90,7 @@ def _run_canary_probe(redis_url: str, gpas_url: str, domain: str) -> dict:
     stored_pseudonym = client.get(canary_key)
 
     if stored_pseudonym is None:
-        # Fresh Redis or first run — store canary, no flush needed
+        # Fresh Redis or first run  store canary, no flush needed
         client.set(canary_key, current_pseudonym)
         _log.info("gpas_canary_stored domain=%s (first run)", domain)
         return {
@@ -103,9 +103,9 @@ def _run_canary_probe(redis_url: str, gpas_url: str, domain: str) -> dict:
         _log.info("gpas_canary_ok domain=%s (cache coherent)", domain)
         return {"checked": True, "flushed": False, "reason": "cache coherent"}
 
-    # 3. Staleness detected — flush all caches
+    # 3. Staleness detected  flush all caches
     _log.warning(
-        "gpas_canary_mismatch domain=%s stored=%s current=%s — flushing caches",
+        "gpas_canary_mismatch domain=%s stored=%s current=%s  flushing caches",
         domain,
         stored_pseudonym,
         current_pseudonym,

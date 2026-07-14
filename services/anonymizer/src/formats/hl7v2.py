@@ -1,15 +1,15 @@
 """HL7 v2 message de-identification.
 
 Scrubs PHI from standard HL7 v2 segments:
-  PID — Patient Identification (name, DOB, address, phone, SSN, MRN)
-  NK1 — Next of Kin (name, address, phone)
-  PV1 — Patient Visit (attending, referring, consulting physicians)
-  PV2 — Patient Visit Additional Information (admission reason)
-  DG1 — Diagnosis (when free-text description contains names)
-  OBX — Observation (responsible observer)
-  ORC — Common Order (ordering provider)
-  OBR — Observation Request (ordering/results provider names)
-  IN1 — Insurance (insured name, address, DOB)
+  PID  Patient Identification (name, DOB, address, phone, SSN, MRN)
+  NK1  Next of Kin (name, address, phone)
+  PV1  Patient Visit (attending, referring, consulting physicians)
+  PV2  Patient Visit Additional Information (admission reason)
+  DG1  Diagnosis (when free-text description contains names)
+  OBX  Observation (responsible observer)
+  ORC  Common Order (ordering provider)
+  OBR  Observation Request (ordering/results provider names)
+  IN1  Insurance (insured name, address, DOB)
 
 Usage:
     from formats.hl7v2 import deidentify_hl7v2

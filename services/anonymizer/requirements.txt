@@ -5,39 +5,39 @@ pydantic==2.12.5
 uvicorn==0.42.0
 gunicorn==23.0.0
 python-multipart==0.0.27    # required for Form fields (SMART /oauth2/introspect)
-orjson==3.11.6             # Rust-based JSON — 3-10x faster than stdlib (hot paths)
-PyYAML==6.0.3              # CVE history in older versions — always pin exactly
+orjson==3.11.6             # Rust-based JSON  3-10x faster than stdlib (hot paths)
+PyYAML==6.0.3              # CVE history in older versions  always pin exactly
 fhirpathpy==0.1.0
 rich==14.3.3
-cryptography>=43.0.0       # RSA encrypt/decrypt — pyca/cryptography (replaces pycryptodome)
+cryptography>=43.0.0       # RSA encrypt/decrypt  pyca/cryptography (replaces pycryptodome)
 PyJWT[crypto]>=2.10.0      # OIDC JWT validation (integrations/oidc/validator.py)
 python-dateutil==2.9.0.post0
-defusedxml==0.7.1           # Security XML parser — always pin exactly
+defusedxml==0.7.1           # Security XML parser  always pin exactly
 prometheus-client==0.24.1
 slowapi==0.1.9
 urllib3==2.7.0             # FHIR client connection pooling
 
-# Redis — L2 gPAS cache + scalable job queue (Streams event-driven worker)
+# Redis  L2 gPAS cache + scalable job queue (Streams event-driven worker)
 redis==5.2.1
 
 # MinIO S3-compatible object storage client (opt-in: MEDANON_RESULT_STORAGE=s3)
 minio==7.2.15
 
-# Aho-Corasick multi-pattern string matching — O(N) text-ID rewriting in post_processor.py
+# Aho-Corasick multi-pattern string matching  O(N) text-ID rewriting in post_processor.py
 # Falls back to regex when absent; presence reduces post stage time ~10× for large batches.
 pyahocorasick>=2.1
 
-# PostgreSQL — staging table for large-scale bulk export/cohort processing
+# PostgreSQL  staging table for large-scale bulk export/cohort processing
 psycopg2-binary>=2.9
 
 # HL7 v2 message parsing
 hl7==0.4.5
 
-# AI agent integration — unified LLM client (Ollama, OpenAI, Anthropic)
+# AI agent integration  unified LLM client (Ollama, OpenAI, Anthropic)
 # Exact pin per security policy. Bump deliberately after CVE/release-note review.
 litellm==1.83.10
 
-# OpenTelemetry — opt-in distributed tracing (enabled when MEDANON_OTEL_ENABLED=true).
+# OpenTelemetry  opt-in distributed tracing (enabled when MEDANON_OTEL_ENABLED=true).
 # Imports are guarded; absence of these packages disables tracing without crashing.
 opentelemetry-api==1.29.0
 opentelemetry-sdk==1.29.0

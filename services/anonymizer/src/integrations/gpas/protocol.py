@@ -1,8 +1,8 @@
 """gPAS FHIR Parameters builders and response parsers (pure data transformation, no I/O).
 
 Four functions covering the two FHIR operations used by the gPAS integration:
-  $pseudonymize[AllowCreate] — get-or-create pseudonym for original values
-  $dePseudonymize            — reverse lookup: pseudonym -> original value
+  $pseudonymize[AllowCreate]  get-or-create pseudonym for original values
+  $dePseudonymize             reverse lookup: pseudonym -> original value
 """
 
 

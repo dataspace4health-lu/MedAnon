@@ -1,4 +1,4 @@
-"""gPAS circuit breaker — prevents cascade failures when gPAS is down.
+"""gPAS circuit breaker  prevents cascade failures when gPAS is down.
 
 ``GpasUnavailableError`` is raised (not ``ValueError``) whenever gPAS is
 unreachable: circuit OPEN, connection refused, or timeout after all retries.
@@ -44,7 +44,7 @@ def _build_gpas_cb() -> CircuitBreaker:
                 r.ping()
                 return RedisCircuitBreaker(redis_client=r, **kwargs)
         except Exception:
-            pass  # Redis unavailable — fall through to in-process breaker
+            pass  # Redis unavailable  fall through to in-process breaker
     return CircuitBreaker(**kwargs)
 
 

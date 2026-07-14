@@ -1,12 +1,12 @@
 """MedAnon domain types.
 
 Canonical definitions of:
-    ``Job``                  — async job dataclass
-    ``JobStatus``            — job lifecycle enum
-    ``JobStoreUnavailable``  — job store not initialized
-    ``JobNotFound``          — job ID does not exist
-    ``JobNotComplete``       — job is still running
-    ``JobResultMissing``     — result file has been cleaned up
+    ``Job``                   async job dataclass
+    ``JobStatus``             job lifecycle enum
+    ``JobStoreUnavailable``   job store not initialized
+    ``JobNotFound``           job ID does not exist
+    ``JobNotComplete``        job is still running
+    ``JobResultMissing``      result file has been cleaned up
 """
 
 from __future__ import annotations

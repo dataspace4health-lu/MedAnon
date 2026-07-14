@@ -1,4 +1,4 @@
-"""CLI cohort subcommand — condition-based cohort export via $everything."""
+"""CLI cohort subcommand  condition-based cohort export via $everything."""
 
 import json
 import os

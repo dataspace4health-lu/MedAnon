@@ -1,4 +1,4 @@
-"""GpasPseudonymizerAdapter — production implementation of PseudonymizerPort.
+"""GpasPseudonymizerAdapter  production implementation of PseudonymizerPort.
 
 Wraps the low-level ``gpas_pseudonymize_batch`` HTTP client so the domain
 layer (processor, post_processor) can call pseudonymization without importing

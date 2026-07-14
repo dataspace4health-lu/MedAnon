@@ -152,7 +152,7 @@ class RemoteScoringClient:
             self._breaker.record_failure()
             raise ScoringRemoteError(f"upstream {resp.status}")
         if resp.status >= 400:
-            # 4xx is a client/contract error — do not trip the breaker.
+            # 4xx is a client/contract error  do not trip the breaker.
             raise ScoringRemoteError(f"client error {resp.status}: {resp.data[:200]!r}")
 
         try:

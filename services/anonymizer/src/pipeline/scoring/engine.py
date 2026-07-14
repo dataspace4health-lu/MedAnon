@@ -1,4 +1,4 @@
-"""Scoring engine — orchestrates privacy gate + utility + quality.
+"""Scoring engine  orchestrates privacy gate + utility + quality.
 
 Implements the constraint-based scoring model:
 1. Privacy risk is evaluated first as a hard constraint (PASS/FAIL)
@@ -47,7 +47,7 @@ _MAX_PATIENTS: int = int(os.environ.get("MEDANON_SCORE_MAX_PATIENTS", "10000"))
 
 # Quasi-identifier extractor, resolved once and cached at module level.  It was
 # previously imported inside ``record_resource`` on *every* Patient (inside the
-# accumulator lock) — hoisting the resolution out of the per-resource hot loop
+# accumulator lock)  hoisting the resolution out of the per-resource hot loop
 # avoids a repeated import lookup in the critical section.
 _extract_patient_qi = None
 
@@ -70,24 +70,24 @@ def compute_composite(
     utility: ModuleScore,
     quality: ModuleScore,
 ) -> tuple[float, str]:
-    """Multiplicative aggregation — no dimension compensates for another."""
+    """Multiplicative aggregation  no dimension compensates for another."""
     if not privacy.passed:
         return 0.0, "FAIL"
     # Privacy contribution = residual-privacy level = 1 - re-identification risk.
     # ``risk_score`` and this factor are both dimensionless in [0, 1]; the gate
     # threshold is a PASS/FAIL decision boundary, not a normaliser, so it must
     # not scale the composite. The previous ``1 - risk/threshold`` mapping drove
-    # any resource that merely *passed* near the boundary toward 0 — a clean
-    # privacy posture could still score ~0 — which is why legitimately safe
+    # any resource that merely *passed* near the boundary toward 0  a clean
+    # privacy posture could still score ~0  which is why legitimately safe
     # cohorts graded F. A passed resource now contributes in proportion to its
     # actual residual risk.
     privacy_score = max(0.0, min(1.0, 1.0 - privacy.risk_score))
     raw = privacy_score * utility.score * quality.score
     # `composite` is on the 0-100 scale (already multiplied by 100). Persist it
     # as-is in `score.avg_composite`; the React UI does Math.round(value) + "%"
-    # — do NOT multiply by 100 again at the display layer.
+    #  do NOT multiply by 100 again at the display layer.
     composite = round(raw * 100, 1)
-    # A composite of exactly 0.0 means utility or quality is completely absent —
+    # A composite of exactly 0.0 means utility or quality is completely absent
     # return FAIL since a zero score is not a meaningful pass.
     decision = "PASS" if composite > 0.0 else "FAIL"
     return composite, decision
@@ -119,7 +119,7 @@ def score_resource(
                 error_count=error_count,
                 total_count=total_count,
             )
-        except Exception as exc:  # noqa: BLE001 — degrade gracefully
+        except Exception as exc:  # noqa: BLE001  degrade gracefully
             _log.warning("remote scoring failed, falling back to local: %s", exc)
 
     return _score_resource_local(
@@ -220,7 +220,7 @@ def _score_resource_local(
 class ScoreCollector:
     """Accumulates per-resource scores during job execution.
 
-    Follows the same pattern as ``JobSummaryCollector`` — call
+    Follows the same pattern as ``JobSummaryCollector``  call
     ``record_resource()`` for each processed resource, then ``aggregate()``
     at job completion for the batch-level k-anonymity evaluation.
     """
@@ -269,7 +269,7 @@ class ScoreCollector:
         # Accumulate per-resource config_identifier_risk so the aggregate
         # batch_privacy can report the average coverage gap across all scored
         # resources (only counted when settings was available, i.e. > 0.0 or
-        # settings was passed and rules were found — tracked via _config_risk_count).
+        # settings was passed and rules were found  tracked via _config_risk_count).
         self._config_risk_sum: float = 0.0
         self._config_risk_count: int = 0
         # Frequency of each uncovered HIPAA-sensitive path across the batch, so
@@ -334,7 +334,7 @@ class ScoreCollector:
 
         # Heavy scoring is intentionally outside the lock to avoid serialising
         # CPU-bound work; only the accumulation below is critical-section.
-        # Use the local engine directly — score_resource() would route each
+        # Use the local engine directly  score_resource() would route each
         # call to the remote scoring microservice (one HTTP POST per resource),
         # which multiplies into tens of thousands of round-trips during bulk
         # export. The remote service runs the identical algorithm; local scoring
@@ -348,7 +348,7 @@ class ScoreCollector:
                 self._config_profile,
             )
         except Exception:
-            # Scoring raised unexpectedly — _total_count was already
+            # Scoring raised unexpectedly  _total_count was already
             # incremented in the first critical section so we must balance
             # _fail_count here, otherwise aggregate() computes totals from
             # pass+fail that are one less than _total_count.
@@ -389,7 +389,7 @@ class ScoreCollector:
                                 self._uncovered_paths[path] += 1
                 # Accumulate config_identifier_risk when settings was available.
                 # _config_coverage() returns 0.0 both when settings=None AND when
-                # all rules fired — use config_risk_count to track only cases
+                # all rules fired  use config_risk_count to track only cases
                 # where settings was present (i.e. the evaluator had rules to check).
                 if result.privacy.config_identifier_risk > 0.0:
                     self._config_risk_sum += result.privacy.config_identifier_risk
@@ -470,11 +470,11 @@ class ScoreCollector:
             "avg_quality": round(avg_quality, 4),
             "batch_privacy": batch_privacy.to_dict() if batch_privacy else None,
             "config_profile": self._config_profile,
-            # Zero-tolerance PII leak counters — used by the score gate for a
+            # Zero-tolerance PII leak counters  used by the score gate for a
             # hard block independent of the composite score.
             "text_risk_hits": self._text_risk_hits,
             "identifier_risk_hits": self._identifier_risk_hits,
-            # Exact HIPAA paths left uncovered, most frequent first — drives the
+            # Exact HIPAA paths left uncovered, most frequent first  drives the
             # gate's structured "what leaked" block. [(path, resource_count), …]
             "uncovered_paths": self._uncovered_paths.most_common(20),
         }

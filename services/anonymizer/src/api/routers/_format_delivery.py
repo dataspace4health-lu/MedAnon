@@ -59,7 +59,7 @@ async def deliver_format_output(
             artifact="data",
         )
         if data_key is None:
-            return None  # no destination configured — nothing delivered
+            return None  # no destination configured  nothing delivered
         delivered = {"data": data_key}
         if manifest is not None:
             man_line = json.dumps({"format": fmt, "transformations": manifest}) + "\n"

@@ -1,4 +1,4 @@
-"""FHIR Bulk Data Export operations — kick-off, poll, download, cleanup.
+"""FHIR Bulk Data Export operations  kick-off, poll, download, cleanup.
 
 Implements the FHIR Bulk Data Access IG protocol: ``$export`` kick-off,
 status polling with Retry-After, NDJSON file download, and best-effort
@@ -28,7 +28,7 @@ def _validate_bulk_file_url(url: str) -> None:
     Prevents SSRF via malicious FHIR bulk export manifests that redirect
     file downloads to internal infrastructure (e.g. AWS metadata service).
     """
-    from api.deps import check_hostname_ssrf
+    from utils.ssrf import check_hostname_ssrf
 
     parsed = _urlparse.urlparse(url)
     if parsed.scheme not in ("http", "https"):
@@ -45,7 +45,7 @@ _BULK_DOWNLOAD_PARALLEL = int(os.environ.get("MEDANON_BULK_DOWNLOAD_PARALLEL", "
 
 # Timeout for queue.get() in parallel download consumer loops.
 # Prevents permanent thread hangs when a producer thread crashes without
-# pushing its sentinel.  5 minutes is generous — a single NDJSON file
+# pushing its sentinel.  5 minutes is generous  a single NDJSON file
 # download that takes >5 min of zero output is effectively dead.
 _QUEUE_GET_TIMEOUT_SEC = int(os.environ.get("MEDANON_QUEUE_GET_TIMEOUT_SEC", "300"))
 
@@ -68,8 +68,8 @@ def _poll_bulk_status_single(status_url, token=None, timeout=30):
     """Execute a single poll request against a Bulk Data Export status URL.
 
     Returns a tuple ``(done, manifest_or_delay)``:
-      - ``(True, manifest_dict)`` — export complete, manifest with ``output[]``
-      - ``(False, delay_seconds)`` — still in progress, caller should wait
+      - ``(True, manifest_dict)``  export complete, manifest with ``output[]``
+      - ``(False, delay_seconds)``  still in progress, caller should wait
     Raises ``ValueError`` on unexpected HTTP status or connection errors.
     """
     headers = _make_headers(token)
@@ -134,7 +134,7 @@ def _download_bulk_ndjson(file_url, token=None, timeout=60):
 
     if not _fhir_cb.allow_request():
         raise FhirCircuitBreakerOpen(
-            "FHIR server unavailable — circuit breaker OPEN (bulk_download)"
+            "FHIR server unavailable  circuit breaker OPEN (bulk_download)"
         )
     headers = _make_headers(token)
     headers["Accept"] = "application/fhir+ndjson"
@@ -316,7 +316,7 @@ def _download_manifest_files(manifest, token=None, timeout=60):
             except _queue.Empty:
                 raise ValueError(
                     f"Bulk download stalled: no data received for "
-                    f"{_QUEUE_GET_TIMEOUT_SEC}s — possible thread crash"
+                    f"{_QUEUE_GET_TIMEOUT_SEC}s  possible thread crash"
                 )
             if item is _SENTINEL:
                 finished += 1
@@ -350,7 +350,7 @@ def bulk_export(
         level:         ``"system"``, ``"type"``, or ``"group"``
         resource_type: Required when ``level="type"``.  For system-level, used as
                        the ``_type`` param when ``type_filter`` is not set.
-        group_id:      Required when ``level="group"`` — FHIR Group.id.
+        group_id:      Required when ``level="group"``  FHIR Group.id.
         type_filter:   Comma-separated resource types for the ``_type`` param
                        (overrides ``resource_type`` for system-level).
         since:         ``_since`` instant, e.g. ``"2024-01-01T00:00:00Z"``

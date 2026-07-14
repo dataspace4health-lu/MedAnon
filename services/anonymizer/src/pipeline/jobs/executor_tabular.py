@@ -1,4 +1,4 @@
-"""Tabular-batch executor — de-identify many CSV/Excel/Parquet files as one job.
+"""Tabular-batch executor  de-identify many CSV/Excel/Parquet files as one job.
 
 The user uploads N files of the same tabular format plus a saved config profile
 (which must contain ``column:<name>`` rules).  At submit time the API stages the
@@ -8,10 +8,10 @@ de-identifies it through the column-rule engine, and writes all results into a
 single ZIP archive that the user downloads when the job completes.
 
 Job params (set by the submit endpoint):
-    staged_dir      — directory holding the uploaded files (under _OUTPUT_DIR)
-    file_format     — "csv" | "xlsx" | "parquet"
-    config_profile  — profile whose column: rules to apply
-    file_names      — original filenames, in upload order
+    staged_dir       directory holding the uploaded files (under _OUTPUT_DIR)
+    file_format      "csv" | "xlsx" | "parquet"
+    config_profile   profile whose column: rules to apply
+    file_names       original filenames, in upload order
 
 Per-file isolation: a file that fails to parse/process is recorded as an
 ``<name>.error.txt`` entry in the ZIP rather than aborting the whole batch.
@@ -25,7 +25,7 @@ import zipfile
 
 from domain.jobs import JobStatus
 from pipeline.jobs.checkpoint import save_checkpoint
-from integrations.storage import publish_result
+from pipeline.jobs.result_publisher import publish_result
 
 _log = logging.getLogger("medanon.worker")
 

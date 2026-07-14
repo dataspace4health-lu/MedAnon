@@ -54,7 +54,7 @@ def _handle_store_unavailable(exc: ApiKeyStoreUnavailable) -> None:
 async def create_api_key(body: ApiKeyCreateRequest, request: Request):
     """Create a new per-client API key.
 
-    **The raw key is returned exactly once** — store it securely.
+    **The raw key is returned exactly once**  store it securely.
     Subsequent reads return only metadata (no key material).
     """
     _require_admin(request)
@@ -78,7 +78,7 @@ async def create_api_key(body: ApiKeyCreateRequest, request: Request):
 
 @router.get("/api-keys")
 async def list_api_keys(request: Request):
-    """List all API keys (metadata only — no raw keys or hashes)."""
+    """List all API keys (metadata only  no raw keys or hashes)."""
     _require_admin(request)
     try:
         keys = await asyncio.to_thread(_service.list_all)

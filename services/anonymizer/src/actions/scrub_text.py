@@ -3,33 +3,33 @@
 PII detection via regex patterns has been consolidated into Presidio custom
 recognizers (see ``integrations/nlp/detector.py``).  This module now provides:
 
-    1. **Name extraction and scrubbing** — extract patient/practitioner names
+    1. **Name extraction and scrubbing**  extract patient/practitioner names
        from ``resource.name`` and redact literal occurrences in text fields.
 
-    2. **HTML narrative modes** — ``html`` (replace entire div with safe
+    2. **HTML narrative modes**  ``html`` (replace entire div with safe
        placeholder) and ``html_tokenize`` (scrub text nodes, preserve markup).
 
-    3. **Token state management** — deterministic ``[[TYPE_N]]`` surrogate
+    3. **Token state management**  deterministic ``[[TYPE_N]]`` surrogate
        tokens with configurable scope (resource, bundle, global_run).
 
 Supported ``mode`` values (set via ``params['mode']``):
 
-    text  (default) — scrub names in plain-text fields in-place.
+    text  (default)  scrub names in plain-text fields in-place.
 
-    html_tokenize   — scrub names in XHTML text nodes while preserving
+    html_tokenize    scrub names in XHTML text nodes while preserving
                       markup and attributes.
 
-    html            — replace the entire XHTML field with a single safe
+    html             replace the entire XHTML field with a single safe
                     FHIR-compliant ``<div>`` placeholder.
 
 Optional params:
 
-  names         — list of name strings to redact (case-insensitive
+  names          list of name strings to redact (case-insensitive
                   literal match, e.g. ``["Smith", "John"]``).
-  extract_names — if ``true``, automatically extract names from the
+  extract_names  if ``true``, automatically extract names from the
                   resource's own ``name`` field (FHIR Patient / Practitioner).
-  placeholders  — dict overriding default replacement tokens.
-  mapping_scope — ``resource`` (default), ``bundle`` or ``global_run``
+  placeholders   dict overriding default replacement tokens.
+  mapping_scope  ``resource`` (default), ``bundle`` or ``global_run``
                   controls token consistency scope.
 """
 
@@ -42,12 +42,12 @@ from integrations.nlp.utils import _scrub_xhtml_text_nodes, _tokenize
 from utils.fhirpath import find_nodes
 
 # ---------------------------------------------------------------------------
-# Regex patterns — most PII detection is consolidated into Presidio custom
+# Regex patterns  most PII detection is consolidated into Presidio custom
 # recognizers in integrations/nlp/detector.py.  Patterns kept here are used
 # by scrub_text_by_path() when the Presidio stack is unavailable or not
 # configured (e.g. plain scrub_text rules without an NLP service).
 #
-# street_address — combined US + EU + PO Box pattern derived from the Presidio
+# street_address  combined US + EU + PO Box pattern derived from the Presidio
 #   custom recognizers in detector.py.  Kept here so that scrub_text rules
 #   with ``patterns: street_address`` fire on any valueString / free-text
 #   field regardless of LOINC code or FHIR resource structure.
@@ -188,7 +188,7 @@ def _scrub(
             ph = placeholder_overrides.get(key, default_ph)
             text = compiled.sub(ph, text)
 
-    # Name scrubbing — case-insensitive literal match on each token
+    # Name scrubbing  case-insensitive literal match on each token
     for name in names:
         name = str(name).strip()
         if not name:
@@ -263,7 +263,7 @@ def _get_token_state(params, mapping_scope):
     """Return mutable token-state dict according to selected scope.
 
     - 'global_run': shares state across all calls in a batch CLI run.
-      WARNING: This state grows indefinitely — call reset_global_token_state()
+      WARNING: This state grows indefinitely  call reset_global_token_state()
       between separate batch runs to prevent unbounded memory growth.
     - 'bundle'/'resource': uses per-call state (safe for API use).
     """
@@ -289,9 +289,9 @@ def scrub_text_by_path(resource: dict, el: dict, params: dict) -> None:
 
     Optional params:
         mode          : 'text' (default), 'html_tokenize', or 'html'
-        patterns      : 'all' (default) — retained for backward compatibility
+        patterns      : 'all' (default)  retained for backward compatibility
         names         : list of literal name strings to redact
-        extract_names : bool — auto-extract names from resource.name
+        extract_names : bool  auto-extract names from resource.name
         placeholders  : dict mapping pattern key → replacement token
         tokenize      : bool (default True). If False, uses static placeholders.
         mapping_scope : resource (default), bundle, or global_run

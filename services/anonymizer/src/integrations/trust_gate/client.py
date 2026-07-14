@@ -121,7 +121,7 @@ class TrustGateClient:
             self._breaker.record_failure()
             raise TrustGateRemoteError(f"upstream {resp.status}")
         if resp.status >= 400:
-            # 4xx is a client/contract error — do not trip the breaker.
+            # 4xx is a client/contract error  do not trip the breaker.
             raise TrustGateRemoteError(
                 f"client error {resp.status}: {resp.data[:200]!r}"
             )

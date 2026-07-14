@@ -1,4 +1,4 @@
-"""AI Agent service layer — orchestrates agent calls with async wrapping."""
+"""AI Agent service layer  orchestrates agent calls with async wrapping."""
 
 import asyncio
 import logging
@@ -57,7 +57,7 @@ class AgentService:
         regulation: str = "",
         include_source_context: bool = False,
     ) -> dict:
-        """Proxy or local — follows the ANALYTICS_SERVICE_URL pattern."""
+        """Proxy or local  follows the ANALYTICS_SERVICE_URL pattern."""
         ai_service_url = self._ai_service_url()
         if ai_service_url:
             return await asyncio.to_thread(
@@ -83,7 +83,7 @@ class AgentService:
             from integrations.ai.source_context import get_source_resource_context
 
             return get_source_resource_context()
-        except Exception as exc:  # noqa: BLE001 — context is best-effort
+        except Exception as exc:  # noqa: BLE001  context is best-effort
             _log.info("source_context_resolve_failed: %s", exc)
             return ""
 
@@ -123,7 +123,7 @@ class AgentService:
     ) -> dict:
         """Classify a field tree as PII and suggest actions.
 
-        Runs the synchronous scanner agent off the event loop. Never raises —
+        Runs the synchronous scanner agent off the event loop. Never raises
         the agent returns a structured error result on failure. ``granularity``
         ('values' | 'whole') controls leaf-vs-parent classification of
         structured fields. ``include_values`` marks that the tree carries sample
@@ -243,7 +243,7 @@ class AgentService:
         ``AI_SERVICE_URL`` is admin-set env config (trusted, may legitimately
         point at an in-cluster private address), so private nets are allowed
         by default (MEDANON_AI_PROXY_ALLOW_PRIVATE=true). Link-local/metadata
-        ranges and non-http(s) schemes are ALWAYS rejected — those are the
+        ranges and non-http(s) schemes are ALWAYS rejected  those are the
         cloud-metadata exfiltration vectors regardless of trust level.
         """
         import ipaddress
@@ -282,14 +282,14 @@ class AgentService:
             if any(addr in net for net in blocked):
                 raise ValueError(
                     "AI service URL resolves to a link-local/metadata "
-                    f"address ({addr}) — refusing",
+                    f"address ({addr})  refusing",
                 )
 
         allow_private = os.environ.get(
             "MEDANON_AI_PROXY_ALLOW_PRIVATE", "true"
         ).strip().lower() in ("true", "1", "yes")
         if not allow_private:
-            from api.deps import check_hostname_ssrf
+            from utils.ssrf import check_hostname_ssrf
 
             err = check_hostname_ssrf(host)
             if err:
@@ -300,7 +300,7 @@ class AgentService:
         """POST JSON to the remote AI service and return the parsed dict.
 
         Centralised so all four agent proxies share request/response handling.
-        Uses the pooled urllib3 client (no redirect following — the pool is
+        Uses the pooled urllib3 client (no redirect following  the pool is
         built with retries=False) with an SSRF guard and a response-size cap.
         """
         import json
@@ -408,7 +408,7 @@ class AgentService:
     ) -> str:
         """Remote /v1/ai/explain returns a JSON object with an `explanation` field.
 
-        Streaming is not proxied here — the SSE endpoint stays local.
+        Streaming is not proxied here  the SSE endpoint stays local.
         """
         path = "/v1/ai/explain"
         parsed = AgentService._post_proxy_json(

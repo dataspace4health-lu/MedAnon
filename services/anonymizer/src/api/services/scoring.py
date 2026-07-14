@@ -1,4 +1,4 @@
-"""Scoring service — on-demand job scoring + ad-hoc single-resource scoring.
+"""Scoring service  on-demand job scoring + ad-hoc single-resource scoring.
 
 Scoring is triggered manually by the user via POST /v1/jobs/{id}/score.
 The service reads the job's NDJSON result file, extracts manifest entries
@@ -169,7 +169,7 @@ class ScoringService:
                 # Extract manifest entries from meta.tag
                 manifest_entries = _extract_manifest_entries(resource)
 
-                # Score with original=None (on-demand mode — utility uses
+                # Score with original=None (on-demand mode  utility uses
                 # manifest-based estimation when originals are unavailable)
                 collector.record_resource(
                     original=None,
@@ -241,7 +241,7 @@ class ScoringService:
             return {
                 "job_id": job_id,
                 "computed": False,
-                "reason": "scoring not yet triggered for this job — use POST /v1/jobs/{id}/score",
+                "reason": "scoring not yet triggered for this job  use POST /v1/jobs/{id}/score",
             }
 
         result = {"job_id": job_id, "computed": True, **score}

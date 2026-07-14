@@ -5,7 +5,7 @@ run stats) into a single response so the React SPA dashboard renders without a
 request waterfall.
 
 Each section is fetched in parallel and degrades to ``null`` (or empty list) on
-upstream failure — partial results are preferable to a fully failing dashboard.
+upstream failure  partial results are preferable to a fully failing dashboard.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ from api.schemas.dashboard import (
     JobSummary,
     ReadinessSnapshot,
 )
-from api.services.health import HealthCheckService
+from pipeline.health import HealthCheckService
 from api.services.jobs import JobService, JobStoreUnavailable
 
 router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
@@ -33,9 +33,20 @@ _health_service = HealthCheckService()
 _job_service = JobService()
 
 
+#  useDashboardSummary.ts polls this endpoint every 5s. check_readiness's
+# default MEDANON_READY_TIMEOUT (5s, +2s grace = 7s worst case) is tuned for
+# the infrequent k8s /ready probe, not a 5s-interval BFF section  a single
+# down advisory microservice (analytics/scoring/trust_gate/ai) would then
+# make every poll take longer than the poll interval itself. Cap it well
+# under 5s here so that can't happen.
+_DASHBOARD_READINESS_TIMEOUT = 1.5
+
+
 async def _readiness_section() -> ReadinessSnapshot:
     try:
-        checks = await asyncio.to_thread(_health_service.check_readiness)
+        checks = await asyncio.to_thread(
+            _health_service.check_readiness, _DASHBOARD_READINESS_TIMEOUT
+        )
     except Exception:
         logger.debug("dashboard_readiness_failed", exc_info=True)
         return ReadinessSnapshot(status="unknown", checks={})
@@ -64,7 +75,7 @@ async def _recent_jobs_section(limit: int) -> list[JobSummary]:
 
 
 async def _processing_stats_section():
-    """Optional — only populated when the processing-run store is available."""
+    """Optional  only populated when the processing-run store is available."""
     try:
         from pipeline.processing_run import get_processing_run_store
 

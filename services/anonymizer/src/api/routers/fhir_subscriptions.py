@@ -1,10 +1,10 @@
 """FHIR R4 Subscription CRUD endpoints.
 
-POST   /fhir/Subscription       — create subscription
-GET    /fhir/Subscription/{id}  — retrieve subscription
-PUT    /fhir/Subscription/{id}  — update subscription
-DELETE /fhir/Subscription/{id}  — delete subscription
-GET    /fhir/Subscription       — list all (admin only)
+POST   /fhir/Subscription        create subscription
+GET    /fhir/Subscription/{id}   retrieve subscription
+PUT    /fhir/Subscription/{id}   update subscription
+DELETE /fhir/Subscription/{id}   delete subscription
+GET    /fhir/Subscription        list all (admin only)
 """
 
 import asyncio

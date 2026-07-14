@@ -22,12 +22,12 @@ from __future__ import annotations
 # terse and example-driven because the local models are small (Gemma 3 4B) and
 # follow concrete path→action mappings far better than prose.
 _POLICY_TEMPLATE = """\
-ACTION SELECTION — choose the action that fits the FIELD, never redact \
+ACTION SELECTION  choose the action that fits the FIELD, never redact \
 everything. Match each PII field to the closest class below:
 
 1. STABLE IDENTIFIERS & REFERENCES (a resource id, identifier.value, any \
 *.reference, MRN, account number): action = {id_action}. These must stay \
-consistent across resources so links survive de-identification — NEVER redact \
+consistent across resources so links survive de-identification  NEVER redact \
 them (redaction breaks subject.reference / cross-resource joins).
    e.g. Patient.id, Patient.identifier.value, Condition.subject.reference, \
 Encounter.identifier.value → {id_action}
@@ -49,7 +49,7 @@ A free-text name field (.text) → nlp_scrub.
 position.longitude): action = redact (removes precise geolocation).
 
 6. TELECOM VALUES (telecom.value holding a phone or email): action = mask \
-(strategy: keep_domain for email, keep_country_code for phone) — preserves \
+(strategy: keep_domain for email, keep_country_code for phone)  preserves \
 shape for validation without exposing the contact point.
 
 7. FREE-TEXT / NARRATIVE (code.text, *.text, note, dosageInstruction.text, \
@@ -57,10 +57,10 @@ presentedForm.data, content.attachment.data, any human-written string): \
 action = nlp_scrub. Detects and removes names/dates/locations embedded in the \
 prose while keeping the clinical content.
 
-8. CODED / STRUCTURAL DATA — NOT PII, emit NO rule: coding.code, \
+8. CODED / STRUCTURAL DATA  NOT PII, emit NO rule: coding.code, \
 coding.system, coding.display, *.system, status, category, clinicalStatus, \
 verificationStatus, intent, criticality, type codes, resourceType, url. These \
-are standard terminology and carry no identity — leaving them intact preserves \
+are standard terminology and carry no identity  leaving them intact preserves \
 clinical meaning. Do not propose rules for them.
 
 If a field does not clearly fit a class above, prefer the least destructive \
@@ -86,7 +86,7 @@ def action_policy_block(gpas_available: bool = False) -> str:
     if not gpas_available:
         block += (
             "\n\nNOTE: no gPAS server is configured, so use cryptohash (not "
-            "gpas_pseudonymize) for identifiers — it is deterministic and keeps "
+            "gpas_pseudonymize) for identifiers  it is deterministic and keeps "
             "links consistent without a pseudonymisation service."
         )
     return block

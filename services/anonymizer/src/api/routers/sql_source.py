@@ -78,7 +78,7 @@ def _map_error(exc: Exception) -> HTTPException:
         return HTTPException(status_code=404, detail=f"Connection not found: {exc}")
     if isinstance(exc, (SqlSourceError, CredentialKeyError)):
         return HTTPException(status_code=422, detail=str(exc))
-    # Unknown failure — log the real cause (type + message) so it is diagnosable
+    # Unknown failure  log the real cause (type + message) so it is diagnosable
     # without leaking internals to the client.
     logger.error("sql_source_unexpected_error: %s: %s", type(exc).__name__, exc)
     return HTTPException(status_code=500, detail="SQL source error")

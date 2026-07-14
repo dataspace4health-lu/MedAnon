@@ -1,4 +1,4 @@
-"""Write-side FHIR operations — single resource, bundle, and batch upload.
+"""Write-side FHIR operations  single resource, bundle, and batch upload.
 
 Handles resource creation/update, manifest tag stripping, ID sanitisation,
 topological upload ordering, and cross-resource reference rewriting.
@@ -45,7 +45,7 @@ def _strip_manifest_tags(resource: dict) -> dict:
     The MedAnon pipeline attaches ``meta.tag`` entries (system
     ``https://medanon.local/transformation-manifest``) whose ``display``
     field can exceed HAPI FHIR's ``hfj_tag_def.tag_display`` varchar(200)
-    column.  These tags are intended for the UI only — strip them before
+    column.  These tags are intended for the UI only  strip them before
     uploading to any FHIR server.
     """
     meta = resource.get("meta")
@@ -61,7 +61,7 @@ def _strip_manifest_tags(resource: dict) -> dict:
         if not (isinstance(t, dict) and t.get("system") == _MANIFEST_SYSTEM)
     ]
     if len(filtered) == len(tags):
-        return resource  # nothing removed — avoid copy
+        return resource  # nothing removed  avoid copy
 
     resource = {**resource, "meta": {**meta, "tag": filtered}}
     return resource
@@ -242,7 +242,7 @@ def _rewrite_references(obj: object, id_map: dict[tuple[str, str], str]) -> obje
     are rewritten; versioned references (``Type/id/_history/N``) are
     left unchanged.
 
-    Returns a new object — the input is never mutated.
+    Returns a new object  the input is never mutated.
     """
     if isinstance(obj, dict):
         out = {}
@@ -250,7 +250,7 @@ def _rewrite_references(obj: object, id_map: dict[tuple[str, str], str]) -> obje
             if k == "reference" and isinstance(v, str):
                 parts = v.split("/", 1)
                 if len(parts) == 2 and "/" not in parts[1]:
-                    # Plain Type/id reference — rewrite if in map
+                    # Plain Type/id reference  rewrite if in map
                     new_rid = id_map.get((parts[0], parts[1]))
                     out[k] = f"{parts[0]}/{new_rid}" if new_rid else v
                 else:
@@ -378,7 +378,7 @@ def _post_bundle_batch(base: str, chunk: list[dict], token, timeout) -> list[dic
     """Build and POST one FHIR batch Bundle for *chunk*. Return a list of per-resource results.
 
     Used by both the serial and parallel paths of :func:`upload_resources`.
-    Never raises — all errors are captured as per-resource result dicts.
+    Never raises  all errors are captured as per-resource result dicts.
     """
     entries = []
     meta_list: list[tuple[str, str | None]] = []
@@ -459,7 +459,7 @@ def upload_resources(
     ``parallel=1`` retains the original sequential behaviour.
 
     Resource IDs are sanitised to FHIR R4 ``[A-Za-z0-9\\-.]{1,64}`` before
-    upload — gPAS pseudonym prefixes like ``rid_`` become ``rid-``.
+    upload  gPAS pseudonym prefixes like ``rid_`` become ``rid-``.
 
     Yields one result dict per resource:
         {
@@ -470,7 +470,7 @@ def upload_resources(
             "error":        str | None,
         }
 
-    Never raises — errors are captured per-resource or per-chunk.
+    Never raises  errors are captured per-resource or per-chunk.
     """
     chunk_size = batch_size or _UPLOAD_BATCH_SIZE
     base = base_url.rstrip("/")
@@ -533,7 +533,7 @@ def upload_resources(
                 for b in batches
             ]
             # as_completed yields futures as they finish and blocks until all
-            # tier-N futures complete — this ensures tier ordering is preserved.
+            # tier-N futures complete  this ensures tier ordering is preserved.
             for fut in as_completed(futs):
                 for result in fut.result():
                     yield result

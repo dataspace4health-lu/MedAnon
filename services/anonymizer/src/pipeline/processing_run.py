@@ -4,8 +4,8 @@ Module-level holder for the active processing run store.
 Initialised during FastAPI startup.
 
 Backends (in priority order):
-  1. PostgreSQL — when MEDANON_APP_DB_URL is set
-  2. SQLite     — fallback, always available (default path /output/processing_runs.db)
+  1. PostgreSQL  when MEDANON_APP_DB_URL is set
+  2. SQLite      fallback, always available (default path /output/processing_runs.db)
 """
 
 from __future__ import annotations
@@ -284,7 +284,7 @@ def init_processing_run_store(db_path: Any = None, store: Any = None) -> Any:
     """
     global _processing_run_store
     if db_path is not None and not isinstance(db_path, str):
-        # Caller passed a store object positionally — accept it.
+        # Caller passed a store object positionally  accept it.
         # We deliberately don't accept ``os.PathLike`` here because mocks
         # auto-implement ``__fspath__`` and would falsely match.
         store = db_path

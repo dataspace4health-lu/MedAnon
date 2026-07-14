@@ -1,10 +1,10 @@
-"""DicomAdapter — map DICOM patient/study attributes onto the FHIR IR.
+"""DicomAdapter  map DICOM patient/study attributes onto the FHIR IR.
 
 Unlike the legacy ``formats/dicom.py`` scrubber (which removes a fixed PS3.15
 tag set), this adapter maps the highest-value patient-identifying tags onto a
 FHIR-shaped ``Patient`` resource, runs the *full* rule engine over it (so a
 PatientID can be gPAS-pseudonymised, a name NLP-scrubbed, a birth date
-generalised — not merely zeroed), then writes the de-identified values back into
+generalised  not merely zeroed), then writes the de-identified values back into
 the original DICOM dataset by tag.
 
 Scope: patient identification tags (group 0x0010) plus a few study identifiers.
@@ -12,7 +12,7 @@ The exhaustive PS3.15 Basic-Profile tag removal remains available via the legacy
 ``formats/dicom.py`` for callers that want blanket zeroing; this adapter is the
 engine-driven path on the new normalization seam.
 
-Pixel data is NOT touched here — burned-in PHI in pixels needs an OCR pass
+Pixel data is NOT touched here  burned-in PHI in pixels needs an OCR pass
 (scoped follow-on).  The adapter stamps the mandatory PS3.15 §E.3.1
 de-identification markers on serialize.
 
@@ -161,7 +161,7 @@ class DicomAdapter:
         return None
 
     def can_target_fhir_server(self) -> bool:
-        # DICOM output is not FHIR — never upload to the FHIR target server.
+        # DICOM output is not FHIR  never upload to the FHIR target server.
         return False
 
 

@@ -3,7 +3,7 @@
 A risk-driven export produces an anonymous Transformation Passport; persisting
 it here makes it a durable, queryable *report* independent of the job's own
 retention. Mirrors the ``init_*_store`` / ``get_*_store`` idiom used by
-``api.services.permits`` — Postgres-backed at startup when ``MEDANON_APP_DB_URL``
+``pipeline.permits``  Postgres-backed at startup when ``MEDANON_APP_DB_URL``
 is set, otherwise a no-op (passports still ride on the job checkpoint, so the
 per-job view keeps working without a DB).
 """
@@ -35,7 +35,7 @@ def save_passport(job_id: str, passport: dict) -> None:
     """Best-effort persist of a completed job's passport. Never raises.
 
     A missing store (no Postgres) is a silent no-op; a PII-guard rejection or
-    a DB error is logged but never propagated — persisting the report must not
+    a DB error is logged but never propagated  persisting the report must not
     fail the export.
     """
     store = _store
@@ -43,7 +43,7 @@ def save_passport(job_id: str, passport: dict) -> None:
         return
     try:
         store.save(job_id, passport)
-    except Exception as exc:  # noqa: BLE001 — report persistence is best-effort
+    except Exception as exc:  # noqa: BLE001  report persistence is best-effort
         logger.warning(
             "passport_persist_failed job=%s error=%s", job_id, type(exc).__name__
         )

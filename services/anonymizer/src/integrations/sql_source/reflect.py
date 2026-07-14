@@ -2,8 +2,8 @@
 
 All table/column names reach SQL only through ``psycopg2.sql.Identifier`` (never
 string interpolation), so a maliciously named object cannot inject SQL.  Reads
-are streamed in chunks — by primary key (keyset pagination) when a single-column
-PK exists, else by ``OFFSET/LIMIT`` — to keep memory bounded on large tables.
+are streamed in chunks  by primary key (keyset pagination) when a single-column
+PK exists, else by ``OFFSET/LIMIT``  to keep memory bounded on large tables.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ _DEFAULT_CHUNK = 1000
 def list_tables(conn, schema: str = "public") -> list[dict]:
     """Return base tables in *schema* with a cheap row-count estimate.
 
-    Estimate comes from ``pg_class.reltuples`` (planner statistics) — instant even
+    Estimate comes from ``pg_class.reltuples`` (planner statistics)  instant even
     on huge tables, unlike ``COUNT(*)``.
     """
     query = """

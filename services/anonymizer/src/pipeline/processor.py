@@ -2,28 +2,28 @@
 
 Public surface:
 
-- :func:`process_data` — single resource / Bundle / list (signature unchanged).
-- :func:`process_data_batch` — batch of resources with cross-resource gPAS
+- :func:`process_data`  single resource / Bundle / list (signature unchanged).
+- :func:`process_data_batch`  batch of resources with cross-resource gPAS
   batching (one HTTP call for up to ``MEDANON_BATCH_SIZE`` resources).
 
 Pipeline stages per batch:
 
-1. **match**       — FHIRPath evaluation + action dispatch (parallel, per resource)
-2. **phi_detection** — NLP batch detection + replacement across all resources
-   **pseudonymize** — gPAS batch lookup across all resources
-   (stages 2 & 3 run **concurrently** — NLP scrubs free-text fields while gPAS
+1. **match**        FHIRPath evaluation + action dispatch (parallel, per resource)
+2. **phi_detection**  NLP batch detection + replacement across all resources
+   **pseudonymize**  gPAS batch lookup across all resources
+   (stages 2 & 3 run **concurrently**  NLP scrubs free-text fields while gPAS
    fetches pseudonyms for structured identifiers; they touch disjoint paths)
-3. **finalize**    — gPAS write-back + post-processing per resource (parallel)
+3. **finalize**     gPAS write-back + post-processing per resource (parallel)
 
 All logic is delegated to focused sub-modules:
 
-- :mod:`pipeline.rule_matcher`      — FHIRPath evaluation + rule index
-- :mod:`pipeline.action_dispatcher` — match stage: action dispatch + work accumulation
-- :mod:`pipeline.nlp_orchestrator`  — phi_detection stage: batch NLP
-- :mod:`pipeline.gpas_orchestrator` — pseudonymize stage: batch gPAS call
-- :mod:`pipeline.post_processor`    — reference rewriting + text-ID replacement
-- :mod:`pipeline.manifest`          — transformation manifest tagging
-- :mod:`pipeline.ports`             — PseudonymizerPort Protocol
+- :mod:`pipeline.rule_matcher`       FHIRPath evaluation + rule index
+- :mod:`pipeline.action_dispatcher`  match stage: action dispatch + work accumulation
+- :mod:`pipeline.nlp_orchestrator`   phi_detection stage: batch NLP
+- :mod:`pipeline.gpas_orchestrator`  pseudonymize stage: batch gPAS call
+- :mod:`pipeline.post_processor`     reference rewriting + text-ID replacement
+- :mod:`pipeline.manifest`           transformation manifest tagging
+- :mod:`pipeline.ports`              PseudonymizerPort Protocol
 
 Dependency injection: pass a custom ``pseudonymizer`` (any object satisfying
 :class:`~pipeline.ports.PseudonymizerPort`) to replace the default gPAS adapter.
@@ -85,7 +85,7 @@ def _stage_span(name: str, *, metric_stage: "str | None" = None):
 audit_log = logging.getLogger("medanon.audit")
 
 # The .log() FHIRPath invocation is registered lazily inside
-# rule_matcher._compile_fhirpath() on first use — no eager import needed.
+# rule_matcher._compile_fhirpath() on first use  no eager import needed.
 
 # Default 1000: a safe middle ground between the legacy 200 and an aggressive
 # 5000.  At 1000 resources/chunk, gPAS and NLP sub-batches fit comfortably
@@ -101,11 +101,11 @@ _BATCH_SIZE = int(os.environ.get("MEDANON_BATCH_SIZE", "1000"))
 # The API paths are already bounded by MEDANON_MAX_BODY_BYTES; this covers the
 # CLI and library callers, which are not.
 _MAX_BUNDLE_ENTRIES = int(os.environ.get("MEDANON_MAX_BUNDLE_ENTRIES", "50000"))
-# Default 8 parallel workers — matches docker-compose.yml default.
+# Default 8 parallel workers  matches docker-compose.yml default.
 # Set to 0 to disable parallelism (sequential processing).
 _PARALLEL_WORKERS = int(os.environ.get("MEDANON_PARALLEL_WORKERS", "8"))
 
-# Heuristic attachment scanner in detect_phi_batch — finds Attachment.data /
+# Heuristic attachment scanner in detect_phi_batch  finds Attachment.data /
 # *Base64Binary fields anywhere in a resource and scrubs embedded PHI, even when
 # no config nlp_* rule targets them.  OFF by default so the config rules are the
 # single source of truth: nothing is transformed without a matching rule.  The
@@ -122,7 +122,7 @@ _ATTACHMENT_SCAN = os.environ.get(
 )
 
 # When set, forces sequential processing and clears all rule caches at the
-# start of every process_data_batch call.  Intended for tests only — never
+# start of every process_data_batch call.  Intended for tests only  never
 # set in production (disables parallelism and defeats caching).
 _DETERMINISTIC = os.environ.get(
     "MEDANON_PIPELINE_DETERMINISTIC", ""
@@ -155,7 +155,7 @@ from pipeline.gate import (  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
-# Stage helpers — called directly or dispatched to the thread pool
+# Stage helpers  called directly or dispatched to the thread pool
 # ---------------------------------------------------------------------------
 
 
@@ -193,7 +193,7 @@ def _pseudonymize(
         )
 
 
-# Module-level singleton — GpasPseudonymizerAdapter is stateless (no instance
+# Module-level singleton  GpasPseudonymizerAdapter is stateless (no instance
 # data; all state lives in the module-level gPAS client, circuit breaker, and
 # cache). Re-using the same instance avoids per-request object allocation and
 # keeps the lazy import pattern to prevent circular imports at module load time.
@@ -214,7 +214,7 @@ def _processing_errors_mode(settings) -> str:
 
 
 # ---------------------------------------------------------------------------
-# finalize stage — gPAS write-back + post-processing (per resource)
+# finalize stage  gPAS write-back + post-processing (per resource)
 # ---------------------------------------------------------------------------
 
 
@@ -234,12 +234,12 @@ def _assemble_resource(
     """finalize stage for one resource: gPAS write-back + post-processing.
 
     Always invoked after the pseudonymize stage has returned the shared mapping
-    for the whole batch — zero additional HTTP calls per resource.
+    for the whole batch  zero additional HTTP calls per resource.
     ``precomputed_mapping`` and (when ``rewrite_references`` is on)
     ``precomputed_ref_mapping`` MUST be supplied by the caller.
     """
     if precomputed_mapping is None:
-        # Defensive guard — preserves the public signature for the perf bench
+        # Defensive guard  preserves the public signature for the perf bench
         # while making the contract explicit.  See process_data_batch / chunk
         # path which always supply ``shared_mapping``.
         raise ValueError(
@@ -311,7 +311,7 @@ def _assemble_resource(
 
 
 def _evaluate_rules(resource, settings, processing_mode, collect_refs=False):
-    """match stage for a single resource — suitable for thread pool dispatch.
+    """match stage for a single resource  suitable for thread pool dispatch.
 
     Evaluates FHIRPath rules and dispatches actions, accumulating deferred
     gPAS (PseudonymizationTask) and NLP (PHIDetectionTask) items for batch processing.
@@ -338,7 +338,7 @@ def _evaluate_rules(resource, settings, processing_mode, collect_refs=False):
         manifest_entries: list[dict] = []
         # Collect reference IDs BEFORE the match stage mutates the resource so
         # that outbound references capture original (pre-pseudonymisation) IDs.
-        # ref_type_map: {bare_id: resource_type} — enables per-type domain routing.
+        # ref_type_map: {bare_id: resource_type}  enables per-type domain routing.
         ref_type_map: "dict[str, str] | None" = None
         if collect_refs:
             _ref_ids: set[str] = set()
@@ -357,13 +357,13 @@ def _evaluate_rules(resource, settings, processing_mode, collect_refs=False):
         if snapshot is not None:
             # Restore original resource to prevent emitting partial de-identification.
             # If restoration itself fails the resource is cleared (empty output) rather
-            # than left in a partially de-identified state — never leak PHI.
+            # than left in a partially de-identified state  never leak PHI.
             try:
                 resource.clear()
                 resource.update(_json_loads(snapshot))
             except Exception as restore_exc:
                 audit_log.error(
-                    "snapshot_restore_failed resource_type=%s — resource cleared to prevent PHI leak: %s",
+                    "snapshot_restore_failed resource_type=%s  resource cleared to prevent PHI leak: %s",
                     resource.get("resourceType", "unknown"),
                     restore_exc,
                 )
@@ -387,7 +387,7 @@ def _run_finalize_stage(
     _keep_manifest,
     quarantine_info: "dict[int, dict] | None" = None,
 ):
-    """Stage 4 — finalize: gPAS write-back + post-processing per resource.
+    """Stage 4  finalize: gPAS write-back + post-processing per resource.
 
     Each resource is independent (``shared_mapping`` is read-only here), so the
     work is dispatched to the thread pool for batches > 4 resources and run
@@ -412,7 +412,7 @@ def _run_finalize_stage(
                 )
                 continue
             try:
-                # submit_with_context — _assemble_resource may call
+                # submit_with_context  _assemble_resource may call
                 # depseudonymize_resource_identifiers, which reads the active
                 # permit context (utils.permit_context) for domain scoping.
                 fut = submit_with_context(
@@ -527,7 +527,7 @@ def _run_finalize_stage(
                 if not _keep_manifest:
                     all_manifest_entries[i] = []
     else:
-        # Small batch — sequential (no thread pool overhead)
+        # Small batch  sequential (no thread pool overhead)
         for i, (resource, gpas_work, manifest_entries_) in enumerate(
             zip(parsed, all_gpas_works, all_manifest_entries)
         ):
@@ -591,19 +591,19 @@ def process_data_batch(
 
     Runs four pipeline stages:
 
-    1. **match** — FHIRPath evaluation + action dispatch per resource (parallel).
-    2. **phi_detection** + **pseudonymization** — NLP replacement and gPAS batch lookup
+    1. **match**  FHIRPath evaluation + action dispatch per resource (parallel).
+    2. **phi_detection** + **pseudonymization**  NLP replacement and gPAS batch lookup
        run **concurrently**: NLP modifies free-text fields while gPAS fetches
        pseudonyms for structured identifiers. Both stages consume only match-stage
        output and write to disjoint resource paths, so concurrent execution is safe.
-    3. **finalize** — gPAS write-back + post-processing per resource (parallel).
+    3. **finalize**  gPAS write-back + post-processing per resource (parallel).
 
     Cross-chunk pseudonym dedup relies on the gPAS client's deterministic L1 LRU
     and Redis L2 cache: identical values always map to identical pseudonyms, so
     duplicate HTTP calls are cache hits rather than new entries.
 
     Args:
-        resources:        List of FHIR resource dicts (not Bundles — handled by
+        resources:        List of FHIR resource dicts (not Bundles  handled by
                           ``_process_bundle``).
         settings:         Loaded :class:`~pipeline.config.Settings` instance.
         pseudonymizer:    Optional :class:`~pipeline.ports.PseudonymizerPort`.
@@ -637,14 +637,14 @@ def process_data_batch(
     all_nlp_works: list[list] = []
     all_manifest_entries: list[list] = []
     # PHI-free identity info for resources quarantined in the match stage,
-    # keyed by parsed index — consumed by _run_finalize_stage so quarantine
+    # keyed by parsed index  consumed by _run_finalize_stage so quarantine
     # records are traceable to a source resource (1.6).
     quarantine_info: dict[int, dict] = {}
     _all_ref_type_map: dict[
         str, str
     ] = {}  # ref_id → resource_type for per-domain routing
 
-    # Stage 1 — match: FHIRPath evaluation + action dispatch (parallel per resource).
+    # Stage 1  match: FHIRPath evaluation + action dispatch (parallel per resource).
     # Reference IDs are collected during the same call so they benefit from
     # thread pool parallelism rather than running serially afterward.
     #
@@ -664,7 +664,7 @@ def process_data_batch(
                 _parallel_fell_back = False
                 for resource in resources:
                     try:
-                        # submit_with_context — _evaluate_rules dispatches
+                        # submit_with_context  _evaluate_rules dispatches
                         # cryptohash/tokenize/date_shift, which read the
                         # active permit context (utils.permit_context) to
                         # scope their derived keys per permit.
@@ -846,18 +846,18 @@ def _finalize_batch(
     Split out of ``process_data_batch`` so the match stage's ``with`` block stays
     readable. Runs inside the caller's open ``pipeline.batch`` span.
     """
-    # Stages 2 + 3 — phi_detection (NLP) and pseudonymization (gPAS) run concurrently.
+    # Stages 2 + 3  phi_detection (NLP) and pseudonymization (gPAS) run concurrently.
     # NLP processes free-text/narrative fields including heuristic attachment scans.
     # gPAS pre-fetches pseudonyms for structured identifiers and references.
     #
     # Concurrency safety: the gPAS call (``_pseudonymize`` →
     # ``pseudonymize_identifier_batch``) is READ-ONLY with respect to the resource
-    # dicts — it collects serialized values, calls the pseudonymizer, and returns a
+    # dicts  it collects serialized values, calls the pseudonymizer, and returns a
     # mapping dict without touching any resource.  Write-back happens in stage 4
     # (``_assemble_resource``) AFTER the NLP thread is joined.  The NLP stage
     # mutates free-text fields in place, but gPAS write-back hasn't started yet, so
     # the two stages never contend on the same dict keys.  This is what makes
-    # concurrent execution safe — NOT disjoint paths (the NLP heuristic scanner
+    # concurrent execution safe  NOT disjoint paths (the NLP heuristic scanner
     # walks the entire resource tree).
     #
     # NLP runs in a dedicated thread; gPAS runs in the caller thread. Using
@@ -897,7 +897,7 @@ def _finalize_batch(
         _nlp_thread.start()
 
     # gPAS runs in the caller thread while NLP runs concurrently above.
-    # If the gPAS stage raises, we MUST still join the NLP thread — otherwise it
+    # If the gPAS stage raises, we MUST still join the NLP thread  otherwise it
     # keeps mutating the ``parsed`` resource dicts after the batch has logically
     # failed (an orphaned writer). The try/finally guarantees the join happens on
     # every exit path before the exception propagates.
@@ -917,7 +917,7 @@ def _finalize_batch(
         if _nlp_exc is not None:
             raise _nlp_exc  # type: ignore[misc]
     elif _run_nlp_stage:
-        # PARALLEL_WORKERS=0 (deterministic mode) — run NLP sequentially
+        # PARALLEL_WORKERS=0 (deterministic mode)  run NLP sequentially
         _detect_phi(parsed, all_nlp_works, all_manifest_entries, processing_mode)
 
     # Pre-compile the text-ID matcher once for the whole batch so each resource
@@ -939,13 +939,13 @@ def _finalize_batch(
     # Reference pseudonym mapping comes from shared_mapping (same HTTP call).
     _batch_ref_mapping: dict | None = shared_mapping if _all_ref_type_map else None
 
-    # Stage 4 — finalize: gPAS write-back + post-processing per resource (parallel).
+    # Stage 4  finalize: gPAS write-back + post-processing per resource (parallel).
     # shared_mapping is read-only here; each resource is independent.
     #
     # ``_run_finalize_stage`` frees each resource's manifest entries as it
     # consumes them, to cap peak memory. The output gate's structural check
     # reads those entries (which paths were transformed), and gPAS write-back
-    # appends to them *during* this stage — so they are only complete once it
+    # appends to them *during* this stage  so they are only complete once it
     # returns. Keep them alive across the gate call when the check will run.
     _keep_manifest = _return_manifest or (_MANIFEST_ENABLED and _raw_pii_scan_enabled())
 
@@ -967,7 +967,7 @@ def _finalize_batch(
             quarantine_info=quarantine_info,
         )
 
-    # Output barrier — runs at the single choke point that all callers share:
+    # Output barrier  runs at the single choke point that all callers share:
     # batch API, NDJSON streaming, async bulk/cohort jobs, staged worker, and
     # Bundle inner processing all call process_data_batch.
     # Default-ON; disable with MEDANON_OUTPUT_GATE_ENABLED=false (or skip the
@@ -981,7 +981,7 @@ def _finalize_batch(
                 _gate_manifests.append(_m)
         _run_pii_gate(_gate_results, _gate_manifests, settings)
     else:
-        # No manifest available — the structural check no-ops, content scan only.
+        # No manifest available  the structural check no-ops, content scan only.
         _run_pii_gate([r for r in results if r is not None])
 
     if _return_manifest:
@@ -1080,12 +1080,12 @@ def _process_bundle(
                 compiled=compiled,
             )
         elif bare_id_map:
-            # Reference-only rewrite: skip entry[].resource — individual resource
+            # Reference-only rewrite: skip entry[].resource  individual resource
             # processing already applied the shared pseudonym mapping to every
             # reference field.  Only Bundle-level metadata needs updating.
             _shallow_post_process_bundle(resource, ref_mapping=bare_id_map)
     elif getattr(settings, "rewrite_text_ids", False):
-        # No ref_map but text_ids requested — nothing to rewrite
+        # No ref_map but text_ids requested  nothing to rewrite
         pass
 
     return resource
@@ -1107,7 +1107,7 @@ def _rewrite_list_references(pre_ids, results, settings) -> None:
     Type/new`` map from each resource's id change and rewrite every reference.
 
     Skipped when ``rewrite_references`` is off, or when gPAS is configured (the
-    batch path already folded reference IDs into the pseudonym call — doing it
+    batch path already folded reference IDs into the pseudonym call  doing it
     again here would be redundant). Mutates *results* in place.
     """
     if not getattr(settings, "rewrite_references", False):

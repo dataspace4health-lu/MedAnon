@@ -90,7 +90,7 @@ def default_tool_registry() -> ToolRegistry:
     reg.register(
         ApprovedTool(
             name="medanon",
-            version=None,  # wildcard — any engine version is approved
+            version=None,  # wildcard  any engine version is approved
             category="de-identification",
             status=ToolStatus.APPROVED,
             validation_ref="built-in",

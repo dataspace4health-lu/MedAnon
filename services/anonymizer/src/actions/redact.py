@@ -1,4 +1,4 @@
-"""redact — field redaction action.
+"""redact  field redaction action.
 
 Replaces matched FHIR field values with a configurable placeholder string
 (default ``"[REDACTED]"``).  For complex types (HumanName, Address, etc.)
@@ -20,7 +20,7 @@ def _del_nodes(node: Any, key: str, value: Any) -> None:
         if isinstance(node[key], list) and value is not None:
             if isinstance(value, list):
                 # el["value"] IS the whole array (rule_matcher expanded a list
-                # node and passed the entire list back) — delete the field.
+                # node and passed the entire list back)  delete the field.
                 del node[key]
             else:
                 # Rebuild the list excluding matching values to avoid skipping
@@ -30,7 +30,7 @@ def _del_nodes(node: Any, key: str, value: Any) -> None:
                     del node[key]
         else:
             # value is None means the field content is unknown (FHIRPath eval
-            # failure fallback path) — remove the entire field unconditionally
+            # failure fallback path)  remove the entire field unconditionally
             # so no PHI survives in list fields where value-equality matching
             # would otherwise be a no-op.
             del node[key]
@@ -42,7 +42,7 @@ def redact_by_path(resource: dict, el: dict, params: dict) -> None:
     path = path.split(".")[1:]  # Remove root
     if len(path) == 0:
         raise ValueError(
-            f"Empty path after removing resource type root in redact — "
+            f"Empty path after removing resource type root in redact  "
             f"refusing to clear entire resource (original path: {el['path']!r})"
         )
     ret = find_nodes(ret, path[:-1], [])

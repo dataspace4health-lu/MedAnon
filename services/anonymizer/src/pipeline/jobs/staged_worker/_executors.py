@@ -1,11 +1,11 @@
-"""staged_worker._executors — standard staged export/cohort/patient executors.
+"""staged_worker._executors  standard staged export/cohort/patient executors.
 
 Contains five public executor functions:
-    execute_bulk_export_staged         — system/type-level bulk export
-    execute_cohort_staged              — cohort (patient-search) export
-    execute_patient_export_staged      — single-patient $everything export
-    execute_batch_patient_export_staged — multi-patient $everything export
-    execute_reprocess_staged           — re-process already-staged rows
+    execute_bulk_export_staged          system/type-level bulk export
+    execute_cohort_staged               cohort (patient-search) export
+    execute_patient_export_staged       single-patient $everything export
+    execute_batch_patient_export_staged  multi-patient $everything export
+    execute_reprocess_staged            re-process already-staged rows
 """
 
 from __future__ import annotations
@@ -30,12 +30,12 @@ from pipeline.jobs.checkpoint import (
     save_checkpoint,
     _truncate_to_lines,
 )
-from integrations.storage import publish_result
+from pipeline.jobs.result_publisher import publish_result
 from pipeline.jobs.source_resolver import resolve_source_token
 
 
 def execute_bulk_export_staged(job, store, staging) -> None:
-    """Staged two-phase bulk-export executor (synchronous — runs via asyncio.to_thread)."""
+    """Staged two-phase bulk-export executor (synchronous  runs via asyncio.to_thread)."""
     from integrations.fhir.client import (
         fetch_resource_type,
         get_capability_statement,
@@ -359,7 +359,7 @@ def execute_bulk_export_staged(job, store, staging) -> None:
 
 
 def execute_cohort_staged(job, store, staging) -> None:
-    """Staged two-phase cohort executor (synchronous — runs via asyncio.to_thread)."""
+    """Staged two-phase cohort executor (synchronous  runs via asyncio.to_thread)."""
     from integrations.fhir.client import fetch_cohort, preflight_resource_count
     from pipeline.config.service import get_settings
     from pipeline.processor import _get_default_pseudonymizer
@@ -561,7 +561,7 @@ def execute_cohort_staged(job, store, staging) -> None:
 
 
 def execute_patient_export_staged(job, store, staging) -> None:
-    """Staged two-phase patient $everything executor (synchronous — runs via asyncio.to_thread)."""
+    """Staged two-phase patient $everything executor (synchronous  runs via asyncio.to_thread)."""
     from integrations.fhir.client import fetch_everything
     from pipeline.config.service import get_settings
     from pipeline.processor import _get_default_pseudonymizer
@@ -757,7 +757,7 @@ def execute_patient_export_staged(job, store, staging) -> None:
 
 
 def execute_batch_patient_export_staged(job, store, staging) -> None:
-    """Staged two-phase batch patient $everything executor (synchronous — runs via asyncio.to_thread)."""
+    """Staged two-phase batch patient $everything executor (synchronous  runs via asyncio.to_thread)."""
     from integrations.fhir.client import fetch_patients_everything
     from pipeline.config.service import get_settings
     from pipeline.processor import _get_default_pseudonymizer
@@ -781,7 +781,7 @@ def execute_batch_patient_export_staged(job, store, staging) -> None:
     processed = checkpoint.get("processed", 0)
 
     # ════════════════════════════════════════════════════════════════════════
-    # Phase 1 + Phase 2 (overlapped) — normal first run
+    # Phase 1 + Phase 2 (overlapped)  normal first run
     # ════════════════════════════════════════════════════════════════════════
     collector = None
     if phase == "fetching":
@@ -903,13 +903,13 @@ def execute_batch_patient_export_staged(job, store, staging) -> None:
         )
 
     # ════════════════════════════════════════════════════════════════════════
-    # Finalize — runs once after either branch completes (and not when the job
+    # Finalize  runs once after either branch completes (and not when the job
     # was already in "done" or other phase). Persists result_path so callers
     # can download via GET /v1/jobs/{id}/result instead of getting HTTP 410.
     # ════════════════════════════════════════════════════════════════════════
     if collector is None:
         _log.warning(
-            "staged_batch_patient_unexpected_phase job=%s phase=%s — skipping finalize",
+            "staged_batch_patient_unexpected_phase job=%s phase=%s  skipping finalize",
             job.id,
             phase,
         )
@@ -926,7 +926,7 @@ def execute_batch_patient_export_staged(job, store, staging) -> None:
 
     if not os.path.exists(output_path):
         _log.warning(
-            "staged_batch_patient_no_output job=%s path=%s — skipping finalize",
+            "staged_batch_patient_no_output job=%s path=%s  skipping finalize",
             job.id,
             output_path,
         )

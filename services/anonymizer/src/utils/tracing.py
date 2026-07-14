@@ -1,13 +1,13 @@
-"""OpenTelemetry tracing — opt-in distributed tracing for the anonymizer.
+"""OpenTelemetry tracing  opt-in distributed tracing for the anonymizer.
 
 Activated when ``MEDANON_OTEL_ENABLED=true``. Otherwise this module is a no-op
 so production deployments without an OTel collector pay zero overhead.
 
 Environment variables (all standard OTLP):
-    MEDANON_OTEL_ENABLED        — "true" to enable, anything else disables.
-    OTEL_EXPORTER_OTLP_ENDPOINT — collector URL (default: http://otel-collector:4318).
-    OTEL_SERVICE_NAME           — service name (default: medanon-anonymizer).
-    OTEL_RESOURCE_ATTRIBUTES    — extra resource attributes (e.g. deployment.environment=prod).
+    MEDANON_OTEL_ENABLED         "true" to enable, anything else disables.
+    OTEL_EXPORTER_OTLP_ENDPOINT  collector URL (default: http://otel-collector:4318).
+    OTEL_SERVICE_NAME            service name (default: medanon-anonymizer).
+    OTEL_RESOURCE_ATTRIBUTES     extra resource attributes (e.g. deployment.environment=prod).
 
 Spans emitted automatically:
     - HTTP server spans for every FastAPI request (FastAPI instrumentation)
@@ -86,7 +86,7 @@ def setup_tracing(app) -> bool:
             traces_endpoint,
         )
         return True
-    except Exception as exc:  # noqa: BLE001 — tracing must never crash the app
+    except Exception as exc:  # noqa: BLE001  tracing must never crash the app
         logger.warning("OpenTelemetry setup failed; tracing disabled: %s", exc)
         return False
 
@@ -94,7 +94,7 @@ def setup_tracing(app) -> bool:
 def get_tracer(name: str = "medanon.pipeline"):
     """Return an OTel tracer if tracing is active, otherwise a no-op tracer.
 
-    Safe to call at import time — returns a no-op when tracing is not configured.
+    Safe to call at import time  returns a no-op when tracing is not configured.
     """
     try:
         from opentelemetry import trace
@@ -110,7 +110,7 @@ def run_with_current_context(fn):
     Python ``threading.Thread`` targets do not inherit the active span context,
     so a span opened inside the thread becomes an orphan (no parent link).  Call
     this in the spawning thread to capture the current context, then run the
-    returned wrapper as the thread target — the child's spans will correctly
+    returned wrapper as the thread target  the child's spans will correctly
     parent to the active span.
 
     Degrades to a no-op pass-through when OpenTelemetry is not installed, so

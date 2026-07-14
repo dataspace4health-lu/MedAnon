@@ -1,10 +1,10 @@
-"""RabbitMQ stage consumer — drains partition messages and processes them.
+"""RabbitMQ stage consumer  drains partition messages and processes them.
 
 One consumer per stage (``MEDANON_AMQP_CONSUMER_STAGES``). For the ``deid``
-stage it: claims the specific partition (CAS — duplicate deliveries fail the
+stage it: claims the specific partition (CAS  duplicate deliveries fail the
 claim and are acked+skipped), runs the shared :func:`process_one_partition`,
-stores the shard, marks the partition done, and — when it was the LAST open
-partition — advances the workflow step and publishes the next stage's message.
+stores the shard, marks the partition done, and  when it was the LAST open
+partition  advances the workflow step and publishes the next stage's message.
 
 Failure handling: a processing error releases the partition and either
 republishes for retry (via the retry queue, up to ``max_attempts``) or
@@ -45,7 +45,7 @@ async def run_stage_consumer(stage: str, store, staging) -> None:
         return
     # Ensure connection + topology.
     await client.connect()
-    channel = client._channel  # noqa: SLF001 — intentional: reuse the client's channel
+    channel = client._channel  # noqa: SLF001  intentional: reuse the client's channel
     queue = await channel.get_queue(queue_name(stage))
     wid = _worker_id()
     logger.info("stage_consumer_started stage=%s worker=%s", stage, wid)
@@ -71,7 +71,7 @@ async def _handle_message(stage, message, store, staging, client, wid) -> None:
     msg = StageMessage.from_bytes(message.body)
     job = store.get(msg.job_id)
     if job is None:
-        # Orphan message (job purged) — ack and drop.
+        # Orphan message (job purged)  ack and drop.
         await message.ack()
         AMQP_CONSUMED.labels(stage=stage, outcome="skip").inc()
         return
@@ -178,7 +178,7 @@ async def _handle_message(stage, message, store, staging, client, wid) -> None:
 def _process_partition_sync(stage, msg: StageMessage, job, store, staging) -> int:
     """Run the shared per-partition processor for the deid stage.
 
-    Non-deid stages (score/upload) are job-granular placeholders for now — they
+    Non-deid stages (score/upload) are job-granular placeholders for now  they
     ack immediately. The deid stage is where the heavy de-identification runs.
     """
     if stage != "deid":
@@ -225,7 +225,7 @@ def _process_partition_sync(stage, msg: StageMessage, job, store, staging) -> in
 async def _maybe_advance(stage, msg: StageMessage, store, staging, client) -> None:
     """When all partitions are done, advance the workflow step + next stage.
 
-    Postgres (count_open_partitions == 0) — not the broker — decides the join.
+    Postgres (count_open_partitions == 0)  not the broker  decides the join.
     Only the worker that observes zero open partitions publishes downstream, and
     the workflow-step CAS guarantees a single advance even under a race.
     """

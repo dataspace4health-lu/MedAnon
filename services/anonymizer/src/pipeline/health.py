@@ -1,4 +1,4 @@
-"""Health check service — probes upstream dependencies."""
+"""Health check service  probes upstream dependencies."""
 
 import logging
 import os
@@ -77,7 +77,7 @@ class HealthCheckService:
         if app_db_url:
             probes["postgres"] = (self._probe_postgres, (timeout,))
 
-        # Advisory microservices — each exposes GET /health and is only probed
+        # Advisory microservices  each exposes GET /health and is only probed
         # when its URL is configured. Reported, never readiness-gating, and
         # skipped entirely for a critical-only probe (they only add latency).
         if not critical_only:
@@ -107,7 +107,7 @@ class HealthCheckService:
                     logger.debug("readiness: probe raised: %s", exc)
                     checks[futures[fut]] = "error"
         except _FuturesTimeoutError:
-            # One or more probes didn't finish in time — mark them so /ready
+            # One or more probes didn't finish in time  mark them so /ready
             # returns 503 instead of letting the TimeoutError propagate as 500.
             for fut, name in futures.items():
                 if name not in checks:
@@ -119,7 +119,7 @@ class HealthCheckService:
         try:
             # GPAS_URL is the FHIR operation base (e.g. http://host:port/ttp-fhir/fhir/gpas).
             # Strip the trailing /gpas segment to reach the FHIR server root and probe
-            # /metadata — avoids the "Unknown resource type 'gpas'" WARN logged by WildFly
+            # /metadata  avoids the "Unknown resource type 'gpas'" WARN logged by WildFly
             # when the old /gpas/gpasService?wsdl suffix was appended to the FHIR path.
             fhir_base = url.rstrip("/").rsplit("/", 1)[0]
             probe = f"{fhir_base}/metadata"

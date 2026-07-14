@@ -7,7 +7,7 @@ whether the bundled (built-in) FHIR servers exist in this deployment.
 
 Admin-managed instance settings live behind ``/v1/settings`` (admin-only); this
 endpoint deliberately exposes only ``active_source_id`` / ``active_target_id``
-(opaque ids — no URLs, no tokens) plus ``builtin_fhir_enabled`` so every user's
+(opaque ids  no URLs, no tokens) plus ``builtin_fhir_enabled`` so every user's
 routing layer can resolve the right server. Browsing a saved server still goes
 through the SSRF-guarded ``/v1/fhir-proxy?source_id=`` where the token is applied
 server-side.

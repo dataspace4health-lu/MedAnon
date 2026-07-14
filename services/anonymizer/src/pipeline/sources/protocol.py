@@ -1,4 +1,4 @@
-"""DataSourceAdapter — structural Protocol for source-format adapters.
+"""DataSourceAdapter  structural Protocol for source-format adapters.
 
 Mirrors the minimal-Protocol style of :class:`pipeline.ports.PseudonymizerPort`.
 An adapter turns raw input bytes of one format into the common intermediate
@@ -7,7 +7,7 @@ processed IR back into that format's bytes.
 
 Concrete implementations:
 
-* :class:`~pipeline.sources.fhir_adapter.FhirAdapter` — JSON / NDJSON / XML (identity IR)
+* :class:`~pipeline.sources.fhir_adapter.FhirAdapter`  JSON / NDJSON / XML (identity IR)
 * (future) ``Hl7v2Adapter``, ``CdaAdapter``, ``DicomAdapter``, ``TabularAdapter``
 
 Adapters raise :class:`pipeline.exceptions.NormalizationError` on malformed

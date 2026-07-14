@@ -25,7 +25,7 @@ _WHERE_PLAN_CACHE_SIZE = int(os.environ.get("FHIRPATH_WHERE_CACHE_SIZE", "128"))
 _CANDIDATES_CACHE_SIZE = int(os.environ.get("FHIRPATH_CANDIDATES_CACHE_SIZE", "512"))
 
 # ---------------------------------------------------------------------------
-# FHIRPath expression cache — compile once, reuse across resources
+# FHIRPath expression cache  compile once, reuse across resources
 # ---------------------------------------------------------------------------
 
 _fhirpathpy_log_registered = False
@@ -61,12 +61,12 @@ def _evaluate_fhirpath_cached(resource: dict, expression: str) -> list:
 
 
 # ---------------------------------------------------------------------------
-# Expression classification — simple paths bypass fhirpathpy entirely
+# Expression classification  simple paths bypass fhirpathpy entirely
 # ---------------------------------------------------------------------------
 
-# Matches "Patient.name", "Observation.value.string" — typed dot-paths with no functions
+# Matches "Patient.name", "Observation.value.string"  typed dot-paths with no functions
 _SIMPLE_PATH_RE = _re.compile(r"^[A-Z][a-zA-Z]+(\.[a-zA-Z][a-zA-Z0-9]*)+$")
-# Matches "*.meta.lastUpdated", "*.text.div" — wildcard dot-paths
+# Matches "*.meta.lastUpdated", "*.text.div"  wildcard dot-paths
 _WILDCARD_PATH_RE = _re.compile(r"^\*(\.[a-zA-Z][a-zA-Z0-9]*)+$")
 
 
@@ -75,10 +75,10 @@ def _classify_match(expression: str) -> str:
     """Classify a match expression for fast-path routing.
 
     Returns:
-        ``"simple"``   — typed dot-path (e.g. ``Patient.name``)
-        ``"wildcard"`` — wildcard dot-path (e.g. ``*.meta.lastUpdated``)
-        ``"where"``    — ``.where(url=...)`` expression handled natively
-        ``"fhirpath"`` — complex expression requiring the full FHIRPath engine
+        ``"simple"``    typed dot-path (e.g. ``Patient.name``)
+        ``"wildcard"``  wildcard dot-path (e.g. ``*.meta.lastUpdated``)
+        ``"where"``     ``.where(url=...)`` expression handled natively
+        ``"fhirpath"``  complex expression requiring the full FHIRPath engine
     """
     if _SIMPLE_PATH_RE.match(expression):
         return "simple"
@@ -90,7 +90,7 @@ def _classify_match(expression: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Native .where(url=...) evaluator — eliminates fhirpathpy for extensions
+# Native .where(url=...) evaluator  eliminates fhirpathpy for extensions
 # ---------------------------------------------------------------------------
 
 # Matches segments like: .where(url='...') or .where(url.startsWith('...'))
@@ -279,7 +279,7 @@ def _evaluate_simple_path(resource: dict, expression: str) -> list:
     # Without this, "*.code.text" produces path "*.code.text" while the
     # candidate expansion also generates "Observation.code.text" from the same
     # rule, yielding two elements with different path strings that bypass the
-    # (el_path, action) dedup check in action_dispatcher — causing actions
+    # (el_path, action) dedup check in action_dispatcher  causing actions
     # like nlp_scrub to run twice on the same field.
     return _traverse(resource, parts[1:], resource_type or "*")
 
@@ -288,7 +288,7 @@ def _traverse(node, path_parts: list[str], prefix: str) -> list:
     """Recursively traverse *node* following *path_parts*, collecting leaf matches.
 
     When the final value is a list, each element is returned separately with
-    the SAME path (no ``[i]`` suffix) — matching fhirpathpy ``.log()`` behavior
+    the SAME path (no ``[i]`` suffix)  matching fhirpathpy ``.log()`` behavior
     where array expansion produces identical paths for every element.
     """
     if not path_parts:
@@ -351,7 +351,7 @@ def _build_match_candidates(match_expr: str, resource: dict) -> tuple:
 
 
 # ---------------------------------------------------------------------------
-# Cache observability — sampled on /metrics scrape
+# Cache observability  sampled on /metrics scrape
 # ---------------------------------------------------------------------------
 
 _CACHED_FUNCS = {
@@ -386,7 +386,7 @@ def sample_cache_metrics() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Rule index by ResourceType — fast lookup without scanning all rules
+# Rule index by ResourceType  fast lookup without scanning all rules
 # ---------------------------------------------------------------------------
 
 _rule_index_cache: dict = {}
@@ -399,7 +399,7 @@ _cache_lock = threading.Lock()
 def _settings_cache_key(settings) -> "tuple | None":
     """Content-dependent cache key for per-profile caches.
 
-    ``(filename, config_hash)`` — including the content hash makes
+    ``(filename, config_hash)``  including the content hash makes
     stale-after-edit structurally impossible: an in-place profile edit
     produces a new hash, so old cache entries are simply never hit again
     (they age out of the bounded caches).
@@ -633,7 +633,7 @@ def _condition_values(resource: dict, path: str) -> list:
     Reuses the same FHIRPath fast-paths as rule matching so a condition can
     target any expression a ``match`` can (simple dot-paths, wildcards,
     ``.where(...)``, or full FHIRPath).  Evaluation errors degrade to an empty
-    result rather than raising — a malformed condition must never crash the
+    result rather than raising  a malformed condition must never crash the
     pipeline.
     """
     values: list = []
@@ -661,7 +661,7 @@ def _eval_single_condition(resource: dict, cond: dict) -> bool:
     op = str(cond.get("op", "exists")).strip().lower()
     if op not in _CONDITION_OPS:
         audit_log.warning(
-            "rule_condition_invalid_op op=%r path=%s — treating rule as applicable",
+            "rule_condition_invalid_op op=%r path=%s  treating rule as applicable",
             op,
             path,
         )
@@ -703,7 +703,7 @@ def evaluate_rule_condition(rule: dict, resource: dict) -> bool:
     """Return ``True`` if *rule* should fire against *resource* (E2.4).
 
     A rule may carry an optional ``condition`` (single node) and/or a
-    ``conditions`` list (all must pass — logical AND).  Each node supports the
+    ``conditions`` list (all must pass  logical AND).  Each node supports the
     operators ``eq``/``ne``/``in``/``not_in``/``exists``/``not_exists`` and the
     nesting keys ``any_of`` (OR) / ``all_of`` (AND).  Rules without either key
     always fire, so existing profiles are unaffected.
@@ -737,7 +737,7 @@ def detect_rule_conflicts(rules: list[dict]) -> list[dict]:
     (e.g. one rule ``redact``s ``Patient.telecom.value`` while another ``mask``s
     it).  The order rules fire in then decides the outcome, which is usually a
     config mistake.  Two rules with the *same* action on the same path are not
-    reported — that is a harmless duplicate.
+    reported  that is a harmless duplicate.
 
     Each returned conflict is a dict::
 

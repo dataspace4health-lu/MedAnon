@@ -4,13 +4,13 @@ EHDS restricts pseudonym *reversal* to the HDAB or a designated Trusted Third
 Party, and foresees cross-border record **linkage** run through TTP/SPIDER-style
 services rather than by exchanging identifiers. This module defines the seam for
 both, following the strangler-fig pattern used elsewhere: a provider is selected
-by ``MEDANON_TTP_PROVIDER`` and everything else degrades **fail-closed** — an
+by ``MEDANON_TTP_PROVIDER`` and everything else degrades **fail-closed**  an
 unconfigured or remote-only operation raises :class:`TTPUnavailableError` instead
 of silently doing a local, unauthorised reversal or assuming linkage exists.
 
 Providers
 ---------
-- ``local`` (default): :class:`LocalGpasTTP`. The current single-holder model —
+- ``local`` (default): :class:`LocalGpasTTP`. The current single-holder model
   gPAS holds the mapping and reversal is an admin/HDAB-gated ``decrypt`` /
   ``gpas_depseudonymize`` action (see ``pipeline/config/reversal.py``). Cross-
   border linkage is **not** supported and fails closed.
@@ -73,7 +73,7 @@ class TTPProvider(ABC):
         """Return ``{pseudonym: identifier}``, or raise ``TTPUnavailableError``.
 
         Implementations MUST enforce that the caller is an HDAB/TTP operator
-        (``admin``) — data users may never reverse (EHDS Art 66(3)).
+        (``admin``)  data users may never reverse (EHDS Art 66(3)).
         """
 
     @abstractmethod
@@ -105,7 +105,7 @@ class LocalGpasTTP(TTPProvider):
                 f"operator '{request.operator}' may not reverse (EHDS Art 66(3))"
             )
         # The actual mapping lookup is performed by the gPAS-backed pipeline
-        # action, not here — this provider is the policy/seam, not the store.
+        # action, not here  this provider is the policy/seam, not the store.
         raise TTPUnavailableError(
             "local reversal must run through the admin-gated gpas_depseudonymize "
             "pipeline action, not the TTP provider directly"
@@ -164,7 +164,7 @@ def get_ttp_provider() -> TTPProvider:
         if not endpoint:
             raise TTPUnavailableError(
                 "MEDANON_TTP_PROVIDER=remote but no broker is configured "
-                "(MEDANON_TTP_URL unset) — refusing to return a non-functional TTP"
+                "(MEDANON_TTP_URL unset)  refusing to return a non-functional TTP"
             )
         return RemoteTTP(endpoint)
     raise TTPUnavailableError(f"unknown MEDANON_TTP_PROVIDER '{provider}'")

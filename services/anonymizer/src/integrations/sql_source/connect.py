@@ -6,7 +6,7 @@ so blocking private IPs would defeat the feature.  Instead we enforce an explici
 **host allow-list** via ``MEDANON_SQL_SOURCE_ALLOWED_HOSTS``.
 
 The list is comma-separated.  An entry matches when it equals the host exactly,
-or — when it begins with a leading dot — when the host ends with it::
+or  when it begins with a leading dot  when the host ends with it::
 
     MEDANON_SQL_SOURCE_ALLOWED_HOSTS=localhost,app-db,.internal.example.com
 

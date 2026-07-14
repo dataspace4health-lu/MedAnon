@@ -2,7 +2,7 @@
 
 Module-level holder for the active :class:`PostgresSettingsStore` (deployment-wide
 admin-managed application defaults), initialised during FastAPI startup when the
-app database (PostgreSQL) is available. PostgreSQL-only — there is no SQLite
+app database (PostgreSQL) is available. PostgreSQL-only  there is no SQLite
 fallback; when unset, the settings service serves the built-in defaults and
 rejects writes. Mirrors :mod:`pipeline.connectors`.
 """

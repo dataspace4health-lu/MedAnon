@@ -1,4 +1,4 @@
-"""CLI everything subcommand — fetch via FHIR $everything."""
+"""CLI everything subcommand  fetch via FHIR $everything."""
 
 import json
 import os

@@ -38,7 +38,7 @@ DEFAULT_SETTINGS: dict = {
     "active_target_id": "target",
 }
 
-# Lost-race errors from concurrent ``CREATE … IF NOT EXISTS`` at startup — the
+# Lost-race errors from concurrent ``CREATE … IF NOT EXISTS`` at startup  the
 # object exists either way, so these are treated as success (mirrors the
 # connector / trust-profile / workflow stores).
 _BENIGN_DDL = (
@@ -115,7 +115,7 @@ class PostgresSettingsStore:
         """Return the effective settings, falling back to :data:`DEFAULT_SETTINGS`.
 
         A deployment that has never saved settings has no row yet; that is not an
-        error — the built-in defaults are the effective configuration until an
+        error  the built-in defaults are the effective configuration until an
         admin saves. ``updated_at``/``updated_by`` are ``None`` in that case.
         """
         conn = self._get_conn()

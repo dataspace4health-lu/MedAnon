@@ -3,7 +3,7 @@
 # =============================================================================
 # Version: 2.0
 # Use case: De-identification that keeps the full FHIR structure intact.
-#           Fields are never removed — PII text is replaced with [REDACTED],
+#           Fields are never removed  PII text is replaced with [REDACTED],
 #           IDs are pseudonymized via gPAS, and clinical data is untouched.
 #
 # Key properties:
@@ -18,10 +18,10 @@
 #   - Binary blobs (photo, attachment): NLP-scrubbed if text/*, redacted if binary
 #
 # Required env vars:
-#   GPAS_URL        — gPAS server base URL (e.g. http://gpas:8080/ttp-fhir/fhir)
-#   GPAS_DOMAIN     — pseudonym domain name configured in gPAS
-#   GPAS_BASIC_USER — HTTP Basic Auth username
-#   GPAS_BASIC_PASS — HTTP Basic Auth password
+#   GPAS_URL         gPAS server base URL (e.g. http://gpas:8080/ttp-fhir/fhir)
+#   GPAS_DOMAIN      pseudonym domain name configured in gPAS
+#   GPAS_BASIC_USER  HTTP Basic Auth username
+#   GPAS_BASIC_PASS  HTTP Basic Auth password
 #
 # Usage:
 #   POST /process?config_profile=structural
@@ -32,7 +32,7 @@ general:
   appname: SPE-FHIR-BlackBox
   rewrite_references: true
   rewrite_text_ids: true
-  # domain_map omitted — inherits _DEFAULT_DOMAIN_MAP from loader.py
+  # domain_map omitted  inherits _DEFAULT_DOMAIN_MAP from loader.py
   # Add domain_map: here to override specific resource types for this profile.
 
 nlp:
@@ -56,7 +56,7 @@ rules:
 # ==========================================================
 # 2. SUBJECT / PATIENT REFERENCE DISPLAY NAMES
 #    References themselves are rewritten by rewrite_references: true
-#    after IDs are pseudonymized — no explicit rule needed here.
+#    after IDs are pseudonymized  no explicit rule needed here.
 # ==========================================================
 
 - name: redact subject display
@@ -72,7 +72,7 @@ rules:
 
 # ==========================================================
 # 3. PATIENT DIRECT IDENTIFIERS
-#    Fields stay present — text content is replaced
+#    Fields stay present  text content is replaced
 # ==========================================================
 
 - name: redact patient name family
@@ -130,7 +130,7 @@ rules:
   action: substitute
   params: *redacted
 
-# Geolocation (lat/lon) nested inside Patient.address.extension — re-identification PHI
+# Geolocation (lat/lon) nested inside Patient.address.extension  re-identification PHI
 - name: redact patient address geolocation
   match: Patient.address.extension
   action: redact
@@ -202,7 +202,7 @@ rules:
 
 # US Core Race Extension - contains demographic information (PHI)
 # Redact the whole ombCategory inner extension (not just its valueCoding) so the
-# remaining Extension object always has value[x] — prevents FHIR R4 violation
+# remaining Extension object always has value[x]  prevents FHIR R4 violation
 # "missing required element: value" (LenientErrorHandler warning on HAPI).
 - name: redact race omb category coding
   match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-race').extension.where(url='ombCategory')
@@ -262,12 +262,12 @@ rules:
   match: Patient.extension.where(url='http://synthetichealth.github.io/synthea/quality-adjusted-life-years')
   action: redact
 
-# Patient record links — cross-patient associations can re-identify
+# Patient record links  cross-patient associations can re-identify
 - name: redact patient link
   match: Patient.link
   action: redact
 
-# Patient deceased boolean — fact of death is sensitive even without a date
+# Patient deceased boolean  fact of death is sensitive even without a date
 - name: redact patient deceased boolean
   match: Patient.deceasedBoolean
   action: redact
@@ -284,7 +284,7 @@ rules:
   params: *redacted
 
 # ==========================================================
-# 4. BIRTH DATE / DECEASED DATE — year only
+# 4. BIRTH DATE / DECEASED DATE  year only
 # ==========================================================
 
 - name: generalise birth date to year
@@ -549,7 +549,7 @@ rules:
   params: *redacted
 
 # ==========================================================
-# 9. CLINICAL DATES — generalise to year only
+# 9. CLINICAL DATES  generalise to year only
 #    Preserves that a date exists but removes day-level precision
 # ==========================================================
 
@@ -677,7 +677,7 @@ rules:
 #    Non-text MIME types (image/*, application/pdf …): data field redacted.
 # ==========================================================
 
-# DocumentReference — clinical notes (content[*].attachment, nested one level)
+# DocumentReference  clinical notes (content[*].attachment, nested one level)
 - name: scrub document reference attachment text
   match: DocumentReference.content.attachment.data
   action: nlp_detect_act
@@ -698,7 +698,7 @@ rules:
   match: DocumentReference.content.attachment.hash
   action: redact
 
-# DiagnosticReport, QuestionnaireResponse — presentedForm is Attachment directly
+# DiagnosticReport, QuestionnaireResponse  presentedForm is Attachment directly
 - name: scrub presented form text
   match: "*.presentedForm.data"
   action: nlp_detect_act
@@ -715,7 +715,7 @@ rules:
   match: "*.presentedForm.title"
   action: redact
 
-# Observation, Task — valueAttachment
+# Observation, Task  valueAttachment
 - name: scrub value attachment text
   match: "*.valueAttachment.data"
   action: nlp_detect_act
@@ -728,7 +728,7 @@ rules:
   match: "*.valueAttachment.url"
   action: redact
 
-# Photos — biometric identifiers, never NLP-scrubable
+# Photos  biometric identifiers, never NLP-scrubable
 - name: redact photo data
   match: "*.photo.data"
   action: redact
@@ -772,7 +772,7 @@ rules:
   action: redact
 
 # ==========================================================
-# 13. FREE-TEXT NARRATIVE — scrub PII tokens in place
+# 13. FREE-TEXT NARRATIVE  scrub PII tokens in place
 #     scrub_text/nlp_scrub replace PII inline; field stays present
 # ==========================================================
 
@@ -833,7 +833,7 @@ rules:
     mode: tokenize
     threshold: 0.4
 
-# Street address pattern — fires on any valueString containing a recognizable
+# Street address pattern  fires on any valueString containing a recognizable
 # address regardless of LOINC code or resource structure (covers PRAPARE 56799-0,
 # custom SDOH panels, and any other free-text fields with address content).
 # Two rules: one for top-level valueString, one for component.valueString

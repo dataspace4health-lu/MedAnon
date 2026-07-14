@@ -1,15 +1,15 @@
 """SQLite-backed index for de-identification configuration profiles.
 
-Tracks metadata (name, description, created_at, is_system) for all profiles —
+Tracks metadata (name, description, created_at, is_system) for all profiles
 both the six bundled system configs and any user-defined configs saved at runtime.
 
 The actual rule content lives in YAML files on disk. This store provides fast
 listing and metadata queries without reading every YAML file on each request.
 
 Public surface:
-    ``init_config_store(db_path)``  — initialise the module-level singleton.
-    ``ConfigStore``                 — SQLite backend.
-    ``_config_store``               — module-level singleton (set by init_config_store).
+    ``init_config_store(db_path)``   initialise the module-level singleton.
+    ``ConfigStore``                  SQLite backend.
+    ``_config_store``                module-level singleton (set by init_config_store).
 """
 
 from __future__ import annotations
@@ -108,7 +108,7 @@ class ConfigStore:
     # ------------------------------------------------------------------
 
     def list_all(self) -> list[dict]:
-        """Return metadata for all configs — system first, then user-defined by created_at."""
+        """Return metadata for all configs  system first, then user-defined by created_at."""
         with self._connect() as conn:
             rows = conn.execute(
                 "SELECT * FROM configs ORDER BY is_system DESC, created_at ASC"

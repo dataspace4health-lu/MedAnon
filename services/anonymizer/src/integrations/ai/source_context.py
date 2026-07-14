@@ -2,8 +2,8 @@
 
 Both the config-generator and chat agents reason better when they know which
 FHIR resource types actually exist on the configured source server (and how
-many of each). This module fetches that snapshot — resource types + counts
-only, never resource *content* — so the agents can suggest rules grounded in
+many of each). This module fetches that snapshot  resource types + counts
+only, never resource *content*  so the agents can suggest rules grounded in
 the real dataset instead of generic boilerplate.
 
 PHI safety: only the CapabilityStatement resource-type list and
@@ -20,13 +20,13 @@ import time
 
 _log = logging.getLogger("medanon.ai.source_context")
 
-# (snapshot_text, expiry_epoch) — module-level so it survives across requests
+# (snapshot_text, expiry_epoch)  module-level so it survives across requests
 # within a worker process. Keyed implicitly by the single source server URL.
 _CACHE: dict[str, tuple[str, float]] = {}
 
 _TTL_SEC = int(os.environ.get("MEDANON_AI_SOURCE_CONTEXT_TTL_SEC", "300"))
 
-# Cap how many resource types we count — a CapabilityStatement can advertise
+# Cap how many resource types we count  a CapabilityStatement can advertise
 # 140+ types, but counting each is one HTTP round-trip. We count the clinically
 # relevant ones first and stop at this many present types.
 _MAX_TYPES_COUNTED = int(os.environ.get("MEDANON_AI_SOURCE_CONTEXT_MAX_TYPES", "40"))
@@ -80,7 +80,7 @@ def get_source_resource_context(
         Generate/suggest rules for the types that are actually present.
 
     Returns an empty string when no source server is configured or it cannot be
-    reached — callers treat that as "no extra context" and fall back to generic
+    reached  callers treat that as "no extra context" and fall back to generic
     behaviour. Never raises.
     """
     url = (base_url or _source_url()).strip()
@@ -101,7 +101,7 @@ def get_source_resource_context(
 
         tok = token or os.environ.get("FHIR_SOURCE_TOKEN") or None
         types = get_capability_statement(url, token=tok, timeout=10)
-    except Exception as exc:  # noqa: BLE001 — context is best-effort
+    except Exception as exc:  # noqa: BLE001  context is best-effort
         _log.info("source_context_capability_failed url=%s: %s", url, exc)
         return ""
 
@@ -128,7 +128,7 @@ def get_source_resource_context(
             counts.append((rtype, total))
 
     if not counts:
-        # Server reachable but no counted data — still tell the agent which
+        # Server reachable but no counted data  still tell the agent which
         # types are *declared* so it does not invent unrelated resources.
         declared = ", ".join(ordered[:20])
         text = (

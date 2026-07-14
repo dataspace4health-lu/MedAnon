@@ -1,4 +1,4 @@
-"""run_through_engine — drive any DataSourceAdapter through the full pipeline.
+"""run_through_engine  drive any DataSourceAdapter through the full pipeline.
 
 One helper that ties a :class:`~pipeline.sources.protocol.DataSourceAdapter`
 to the engine: parse the source format into the FHIR IR, run
@@ -47,7 +47,7 @@ def run_through_engine_with_manifest(
     """Like :func:`run_through_engine` but also returns the transformation manifest.
 
     The manifest is the flattened list of rule-engine manifest entries
-    (``{rule, match, action, ...}``) across the mapped resources — the same
+    (``{rule, match, action, ...}``) across the mapped resources  the same
     transformation record FHIR produces, on the fields mapped from the source
     format. The FHIR ``meta.tag`` manifest is stripped from the resources before
     serialising, so the released native output never carries it inline.

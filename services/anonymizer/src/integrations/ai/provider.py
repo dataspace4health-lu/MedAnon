@@ -1,4 +1,4 @@
-"""LLM provider — lazy singleton with circuit breaker + response cache.
+"""LLM provider  lazy singleton with circuit breaker + response cache.
 
 Uses litellm as the unified client.  When MEDANON_AI_ENABLED is false
 all calls raise NotAvailableError.  When the circuit breaker is OPEN
@@ -31,7 +31,7 @@ class ProviderUnavailableError(Exception):
 class _BoundedTtlCache:
     """Thread-safe LRU cache with TTL + proactive eviction on write.
 
-    Replaces the previously unbounded ``dict`` response cache — entries were
+    Replaces the previously unbounded ``dict`` response cache  entries were
     only dropped lazily on read, so unique cache keys accumulated forever.
     """
 
@@ -202,13 +202,13 @@ class LLMProvider:
         """Synchronous LLM completion with circuit breaker + cache.
 
         ``api_base_override`` pins a specific endpoint even when
-        ``model_override`` is used — required by the local-only PII path so it
+        ``model_override`` is used  required by the local-only PII path so it
         can target a self-hosted model instead of litellm's default routing.
 
         ``phi_payload`` (fail-closed default True): when the messages may
         contain PHI/resource content, the effective endpoint must be provably
         local (C4). Callers handling only non-resource text (config intent,
-        YAML rules) opt out with ``phi_payload=False`` — still enforced when
+        YAML rules) opt out with ``phi_payload=False``  still enforced when
         MEDANON_AI_REQUIRE_LOCAL=true.
         """
         if not self._cb.allow_request():
@@ -217,7 +217,7 @@ class LLMProvider:
         model = model_override or self._model
         # A bare model_override (e.g. config-gen switching to gemma3:4b) still
         # targets the SAME local Ollama host, so the configured api_base must be
-        # preserved — dropping it to None makes litellm fall back to its default
+        # preserved  dropping it to None makes litellm fall back to its default
         # http://localhost:11434, which inside the container is nothing and fails
         # with "Connection refused". Only an explicit api_base_override changes
         # the endpoint. (Mirrors complete_streaming, which already did this.)
@@ -277,11 +277,11 @@ class LLMProvider:
         """Generator yielding streaming chunks. For SSE endpoints.
 
         ``api_base_override`` pins the endpoint; when omitted the configured
-        ``MEDANON_AI_API_BASE`` is always used — including when only the model
+        ``MEDANON_AI_API_BASE`` is always used  including when only the model
         is overridden (model switches target the same local Ollama host, so the
         base must not be dropped to litellm's default).
 
-        ``phi_payload`` semantics match :meth:`complete` — the streaming path
+        ``phi_payload`` semantics match :meth:`complete`  the streaming path
         previously had zero locality enforcement (C4).
         """
         if not self._cb.allow_request():
@@ -323,18 +323,18 @@ class LLMProvider:
             self._cb.record_failure()
             _log.warning("ai_provider_stream_error model=%s: %s", model, exc)
             if yielded_any:
-                # Partial answer already sent — append a graceful note rather
+                # Partial answer already sent  append a graceful note rather
                 # than raising (the consumer can't recover a half-sent body).
                 yield (
                     "\n\n_[The model stopped unexpectedly mid-response. "
-                    "The answer above may be incomplete — try resending, or "
+                    "The answer above may be incomplete  try resending, or "
                     "switch to a different model.]_"
                 )
                 return
             raise ProviderUnavailableError(
                 f"LLM streaming failed: {exc}",
             ) from exc
-        # Stream completed without exception — record exactly one success,
+        # Stream completed without exception  record exactly one success,
         # not one per chunk (would inflate the circuit breaker counter 10-100x).
         self._cb.record_success()
 

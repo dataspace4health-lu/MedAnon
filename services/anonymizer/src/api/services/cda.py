@@ -5,8 +5,8 @@ patient demographics (recordTarget) are mapped to the FHIR IR, the configured
 profile is applied (redact / generalize / gPAS / NLP / scoring + the validation
 barrier), and the de-identified values are written back into the original XML.
 
-Unlike HL7 v2 / DICOM there is no legacy blanket-scrubber endpoint for CDA — the
-``formats/cda.py`` scrubber exists but was never wired to a route — so this
+Unlike HL7 v2 / DICOM there is no legacy blanket-scrubber endpoint for CDA  the
+``formats/cda.py`` scrubber exists but was never wired to a route  so this
 service always uses the engine path.
 """
 

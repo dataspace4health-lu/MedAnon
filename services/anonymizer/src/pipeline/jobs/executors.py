@@ -1,9 +1,9 @@
-"""FHIR bulk-operation executors — public re-export facade.
+"""FHIR bulk-operation executors  public re-export facade.
 
 Implementation is split across focused sub-modules:
-    executor_stream  — shared streaming infrastructure (pipeline, checkpoint writer)
-    executor_export  — export jobs: bulk-export, cohort, patient-export, reprocess
-    executor_import  — import job: bulk-import
+    executor_stream   shared streaming infrastructure (pipeline, checkpoint writer)
+    executor_export   export jobs: bulk-export, cohort, patient-export, reprocess
+    executor_import   import job: bulk-import
 
 All symbols are re-exported here so callers (worker.py, tests) continue to
 import from this module without change.

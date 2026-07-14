@@ -2,7 +2,7 @@
 
 When MEDANON_MANIFEST_ENABLED is set, each processed resource's meta.tag
 receives a compact JSON summary of which rules fired (rule name/match, action,
-FHIRPath — no PHI values).
+FHIRPath  no PHI values).
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ MANIFEST_FULL_EXT_URL = "https://medanon.local/transformation-manifest-full"
 # is silently truncated, losing audit trail.  When the JSON-serialised entries
 # would exceed this we collapse to a count summary in ``display`` (so HAPI is
 # happy) AND attach the full payload as a tag-level ``extension`` (FHIR
-# permits extensions on Coding, and HAPI stores them in hfj_res_ver — no 200
+# permits extensions on Coding, and HAPI stores them in hfj_res_ver  no 200
 # char cap).  The scorer prefers the extension over the truncated display.
 _MANIFEST_DISPLAY_MAX = 200
 
@@ -44,7 +44,7 @@ def _build_manifest_tag(manifest_entries: list[dict]) -> dict:
         "system": MANIFEST_SYSTEM,
         "code": "transformation-manifest",
         "display": summary[:_MANIFEST_DISPLAY_MAX],
-        # Full payload as an extension on the Coding — uncapped, FHIR-valid,
+        # Full payload as an extension on the Coding  uncapped, FHIR-valid,
         # and consumed by the scorer's ``_extract_manifest_entries``.
         "extension": [
             {
@@ -90,7 +90,7 @@ def strip_manifest_tag(resource: dict) -> dict:
     """Remove the transformation-manifest ``meta.tag`` from *resource* in place.
 
     Used on the export path so released clinical data never carries the manifest
-    inline — the manifest is delivered as a separate artifact. Drops the now-empty
+    inline  the manifest is delivered as a separate artifact. Drops the now-empty
     ``tag``/``meta`` containers so the output stays clean. Returns *resource*.
     """
     if not isinstance(resource, dict):
@@ -122,11 +122,11 @@ def split_ndjson_manifest(data_path: str) -> str | None:
     and writes a ``<data_path>.manifest.ndjson`` sidecar (one line per resource:
     ``{resourceType, id, rules}``). Rewrites *data_path* in place with the cleaned
     resources. Returns the sidecar path when at least one resource carried a
-    manifest, else ``None`` (nothing to split — data left untouched).
+    manifest, else ``None`` (nothing to split  data left untouched).
 
     This is the universal fallback used by :func:`publish_result` so *every*
     export type that writes NDJSON with an attached manifest (e.g. the staged
-    large-export path) releases the manifest as a separate artifact — without the
+    large-export path) releases the manifest as a separate artifact  without the
     streaming path's inline sidecar. Best-effort: on any error the original file
     is preserved and ``None`` is returned.
     """
@@ -175,7 +175,7 @@ def split_ndjson_manifest(data_path: str) -> str | None:
             return manifest_path
     except Exception:
         pass
-    # Nothing to split (or an error) — discard temp artifacts, leave data as-is.
+    # Nothing to split (or an error)  discard temp artifacts, leave data as-is.
     for p in (tmp_data, manifest_path):
         try:
             os.unlink(p)
@@ -191,7 +191,7 @@ def extract_manifest_entries(resource: dict) -> list[dict]:
     (used when the JSON exceeds HAPI's 200-char ``display`` cap) and falls
     back to parsing ``display`` for short manifests.
 
-    This is the single source of truth — all scoring callers must use it,
+    This is the single source of truth  all scoring callers must use it,
     otherwise large manifests appear empty and PHI-bearing resources falsely
     fail the privacy gate (composite=0, grade F).
     """

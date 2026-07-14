@@ -1,4 +1,4 @@
-"""SQL source service — saved connections, schema inspection, export submit.
+"""SQL source service  saved connections, schema inspection, export submit.
 
 Connection passwords are encrypted before they reach the store and decrypted only
 to open a (read-only, allow-list-guarded) connection.  Reflection runs in a worker
@@ -27,7 +27,7 @@ def _store():
     store = get_sql_connection_store()
     if store is None:
         raise SqlStoreUnavailable(
-            "SQL connection store is not initialised — set MEDANON_APP_DB_URL "
+            "SQL connection store is not initialised  set MEDANON_APP_DB_URL "
             "(PostgreSQL) to enable saved SQL source connections."
         )
     return store

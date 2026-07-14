@@ -1,7 +1,7 @@
 """Unified action registry for the anonymizer pipeline.
 
-Consolidates all action dispatching — de-identification, pseudonymization,
-and de-pseudonymization — into a single pipeline-layer module.  This keeps
+Consolidates all action dispatching  de-identification, pseudonymization,
+and de-pseudonymization  into a single pipeline-layer module.  This keeps
 the ``action_dispatcher`` free of direct imports from the integrations layer.
 
 NLP detection uses a lazy adapter pattern so the Presidio/spaCy stack is
@@ -32,7 +32,7 @@ from pipeline.exceptions import NlpError, NlpUnavailableError
 _log = logging.getLogger("medanon.actions")
 
 # Exception types that signal a *programming defect*, not a recoverable runtime
-# failure.  These must never be swallowed by a fail-closed redact — doing so
+# failure.  These must never be swallowed by a fail-closed redact  doing so
 # would mask a bug (e.g. a typo in an action) behind a legitimate-looking
 # redaction.  When one of these escapes from NLP/replacement code we re-raise it
 # so it reaches the job-level error boundary and is observable.
@@ -45,7 +45,7 @@ def _is_bug(exc: BaseException) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# NLP adapter — resolved lazily on first call
+# NLP adapter  resolved lazily on first call
 # ---------------------------------------------------------------------------
 
 _nlp_adapter = None
@@ -54,7 +54,7 @@ _nlp_adapter_lock = threading.Lock()
 _nlp_adapter_initialised = False  # True once the lock section has run (even if no URL)
 
 # NLP failure mode: "redact" (default, safe fallback) | "raise" (hard fail)
-# "skip" was removed — it silently passed unscrubbed PHI through when NLP was unavailable.
+# "skip" was removed  it silently passed unscrubbed PHI through when NLP was unavailable.
 _VALID_FAIL_MODES = ("redact", "raise")
 
 
@@ -69,7 +69,7 @@ def _nlp_fail_mode() -> str:
     mode = os.environ.get("MEDANON_NLP_FAIL_MODE", "redact").strip().lower()
     if mode not in _VALID_FAIL_MODES:
         _log.error(
-            "Invalid MEDANON_NLP_FAIL_MODE=%r — only 'redact' and 'raise' are "
+            "Invalid MEDANON_NLP_FAIL_MODE=%r  only 'redact' and 'raise' are "
             "supported. Falling back to 'redact' (safe default).",
             mode,
         )
@@ -93,7 +93,7 @@ def _resolve_fail_mode(params: dict) -> str:
     mode = str(override).strip().lower()
     if mode not in _VALID_FAIL_MODES:
         _log.warning(
-            "Invalid nlp fail_mode=%r in config — only 'redact'/'raise' supported; "
+            "Invalid nlp fail_mode=%r in config  only 'redact'/'raise' supported; "
             "using global default %r",
             override,
             global_mode,
@@ -102,7 +102,7 @@ def _resolve_fail_mode(params: dict) -> str:
     return mode
 
 
-# NLP detector helpers — imported lazily once on first use, then cached.
+# NLP detector helpers  imported lazily once on first use, then cached.
 _nlp_resolve_entities = None
 _nlp_scrub_xhtml = None
 
@@ -124,15 +124,15 @@ def _ensure_nlp_detector_imports():
 def _get_nlp_adapter():
     """Return the NLP detector adapter, creating it once on first use.
 
-    Requires ``NLP_SERVICE_URL`` to be set — the NLP engine runs exclusively
+    Requires ``NLP_SERVICE_URL`` to be set  the NLP engine runs exclusively
     as the NLP microservice (``RemoteNlpAdapter``).  Returns ``None`` if the
-    env var is absent — callers must handle this gracefully.
+    env var is absent  callers must handle this gracefully.
 
     Thread-safe: the initialisation block runs exactly once under a lock.
     Fast path: after initialisation the lock is never acquired again.
     """
     global _nlp_adapter, _nlp_adapter_initialised
-    # Fast path — if _nlp_adapter is already set (by init or by test injection),
+    # Fast path  if _nlp_adapter is already set (by init or by test injection),
     # skip the lock entirely. Using `is not None` rather than the initialised flag
     # means tests can inject a mock by simply assigning the module attribute.
     if _nlp_adapter is not None:
@@ -148,7 +148,7 @@ def _get_nlp_adapter():
             _nlp_adapter = RemoteNlpAdapter()
         else:
             _log.warning(
-                "NLP_SERVICE_URL not set — NLP scrubbing unavailable. "
+                "NLP_SERVICE_URL not set  NLP scrubbing unavailable. "
                 "Set NLP_SERVICE_URL=http://nlp-lb:8200 to enable."
             )
             _nlp_adapter = _NLP_UNAVAILABLE
@@ -157,7 +157,7 @@ def _get_nlp_adapter():
 
 
 def nlp_scrub_by_path(resource: dict, el: dict, params: dict) -> None:
-    """NLP-based PHI scrubbing — delegates to the configured NLP adapter.
+    """NLP-based PHI scrubbing  delegates to the configured NLP adapter.
 
     Replaces detected PHI spans with deterministic tokens (``[[PERSON_1]]``)
     or redaction placeholders (``[PERSON]``), depending on the ``mode`` param.
@@ -179,9 +179,9 @@ def nlp_scrub_by_path(resource: dict, el: dict, params: dict) -> None:
     if adapter is None:
         if _resolve_fail_mode(params) == "raise":
             raise NlpUnavailableError(
-                f"NLP adapter unavailable — cannot scrub {el['path']}"
+                f"NLP adapter unavailable  cannot scrub {el['path']}"
             )
-        _log.error("nlp_unavailable path=%s — redacting as safety fallback", el["path"])
+        _log.error("nlp_unavailable path=%s  redacting as safety fallback", el["path"])
         redact_by_path(resource, el, params.get("redact_params", {}))
         return
 
@@ -202,7 +202,7 @@ def nlp_scrub_by_path(resource: dict, el: dict, params: dict) -> None:
         nodes = find_nodes(resource, parent_path, [])
     except (ValueError, LookupError, RuntimeError):
         _log.error(
-            "nlp_find_nodes_failed path=%s — redacting field as safety fallback", path
+            "nlp_find_nodes_failed path=%s  redacting field as safety fallback", path
         )
         redact_by_path(resource, el, {})
         return
@@ -221,7 +221,7 @@ def nlp_scrub_by_path(resource: dict, el: dict, params: dict) -> None:
                     current["div"] = _nlp_scrub_xhtml(current["div"], scrub_fn)
                 except (NlpError, RuntimeError, OSError, ValueError):
                     _log.error(
-                        "nlp_scrub_failed path=%s.%s — redacting field", path, field
+                        "nlp_scrub_failed path=%s.%s  redacting field", path, field
                     )
                     current["div"] = "[REDACTED]"
             elif isinstance(current, str):
@@ -229,14 +229,14 @@ def nlp_scrub_by_path(resource: dict, el: dict, params: dict) -> None:
                     node[field] = _nlp_scrub_xhtml(current, scrub_fn)
                 except (NlpError, RuntimeError, OSError, ValueError):
                     _log.error(
-                        "nlp_scrub_failed path=%s.%s — redacting field", path, field
+                        "nlp_scrub_failed path=%s.%s  redacting field", path, field
                     )
                     node[field] = "[REDACTED]"
         elif isinstance(current, str):
             try:
                 node[field] = scrub_fn(current)
             except (NlpError, RuntimeError, OSError, ValueError):
-                _log.error("nlp_scrub_failed path=%s.%s — redacting field", path, field)
+                _log.error("nlp_scrub_failed path=%s.%s  redacting field", path, field)
                 node[field] = "[REDACTED]"
         elif isinstance(current, list):
             for i, v in enumerate(current):
@@ -245,7 +245,7 @@ def nlp_scrub_by_path(resource: dict, el: dict, params: dict) -> None:
                         current[i] = scrub_fn(v)
                     except (NlpError, RuntimeError, OSError, ValueError):
                         _log.error(
-                            "nlp_scrub_failed path=%s.%s[%d] — redacting field",
+                            "nlp_scrub_failed path=%s.%s[%d]  redacting field",
                             path,
                             field,
                             i,
@@ -256,7 +256,7 @@ def nlp_scrub_by_path(resource: dict, el: dict, params: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
-# NLP conditional action — detect first, act per entity type
+# NLP conditional action  detect first, act per entity type
 # ---------------------------------------------------------------------------
 
 _DEFAULT_ENTITY_ACTIONS: dict[str, str] = {
@@ -310,7 +310,7 @@ _DEFAULT_ENTITY_ACTIONS: dict[str, str] = {
     "RELIGION_LABEL": "redact",
     "POLITICAL_LABEL": "redact",
     "ETHNICITY_LABEL": "redact",
-    # GDPR Art.9 / HIPAA — bare inline demographic (no label prefix required)
+    # GDPR Art.9 / HIPAA  bare inline demographic (no label prefix required)
     "GENDER": "redact",
     "RACE_ETHNICITY": "redact",
     # EU dates
@@ -318,7 +318,7 @@ _DEFAULT_ENTITY_ACTIONS: dict[str, str] = {
     "EU_DATE_WRITTEN": "generalize",
     # Synthetic artifacts
     "SYNTHEA_SEED": "redact",
-    # Clinical note PHI — inline administrative / geographic
+    # Clinical note PHI  inline administrative / geographic
     "INSURANCE_STATUS": "redact",
     "GEO_COORDINATES": "redact",
     # Healthcare / payer organisations
@@ -338,7 +338,7 @@ _DEFAULT_ENTITY_ACTIONS: dict[str, str] = {
     "UUID": "redact",
     "BEARER_TOKEN": "redact",
     "USERNAME_HANDLE": "redact",
-    # GDPR Art.9 — genetic data
+    # GDPR Art.9  genetic data
     "GENETIC_VARIANT": "redact",
 }
 
@@ -402,7 +402,7 @@ def _merge_overlapping_spans(
     NLP detectors (Presidio + custom recognizers) frequently emit overlapping
     spans for the same characters (e.g. ``"policy number FR-AXA-99887766"``
     is tagged as both ``ACCOUNT_LABEL`` and ``DRIVER_LICENSE``).  Replacing
-    overlapping spans in reverse-start order corrupts the text — the longer
+    overlapping spans in reverse-start order corrupts the text  the longer
     span's recorded ``end`` no longer matches the shifted string after the
     inner span has been substituted, leaving fragments like
     ``[ACCOUNT_LABEL]ER_LICENSE]``.
@@ -413,7 +413,7 @@ def _merge_overlapping_spans(
       2. Walk the list keeping the earliest non-overlapping span.  When a new
          span overlaps the previously kept one, *union-merge* the coordinates
          (``min(start), max(end)``) so every character detected by either span
-         stays covered — a partial overlap must never leave an uncovered
+         stays covered  a partial overlap must never leave an uncovered
          head/tail un-redacted.  ``_ENTITY_PRIORITY`` (higher wins, ties broken
          by longer span) only picks which entity *label* drives the replacement
          strategy for the merged span.
@@ -425,7 +425,7 @@ def _merge_overlapping_spans(
 
     # Sanitise spans fail-safe: the NLP service is an external dependency and
     # may emit malformed spans (wrong arity, non-integer/negative offsets,
-    # start >= end).  A bad span must never crash the pipeline or corrupt text —
+    # start >= end).  A bad span must never crash the pipeline or corrupt text
     # we silently drop it and keep the well-formed ones.  This is the single
     # choke point every replacement passes through, so validating here protects
     # both _replace_span call sites.
@@ -440,7 +440,7 @@ def _merge_overlapping_spans(
             _log.warning("nlp_span_malformed dropped=%r (non-int offsets)", hit)
             continue
         if s < 0 or e <= s:
-            # Negative start, zero-width, or inverted span — drop.
+            # Negative start, zero-width, or inverted span  drop.
             continue
         cleaned.append((s, e, t))
     if not cleaned:
@@ -456,10 +456,10 @@ def _merge_overlapping_spans(
             continue
         last_s, last_e, last_t = accepted[-1]
         if s >= last_e:
-            # No overlap — accept
+            # No overlap  accept
             accepted.append((s, e, t))
             continue
-        # Overlap — union-merge coordinates so the full extent of both spans is
+        # Overlap  union-merge coordinates so the full extent of both spans is
         # replaced.  Replacing one span with the other wholesale leaves the
         # uncovered head/tail characters of the loser un-redacted (a leak).
         # Priority only decides which entity label drives the replacement
@@ -475,7 +475,7 @@ def _merge_overlapping_spans(
         # the merged span cannot newly overlap accepted[-2].
         accepted[-1] = (last_s, max(last_e, e), winner_t)
         merge_count += 1
-        # Offsets + types only — never span text (PHI).
+        # Offsets + types only  never span text (PHI).
         _log.debug(
             "nlp_span_union_merged kept=(%d,%d,%s) new=(%d,%d,%s) label=%s",
             last_s,
@@ -505,7 +505,7 @@ def _replace_span(
 
     Offsets are clamped to ``[0, len(text)]`` defensively so a malformed span
     (negative start, out-of-bounds end) cannot produce a negative-index slice
-    artefact or raise — it degrades to a no-op or a clamped replacement.
+    artefact or raise  it degrades to a no-op or a clamped replacement.
     """
     n = len(text)
     start = max(0, min(start, n))
@@ -582,9 +582,9 @@ def nlp_detect_act_by_path(resource: dict, el: dict, params: dict) -> None:
     if adapter is None:
         if _resolve_fail_mode(params) == "raise":
             raise NlpUnavailableError(
-                f"NLP adapter unavailable — cannot detect {el['path']}"
+                f"NLP adapter unavailable  cannot detect {el['path']}"
             )
-        _log.error("nlp_unavailable path=%s — redacting as safety fallback", el["path"])
+        _log.error("nlp_unavailable path=%s  redacting as safety fallback", el["path"])
         redact_by_path(resource, el, {})
         params["_actual_action"] = "nlp_detect_act/redact"
         return
@@ -603,7 +603,7 @@ def nlp_detect_act_by_path(resource: dict, el: dict, params: dict) -> None:
         nodes = find_nodes(resource, parent_path, [])
     except (ValueError, LookupError, RuntimeError):
         _log.error(
-            "nlp_detect_act_find_nodes_failed path=%s — redacting as safety fallback",
+            "nlp_detect_act_find_nodes_failed path=%s  redacting as safety fallback",
             path,
         )
         redact_by_path(resource, el, {})
@@ -613,7 +613,7 @@ def nlp_detect_act_by_path(resource: dict, el: dict, params: dict) -> None:
     changed = False
 
     # ------------------------------------------------------------------
-    # HTML / XHTML path — serial, one detect call per xhtml node
+    # HTML / XHTML path  serial, one detect call per xhtml node
     # ------------------------------------------------------------------
     if use_html:
 
@@ -647,7 +647,7 @@ def nlp_detect_act_by_path(resource: dict, el: dict, params: dict) -> None:
                         current["div"] = result
                         changed = True
                 except (NlpError, RuntimeError, OSError, ValueError):
-                    _log.error("nlp_detect_act_failed path=%s — redacting", path)
+                    _log.error("nlp_detect_act_failed path=%s  redacting", path)
                     current["div"] = "[REDACTED]"
                     changed = True
             elif isinstance(current, str):
@@ -657,7 +657,7 @@ def nlp_detect_act_by_path(resource: dict, el: dict, params: dict) -> None:
                         node[field] = result
                         changed = True
                 except (NlpError, RuntimeError, OSError, ValueError):
-                    _log.error("nlp_detect_act_failed path=%s — redacting", path)
+                    _log.error("nlp_detect_act_failed path=%s  redacting", path)
                     node[field] = "[REDACTED]"
                     changed = True
 
@@ -669,7 +669,7 @@ def nlp_detect_act_by_path(resource: dict, el: dict, params: dict) -> None:
         return
 
     # ------------------------------------------------------------------
-    # Plain-text path — two-phase: collect all strings, detect in one
+    # Plain-text path  two-phase: collect all strings, detect in one
     # batch call, then apply per-entity replacements.
     # ------------------------------------------------------------------
 
@@ -706,7 +706,7 @@ def nlp_detect_act_by_path(resource: dict, el: dict, params: dict) -> None:
             batch_hits = adapter.detect_batch(texts, entities, threshold, language)
     except (NlpError, RuntimeError, OSError, ValueError):
         _log.error(
-            "nlp_detect_act_batch_failed path=%s — redacting as safety fallback", path
+            "nlp_detect_act_batch_failed path=%s  redacting as safety fallback", path
         )
         redact_by_path(resource, el, {})
         params["_actual_action"] = "nlp_detect_act/redact"
@@ -753,11 +753,11 @@ deident_actions = {
 }
 
 # ---------------------------------------------------------------------------
-# Pseudonymization actions (non-gPAS — pure crypto transforms)
+# Pseudonymization actions (non-gPAS  pure crypto transforms)
 # ---------------------------------------------------------------------------
 
 pseudo_actions = {
-    "gpas_pseudonymize": None,  # sentinel — handled by batch Pass 2
+    "gpas_pseudonymize": None,  # sentinel  handled by batch Pass 2
     "encrypt": encrypt_by_path,
 }
 
@@ -766,7 +766,7 @@ pseudo_actions = {
 # ---------------------------------------------------------------------------
 
 depseudo_actions = {
-    "gpas_depseudonymize": None,  # sentinel — requires gPAS infrastructure
+    "gpas_depseudonymize": None,  # sentinel  requires gPAS infrastructure
     "decrypt": decrypt_by_path,
 }
 
@@ -790,7 +790,7 @@ def perform_deidentification(action, resource, el, params):
 def perform_pseudonymization(action, resource, el, params):
     handler = pseudo_actions.get(action)
     if handler is None and action in pseudo_actions:
-        # Sentinel action (gpas_pseudonymize) — should be deferred to batch pass
+        # Sentinel action (gpas_pseudonymize)  should be deferred to batch pass
         not_implemented(
             f"Action {action} must be dispatched via batch Pass 2, not per-element"
         )
@@ -804,7 +804,7 @@ def perform_pseudonymization(action, resource, el, params):
 def perform_depseudonymization(action, resource, el, params):
     handler = depseudo_actions.get(action)
     if handler is None and action in depseudo_actions:
-        # Sentinel — need gPAS infrastructure loaded via dispatcher
+        # Sentinel  need gPAS infrastructure loaded via dispatcher
         _load_gpas_depseudo(action, resource, el, params)
     elif handler:
         handler(resource, el, params)

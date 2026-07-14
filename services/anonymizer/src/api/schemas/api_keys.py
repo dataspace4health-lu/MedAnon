@@ -55,8 +55,8 @@ class ApiKeyResponse(BaseModel):
 
 
 class ApiKeyCreateResponse(ApiKeyResponse):
-    """Response on key creation — includes raw key (returned exactly once)."""
+    """Response on key creation  includes raw key (returned exactly once)."""
 
     raw_key: str = Field(
-        description="Secret API key — store securely; not retrievable again"
+        description="Secret API key  store securely; not retrievable again"
     )

@@ -3,13 +3,13 @@
 CRUD for the named phase/threshold/target selections that tune the pre-privacy
 Trust Gate barrier:
 
-    GET    /v1/trust-profiles            — list all (system + user-defined)
-    GET    /v1/trust-profiles/{name}     — fetch one
-    POST   /v1/trust-profiles            — create a user-defined profile
-    PUT    /v1/trust-profiles/{name}     — update a user-defined profile
-    DELETE /v1/trust-profiles/{name}     — delete a user-defined profile
+    GET    /v1/trust-profiles             list all (system + user-defined)
+    GET    /v1/trust-profiles/{name}      fetch one
+    POST   /v1/trust-profiles             create a user-defined profile
+    PUT    /v1/trust-profiles/{name}      update a user-defined profile
+    DELETE /v1/trust-profiles/{name}      delete a user-defined profile
 
-System profiles (the bundled starters) are read-only — PUT/DELETE return 403.
+System profiles (the bundled starters) are read-only  PUT/DELETE return 403.
 All write operations require the 'admin' role. The available phase ids are listed
 at ``GET /v1/trust-profiles/_phases``.
 """
@@ -67,7 +67,7 @@ def list_phases(request: Request):
 
 @router.get("/trust-profiles")
 def list_trust_profiles(request: Request):
-    """List all trust profiles — system (read-only) and user-defined."""
+    """List all trust profiles  system (read-only) and user-defined."""
     return {"profiles": _get_store().list_all()}
 
 

@@ -1,4 +1,4 @@
-"""FHIR R4 Subscription persistence — SQLite-backed store.
+"""FHIR R4 Subscription persistence  SQLite-backed store.
 
 Stores active Subscription resources. Used by the subscription dispatcher
 to find matching subscriptions after resource processing.

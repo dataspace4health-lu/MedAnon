@@ -22,12 +22,12 @@ HIPAA_SENSITIVE_PATHS: dict[str, list[str]] = {
         "identifier",  # (7)(8)(18) SSN, MRN, other unique IDs
         "birthDate",  # (3) dates directly related to individual
         "deceasedDateTime",  # (3) dates
-        "deceasedBoolean",  # indirect — reveals death status
+        "deceasedBoolean",  # indirect  reveals death status
         "photo",  # (17) full-face photographic images
         "contact.name",  # (1) emergency contact names
         "contact.telecom",  # (4)(5)(6)
         "contact.address",  # (2)
-        "generalPractitioner",  # (18) indirect identifier — unique provider link
+        "generalPractitioner",  # (18) indirect identifier  unique provider link
         "managingOrganization",  # (18) indirect narrowing identifier
         "link",  # (18) links to other patient records
     ],
@@ -69,7 +69,7 @@ HIPAA_SENSITIVE_PATHS: dict[str, list[str]] = {
     ],
     "Device": [
         "identifier",  # (13)(18) device IDs
-        "udiCarrier",  # (13) UDI — unique device identifier
+        "udiCarrier",  # (13) UDI  unique device identifier
         "serialNumber",  # (13)
         "lotNumber",  # (13)
         "distinctIdentifier",  # (13)
@@ -100,7 +100,7 @@ HIPAA_SENSITIVE_PATHS: dict[str, list[str]] = {
     # All carry PHI under HIPAA category (3) dates and (18) unique identifiers.
     "Encounter": [
         "identifier",  # (18)
-        "period",  # (3) admission + discharge dates — critical
+        "period",  # (3) admission + discharge dates  critical
         "participant.period",  # (3) individual participation windows
         "location.period",  # (3)
         "hospitalization",  # (3) admit/discharge source + disposition
@@ -132,7 +132,7 @@ HIPAA_SENSITIVE_PATHS: dict[str, list[str]] = {
         "effectivePeriod",  # (3)
         "issued",  # (3)
         "performer",  # (18)
-        "valueString",  # free text — may contain residual PHI
+        "valueString",  # free text  may contain residual PHI
         "subject",  # (18)
     ],
     "DiagnosticReport": [

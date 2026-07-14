@@ -1,4 +1,4 @@
-"""DICOM de-identification — PS3.15 Annex E Basic Application Level Confidentiality Profile.
+"""DICOM de-identification  PS3.15 Annex E Basic Application Level Confidentiality Profile.
 
 Scrubs all Type 1 and Type 2 identifying attributes defined in the DICOM
 PS 3.15 Table E.1-1.  Pixel data is not modified (pixel-burned annotations
@@ -12,7 +12,7 @@ Usage:
 import io
 
 # ---------------------------------------------------------------------------
-# PS3.15 Annex E Table E.1-1 — Basic Application Level Confidentiality Profile
+# PS3.15 Annex E Table E.1-1  Basic Application Level Confidentiality Profile
 # All (group, element) tags that must be removed or zeroed under the Basic Profile.
 # ---------------------------------------------------------------------------
 
@@ -136,7 +136,7 @@ def _walk_and_scrub(dataset, manifest: list | None = None) -> None:  # type: ign
     """Recursively remove all DICOM_PS315_TAGS from *dataset*.
 
     For SQ (Sequence) data elements each contained item is visited recursively
-    before the sequence tag itself is evaluated — this ensures nested UIDs and
+    before the sequence tag itself is evaluated  this ensures nested UIDs and
     identifying attributes inside sequences are scrubbed even when the parent
     sequence tag is not on the removal list.
 
@@ -181,7 +181,7 @@ def deidentify_dicom(raw_bytes: bytes) -> bytes:
     - ``(0012,0062)`` PatientIdentityRemoved = ``"YES"``
     - ``(0012,0063)`` DeidentificationMethod = ``"PS3.15 Annex E Basic Profile"``
 
-    Pixel Data (7FE0,0010) is intentionally preserved — pixel-burned text
+    Pixel Data (7FE0,0010) is intentionally preserved  pixel-burned text
     annotations require a separate OCR-based scrubbing pass.
 
     Args:
@@ -200,7 +200,7 @@ def deidentify_dicom(raw_bytes: bytes) -> bytes:
 def deidentify_dicom_with_manifest(raw_bytes: bytes) -> tuple[bytes, list[dict]]:
     """Like :func:`deidentify_dicom` but also returns the transformation manifest.
 
-    The manifest is a list of ``{tag, keyword, action}`` entries — one per removed
+    The manifest is a list of ``{tag, keyword, action}`` entries  one per removed
     attribute, plus the two mandatory de-identification markers stamped on. It
     carries no PHI (attribute identity + action only) and is released as a
     separate artifact from the de-identified pixel data.

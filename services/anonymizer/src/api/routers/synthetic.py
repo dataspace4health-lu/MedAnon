@@ -64,8 +64,8 @@ async def generate_synthetic(
 
     Engine choices:
     - **auto** (default): Use SDV if installed, otherwise fall back to stdlib.
-    - **sdv**: GaussianCopulaSynthesizer — learns multivariate correlations.
-    - **stdlib**: Weighted per-attribute sampling — zero dependencies, always available.
+    - **sdv**: GaussianCopulaSynthesizer  learns multivariate correlations.
+    - **stdlib**: Weighted per-attribute sampling  zero dependencies, always available.
 
     Synthetic resources are tagged with the ``SYN`` code in ``meta.tag`` so
     downstream systems can distinguish them from real de-identified data.
@@ -107,7 +107,7 @@ async def generate_synthetic(
             status_code=500, detail="Synthetic generation error"
         ) from exc
 
-    # Proxy returns raw bytes — pass through with correct content-type
+    # Proxy returns raw bytes  pass through with correct content-type
     if isinstance(result, bytes):
         fmt = output_format.lower()
         if fmt == "json":
@@ -194,7 +194,7 @@ async def synthetic_passport(request: Request):
     similarity.
 
     When ``ANALYTICS_SERVICE_URL`` is set, proxies to the analytics microservice
-    (this was previously reachable only on that microservice directly — this
+    (this was previously reachable only on that microservice directly  this
     endpoint makes it a first-class part of the anonymizer's own API surface).
     """
     body = await request.body()

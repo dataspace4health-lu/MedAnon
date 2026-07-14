@@ -1,4 +1,4 @@
-"""JobStorePort — structural Protocol for async job-store backends.
+"""JobStorePort  structural Protocol for async job-store backends.
 
 Formalizes the previously implicit (duck-typed) contract shared by the three
 job-store backends so a new backend (e.g. an AMQP-fronted store) and the
@@ -9,7 +9,7 @@ workflow engine can depend on an interface rather than a concrete class:
 * :class:`~integrations.redis.job_store.RedisJobStore` (Streams + consumer groups)
 
 Mirrors the ``pipeline.ports.PseudonymizerPort`` convention: pure interface,
-no infrastructure imports. Backends already satisfy this structurally — the
+no infrastructure imports. Backends already satisfy this structurally  the
 Protocol exists for type-checking and ``isinstance`` assertions, not to force
 inheritance.
 

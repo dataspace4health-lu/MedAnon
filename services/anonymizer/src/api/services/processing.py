@@ -1,4 +1,4 @@
-"""Processing service — business logic for FHIR de-identification endpoints."""
+"""Processing service  business logic for FHIR de-identification endpoints."""
 
 import asyncio
 import logging
@@ -113,10 +113,10 @@ class ProcessingService:
 
         Consumes lines lazily from *line_aiter* and de-identifies them in batches
         of ``_BATCH_SIZE``, yielding each batch's result JSON strings before the
-        next batch is read — so at most one batch is held in memory and the input
+        next batch is read  so at most one batch is held in memory and the input
         may be arbitrarily large. Parse errors are emitted in place; a gPAS outage
         yields a fatal sentinel and stops; a blocked PII leak yields an explicit
-        placeholder (fail-closed — the offending resource is never streamed).
+        placeholder (fail-closed  the offending resource is never streamed).
         """
 
         async def _flush(chunk: list[dict]) -> tuple[list[str], bool]:
@@ -143,9 +143,9 @@ class ProcessingService:
                         out.append(GPAS_FATAL_JSON)
                         return out, True
                     except PiiLeakError as pexc:
-                        out.append(_json_dumps({"error": f"pii_leak_blocked — {pexc}"}))
+                        out.append(_json_dumps({"error": f"pii_leak_blocked  {pexc}"}))
                     except Exception as exc:
-                        out.append(_json_dumps({"error": f"processing error — {exc}"}))
+                        out.append(_json_dumps({"error": f"processing error  {exc}"}))
                 return out, False
 
         batch: list[dict] = []
@@ -156,7 +156,7 @@ class ProcessingService:
             try:
                 resource = _json_loads(line)
             except (ValueError, TypeError) as exc:
-                yield _json_dumps({"error": f"invalid JSON — {exc}"})
+                yield _json_dumps({"error": f"invalid JSON  {exc}"})
                 continue
             batch.append(resource)
             if len(batch) >= _BATCH_SIZE:
@@ -177,7 +177,7 @@ class ProcessingService:
         """Process NDJSON lines in batches, yielding JSON result strings.
 
         If gPAS becomes unavailable mid-stream, a fatal error sentinel is yielded
-        and the generator stops immediately — no partial results are silently dropped.
+        and the generator stops immediately  no partial results are silently dropped.
 
         Results are yielded incrementally as each chunk completes, preserving
         input order (parse errors interleaved at their original position).
@@ -195,11 +195,11 @@ class ProcessingService:
                 slots.append(("valid", len(valid_resources)))
                 valid_resources.append(resource)
             except (ValueError, TypeError) as exc:
-                logger.warning("NDJSON line %d: JSON parse error — %s", lineno, exc)
+                logger.warning("NDJSON line %d: JSON parse error  %s", lineno, exc)
                 slots.append(
                     (
                         "error",
-                        _json_dumps({"error": f"line {lineno}: invalid JSON — {exc}"}),
+                        _json_dumps({"error": f"line {lineno}: invalid JSON  {exc}"}),
                     )
                 )
 
@@ -272,7 +272,7 @@ class ProcessingService:
                         # The output barrier blocked this resource. Withhold the
                         # leaking bytes (fail closed) and emit a clear, explicit
                         # leak placeholder in its slot so the offender is never
-                        # streamed and the client sees *why* it was dropped —
+                        # streamed and the client sees *why* it was dropped
                         # rather than masking it as a generic "processing error".
                         logger.warning(
                             "ndjson_stream: pii_leak_blocked detections=%d",
@@ -321,7 +321,7 @@ class ProcessingService:
         """Process a list of resources in chunks, yielding JSON result strings.
 
         If gPAS becomes unavailable mid-stream, a fatal error sentinel is yielded
-        and the generator stops immediately — no partial results are silently dropped.
+        and the generator stops immediately  no partial results are silently dropped.
         """
         for chunk_start in range(0, len(resources), _BATCH_SIZE):
             chunk = resources[chunk_start : chunk_start + _BATCH_SIZE]
@@ -344,7 +344,7 @@ class ProcessingService:
                 )
                 yield _json_dumps(
                     {
-                        "error": "gPAS service unavailable — stream halted to prevent partial results",
+                        "error": "gPAS service unavailable  stream halted to prevent partial results",
                         "fatal": True,
                         "stopped_at_resource": chunk_start,
                     }

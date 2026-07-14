@@ -1,14 +1,14 @@
-"""io_formats — FHIR input/output format detection and parsing.
+"""io_formats  FHIR input/output format detection and parsing.
 
 Supports JSON (single resource or Bundle), NDJSON (one resource per line),
 and XML (parsed via ``defusedxml`` to prevent XXE).  Auto-detects format
 from file extension or content when ``format="auto"``.
 
 Public API:
-    detect_format(path, hint)     — resolve format string from file path + hint
-    read_input_file(path, fmt)    — parse a file into a list[dict] or dict
-    parse_input(data, fmt)        — parse raw bytes/str
-    serialize_output(resources, fmt) — serialize to bytes
+    detect_format(path, hint)      resolve format string from file path + hint
+    read_input_file(path, fmt)     parse a file into a list[dict] or dict
+    parse_input(data, fmt)         parse raw bytes/str
+    serialize_output(resources, fmt)  serialize to bytes
 """
 
 from pathlib import Path

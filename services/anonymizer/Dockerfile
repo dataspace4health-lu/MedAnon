@@ -29,7 +29,7 @@ RUN mkdir -p /output && chown appuser:appgroup /output
 
 EXPOSE 8000
 
-# ── API stage — public HTTP server (anonymizer) ───────────────────────────────
+# ── API stage  public HTTP server (anonymizer) ───────────────────────────────
 # Default production target. Runs the FastAPI app via gunicorn + uvicorn workers.
 FROM base AS api
 WORKDIR /code/src
@@ -39,7 +39,7 @@ CMD gunicorn api.main:app -k uvicorn.workers.UvicornWorker \
     --workers ${MEDANON_WORKERS:-4} --bind 0.0.0.0:8000 \
     --timeout ${MEDANON_REQUEST_TIMEOUT_SEC:-120} --graceful-timeout 120
 
-# ── Worker stage — async job executor (no HTTP server) ────────────────────────
+# ── Worker stage  async job executor (no HTTP server) ────────────────────────
 # Same code, no gunicorn/uvicorn process. Listens on Redis/Postgres for jobs and
 # exposes Prometheus metrics on :9091. Slimmer attack surface than the API image
 # because there is no public web port.
@@ -49,16 +49,16 @@ USER appuser
 EXPOSE 9091
 ENTRYPOINT ["python", "-m", "pipeline.jobs.worker_main"]
 
-# ── Production alias — keeps `target: prod` working for legacy compose files ──
+# ── Production alias  keeps `target: prod` working for legacy compose files ──
 FROM api AS prod
 
-# ── Development stage — used by docker-compose.dev.yml ───────────────────────
+# ── Development stage  used by docker-compose.dev.yml ───────────────────────
 FROM base AS dev
 RUN pip install --no-cache-dir watchfiles
 WORKDIR /code/src
 CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
 
-# ── SDV stage — full synthetic data capability (GaussianCopula engine) ────────
+# ── SDV stage  full synthetic data capability (GaussianCopula engine) ────────
 # Extends base before the non-root user switch so pip can write to site-packages.
 # Build: make build-sdv   Start: make up-sdv
 FROM base AS sdv

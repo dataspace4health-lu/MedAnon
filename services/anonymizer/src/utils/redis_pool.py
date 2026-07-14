@@ -2,7 +2,7 @@
 
 Problem: each ``redis.Redis.from_url(...)`` call creates its own
 ``ConnectionPool`` (default ``max_connections=50``).  The anonymizer has 9
-distinct call sites — three of which were per-request — producing up to
+distinct call sites  three of which were per-request  producing up to
 ~450 idle sockets per replica plus thrashing on hot endpoints like
 ``/health`` (probed every 10 s by k8s).
 
@@ -18,7 +18,7 @@ environment variables:
 
 Hot-loop callers (RedisJobStore, gPAS RedisCircuitBreaker) keep their own
 clients with caller-specific socket timeouts because they need different
-blocking semantics — those are explicitly documented at their call sites.
+blocking semantics  those are explicitly documented at their call sites.
 
 Thread-safe: ``redis.ConnectionPool`` itself is thread-safe; the singleton
 dict is guarded by a lock for the rare initialisation race.
@@ -33,7 +33,7 @@ import threading
 logger = logging.getLogger("medanon.redis_pool")
 
 _CLIENTS: dict[tuple[str, bool], object] = {}
-_MODULE_ID: int | None = None  # id of the cached redis module — invalidates on swap
+_MODULE_ID: int | None = None  # id of the cached redis module  invalidates on swap
 _LOCK = threading.Lock()
 
 
@@ -45,7 +45,7 @@ def get_redis(url: str, *, decode_responses: bool = True):
 
     Returns ``None`` only if the ``redis`` package is not installed.
 
-    The client is **not** pinged here — callers that need fail-fast
+    The client is **not** pinged here  callers that need fail-fast
     semantics should call ``.ping()`` explicitly.  Pinging in this factory
     would defeat the lazy-connect design: ``/health`` calls would pay
     a round-trip on every request even though the cached client already
@@ -58,12 +58,12 @@ def get_redis(url: str, *, decode_responses: bool = True):
 
     try:
         import redis as _redis
-    except ImportError:  # pragma: no cover — packaged in requirements.txt
-        logger.warning("redis package missing — get_redis returning None")
+    except ImportError:  # pragma: no cover  packaged in requirements.txt
+        logger.warning("redis package missing  get_redis returning None")
         return None
 
     # If sys.modules["redis"] was swapped (e.g. tests install a mock),
-    # the cached clients reference a stale module — drop the cache.
+    # the cached clients reference a stale module  drop the cache.
     if _MODULE_ID is not None and _MODULE_ID != id(_redis):
         with _LOCK:
             if _MODULE_ID != id(_redis):
@@ -106,7 +106,7 @@ def get_redis(url: str, *, decode_responses: bool = True):
         )
         _CLIENTS[key] = client
         _MODULE_ID = id(_redis)
-        # One INFO line per (url, decode) pair — quiet in steady state.
+        # One INFO line per (url, decode) pair  quiet in steady state.
         masked = url.split("@")[-1] if "@" in url else url
         logger.info(
             "redis_pool_init host=%s decode=%s max_connections=%d socket_timeout=%.1fs",
@@ -133,7 +133,7 @@ def close_all() -> None:
         for client in _CLIENTS.values():
             try:
                 client.close()
-            except Exception:  # noqa: BLE001 — best effort
+            except Exception:  # noqa: BLE001  best effort
                 pass
         _CLIENTS.clear()
         _MODULE_ID = None

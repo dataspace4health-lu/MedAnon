@@ -1,15 +1,15 @@
-"""Score gate — blocks job output when de-identification quality is too low
+"""Score gate  blocks job output when de-identification quality is too low
 or when any personal identifiers are detected in the output.
 
 Two independent checks run in sequence:
 
   1. HARD PRIVACY GATE (always when gate is enabled, cannot be lowered)
      Blocks if any resource has:
-       • text_risk > 0  — PII regex or NER found an actual pattern (SSN,
+       • text_risk > 0   PII regex or NER found an actual pattern (SSN,
                           phone, email, ISO date, IP, MRN) in output text.
-       • identifier_risk > 0 — a HIPAA-sensitive field exists in the resource
+       • identifier_risk > 0  a HIPAA-sensitive field exists in the resource
                                but no de-identification rule touched it.
-     These checks are independent of the composite score — a job scoring
+     These checks are independent of the composite score  a job scoring
      Grade A still fails if a single resource leaks a phone number.
 
   2. COMPOSITE SCORE GATE (configurable threshold)
@@ -43,7 +43,7 @@ def _gate_enabled() -> bool:
         return False
     if explicit == "true":
         return True
-    # No explicit override — gate is active whenever scoring is enabled.
+    # No explicit override  gate is active whenever scoring is enabled.
     # MEDANON_SCORING_ENABLED=true is the only setting needed to turn this on.
     return os.environ.get("MEDANON_SCORING_ENABLED", "false").lower() == "true"
 
@@ -65,7 +65,7 @@ def _identifier_coverage_blocks() -> bool:
     """Whether a HIPAA-coverage gap (identifier_risk) hard-blocks output.
 
     ``text_risk`` (detected PII in output) always blocks. ``identifier_risk`` is
-    a coverage gap — set ``MEDANON_GATE_IDENTIFIER_MODE=warn`` to release output
+    a coverage gap  set ``MEDANON_GATE_IDENTIFIER_MODE=warn`` to release output
     with a warning when the only finding is uncovered HIPAA fields and no actual
     PII pattern was detected. Mirrors the sync-path knob in ``scoring_helpers``.
     """
@@ -86,7 +86,7 @@ class ScoreGateBlocked(Exception):
     ``.report`` carries the same verdict as a structured dict (issues, fixes,
     leaked-field counts, score, grade) so the job record can surface *what
     leaked and what to fix* to the UI without parsing the text blob. The output
-    is still deleted and the download still blocked — only the explanation is
+    is still deleted and the download still blocked  only the explanation is
     machine-readable.
     """
 
@@ -163,14 +163,14 @@ def check_score_gate(score_summary: dict | None, config_profile: str = "auto") -
 
     # ── 1. HARD PII LEAK GATE (zero-tolerance, independent of score) ─────────
     # This fires even when composite = 100%.  Detected PII in the output means
-    # the de-identification did not cover every field — releasing the data
+    # the de-identification did not cover every field  releasing the data
     # would be a direct privacy breach.
 
     if text_risk_hits > 0:
         pct = round(text_risk_hits / max(total, 1) * 100, 2)
         issues.append(
             f"Personal identifiers detected in the output text of "
-            f"{text_risk_hits:,} resource(s) ({pct}%) — "
+            f"{text_risk_hits:,} resource(s) ({pct}%)  "
             "patterns such as phone numbers, email addresses, SSNs, "
             "dates, or MRNs were found in the de-identified data"
         )
@@ -194,7 +194,7 @@ def check_score_gate(score_summary: dict | None, config_profile: str = "auto") -
                 f"{identifier_risk_hits:,} resource(s) ({pct}%) contain "
                 "HIPAA-sensitive fields (name, identifier, address, contact, "
                 "birth date, SSN) that were NOT covered by any "
-                "de-identification rule — those values are in the output unchanged"
+                "de-identification rule  those values are in the output unchanged"
             )
             fixes.append(
                 f"Open the config profile '{profile}' and verify rules exist "
@@ -214,13 +214,13 @@ def check_score_gate(score_summary: dict | None, config_profile: str = "auto") -
                 f"Weak config: {identifier_risk_hits:,} resource(s) ({pct}%) have "
                 "HIPAA-sensitive fields not covered by any rule. Output was "
                 "released because no actual PII pattern was detected, but "
-                f"coverage is incomplete — review profile '{profile}'."
+                f"coverage is incomplete  review profile '{profile}'."
             )
 
     # ── 1c. POPULATION k-ANONYMITY GATE (authoritative attacker model) ───────
     # Re-identification risk under k-anonymity is a population property (≈ 1/k),
     # so it is measured across the cohort in ScoreCollector.aggregate(), not on
-    # single records — the per-resource attacker heuristic is advisory only (see
+    # single records  the per-resource attacker heuristic is advisory only (see
     # privacy._attacker_model). This is the authoritative attacker-model FAIL: a
     # cohort that did not reach the safe k is withheld regardless of composite,
     # so retained quasi-identifiers can only be released when the population
@@ -235,7 +235,7 @@ def check_score_gate(score_summary: dict | None, config_profile: str = "auto") -
         else:
             detail = "cohort re-identification risk is above the safe threshold"
         issues.append(
-            "Population re-identification risk is too high — "
+            "Population re-identification risk is too high  "
             f"{detail}; an attacker could single out individuals from the "
             "released quasi-identifiers (gender, birth date, postal code)"
         )
@@ -252,7 +252,7 @@ def check_score_gate(score_summary: dict | None, config_profile: str = "auto") -
         grade = _grade(avg_composite)
         min_grade = _grade(min_comp)
         issues.append(
-            f"Overall quality score is too low — "
+            f"Overall quality score is too low  "
             f"{avg_composite:.1f}% (Grade {grade}) "
             f"vs minimum required {min_comp:.0f}% (Grade {min_grade})"
         )
@@ -260,7 +260,7 @@ def check_score_gate(score_summary: dict | None, config_profile: str = "auto") -
         if avg_quality < 0.90:
             issues.append(
                 f"De-identification rule coverage is low "
-                f"({avg_quality * 100:.1f}%) — some rules are not "
+                f"({avg_quality * 100:.1f}%)  some rules are not "
                 "firing on the actual data"
             )
             fixes.append(
@@ -272,7 +272,7 @@ def check_score_gate(score_summary: dict | None, config_profile: str = "auto") -
         if avg_utility < 0.80:
             issues.append(
                 f"Too much information was removed ({avg_utility * 100:.1f}% "
-                "data utility) — research use may be impaired"
+                "data utility)  research use may be impaired"
             )
             fixes.append(
                 f"The '{profile}' profile uses heavy masking "
@@ -286,7 +286,7 @@ def check_score_gate(score_summary: dict | None, config_profile: str = "auto") -
         priv_pct = round(fail_count / max(total, 1) * 100, 1)
         issues.append(
             f"Privacy gate failed on {fail_count:,} resource(s) "
-            f"({priv_pct}%) — residual re-identification risk is above "
+            f"({priv_pct}%)  residual re-identification risk is above "
             "the configured threshold"
         )
         if batch_privacy.get("min_k") is not None and batch_privacy["min_k"] < 5:
@@ -336,7 +336,7 @@ def check_score_gate(score_summary: dict | None, config_profile: str = "auto") -
     grade_str = _grade(avg_composite)
 
     lines: list[str] = [
-        "Output blocked — de-identification quality gate failed.",
+        "Output blocked  de-identification quality gate failed.",
         "",
     ]
     if hard_pii:
@@ -370,7 +370,7 @@ def check_score_gate(score_summary: dict | None, config_profile: str = "auto") -
 
     message = "\n".join(lines)
 
-    # Structured report — same verdict, machine-readable. The job record carries
+    # Structured report  same verdict, machine-readable. The job record carries
     # this so the UI can render "what leaked" + "what to fix" without parsing the
     # text blob. Output is still deleted and download still blocked.
     report = {
@@ -384,7 +384,7 @@ def check_score_gate(score_summary: dict | None, config_profile: str = "auto") -
         "profile": profile,
         "text_risk_hits": text_risk_hits,
         "identifier_risk_hits": identifier_risk_hits,
-        # [{"path": "Patient.name", "resource_count": 120}, …] — the exact
+        # [{"path": "Patient.name", "resource_count": 120}, …]  the exact
         # HIPAA-sensitive paths left uncovered, most frequent first.
         "leaked_fields": [{"path": p, "resource_count": c} for p, c in uncovered_paths],
         "issues": issues,

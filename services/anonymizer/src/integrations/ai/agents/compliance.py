@@ -1,7 +1,7 @@
 """Compliance Advisor agent.
 
 Recommends config changes for specific regulatory frameworks
-and performs gap analysis. Safe for external LLM — no PHI.
+and performs gap analysis. Safe for external LLM  no PHI.
 """
 
 import json
@@ -17,11 +17,11 @@ You are a healthcare regulatory compliance advisor specializing in data \
 de-identification.
 
 Given a de-identification configuration and a target regulation, you must:
-1. Identify GAPS — required protections not covered by the current config
-2. Identify EXCESS — over-protective rules that reduce data utility \
+1. Identify GAPS  required protections not covered by the current config
+2. Identify EXCESS  over-protective rules that reduce data utility \
 unnecessarily
-3. Recommend CHANGES — specific rules to add, modify, or remove
-4. Provide a compliance SCORE — estimated percentage of requirements met
+3. Recommend CHANGES  specific rules to add, modify, or remove
+4. Provide a compliance SCORE  estimated percentage of requirements met
 
 Output format (JSON):
 {{
@@ -70,7 +70,7 @@ def advise_compliance(yaml_text: str, regulation: str) -> dict:
 
     try:
         provider = get_provider()
-        # YAML rule text only — no resource content (phi_payload=False).
+        # YAML rule text only  no resource content (phi_payload=False).
         response = provider.complete(
             messages, temperature=0.1, max_tokens=4096, phi_payload=False
         )
@@ -107,7 +107,7 @@ def _static_compliance_check(yaml_text: str, regulation: str) -> dict:
     reg_key = regulation.strip().lower()
     spec = _STATIC_REGULATIONS.get(reg_key)
 
-    # Aliases — map common spellings to canonical keys.
+    # Aliases  map common spellings to canonical keys.
     if spec is None:
         for canonical, aliases in _REGULATION_ALIASES.items():
             if reg_key in aliases:
@@ -115,7 +115,7 @@ def _static_compliance_check(yaml_text: str, regulation: str) -> dict:
                 break
 
     if spec is None:
-        # Unknown regulation — be honest: we cannot grade it deterministically.
+        # Unknown regulation  be honest: we cannot grade it deterministically.
         return {
             "regulation": regulation,
             "compliance_score": 0.5,
@@ -161,7 +161,7 @@ def _static_compliance_check(yaml_text: str, regulation: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Regulation specs for the deterministic fallback. Keep conservative — these
+# Regulation specs for the deterministic fallback. Keep conservative  these
 # are required *paths* a config must touch; presence of a matching rule (any
 # action) is treated as coverage. The LLM path performs deeper analysis.
 # ---------------------------------------------------------------------------
@@ -179,7 +179,7 @@ _STATIC_REGULATIONS: dict[str, dict] = {
         ],
     },
     "gdpr": {
-        # GDPR Art. 4(5) — pseudonymization of direct identifiers; data
+        # GDPR Art. 4(5)  pseudonymization of direct identifiers; data
         # minimization across name/contact/location.
         "label_prefix": "GDPR Art. 4(5) / minimization",
         "severity": "high",

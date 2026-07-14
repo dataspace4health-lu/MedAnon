@@ -1,7 +1,7 @@
 """DICOM de-identification endpoints.
 
-POST /process/dicom        — de-identify a single DICOM file
-POST /process/dicom/batch  — de-identify multiple DICOM files (multipart/form-data)
+POST /process/dicom         de-identify a single DICOM file
+POST /process/dicom/batch   de-identify multiple DICOM files (multipart/form-data)
 """
 
 import logging
@@ -70,7 +70,7 @@ async def process_dicom(request: Request):
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
-        # Do not use logger.exception — traceback may contain PHI
+        # Do not use logger.exception  traceback may contain PHI
         logger.error("dicom_process error: %s", type(exc).__name__, exc_info=False)
         raise HTTPException(status_code=500, detail="DICOM processing error") from exc
 

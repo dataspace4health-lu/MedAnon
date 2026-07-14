@@ -31,7 +31,7 @@ _pool = urllib3.PoolManager(
 
 
 def _upstream_label(url: str) -> str:
-    """Best-effort upstream label for metrics — host only, no path/query."""
+    """Best-effort upstream label for metrics  host only, no path/query."""
     try:
         from urllib.parse import urlparse
 
@@ -99,7 +99,7 @@ def proxy_request(
                 should_retry = resp.status in (429, 500, 502, 503, 504)
                 if should_retry and attempt < _RETRY_COUNT:
                     _log.warning(
-                        "proxy request %s HTTP %d — retrying (%d/%d)",
+                        "proxy request %s HTTP %d  retrying (%d/%d)",
                         url,
                         resp.status,
                         attempt + 1,
@@ -120,7 +120,7 @@ def proxy_request(
         except (urllib3.exceptions.HTTPError, OSError) as exc:
             if attempt < _RETRY_COUNT:
                 _log.warning(
-                    "proxy request %s connection error — retrying (%d/%d)",
+                    "proxy request %s connection error  retrying (%d/%d)",
                     url,
                     attempt + 1,
                     _RETRY_COUNT,
@@ -197,7 +197,7 @@ def proxy_post_stream(
                 resp.close()
                 if should_retry and attempt < _RETRY_COUNT:
                     _log.warning(
-                        "proxy stream %s HTTP %d — retrying (%d/%d)",
+                        "proxy stream %s HTTP %d  retrying (%d/%d)",
                         url,
                         resp.status,
                         attempt + 1,
@@ -219,7 +219,7 @@ def proxy_post_stream(
         except (urllib3.exceptions.HTTPError, OSError) as exc:
             if attempt < _RETRY_COUNT:
                 _log.warning(
-                    "proxy stream %s connection error — retrying (%d/%d)",
+                    "proxy stream %s connection error  retrying (%d/%d)",
                     url,
                     attempt + 1,
                     _RETRY_COUNT,

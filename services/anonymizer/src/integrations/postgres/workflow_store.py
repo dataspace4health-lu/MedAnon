@@ -2,14 +2,14 @@
 
 The durable ledger for :class:`~domain.workflows.Workflow` and its steps,
 consistent with "Postgres staging is the batch ledger". Workflows require
-``MEDANON_APP_DB_URL`` — there is intentionally no SQLite workflow store
+``MEDANON_APP_DB_URL``  there is intentionally no SQLite workflow store
 (the API returns 503 when no app-db is configured).
 
 Tables (also declared in ``sql/init.sql`` for fresh-volume bootstrap; this
 store self-creates them via :meth:`ensure_schema` for existing deployments):
 
-* ``medanon.workflows``       — one row per workflow (status, backend, ref)
-* ``medanon.workflow_steps``  — one row per step (status, job_id, deps)
+* ``medanon.workflows``        one row per workflow (status, backend, ref)
+* ``medanon.workflow_steps``   one row per step (status, job_id, deps)
 
 Step status transitions use a compare-and-set ``WHERE status = <expected>``
 so concurrent worker callbacks cannot double-advance a step.
@@ -86,7 +86,7 @@ class PostgresWorkflowStore:
 
         ``CREATE … IF NOT EXISTS`` is not atomic against implicit composite-type
         creation, so concurrent startup across app workers can collide on
-        ``pg_type``/``pg_class``. The objects exist either way — treat those
+        ``pg_type``/``pg_class``. The objects exist either way  treat those
         specific races as success (mirrors ``sql_connection_store``).
         """
         from psycopg2 import errors as _pg_errors
@@ -194,7 +194,7 @@ class PostgresWorkflowStore:
         Without this guard two concurrent worker callbacks (a final-step
         completion settling the workflow DONE, racing a cancel() setting it
         CANCELLED) would both issue unconditional UPDATEs and the last writer
-        would win — so a cancelled workflow could flip back to DONE. The CAS
+        would win  so a cancelled workflow could flip back to DONE. The CAS
         precondition makes terminal transitions safe under multi-worker
         (Redis/Postgres) job stores.
         """
@@ -331,7 +331,7 @@ class PostgresWorkflowStore:
             self._put_conn(conn)
 
     def list_non_terminal(self) -> list[Workflow]:
-        """Workflows still pending/running — for the reconciliation sweep."""
+        """Workflows still pending/running  for the reconciliation sweep."""
         out: list[Workflow] = []
         for st in ("pending", "running"):
             out.extend(self.list_workflows(status=st, limit=500))

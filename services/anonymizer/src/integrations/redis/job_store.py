@@ -1,4 +1,4 @@
-"""Redis-backed job store — Redis Streams for guaranteed delivery.
+"""Redis-backed job store  Redis Streams for guaranteed delivery.
 
 Uses Redis hashes for per-job storage, Redis Streams (XADD/XREADGROUP/XACK)
 for the worker notification queue, and sorted sets for time-ordered listing.
@@ -60,7 +60,7 @@ class RedisJobStore:
         """Idempotent consumer-group creation.  BUSYGROUP = already exists, ignore.
 
         Uses id="0" (not "$") so the group starts from the beginning of the
-        stream — any messages enqueued before the group was created are still
+        stream  any messages enqueued before the group was created are still
         delivered rather than silently skipped.
         """
         import redis as _redis
@@ -70,7 +70,7 @@ class RedisJobStore:
                 _STREAM_KEY, _STREAM_GROUP, id="0", mkstream=True
             )
         except _redis.exceptions.ResponseError as exc:
-            # BUSYGROUP means the group already exists — expected on restart.
+            # BUSYGROUP means the group already exists  expected on restart.
             if "BUSYGROUP" not in str(exc):
                 _log.warning("stream_group_init_error: %s", exc)
         except Exception as exc:
@@ -166,7 +166,7 @@ class RedisJobStore:
 
     # Lua script: atomically claim the oldest PENDING job.
     # Reads all pending IDs, finds the one with the lowest score in the time
-    # index, then transitions it from pending→running in the secondary set —
+    # index, then transitions it from pending→running in the secondary set
     # all in a single server-side operation so no two workers can claim the
     # same job via the polling fallback path.
     _CLAIM_OLDEST_PENDING_LUA = """
@@ -303,7 +303,7 @@ class RedisJobStore:
             try:
                 jobs.append(self._hash_to_job(data))
             except (KeyError, ValueError):
-                pass  # stale/corrupt hash — skip
+                pass  # stale/corrupt hash  skip
         if ghosts:
             try:
                 cleanup = self._client.pipeline(transaction=False)
@@ -328,7 +328,7 @@ class RedisJobStore:
         ``medanon:jobs_by_time`` and the per-status sets indefinitely.
 
         This method walks the time index in pages, EXISTS-checks each ID,
-        and removes orphans. It is safe to call concurrently — Redis SREM /
+        and removes orphans. It is safe to call concurrently  Redis SREM /
         ZREM on missing members is a no-op.
 
         Returns the number of orphan IDs removed (for diagnostics / metrics).
@@ -401,10 +401,10 @@ class RedisJobStore:
             # no persistence, or first deployment race).  Re-create it and let
             # the caller retry on the next loop iteration.
             if "NOGROUP" in err_str:
-                _log.warning("xreadgroup_nogroup — recreating consumer group")
+                _log.warning("xreadgroup_nogroup  recreating consumer group")
                 self._ensure_stream_group()
             else:
-                _log.warning("xreadgroup_error: %s — retrying", type(exc).__name__)
+                _log.warning("xreadgroup_error: %s  retrying", type(exc).__name__)
             return None
 
         if not results:
@@ -415,7 +415,7 @@ class RedisJobStore:
         message_id, fields = messages[0]
         job_id = fields.get("job_id", "")
         if not job_id:
-            # Malformed message — ack it to unblock the queue
+            # Malformed message  ack it to unblock the queue
             try:
                 self._client.xack(_STREAM_KEY, _STREAM_GROUP, message_id)
             except Exception:
@@ -443,7 +443,7 @@ class RedisJobStore:
         running long job for a crashed one (the redelivery/double-run hazard).
 
         Returns True if the claim was refreshed (we still own it), False
-        otherwise (e.g. another consumer already reclaimed it — the job will be
+        otherwise (e.g. another consumer already reclaimed it  the job will be
         re-run there and this worker's eventual XACK is a harmless no-op).
         """
         try:
@@ -467,7 +467,7 @@ class RedisJobStore:
 
         Returns ``[(job_id, message_id), ...]`` for every message claimed.
         The caller uses the message_id to ACK entries whose jobs are already
-        terminal (done/error/cancelled/dead) — those must be ACK'd so they
+        terminal (done/error/cancelled/dead)  those must be ACK'd so they
         don't accumulate in the PEL across restarts.
         """
         try:

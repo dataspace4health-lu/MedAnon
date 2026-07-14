@@ -1,4 +1,4 @@
-"""Workflow service — thin layer over the WorkflowEngine + workflow store."""
+"""Workflow service  thin layer over the WorkflowEngine + workflow store."""
 
 from __future__ import annotations
 

@@ -23,7 +23,7 @@ logger = logging.getLogger("medanon")
 
 _service = JobService()
 
-# Rate limits — overridable via env. Defaults are intentionally conservative
+# Rate limits  overridable via env. Defaults are intentionally conservative
 # because each submission can spawn a long-running, resource-heavy job.
 _RATE_JOBS_SUBMIT = os.environ.get("MEDANON_RATE_JOBS_SUBMIT", "30/minute")
 
@@ -34,7 +34,7 @@ async def _resolve_optional_target_url(user_url: str | None) -> str | None:
     Unlike the old behaviour, this helper does NOT fall back to the
     ``FHIR_TARGET_URL`` environment variable.  Export jobs (bulk-export,
     cohort, patient-export) should only upload to a target when the caller
-    explicitly requests it — silent auto-injection caused unwanted uploads.
+    explicitly requests it  silent auto-injection caused unwanted uploads.
 
     Use :func:`_resolve_import_target_url` for bulk-import jobs, which do
     require a target and support the env-var fallback.
@@ -97,7 +97,7 @@ def _saved_id_from_active(active: str | None) -> str | None:
     The instance-settings ``active_source_id``/``active_target_id`` may be a
     built-in (``source``/``target``), a browser-local custom id (not resolvable
     server-side), or a saved server (optionally ``saved:`` prefixed). Only a saved
-    server that actually exists in the store is returned — otherwise the caller
+    server that actually exists in the store is returned  otherwise the caller
     falls back to ``FHIR_SOURCE_URL``/``FHIR_TARGET_URL``.
     """
     active = (active or "").strip()
@@ -143,7 +143,7 @@ def effective_source_id(
     if req_source_id:
         return req_source_id
     if req_server_url:
-        return None  # explicit URL — don't override with a saved server
+        return None  # explicit URL  don't override with a saved server
     return _deployment_source_id()
 
 

@@ -1,7 +1,7 @@
 """PostgreSQL-backed per-client API key store.
 
 Each API key is represented by a row in ``medanon.api_keys``.  Plain raw keys
-are never stored — only a SHA-256 hex digest.  The raw key is returned once at
+are never stored  only a SHA-256 hex digest.  The raw key is returned once at
 creation time and is never retrievable again.
 
 Key lifecycle:
@@ -126,7 +126,7 @@ class PostgresApiKeyStore:
                     )
         except psycopg2.IntegrityError:
             self._put_conn(conn)
-            raise ValueError(f"API key ID collision — retry (id={key_id!r})")
+            raise ValueError(f"API key ID collision  retry (id={key_id!r})")
         finally:
             self._put_conn(conn)
 

@@ -1,26 +1,26 @@
-"""staged_worker._risk — risk-driven k-anonymity export executor.
+"""staged_worker._risk  risk-driven k-anonymity export executor.
 
 The risk-driven export is a three-phase staged job:
 
-  1. **fetching**  — pull every resource from the source FHIR server and stage
+  1. **fetching**   pull every resource from the source FHIR server and stage
      its *reference* (resource_id, resource_type, fhir_source_url) in the
      staging table.  No patient data is persisted (same contract as every
-     other staged executor — see ``_core._fetch_staged_resources``).
-  2. **solving**   — re-fetch the staged resources, build a quasi-identifier
+     other staged executor  see ``_core._fetch_staged_resources``).
+  2. **solving**    re-fetch the staged resources, build a quasi-identifier
      index (:func:`pipeline.privacy.qi_index.build_qi_index`), and search the
      generalisation lattice (:func:`pipeline.privacy.lattice.solve`) for the
      least-information-loss level vector that achieves the target k (and
      optional l-diversity) within the suppression cap.  The resulting
      :class:`~pipeline.privacy.lattice.GeneralizationPlan` is stored in the
      checkpoint so a crash-resume can re-apply it without re-solving.
-  3. **applying**  — apply the plan: suppress small-class Patients (and their
+  3. **applying**   apply the plan: suppress small-class Patients (and their
      linked resources when ``suppress_linked`` is set), generalise the QI
      fields on the survivors, de-identify the survivors through the normal
      :func:`pipeline.processor.process_data_batch` pipeline, and write the
      result to ``{MEDANON_OUTPUT_DIR}/{job_id}.ndjson``.
 
 Unlike the bulk-export / cohort executors this job needs the *whole* cohort in
-memory at once (the lattice solver is global), so it does not stream — it
+memory at once (the lattice solver is global), so it does not stream  it
 re-fetches all staged resources, solves, applies, and writes in one pass.  The
 QI index uses reservoir sampling (``MEDANON_KANON_MAX_PATIENTS``) so the
 solver stays bounded even on large cohorts; the apply pass streams the full
@@ -37,7 +37,7 @@ from pathlib import Path
 
 from domain.jobs import JobStatus
 from pipeline.jobs.checkpoint import load_checkpoint, save_checkpoint
-from integrations.storage import publish_result
+from pipeline.jobs.result_publisher import publish_result
 from pipeline.jobs.source_resolver import resolve_source_token
 
 _log = logging.getLogger("medanon.staged_worker")
@@ -68,7 +68,7 @@ def assess_and_gate_disclosure(
     coupling) so it is unit-testable without driving the full staged job.
     Resolves *permit_id* to a :class:`~domain.permit.Permit` when
     present. An unknown permit id degrades to ``permit=None`` rather than
-    raising — the submission endpoint already validated the permit exists via
+    raising  the submission endpoint already validated the permit exists via
     ``api.deps.resolve_active_permit``, and permits are never deleted (only
     revoked), so this only matters for a fabricated id bypassing submission
     validation, which is not a silent-release risk: a permit revoked *after*
@@ -85,7 +85,7 @@ def assess_and_gate_disclosure(
 
     permit_obj = None
     if permit_id:
-        from api.services.permits import PermitNotFoundError, PermitService
+        from pipeline.permits import PermitNotFoundError, PermitService
 
         try:
             permit_obj = PermitService().get(permit_id)
@@ -133,14 +133,14 @@ def _cancelled(store, job) -> bool:
 
 
 def execute_risk_driven_export_staged(job, store, staging) -> None:
-    """Staged risk-driven k-anonymity export (synchronous — runs via to_thread).
+    """Staged risk-driven k-anonymity export (synchronous  runs via to_thread).
 
     Phases (``checkpoint['phase']``): ``fetching`` → ``solving`` → ``done``.
     Crash-resume re-enters at the recorded phase.  The chosen
     ``generalization_plan`` is persisted in the checkpoint so the ``solving``
     work is never repeated.
 
-    Raises ``RuntimeError`` if *staging* is None — risk-driven export cannot
+    Raises ``RuntimeError`` if *staging* is None  risk-driven export cannot
     operate without a staging store (it needs the full cohort to solve the
     lattice).
     """
@@ -185,7 +185,7 @@ def execute_risk_driven_export_staged(job, store, staging) -> None:
 
     # ── Phase 1: fetching ────────────────────────────────────────────────
     # Stage every resource type from the source server.  Mirrors the bulk
-    # export fetch but without per-type streaming output — risk-driven needs
+    # export fetch but without per-type streaming output  risk-driven needs
     # the whole cohort, so we stage refs then re-fetch in the solve phase.
     if phase == "fetching":
         from integrations.fhir.client import (
@@ -298,7 +298,7 @@ def execute_risk_driven_export_staged(job, store, staging) -> None:
     # Suppress + generalise the cohort, then de-identify the survivors through
     # the normal pipeline and write NDJSON.  Suppression happens BEFORE the
     # de-id pass so suppressed patients (and their linked resources) never
-    # reach gPAS/NLP — no wasted work and no risk of a suppressed value leaking.
+    # reach gPAS/NLP  no wasted work and no risk of a suppressed value leaking.
     survivors = filter_and_apply(resources, plan, privacy_model)
 
     from utils.permit_context import permit_scope
@@ -307,7 +307,7 @@ def execute_risk_driven_export_staged(job, store, staging) -> None:
 
     written = 0
     # Retain the de-identified output for the post-hoc privacy-risk /
-    # disclosure-decision pass below — bounded by the same in-memory cohort
+    # disclosure-decision pass below  bounded by the same in-memory cohort
     # this job already holds (the qi_index/lattice solve is global, so this
     # job never streams; see the module docstring).
     deidentified_output: list[dict] = []
@@ -335,7 +335,7 @@ def execute_risk_driven_export_staged(job, store, staging) -> None:
     final_plan = dict(plan_dict)
 
     # D7.2 §5.4 Fig 6 / §5.5.7: close the assess-then-decide loop on the
-    # ACTUAL de-identified output before it is released — not just the
+    # ACTUAL de-identified output before it is released  not just the
     # lattice's k/l/t targets, which describe intent, not the realised
     # output (residual direct identifiers, purpose-limitation gaps, etc. are
     # only visible post-transform).
@@ -349,7 +349,7 @@ def execute_risk_driven_export_staged(job, store, staging) -> None:
     )
 
     if disclosure["decision"] == "refuse":
-        # Never release the written file — this is the enforcement point Fig 6
+        # Never release the written file  this is the enforcement point Fig 6
         # requires between "processing" and "approved anonymous data".
         try:
             os.remove(output_path)
@@ -397,7 +397,7 @@ def execute_risk_driven_export_staged(job, store, staging) -> None:
     # D7.2 §5.5.1 / Art 79: persist the passport as a durable report (anonymous
     # by construction). No-op when no Postgres report store is configured; the
     # passport still rides on the checkpoint above for the per-job view.
-    from api.services.reports import save_passport
+    from pipeline.reports import save_passport
 
     save_passport(job.id, passport)
 

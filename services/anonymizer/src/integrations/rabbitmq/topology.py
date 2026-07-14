@@ -1,4 +1,4 @@
-"""RabbitMQ topology — exchanges, queues, dead-lettering, retry.
+"""RabbitMQ topology  exchanges, queues, dead-lettering, retry.
 
 Idempotently declared at startup. Layout (per stage in
 ``messages.STAGES`` except ``fetch``, which is produced locally):
@@ -71,7 +71,7 @@ async def declare_topology(channel, stages: list[str]) -> dict:
     base_args = _queue_type_args()
 
     for stage in stages:
-        # Main work queue — dead-letters to the DLX on reject/expire.
+        # Main work queue  dead-letters to the DLX on reject/expire.
         main = await channel.declare_queue(
             queue_name(stage),
             durable=True,
@@ -83,13 +83,13 @@ async def declare_topology(channel, stages: list[str]) -> dict:
         )
         await main.bind(wf_exchange, routing_key=f"wf.{stage}.#")
 
-        # Dead-letter queue — terminal failures land here for operator triage.
+        # Dead-letter queue  terminal failures land here for operator triage.
         dlq = await channel.declare_queue(
             dlq_name(stage), durable=True, arguments=base_args
         )
         await dlq.bind(dlx_exchange, routing_key=f"dlq.{stage}.#")
 
-        # Retry queue — holds for a TTL then dead-letters BACK to the workflow
+        # Retry queue  holds for a TTL then dead-letters BACK to the workflow
         # exchange (delayed redelivery to the main queue).
         retry = await channel.declare_queue(
             retry_queue_name(stage),

@@ -16,7 +16,7 @@ try:
         return _orjson.dumps(obj).decode("utf-8")
 
     def dumps_sorted(obj) -> str:
-        """Compact JSON string with keys sorted recursively — stable across runs.
+        """Compact JSON string with keys sorted recursively  stable across runs.
 
         Use for dedup / cache keys where two equal dicts must hash identically
         regardless of insertion order.
@@ -24,7 +24,7 @@ try:
         return _orjson.dumps(obj, option=_orjson.OPT_SORT_KEYS).decode("utf-8")
 
     def dumps_bytes(obj) -> bytes:
-        """Compact JSON bytes — use for HTTP request bodies (no decode overhead)."""
+        """Compact JSON bytes  use for HTTP request bodies (no decode overhead)."""
         return _orjson.dumps(obj)
 
     def dumps_pretty(obj) -> str:
@@ -41,7 +41,7 @@ except ImportError:
         return _json.dumps(obj, separators=(",", ":"))
 
     def dumps_sorted(obj) -> str:
-        """Compact JSON with keys sorted recursively — stable across runs."""
+        """Compact JSON with keys sorted recursively  stable across runs."""
         return _json.dumps(obj, separators=(",", ":"), sort_keys=True)
 
     def dumps_bytes(obj) -> bytes:

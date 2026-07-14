@@ -10,7 +10,7 @@ never reach gPAS/NLP.
 This module is the reusable exclusion engine: it resolves the opt-out set
 (request-supplied ids + a configured file source), matches resources to
 subjects (Patient by id/identifier; linked resources by subject/patient
-reference), and drops the matches — emitting a PHI-safe ``optout.excluded``
+reference), and drops the matches  emitting a PHI-safe ``optout.excluded``
 audit event (count only, never the ids). In regulated mode it fails **closed**:
 if an opt-out source is configured but cannot be read, processing is refused
 rather than silently releasing opted-out subjects.
@@ -40,7 +40,7 @@ class OptOutSourceError(RuntimeError):
 def optout_configured() -> bool:
     """True when any opt-out source (file) is configured.
 
-    Request-supplied ids alone do not count as "configured" — they are an
+    Request-supplied ids alone do not count as "configured"  they are an
     explicit per-request list the caller opted into; the fail-closed guarantee
     is about a *configured* register being unreachable.
     """
@@ -73,11 +73,11 @@ def load_optout_set(extra_ids: list[str] | None = None) -> set[str]:
                 raise OptOutSourceError(
                     f"MEDANON_REGULATED_MODE is on and the opt-out source "
                     f"{path!r} could not be read ({type(exc).__name__}); refusing "
-                    "to process — opted-out subjects (Art 71) might otherwise be "
+                    "to process  opted-out subjects (Art 71) might otherwise be "
                     "released."
                 ) from exc
             _log.warning(
-                "optout_source_unreadable path=%s error=%s — proceeding without "
+                "optout_source_unreadable path=%s error=%s  proceeding without "
                 "it (non-regulated best-effort)",
                 path,
                 type(exc).__name__,
@@ -133,7 +133,7 @@ def filter_excluded(
 
     1. Find every Patient whose id/identifier is in *optout_set* and expand
        the set with that Patient's resource id (bare + ``Patient/{id}`` form).
-    2. Drop every resource — Patient and linked — matching the expanded set,
+    2. Drop every resource  Patient and linked  matching the expanded set,
        so an identifier-only opt-out still removes the whole subject rather
        than orphaning their clinical resources.
     """
@@ -201,7 +201,7 @@ def apply_optout(
                 outcome="success",
                 detail={"excluded_count": excluded, "dataset_id": dataset_id},
             )
-        except Exception:  # noqa: BLE001 — audit must never break the pipeline
+        except Exception:  # noqa: BLE001  audit must never break the pipeline
             pass
         _log.info("optout_excluded count=%d dataset=%s", excluded, dataset_id or "-")
     return kept, excluded

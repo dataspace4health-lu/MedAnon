@@ -1,6 +1,6 @@
 """PostgreSQL staging store for large-scale de-identification jobs.
 
-The staging table stores ONLY resource references — no patient data:
+The staging table stores ONLY resource references  no patient data:
 
   (job_id, resource_id, resource_type, fhir_source_url, status, expires_at)
 
@@ -10,11 +10,11 @@ gPAS is the only authorised store for any identifier mapping.
 
 Two-phase execution:
 
-  Phase 1 — FHIR Fetch:
+  Phase 1  FHIR Fetch:
     Stream resources from the source FHIR server.  Record only the resource ID
     and type in staging (one row per resource, no content).
 
-  Phase 2 — De-identification:
+  Phase 2  De-identification:
     Read staged references in batches.  Re-fetch each batch from the source
     FHIR server via ``fetch_resources_by_ids`` (``_id`` search parameter).
     De-identify the fetched resources and write to the NDJSON output file.
@@ -49,7 +49,7 @@ _PARTITION_TARGET_ROWS: int = int(
 _DDL = """
 CREATE SCHEMA IF NOT EXISTS medanon;
 
--- Staging table stores ONLY resource references — no patient data.
+-- Staging table stores ONLY resource references  no patient data.
 -- Patient FHIR resources are re-fetched from the source FHIR server in Phase 2.
 CREATE TABLE IF NOT EXISTS medanon.staged_resources (
     id               BIGSERIAL PRIMARY KEY,
@@ -85,7 +85,7 @@ ALTER TABLE medanon.staged_resources
 -- Migration: add resource_blob for OPT-IN encrypted body staging (A1).
 -- This is NULL by default (refs-only, no PHI at rest). It is populated ONLY when
 -- MEDANON_STAGE_BODIES=encrypted, and then holds a gzip+Fernet (AES-128-CBC+HMAC)
--- encrypted body — NOT the plaintext resource_json that was removed above.
+-- encrypted body  NOT the plaintext resource_json that was removed above.
 -- Lets Phase 2 decrypt in-process instead of re-fetching from FHIR.
 ALTER TABLE medanon.staged_resources
     ADD COLUMN IF NOT EXISTS resource_blob BYTEA;
@@ -224,7 +224,7 @@ class StagingStore:
 
         Used by process-executor child workers: the parent already ran
         ``ensure_schema`` before fanning out, so children must NOT re-run the
-        ``ALTER TABLE`` / ``CREATE INDEX`` migrations — N concurrent DDL
+        ``ALTER TABLE`` / ``CREATE INDEX`` migrations  N concurrent DDL
         statements take ``AccessExclusiveLock`` on ``staged_resources`` and
         deadlock (observed with 8 children). This sets up only what a child
         needs to read/claim partitions, plus the A1 fail-closed key check.
@@ -296,7 +296,7 @@ class StagingStore:
         resources: list[dict],
         fhir_source_url: str = "",
     ) -> int:
-        """Record resource references in staging — stores NO patient data.
+        """Record resource references in staging  stores NO patient data.
 
         Only the resource ID and type are persisted alongside the source FHIR
         server URL needed for Phase 2 re-fetch.  The ``resource_json`` column
@@ -361,7 +361,7 @@ class StagingStore:
 
         Accepts rows in either ``processing`` (streaming path that calls
         ``get_pending_batch`` first) or ``pending`` (partition-claim path
-        where ``iter_partition`` doesn't transition status — the partition
+        where ``iter_partition`` doesn't transition status  the partition
         lock provides exclusivity instead).
         """
         if not staged_ids:
@@ -407,7 +407,7 @@ class StagingStore:
         """Return up to *limit* pending rows, atomically marking them 'processing'.
 
         Uses a CTE with ``FOR UPDATE SKIP LOCKED`` to claim rows in one
-        statement — no window between SELECT and UPDATE where a crash could
+        statement  no window between SELECT and UPDATE where a crash could
         leave rows invisible to other workers.
         """
         conn = self._get_conn()
@@ -439,7 +439,7 @@ class StagingStore:
     def get_all_resources(self, job_id: str, page_size: int = 500) -> Iterable[dict]:
         """Iterate over every resource for a job (e.g. for re-processing).
 
-        Uses keyset pagination on the integer ``id`` PK — releases and
+        Uses keyset pagination on the integer ``id`` PK  releases and
         re-acquires the connection between pages so the pool is never starved
         during long-running jobs.  Pages of *page_size* rows at a time.
         """
@@ -596,7 +596,7 @@ class StagingStore:
         so each partition covers exactly ``target_rows`` consecutive rows.
 
         Inserts one row per distinct partition into ``medanon.staged_partitions``
-        (upsert — safe to call more than once).
+        (upsert  safe to call more than once).
 
         Returns the total number of distinct partitions for the job.
         """
@@ -640,7 +640,7 @@ class StagingStore:
                     _already = cur.fetchone()[0]
                     if _already:
                         # A concurrent first-caller won the lock and planned;
-                        # nothing to do — return the partition count it created.
+                        # nothing to do  return the partition count it created.
                         return _already
                     cur.execute(
                         """
@@ -682,7 +682,7 @@ class StagingStore:
         """Atomically claim the next unclaimed partition for *job_id*.
 
         Uses ``FOR UPDATE SKIP LOCKED`` on the ``staged_partitions`` row so
-        concurrent workers each claim distinct partitions — at-most-one-worker-
+        concurrent workers each claim distinct partitions  at-most-one-worker-
         per-partition guarantee.
 
         Returns ``(resource_type, partition_id)`` or ``None`` when all
@@ -871,7 +871,7 @@ class StagingStore:
         """Atomically claim a specific unclaimed partition. True iff claimed.
 
         Returns False when the partition is already claimed/done (duplicate
-        delivery) or does not exist — the caller acks and skips.
+        delivery) or does not exist  the caller acks and skips.
         """
         conn = self._get_conn()
         try:
@@ -1070,7 +1070,7 @@ class StagingStore:
             self._put_conn(conn)
 
     def count_open_partitions(self, job_id: str) -> int:
-        """Number of partitions not yet ``done`` — the stage-join condition.
+        """Number of partitions not yet ``done``  the stage-join condition.
 
         When this hits zero, all partitions of the stage are complete and the
         winner publishes the next-stage message.

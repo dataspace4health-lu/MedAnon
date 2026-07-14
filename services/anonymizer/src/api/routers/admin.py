@@ -1,7 +1,7 @@
-"""Admin operations — cache management and diagnostics.
+"""Admin operations  cache management and diagnostics.
 
-POST /v1/admin/cache/flush     — flush all gPAS cache entries (admin role)
-GET  /v1/admin/cache/canary    — cache coherence status (admin role)
+POST /v1/admin/cache/flush      flush all gPAS cache entries (admin role)
+GET  /v1/admin/cache/canary     cache coherence status (admin role)
 """
 
 import logging
@@ -40,7 +40,7 @@ def flush_cache_endpoint(request: Request):
 def cache_canary_status(request: Request):
     """Run the gPAS canary probe and report cache coherence status.
 
-    Does NOT automatically flush — use POST /admin/cache/flush for that.
+    Does NOT automatically flush  use POST /admin/cache/flush for that.
     """
     _require_admin(request)
     redis_url = os.environ.get("MEDANON_REDIS_URL", "").strip()
@@ -79,7 +79,7 @@ def cache_canary_status(request: Request):
         stored = client.get(CANARY_KEY_PREFIX + domain)
 
         coherent = stored is not None and stored == current
-        # Do not expose pseudonym values (stored/current) — they are PHI-adjacent
+        # Do not expose pseudonym values (stored/current)  they are PHI-adjacent
         # secrets that should not appear in API responses, logs, or browser history.
         return {
             "checked": True,

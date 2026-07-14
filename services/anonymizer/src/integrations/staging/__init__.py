@@ -1,4 +1,4 @@
-"""integrations.staging — PostgreSQL two-phase staging store.
+"""integrations.staging  PostgreSQL two-phase staging store.
 
 The staging store buffers FHIR resources in ``medanon.staged_resources``
 between Phase 1 (FHIR fetch) and Phase 2 (de-identification + write),

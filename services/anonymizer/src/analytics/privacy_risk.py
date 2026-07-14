@@ -10,16 +10,16 @@ scores.
 
 Two assessment modes
 --------------------
-- **De-identified dataset** (``synthetic`` omitted): re-identification only —
+- **De-identified dataset** (``synthetic`` omitted): re-identification only
   k-anonymity, l-diversity, uniqueness (delegated to :mod:`analytics.risk`).
 - **Synthetic dataset** (``synthetic`` supplied against a ``real`` reference):
-  the full surface — DCR/NNDR/τ-DCR (in-house, no heavy deps) plus attribute
+  the full surface  DCR/NNDR/τ-DCR (in-house, no heavy deps) plus attribute
   inference (CAP) via **SDMetrics** when installed.
 
 Dependency posture
 ------------------
 The in-house distance metrics use only the standard library (always available).
-SDMetrics is used opportunistically and **degrades to NA** when absent —
+SDMetrics is used opportunistically and **degrades to NA** when absent
 matching the fail-soft convention used across the codebase. Anonymeter is
 intentionally *not* a dependency: it pins ``python <3.12`` and so cannot run on
 the project runtime (3.12 Docker / 3.13 local); its singling-out / linkability
@@ -32,7 +32,7 @@ import math
 from typing import Any
 
 # Dual-import: ``analytics.risk`` in the anonymizer monolith; ``risk`` in the
-# analytics microservice (build-copied flat, no package prefix — same pattern
+# analytics microservice (build-copied flat, no package prefix  same pattern
 # the other shared analytics modules rely on).
 try:  # pragma: no cover - import shim
     from analytics.risk import _read_path, assess_risk_resources
@@ -79,7 +79,7 @@ def _dcr_nndr(
 ) -> dict[str, Any]:
     """Distance-to-Closest-Record, NNDR and τ-DCR share (in-house).
 
-    For each synthetic row, find the two smallest distances to real rows —
+    For each synthetic row, find the two smallest distances to real rows
     ``d1`` (closest) and ``d2`` (second closest). DCR = mean d1; NNDR =
     mean d1/d2; τ-DCR share = fraction of synthetic rows with d1 ≤ tau
     (elevated membership/linkage risk).
@@ -120,7 +120,7 @@ def _dcr_nndr(
 
 
 # ---------------------------------------------------------------------------
-# SDMetrics adapter (optional — degrades to NA when the lib is absent)
+# SDMetrics adapter (optional  degrades to NA when the lib is absent)
 # ---------------------------------------------------------------------------
 
 
@@ -136,7 +136,7 @@ def _sdmetrics_privacy(
     try:
         import pandas as pd
         from sdmetrics.single_table import DisclosureProtection
-    except Exception as exc:  # noqa: BLE001 — optional dependency
+    except Exception as exc:  # noqa: BLE001  optional dependency
         return {"computed": False, "reason": f"sdmetrics unavailable: {exc}"}
 
     if not real or not synthetic:
@@ -167,7 +167,7 @@ def _sdmetrics_privacy(
                 if math.isnan(score)
                 else round(score, 6)
             )
-        except Exception as exc:  # noqa: BLE001 — metric may reject sparse data
+        except Exception as exc:  # noqa: BLE001  metric may reject sparse data
             out["attribute_inference"][sf] = {"error": str(exc)}
     return out
 

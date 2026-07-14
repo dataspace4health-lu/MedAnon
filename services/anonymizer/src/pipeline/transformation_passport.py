@@ -8,12 +8,12 @@ which rules fired on each resource); the passport summarises the *whole run*.
 
 D7.2 §5.5.1 asks the documentation to cover, where applicable:
   - identification (data creator, permit id)
-  - original-dataset metadata (size, provenance, quality/utility label — Art 78)
+  - original-dataset metadata (size, provenance, quality/utility label  Art 78)
   - processing (steps, tools + versions, DP parameters, quality metrics)
   - privacy-risk assessment (methods, thresholds, results)
   - disclosure (decision, recipient, restrictions)
 
-The passport MUST be anonymous — it never carries PHI or record-level values.
+The passport MUST be anonymous  it never carries PHI or record-level values.
 It is a pure builder (no I/O) so it is trivially testable and can be attached to
 a job result, written as a sidecar, or embedded in a Bundle by the caller.
 """
@@ -32,7 +32,7 @@ def _now_iso() -> str:
 
 
 def _hash_key_id() -> str:
-    """Active HMAC key-id (``MEDANON_HASH_KEY_ID``) — see ``utils.crypto``."""
+    """Active HMAC key-id (``MEDANON_HASH_KEY_ID``)  see ``utils.crypto``."""
     try:
         from utils.crypto import hash_key_id
 
@@ -97,12 +97,12 @@ def build_transformation_passport(
         Anonymous original-dataset metadata (e.g. ``{"total_resources": N,
         "resource_types": {...}, "provenance": {...}, "quality_label": ...}``).
     privacy_model:
-        The validated ``privacy_model`` (k/l/t targets, QIs) — the *intent*.
+        The validated ``privacy_model`` (k/l/t targets, QIs)  the *intent*.
     generalization_plan:
-        A lattice ``GeneralizationPlan`` or its checkpoint dict — the *achieved*
+        A lattice ``GeneralizationPlan`` or its checkpoint dict  the *achieved*
         guarantee.
     privacy_risk:
-        Output of :func:`analytics.privacy_risk.assess_privacy_risk` — methods +
+        Output of :func:`analytics.privacy_risk.assess_privacy_risk`  methods +
         thresholds + results (§5.5.7).
     dp_params:
         Differential-privacy parameters (``{"epsilon":…, "delta":…}``) or None.
@@ -117,7 +117,7 @@ def build_transformation_passport(
 
     # D7.2 §5.5.8: assess the tools used against the approved-tool registry, so
     # the passport documents that every tool was HDAB-approved (or flags the
-    # ones that were not). Guarded — never let registry evaluation break the
+    # ones that were not). Guarded  never let registry evaluation break the
     # passport build.
     tool_assessment: dict[str, Any] | None = None
     try:

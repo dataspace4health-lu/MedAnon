@@ -28,7 +28,7 @@ from api.deps import (
 from pipeline.intake_gate import IntakeBlocked, enforce_intake
 from api.services import stream_trailer
 from api.services.processing import ProcessingError, ProcessingService
-from api.services.scoring_helpers import (
+from pipeline.scoring_helpers import (
     _is_scoring_enabled,
     _get_config_profile,
     make_collector,
@@ -53,7 +53,7 @@ _service = ProcessingService()
 def _split_interactive_lines(lines: list[str]) -> tuple[str, str]:
     """Split the streamed NDJSON into clean data + a manifest sidecar.
 
-    Released data must never carry the transformation manifest inline — it ships
+    Released data must never carry the transformation manifest inline  it ships
     as a separate artifact. Parses each de-identified line, extracts the manifest
     from ``meta.tag`` (server-side, authoritative), strips it from the resource,
     and returns ``(clean_ndjson, manifest_ndjson)``. Unparseable/error lines pass
@@ -101,7 +101,7 @@ async def _deliver_interactive(
     The browser download is the primary result; this is an opt-in side delivery,
     so a failure is logged rather than surfaced (the client already has the data).
     Delivers three correlated artifacts under distinct prefixes (data/, manifests/,
-    audit/) with a shared generated stem — the manifest is split OUT of the data
+    audit/) with a shared generated stem  the manifest is split OUT of the data
     so the released clinical data never carries it inline (matches the job path).
     """
     import uuid
@@ -175,7 +175,7 @@ def _attach_pii_warning(result, pii_leak: dict) -> None:
     Used when ``MEDANON_GATE_IDENTIFIER_MODE=warn`` and the only finding is a
     config-coverage gap (no detected PII). The output is released; the warning
     rides along under ``meta.tag`` so the UI can surface "weak config" without
-    a 422 block. Mutates dict resources only — Bundles attach to the Bundle root.
+    a 422 block. Mutates dict resources only  Bundles attach to the Bundle root.
     """
     if not isinstance(result, dict):
         return
@@ -290,7 +290,7 @@ async def process(
             result, "/v1/process", runtime_settings, t0, trust_passport=passport or None
         )
     elif passport:
-        # Scoring off but the gate produced a passport — persist it on its own so
+        # Scoring off but the gate produced a passport  persist it on its own so
         # every gated path keeps its Quality Passport (mirrors /process/batch).
         retain_task(
             persist_run(
@@ -310,7 +310,7 @@ async def process(
         )
 
     if pii_leak and pii_leak.get("leaked"):
-        # Real PII detected — block output entirely, return 422 with leak info.
+        # Real PII detected  block output entirely, return 422 with leak info.
         raise HTTPException(
             status_code=422,
             detail={"code": "pii_leak_detected", "pii_leak": pii_leak},
@@ -336,7 +336,7 @@ async def process_ndjson(
 
     Each non-empty line must be a valid JSON object representing a FHIR resource.
     Lines starting with '//' are treated as comments and skipped.
-    Returns a streaming NDJSON response — one processed JSON object per line.
+    Returns a streaming NDJSON response  one processed JSON object per line.
     """
     resolve_active_permit(permit_id)
     body = await request.body()
@@ -408,7 +408,7 @@ async def process_ndjson(
     return StreamingResponse(_generate(), media_type="application/x-ndjson")
 
 
-# Accepted NDJSON content types (only the *type* is checked — no size limit).
+# Accepted NDJSON content types (only the *type* is checked  no size limit).
 _NDJSON_CTYPES = frozenset(
     {
         "application/x-ndjson",
@@ -433,7 +433,7 @@ async def process_stream(
     settings: config.Settings = Depends(get_settings_dep),
     permit_id: str | None = Query(None, description=_PERMIT_ID_DESC),
 ):
-    """De-identify NDJSON as a true stream — **no request-body size limit**.
+    """De-identify NDJSON as a true stream  **no request-body size limit**.
 
     Reads the request body incrementally (never buffering the whole payload) and
     streams de-identified NDJSON back, one processed resource per line in input
@@ -445,7 +445,7 @@ async def process_stream(
     upload, e.g. ``curl --data-binary @big.ndjson -H 'Content-Type: application/x-ndjson'``.
 
     Note: the always-on output PII barrier still runs per resource (fail-closed).
-    The opt-in pre-privacy Trust Gate and score trailer are skipped here — they
+    The opt-in pre-privacy Trust Gate and score trailer are skipped here  they
     require buffering the whole input, which this endpoint deliberately avoids.
     """
     ctype = request.headers.get("content-type", "").split(";")[0].strip().lower()
@@ -494,7 +494,7 @@ async def process_stream(
             yield bytes(buf).decode("utf-8", "replace")
 
     async def _generate():
-        # Note: no request.is_disconnected() poll here — it reads the same ASGI
+        # Note: no request.is_disconnected() poll here  it reads the same ASGI
         # ``receive`` channel as request.stream() and would corrupt the input.
         # StreamingResponse already aborts the generator on client disconnect.
         with permit_scope(permit_id):
@@ -599,7 +599,7 @@ async def process_raw(
             )
 
         if pii_leak and pii_leak.get("leaked"):
-            # Real PII detected — block output, return 422 with pii_leak payload.
+            # Real PII detected  block output, return 422 with pii_leak payload.
             raise HTTPException(
                 status_code=422,
                 detail={"code": "pii_leak_detected", "pii_leak": pii_leak},
@@ -622,7 +622,7 @@ async def process_raw(
         logger.warning("validation error in /process/raw: %s", exc)
         raise HTTPException(status_code=422, detail="Invalid input") from exc
     except Exception as exc:
-        # Do not use logger.exception — traceback may contain PHI
+        # Do not use logger.exception  traceback may contain PHI
         logger.error(
             "Unexpected error in /process/raw: %s", type(exc).__name__, exc_info=False
         )
@@ -647,9 +647,9 @@ async def process_batch(
     """Process FHIR resources in any format (JSON, NDJSON, XML) and stream NDJSON output.
 
     Accepts:
-    - ``application/x-ndjson`` — one resource per line (same as /process/ndjson)
-    - ``application/json`` / ``application/fhir+json`` — single resource or Bundle
-    - ``application/xml`` / ``application/fhir+xml`` — single resource or Bundle
+    - ``application/x-ndjson``  one resource per line (same as /process/ndjson)
+    - ``application/json`` / ``application/fhir+json``  single resource or Bundle
+    - ``application/xml`` / ``application/fhir+xml``  single resource or Bundle
 
     Bundles are processed as a whole to preserve cross-resource reference
     rewriting, then each entry resource is streamed as NDJSON.
@@ -703,7 +703,7 @@ async def process_batch(
         t0 = time.monotonic()
         disconnected = False
         # Accumulate the de-identified output only when an S3 delivery was
-        # requested (single-patient scale — bounded). No buffering otherwise.
+        # requested (single-patient scale  bounded). No buffering otherwise.
         delivered_lines: list[str] | None = [] if destination_id else None
         with permit_scope(permit_id):
             if is_bundle:

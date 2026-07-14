@@ -1,7 +1,7 @@
-"""staged_worker._core — shared constants, imports, and private helpers.
+"""staged_worker._core  shared constants, imports, and private helpers.
 
 Consumed by all executor modules in this package.  Nothing in this module
-is part of the public API — use ``staged_worker.__init__`` re-exports.
+is part of the public API  use ``staged_worker.__init__`` re-exports.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ _BATCH_SIZE = int(os.environ.get("MEDANON_STAGING_BATCH_SIZE", "1000"))
 # one tuning knob (default 4).
 _REFETCH_PARALLEL = max(1, int(os.environ.get("MEDANON_FHIR_FETCH_PARALLEL", "4")))
 
-# Depth of the PostgreSQL prefetch queue — mirrors MEDANON_PIPELINE_QUEUE_SIZE used by
+# Depth of the PostgreSQL prefetch queue  mirrors MEDANON_PIPELINE_QUEUE_SIZE used by
 # the non-staged executor_stream path for consistent fetch-ahead behaviour.
 _PREFETCH_QUEUE_SIZE: int = int(os.environ.get("MEDANON_PIPELINE_QUEUE_SIZE", "4"))
 
@@ -71,22 +71,7 @@ _PROCESS_MIN_PARTITIONS: int = max(
 _OUTPUT_MODE: str = os.environ.get("MEDANON_OUTPUT_MODE", "stream").lower()
 
 # Infrastructure resource types excluded from auto-discovery
-_INFRA = frozenset(
-    {
-        "CapabilityStatement",
-        "OperationDefinition",
-        "SearchParameter",
-        "StructureDefinition",
-        "CompartmentDefinition",
-        "ImplementationGuide",
-        "CodeSystem",
-        "ValueSet",
-        "ConceptMap",
-        "NamingSystem",
-        "OperationOutcome",
-        "Bundle",
-    }
-)
+from domain.fhir import INFRA_RESOURCE_TYPES as _INFRA  # noqa: F401,E402  re-exported for _risk/_executors
 
 
 # ---------------------------------------------------------------------------
@@ -139,7 +124,7 @@ def _fetch_staged_resources(batch_rows: list[dict]) -> list[dict]:
     """Re-fetch FHIR resources from the source server for a batch of staging refs.
 
     Each staging row contains only a reference (resource_id, resource_type,
-    fhir_source_url) — no patient data is stored in the staging table.  This
+    fhir_source_url)  no patient data is stored in the staging table.  This
     function re-fetches the actual resources from the source FHIR server so
     that Phase 2 can de-identify them.
 
@@ -151,7 +136,7 @@ def _fetch_staged_resources(batch_rows: list[dict]) -> list[dict]:
     from integrations.fhir.reader import fetch_resources_by_ids
     from integrations.staging.blob_crypto import decrypt_resource
 
-    # A1: rows that carry an encrypted body are decrypted in-process — NO
+    # A1: rows that carry an encrypted body are decrypted in-process  NO
     # re-fetch. Only rows WITHOUT a blob fall through to the FHIR re-fetch path
     # (the default refs-only behaviour). Plaintext exists only here, in memory.
     resources_from_blob: list[dict] = []
@@ -164,7 +149,7 @@ def _fetch_staged_resources(batch_rows: list[dict]) -> list[dict]:
                 continue
             except Exception as exc:
                 # Fail-soft: fall back to re-fetch for this row rather than drop it.
-                _log.warning("staged_blob_decrypt_failed: %s — re-fetching", exc)
+                _log.warning("staged_blob_decrypt_failed: %s  re-fetching", exc)
         rows_needing_refetch.append(row)
 
     # Group remaining refs by (fhir_source_url, resource_type) for batch HTTP calls.
@@ -198,7 +183,7 @@ def _fetch_staged_resources(batch_rows: list[dict]) -> list[dict]:
     resources: list[dict] = list(resources_from_blob)
     if not items:
         return resources
-    # Parallelise across (url, type) groups — they hit disjoint FHIR endpoints
+    # Parallelise across (url, type) groups  they hit disjoint FHIR endpoints
     # and `fetch_resources_by_ids` uses the shared thread-safe transport pool.
     if _REFETCH_PARALLEL <= 1 or len(items) <= 1:
         for it in items:
@@ -225,7 +210,7 @@ def _process_batch(
     """Re-fetch and de-identify a batch of staged resource references.
 
     Staging rows contain only references (resource_id, resource_type,
-    fhir_source_url) — no patient data.  This function re-fetches from the
+    fhir_source_url)  no patient data.  This function re-fetches from the
     source FHIR server and delegates to
     :func:`pipeline.processor.process_data_batch` for de-identification.
     """
@@ -257,7 +242,7 @@ def _process_batch_with_fallback(
     """Re-fetch, de-identify, and write a staged batch with per-resource fallback.
 
     Staging rows contain only references (resource_id, resource_type,
-    fhir_source_url) — no patient data.  Resources are re-fetched from the
+    fhir_source_url)  no patient data.  Resources are re-fetched from the
     source FHIR server for each attempt so the fallback always operates on
     a fresh, unmutated copy from the authoritative source.
 
@@ -281,7 +266,7 @@ def _process_batch_with_fallback(
         staging.mark_done(job_id, done_ids)
     except Exception:
         # Per-resource fallback: re-fetch and process each resource individually.
-        # Re-fetching from FHIR guarantees a clean, unmutated copy — no risk of
+        # Re-fetching from FHIR guarantees a clean, unmutated copy  no risk of
         # double-pseudonymization from a partially-mutated batch dict.
         for row in batch_rows:
             rtype = row.get("resource_type", "Unknown")
@@ -447,7 +432,7 @@ def _run_staged_phase2(
     row fetches overlap with gPAS HTTP calls + NLP inference.
 
     When *phase1_done* is provided, the prefetcher polls for new rows while
-    Phase 1 is still staging them — enabling Phase 1 and Phase 2 to run
+    Phase 1 is still staging them  enabling Phase 1 and Phase 2 to run
     concurrently.  *phase1_state* is a dict updated in-place by the Phase 1
     thread; its cursor fields are merged into every checkpoint so crash-resume
     can restart Phase 1 from its last known position.
@@ -494,7 +479,7 @@ def _run_staged_phase2(
                         # Phase 1 is done (or there is no concurrent Phase 1).
                         _prefetch_q.put(_SENTINEL)
                         break
-                    # Phase 1 is still running — more rows may arrive shortly.
+                    # Phase 1 is still running  more rows may arrive shortly.
                     time.sleep(0.1)
         except Exception as exc:
             _prefetch_exc.append(exc)
@@ -533,7 +518,7 @@ def _run_staged_phase2(
                     try:
                         batch_rows = _prefetch_q.get(timeout=30)
                     except Exception:
-                        # Timeout: Phase 1 is still running — save a checkpoint
+                        # Timeout: Phase 1 is still running  save a checkpoint
                         # so the UI shows "fetching" and check for cancellation.
                         if _checkpoint_or_cancel(
                             store,
@@ -616,7 +601,7 @@ def _run_staged_phase2(
                     if batch_rows is _SENTINEL:
                         break
 
-                    # submit_with_context — the compute worker must inherit the
+                    # submit_with_context  the compute worker must inherit the
                     # active permit_scope so its process_data_batch pseudonymises
                     # under the same permit (D7.2 §4.4).
                     fut = submit_with_context(
@@ -670,7 +655,7 @@ def process_one_partition(
     on success; ``release_partition`` / ``record_partition_error`` on failure).
 
     Returns ``(resources_processed, shard_path)``. Raises on processing failure
-    after unlinking the partial shard — the caller decides retry vs dead-letter.
+    after unlinking the partial shard  the caller decides retry vs dead-letter.
     """
     from contextlib import suppress
 
@@ -732,7 +717,7 @@ def _run_staged_phase2_partition_claim(
 
     Calls ``plan_partitions`` once (idempotent).  When ``MEDANON_AMQP_URL`` is
     set, publishes one ``wf.deid`` message per partition to RabbitMQ and returns
-    immediately — the stage consumers handle processing asynchronously.  Without
+    immediately  the stage consumers handle processing asynchronously.  Without
     AMQP, falls through to the synchronous in-process partition-claim loop
     (default, unchanged behaviour).
 
@@ -792,12 +777,12 @@ def _run_staged_phase2_partition_claim(
                     partition_count,
                     published,
                 )
-                # Work handed off to consumers — return 0 (processed by them).
+                # Work handed off to consumers  return 0 (processed by them).
                 return 0
     except Exception as exc:
-        # AMQP path failed — fall through to in-process loop as a safety net.
+        # AMQP path failed  fall through to in-process loop as a safety net.
         _log.warning(
-            "%s_amqp_publish_failed job=%s: %s — falling back to in-process loop",
+            "%s_amqp_publish_failed job=%s: %s  falling back to in-process loop",
             label,
             job.id,
             exc,
@@ -887,7 +872,7 @@ def _partition_process_worker(
 
     Mirrors the per-partition collector pattern already used by the RabbitMQ
     stage consumer (``stage_consumer.py``): scoring is job-granular, so a private
-    collector per child is correct — only the processed-resource COUNT needs to
+    collector per child is correct  only the processed-resource COUNT needs to
     flow back, and counts sum cleanly. Partition claims are serialised across all
     children by ``FOR UPDATE SKIP LOCKED`` in ``claim_next_partition``.
 
@@ -901,7 +886,7 @@ def _partition_process_worker(
     settings = get_settings(config_profile)
     pseudonymizer = _get_default_pseudonymizer()
     staging = StagingStore(staging_db_url)
-    # Child workers must NOT re-run schema DDL — the parent already did, and N
+    # Child workers must NOT re-run schema DDL  the parent already did, and N
     # concurrent ALTER TABLE/CREATE INDEX deadlock on staged_resources. Just
     # open the pool (+ A1 fail-closed key check).
     staging.ensure_pool()
@@ -996,14 +981,14 @@ def _run_staged_phase2_shards(
     # only through the stream output mode (``_run_staged_phase2``). The shards
     # path fans work out to spawned processes / AMQP stage-consumers where the
     # permit contextvar cannot propagate, so a permit-bound job here would
-    # silently produce UNSCOPED pseudonyms (reusable across permits — the exact
+    # silently produce UNSCOPED pseudonyms (reusable across permits  the exact
     # thing §4.4 forbids). Refuse rather than mis-scope: the operator must use
     # MEDANON_OUTPUT_MODE=stream for permit-bound exports until shards/AMQP
     # permit propagation lands.
     if (getattr(job, "params", None) or {}).get("permit_id"):
         raise RuntimeError(
             "permit-scoped pseudonymisation (permit_id) is not supported in "
-            "MEDANON_OUTPUT_MODE=shards — the shards/AMQP path cannot propagate "
+            "MEDANON_OUTPUT_MODE=shards  the shards/AMQP path cannot propagate "
             "the permit context to its worker processes, which would produce "
             "pseudonyms reusable across permits (D7.2 §4.4). Use "
             "MEDANON_OUTPUT_MODE=stream for permit-bound exports."
@@ -1145,7 +1130,7 @@ def _persist_scoring_run(
         except Exception:
             _log.debug("staged_job_detail_failed job=%s", job.id, exc_info=True)
     try:
-        from api.services.scoring_helpers import persist_run_sync
+        from pipeline.scoring_helpers import persist_run_sync
 
         persist_run_sync(
             endpoint=endpoint,

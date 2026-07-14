@@ -1,9 +1,9 @@
-"""date_shift — consistent per-subject date jittering.
+"""date_shift  consistent per-subject date jittering.
 
 Shifts every matched date field by a **deterministic offset derived from an
 anchor value** (e.g. the patient id).  Because the offset is a pure function of
 the anchor, all date fields belonging to the same subject move by the *same*
-number of days — preserving:
+number of days  preserving:
 
   * temporal ordering   (date A < date B  →  shifted(A) < shifted(B))
   * intervals           (admit→discharge gap unchanged)
@@ -12,7 +12,7 @@ number of days — preserving:
 
 This differs from ``perturb`` in two ways:
   1. The anchor is configurable (``anchor_path``) rather than always the
-     enclosing resource's subject — so an Observation can be shifted using the
+     enclosing resource's subject  so an Observation can be shifted using the
      referenced Patient id, keeping it aligned with the Patient resource.
   2. The window is one-sided-configurable (``direction``: past / future / both).
 
@@ -32,7 +32,7 @@ YAML
 The offset is ``HMAC-SHA256(MEDANON_HASH_KEY, anchor) mod (max_days + 1)``,
 sign chosen by ``direction``.  Production deployments must set
 ``MEDANON_HASH_KEY``; plain SHA-256 is only allowed with
-``MEDANON_HASH_ALLOW_PLAIN=true`` — and never in regulated mode (EHDS/D7.2
+``MEDANON_HASH_ALLOW_PLAIN=true``  and never in regulated mode (EHDS/D7.2
 §4.4). When a data-permit context is active (``utils.permit_context``)
 the key is scoped per permit, so the same subject shifts by an unrelated
 offset under different permits (§4.4: pseudonyms MUST NOT be reused across
@@ -86,7 +86,7 @@ def _anchor_value(resource: dict, anchor_path: str | None) -> str:
                             val = val[0] if val else None
                         if val:
                             return str(val)
-            except Exception:  # noqa: BLE001 — anchor resolution is best-effort
+            except Exception:  # noqa: BLE001  anchor resolution is best-effort
                 pass
     rid = resource.get("id")
     return str(rid) if rid else ""
@@ -131,7 +131,7 @@ def _signed_offset(anchor: str, max_days: int, direction: str) -> int:
         with _warned_lock:
             if not _warned_no_key:
                 _log.warning(
-                    "MEDANON_HASH_KEY is unset — date-shift offsets are deterministic "
+                    "MEDANON_HASH_KEY is unset  date-shift offsets are deterministic "
                     "but unkeyed (plain SHA-256). NOT suitable for production."
                 )
                 _warned_no_key = True
@@ -194,7 +194,7 @@ def date_shift_by_path(resource: dict, el: dict, params: dict) -> None:
     max_days = int(params["max_days"])
     direction = str(params.get("direction", "past")).lower()
     if direction not in ("past", "future", "both"):
-        _log.warning("date_shift: invalid direction %r — using 'past'", direction)
+        _log.warning("date_shift: invalid direction %r  using 'past'", direction)
         direction = "past"
 
     # preserve_age_bracket: keep the magnitude under one year so age-in-years is
@@ -206,7 +206,7 @@ def date_shift_by_path(resource: dict, el: dict, params: dict) -> None:
     parts = path.split(".")[1:]  # strip resource-type root
     if len(parts) == 0:
         raise ValueError(
-            f"Empty path after removing resource type root in date_shift — "
+            f"Empty path after removing resource type root in date_shift  "
             f"refusing to operate on entire resource (original path: {el['path']!r})"
         )
 

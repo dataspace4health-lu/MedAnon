@@ -1,12 +1,12 @@
 """PostgreSQL-backed Transformation Passport store (D7.2 §5.5.1, EHDS Art 79).
 
 Durable, queryable home for the anonymous documentation bundle a risk-driven
-export produces — the privacy model + achieved k/l/t, tools, privacy-risk
+export produces  the privacy model + achieved k/l/t, tools, privacy-risk
 assessment, and disclosure decision. Persisting it here (independent of the
 job's own retention) gives the auditability trail Art 79 wants: what was done
 to a released dataset remains answerable after the job is purged.
 
-Safe to store: the passport is anonymous **by construction** — it carries only
+Safe to store: the passport is anonymous **by construction**  it carries only
 counts, model parameters, metrics, and the disclosure verdict, never PHI or
 record-level values (see ``pipeline.transformation_passport``). We defensively
 reject a payload that fails a light PII sniff before writing, so a future
@@ -51,7 +51,7 @@ class PassportPiiError(ValueError):
 
 
 # Keys whose presence in a passport would signal record-level / identifying
-# leakage — the passport must never carry these. Cheap structural guard.
+# leakage  the passport must never carry these. Cheap structural guard.
 _FORBIDDEN_KEYS = frozenset(
     {
         "identifier",
@@ -71,7 +71,7 @@ def assert_pii_safe(passport: dict) -> None:
 
     A structural sniff (not a content scan): the passport is anonymous by
     construction, so any of these keys appearing anywhere in the nested dict
-    means the builder regressed — refuse to persist rather than store PII.
+    means the builder regressed  refuse to persist rather than store PII.
     """
 
     def _walk(obj: object) -> None:
@@ -79,7 +79,7 @@ def assert_pii_safe(passport: dict) -> None:
             for k, v in obj.items():
                 if str(k).strip().lower() in _FORBIDDEN_KEYS:
                     raise PassportPiiError(
-                        f"passport contains forbidden key {k!r} — refusing to persist"
+                        f"passport contains forbidden key {k!r}  refusing to persist"
                     )
                 _walk(v)
         elif isinstance(obj, list):

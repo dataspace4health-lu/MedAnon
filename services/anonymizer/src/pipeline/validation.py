@@ -1,6 +1,6 @@
 """Aggregate output-validation barrier (raw PII scan + score-summary gate).
 
-Where each check actually runs — verified against the call graph, not intent:
+Where each check actually runs  verified against the call graph, not intent:
 
 - **Raw-resource PII scan.**  One implementation:
   :func:`pipeline.gate.blocking_raw_detections`.  It is reached two ways.
@@ -10,7 +10,7 @@ Where each check actually runs — verified against the call graph, not intent:
   processing) and raises :class:`pipeline.gate.PiiLeakError`.  This module's
   :func:`_run_raw_pii_scan` calls it to fold the same decision into an
   aggregate verdict.  It blocks ``critical`` (names/SSN/MRN) and ``high``
-  (phone/email/street address) HIPAA direct identifiers by default — see
+  (phone/email/street address) HIPAA direct identifiers by default  see
   ``pii_detector.block_severities``.
 
   Note the scan is *content*-based and only walks strings of >= 15 characters,
@@ -23,7 +23,7 @@ Where each check actually runs — verified against the call graph, not intent:
   ``integrations.storage``, and bundled with the raw scan in
   :func:`enforce_output`.
 
-:func:`enforce_output` is therefore *not* on the FHIR path — its only caller is
+:func:`enforce_output` is therefore *not* on the FHIR path  its only caller is
 ``pipeline.sources.run``, the seam that drives the non-FHIR source adapters
 (HL7 v2 / CDA / DICOM / tabular) through the engine.  The FHIR path gets the raw
 scan via ``run_pii_gate`` and the score gate via the callers listed above.
@@ -76,7 +76,7 @@ def _gate_enabled() -> bool:
 def _run_raw_pii_scan(results: list[dict]) -> list[str]:
     """Raw-resource PII scan, as reasons for the aggregate verdict.
 
-    Delegates the decision to :func:`pipeline.gate.blocking_raw_detections` —
+    Delegates the decision to :func:`pipeline.gate.blocking_raw_detections`
     the single implementation, which also backs the ``process_data_batch``
     choke point.  Enablement (including the regulated-mode override of the
     legacy ``MEDANON_PII_GATE=false``) is decided there.
@@ -119,8 +119,8 @@ def validate_output(
     """Evaluate the unified barrier over a batch of de-identified *results*.
 
     Inputs:
-      - ``results`` — the de-identified resources (raw-resource PII scan).
-      - ``score_summary`` — the aggregated score block (score-summary gate),
+      - ``results``  the de-identified resources (raw-resource PII scan).
+      - ``score_summary``  the aggregated score block (score-summary gate),
         when available; ``None`` skips the score-summary checks.
 
     Returns a :class:`ValidationVerdict`.  Callers that must hard-block should

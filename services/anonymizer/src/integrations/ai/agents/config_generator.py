@@ -6,7 +6,7 @@ configuration profile.  Uses bundled profiles as few-shot RAG examples.
 PHI Safety: This agent receives NO patient data. Inputs are:
   - User's natural-language description of their de-identification requirements
   - (Optionally) a regulation name (HIPAA, GDPR, etc.)
-  - 7 bundled profile YAMLs as context (no PHI — only rule definitions)
+  - 7 bundled profile YAMLs as context (no PHI  only rule definitions)
 """
 
 import hashlib
@@ -79,24 +79,24 @@ _SYSTEM_PROMPT = """\
 You are an expert FHIR de-identification configuration generator for the \
 MedAnon privacy toolkit. Output a valid YAML config profile and NOTHING else.
 
-## CRITICAL SYNTAX RULES (follow exactly — wrong syntax is rejected)
+## CRITICAL SYNTAX RULES (follow exactly  wrong syntax is rejected)
 - `match:` MUST be a FHIRPath expression using DOTS, never slashes.
   CORRECT: `Patient.name`, `Patient.birthDate`, `*.id`, `Observation.valueString`
   WRONG:   `Patient/name`, `Patient.name.given` (too deep), `patient_name`
 - `action:` MUST be EXACTLY one of: {actions}
-- `params:` keys are action-specific — use ONLY the parameters listed below.
+- `params:` keys are action-specific  use ONLY the parameters listed below.
   Never invent parameter names (no `precision:`, no `mode: strict`).
 
 ## ACTIONS AND THEIR PARAMS
-- redact            — remove the value. No params.
-- cryptohash        — one-way HMAC hash (keeps linkage). No params.
-- gpas_pseudonymize — reversible TTP pseudonym (best for IDs). No params.
-- encrypt           — RSA-reversible. No params.
-- generalize        — reduce precision. REQUIRED param `strategy:` one of
+- redact             remove the value. No params.
+- cryptohash         one-way HMAC hash (keeps linkage). No params.
+- gpas_pseudonymize  reversible TTP pseudonym (best for IDs). No params.
+- encrypt            RSA-reversible. No params.
+- generalize         reduce precision. REQUIRED param `strategy:` one of
                       `date_year`, `date_year_month`, `zip_prefix`, `age_bracket`.
-- substitute        — fixed replacement. REQUIRED param `substitute_with: "<value>"`.
-- scrub_text        — regex PII scrub for free text. params: `mode`, `patterns`.
-- nlp_scrub         — NER/LLM PHI scrub for narratives. params: `threshold`.
+- substitute         fixed replacement. REQUIRED param `substitute_with: "<value>"`.
+- scrub_text         regex PII scrub for free text. params: `mode`, `patterns`.
+- nlp_scrub          NER/LLM PHI scrub for narratives. params: `threshold`.
 
 ## CANONICAL RULE EXAMPLES (copy this exact shape)
 rules:
@@ -163,7 +163,7 @@ def _load_profile_context() -> str:
     The number of example profiles and their line budget are tunable so CPU
     deployments can trade a little few-shot breadth for much faster responses.
     Defaults (3 profiles × 60 lines, ~2.5k tokens) keep the most diverse
-    examples — minimal, GDPR pseudonymization, and HIPAA Safe Harbor.
+    examples  minimal, GDPR pseudonymization, and HIPAA Safe Harbor.
     """
     config_dir = os.environ.get("MEDANON_CONFIG_DIR", "/code/config")
     # The canonical rule examples in the system prompt now carry the syntax, so
@@ -260,7 +260,7 @@ def _infer_action(prompt_lower: str, fhir_path: str) -> tuple[str, dict]:
                 if any(d in fhir_path.lower() for d in ("date", "birth", "time")):
                     return "generalize", {"strategy": "date_year"}
             return action, {}
-    # No verb hint — default by field type.
+    # No verb hint  default by field type.
     if any(d in fhir_path.lower() for d in ("date", "birth", "time")):
         return "generalize", {"strategy": "date_year"}
     if any(t in fhir_path.lower() for t in ("note", "text", "comment", "narrative")):
@@ -316,7 +316,7 @@ def _heuristic_config(prompt: str, regulation: str) -> str | None:
     title = f"Heuristic starter config{' (' + regulation + ')' if regulation else ''}"
     header = (
         "# =============================================================================\n"
-        f"# {title} — generated from your prompt without an LLM.\n"
+        f"# {title}  generated from your prompt without an LLM.\n"
         "# Review and refine these rules before use.\n"
         "# =============================================================================\n\n"
     )
@@ -475,7 +475,7 @@ def generate_config(
     )
 
     # C5: user input is sanitized + wrapped as tagged DATA, never interpolated
-    # raw. The primary boundary stays output-side (_validate_yaml_config —
+    # raw. The primary boundary stays output-side (_validate_yaml_config
     # generated YAML is schema-validated, never executed).
     safe_prompt = sanitize_untrusted(prompt)
     safe_regulation = clean_label(regulation)
@@ -483,7 +483,7 @@ def generate_config(
     profiles_context = _load_profile_context()
     source_block = ""
     if source_context.strip():
-        # Server-derived facts (type list + counts), not user input — safe to
+        # Server-derived facts (type list + counts), not user input  safe to
         # embed directly. Sanitised defensively in case of an unusual server.
         source_block = "\n\n## ACTUAL SOURCE DATA\n" + sanitize_untrusted(
             source_context.strip()
@@ -519,7 +519,7 @@ def generate_config(
             model_override=config_model,
             temperature=0.2,
             cache_key=cache_key,
-            # User intent text, not resource content — no PHI expected.
+            # User intent text, not resource content  no PHI expected.
             phi_payload=False,
         )
     except ProviderUnavailableError:
@@ -560,7 +560,7 @@ def generate_config(
             if retry_valid:
                 yaml_text, valid, err = retry_yaml, retry_valid, retry_err
             else:
-                # Neither attempt validated — keep the first (the retry tends to
+                # Neither attempt validated  keep the first (the retry tends to
                 # echo the error text back into the body on small models).
                 yaml_text, err = first_yaml, first_err
         except ProviderUnavailableError:

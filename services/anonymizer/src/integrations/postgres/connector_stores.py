@@ -2,10 +2,10 @@
 
 Two saved-connection types power the dataspace I/O boundary:
 
-* :class:`PostgresSourceStore` — saved **input sources** (currently FHIR servers).
+* :class:`PostgresSourceStore`  saved **input sources** (currently FHIR servers).
   The bearer token is stored **encrypted** (the caller passes an already-encrypted
   token); this store never sees or returns plaintext.
-* :class:`PostgresDestinationStore` — saved **S3 output destinations** (the
+* :class:`PostgresDestinationStore`  saved **S3 output destinations** (the
   de-identified file always lands here). The S3 secret key is stored encrypted.
 
 Both mirror :class:`~integrations.postgres.sql_connection_store.PostgresSqlConnectionStore`:
@@ -13,7 +13,7 @@ self-healing DDL (usable when the feature is added to an existing app-db volume)
 public read methods that omit the secret entirely, and a single secret-returning
 method used only on the run/connect path.
 
-PostgreSQL-only (no SQLite fallback) — saved credentials belong in the durable app
+PostgreSQL-only (no SQLite fallback)  saved credentials belong in the durable app
 database, mirroring the SQL-source store and ``PostgresApiKeyStore``.
 """
 
@@ -29,7 +29,7 @@ from psycopg2.pool import ThreadedConnectionPool
 
 logger = logging.getLogger("medanon.connector_store.postgres")
 
-# Lost-race errors from concurrent ``CREATE … IF NOT EXISTS`` at startup — the
+# Lost-race errors from concurrent ``CREATE … IF NOT EXISTS`` at startup  the
 # object exists either way, so these are treated as success. See the equivalent
 # guard in ``sql_connection_store`` / ``workflow_store`` / ``staging/store``.
 _BENIGN_DDL = (
@@ -137,7 +137,7 @@ class PostgresSourceStore(_BaseConnectorStore):
         }
 
     def list_all(self, role: str | None = None) -> list[dict]:
-        """Return saved servers (public — no token).
+        """Return saved servers (public  no token).
 
         When *role* is given, returns servers matching that role plus any ``both``.
         """
@@ -301,7 +301,7 @@ class PostgresDestinationStore(_BaseConnectorStore):
         return {k: v for k, v in row.items() if k != "secret_key_enc"}
 
     def list_all(self) -> list[dict]:
-        """Return all destinations (public — no secret key)."""
+        """Return all destinations (public  no secret key)."""
         conn = self._get_conn()
         try:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:

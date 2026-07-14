@@ -1,4 +1,4 @@
-"""Standalone worker entry point — no FastAPI, no HTTP server.
+"""Standalone worker entry point  no FastAPI, no HTTP server.
 
 Usage::
 
@@ -18,7 +18,7 @@ import signal
 
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO").upper(),
-    format="%(asctime)s %(levelname)s %(name)s — %(message)s",
+    format="%(asctime)s %(levelname)s %(name)s  %(message)s",
 )
 logger = logging.getLogger("medanon.worker_main")
 
@@ -79,7 +79,7 @@ async def _main() -> None:
 
     # ``select_job_store`` only creates the shared PostgreSQL pool when Postgres
     # is the JOB-STORE backend. With Redis as the job store, ``pg_pool`` stays
-    # None even though MEDANON_APP_DB_URL is set — leaving every Postgres
+    # None even though MEDANON_APP_DB_URL is set  leaving every Postgres
     # app-state store (processing-run, workflow engine, sql-connection) to fall
     # back to SQLite or fail. Create the shared pool here so the worker behaves
     # like the API (which has the same fix). ``get_pool`` is an idempotent
@@ -115,7 +115,7 @@ async def _main() -> None:
     except Exception as exc:
         logger.warning("processing_run_store_start_failed: %s", exc)
 
-    # Job detail cache — the worker WRITES it at finalize (the API only reads).
+    # Job detail cache  the worker WRITES it at finalize (the API only reads).
     # Computing it here is what keeps the browser out of the data path: the UI
     # renders counts/PII/fields without ever downloading the NDJSON result.
     try:
@@ -138,7 +138,7 @@ async def _main() -> None:
     if staging_store is not None:
         _worker.init_staging(staging_store)
 
-    # SQL-source connection store — Postgres only. The worker executes
+    # SQL-source connection store  Postgres only. The worker executes
     # ``sql-export`` jobs which resolve a saved connection by id, so the worker
     # MUST initialise this store too (the API initialises its own copy). Without
     # it, sql-export fails with "SQL connection store is not initialised".
@@ -154,7 +154,7 @@ async def _main() -> None:
         except Exception as exc:
             logger.warning("sql_connection_store_start_failed: %s", exc)
 
-    # Dataspace connector stores — the worker resolves the input-source token
+    # Dataspace connector stores  the worker resolves the input-source token
     # and the S3 output destination at finalize time, so it needs these stores
     # too (not just the API). Without them, publish_result cannot deliver.
     if pg_pool is not None:
@@ -174,7 +174,7 @@ async def _main() -> None:
         except Exception as exc:
             logger.warning("connector_stores_start_failed: %s", exc)
 
-    # Workflow engine — needed in the worker so the job terminal hook can
+    # Workflow engine  needed in the worker so the job terminal hook can
     # advance DAG steps. Postgres-only ("staging is the ledger").
     workflows_enabled = os.environ.get(
         "MEDANON_WORKFLOWS_ENABLED", "true"
@@ -191,7 +191,7 @@ async def _main() -> None:
         except Exception as exc:
             logger.warning("workflow_engine_start_failed: %s", exc)
 
-    # RabbitMQ stage consumers — opt-in (MEDANON_AMQP_URL). Each configured
+    # RabbitMQ stage consumers  opt-in (MEDANON_AMQP_URL). Each configured
     # stage gets its own consumer task; they drain partition messages and run
     # the shared per-partition processor. No-op (and no aio-pika import) when
     # AMQP is unset, so the default stack is unchanged.
@@ -219,7 +219,7 @@ async def _main() -> None:
             )
         elif amqp_enabled():
             logger.warning(
-                "amqp_enabled but staging store is unavailable — stage "
+                "amqp_enabled but staging store is unavailable  stage "
                 "consumers not started (set MEDANON_APP_DB_URL/STAGING_DB_URL)"
             )
     except Exception as exc:
@@ -231,7 +231,7 @@ async def _main() -> None:
 
     def _signal_handler(sig, _frame):
         logger.info(
-            "received %s — initiating graceful shutdown", signal.Signals(sig).name
+            "received %s  initiating graceful shutdown", signal.Signals(sig).name
         )
         stop_event.set()
 
@@ -259,7 +259,7 @@ async def _main() -> None:
                     pass
             if stop_event.is_set():
                 break
-            # worker_loop returned unexpectedly — restart
+            # worker_loop returned unexpectedly  restart
             logger.warning(
                 "worker_loop returned unexpectedly, restarting in %.1fs",
                 backoff_restart,
@@ -270,7 +270,7 @@ async def _main() -> None:
             break
         except Exception as exc:
             logger.error(
-                "worker_loop crashed: %s — restarting in %.1fs", exc, backoff_restart
+                "worker_loop crashed: %s  restarting in %.1fs", exc, backoff_restart
             )
             await asyncio.sleep(backoff_restart)
             backoff_restart = min(backoff_restart * 2, max_backoff)

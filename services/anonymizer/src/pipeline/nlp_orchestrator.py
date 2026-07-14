@@ -130,7 +130,7 @@ def _batch_key(field: _FieldText) -> "tuple | None":
     Only ``nlp_scrub`` / ``nlp_detect`` on a plain (non-XHTML) field qualify.
     They route to ``adapter.analyze_and_replace``, which sends ``token_state``
     with the request and therefore cannot consult the content-addressed
-    detection cache — so today they cost one HTTP round-trip *per field*.
+    detection cache  so today they cost one HTTP round-trip *per field*.
 
     ``nlp_detect_act`` is excluded on purpose: it calls ``adapter.detect``,
     which the Phase-B prewarm has already served from the cache, so batching it
@@ -153,7 +153,7 @@ def _contiguous_batch_runs(fields: list[_FieldText]):
     Order is load-bearing: ``token_state`` assigns surrogates (``[[PERSON_1]]``,
     ``[[PERSON_2]]``, …) on first encounter of a surface form, so reordering
     fields renumbers them.  Runs are *contiguous*, so a batched run produces
-    exactly the surrogates the original per-field loop produced — the NLP
+    exactly the surrogates the original per-field loop produced  the NLP
     service applies replacement items sequentially against the same shared
     ``token_state``.
 
@@ -289,7 +289,7 @@ def _batch_detect_prewarm(
             adapter.detect_batch(unique_texts, entities, threshold, language)
             return
         except Exception:
-            _log.warning("detect_batch_failed — falling back to sequential pre-warm")
+            _log.warning("detect_batch_failed  falling back to sequential pre-warm")
 
     # Fallback: sequential detection (still pre-warms the per-process cache)
     failed = 0
@@ -300,7 +300,7 @@ def _batch_detect_prewarm(
             failed += 1
     if failed:
         _log.warning(
-            "nlp_sequential_prewarm: %d/%d texts failed detection — "
+            "nlp_sequential_prewarm: %d/%d texts failed detection  "
             "affected fields will be redacted during replacement",
             failed,
             len(unique_texts),
@@ -339,10 +339,10 @@ def detect_phi_batch(
             for work_item in nlp_works:
                 if _resolve_fail_mode(work_item.params) == "raise":
                     raise NlpUnavailableError(
-                        "NLP adapter unavailable — cannot process batch"
+                        "NLP adapter unavailable  cannot process batch"
                     )
                 _log.error(
-                    "nlp_unavailable — redacting %s", work_item.element.get("path", "?")
+                    "nlp_unavailable  redacting %s", work_item.element.get("path", "?")
                 )
                 from utils.metrics import NLP_FALLBACK_TOTAL
 
@@ -371,7 +371,7 @@ def detect_phi_batch(
         for work_item in nlp_works:
             fields = _extract_fields(resource, work_item, i)
             if not fields:
-                # Path navigation failed or field empty — redact as fallback
+                # Path navigation failed or field empty  redact as fallback
                 redact_by_path(resource, work_item.element, {})
                 phase_a_redacted.setdefault(i, set()).add(id(work_item))
                 if _MANIFEST_ENABLED:
@@ -384,7 +384,7 @@ def detect_phi_batch(
                     )
             all_fields.extend(fields)
 
-    # Phase A1: Heuristic attachment scan — find any {contentType, data} pair
+    # Phase A1: Heuristic attachment scan  find any {contentType, data} pair
     # anywhere in each resource, regardless of resource type or nesting depth.
     # Runs after Phase A so that config-rule fields are already in the claimed set;
     # this prevents double-processing nodes that are covered by explicit rules.
@@ -429,7 +429,7 @@ def detect_phi_batch(
             wi_params[wi_id] = _resolve_nlp_params(f.work_item)
         f.nlp_params = wi_params[wi_id]
 
-    # Phase B: Batch detection — pre-warm the content-addressed detection cache.
+    # Phase B: Batch detection  pre-warm the content-addressed detection cache.
     # Group by (entities, threshold, language) so mixed-param configs get
     # correct detection results instead of using first-field params for all.
     #
@@ -461,16 +461,16 @@ def detect_phi_batch(
     # Phase C: Per-resource replacement with token_state scoping.
     #
     # mapping_scope controls token consistency across resources:
-    #   resource   (default) — fresh token_state per resource; tokens are
+    #   resource   (default)  fresh token_state per resource; tokens are
     #                          independent (e.g. [[PERSON_1]] in one resource
     #                          has no relationship to [[PERSON_1]] in another).
-    #   bundle               — one shared token_state for the entire batch so
+    #   bundle                one shared token_state for the entire batch so
     #                          the same surface form maps to the same surrogate
     #                          across all resources (e.g. a patient name in
     #                          Patient and in DocumentReference share [[PERSON_1]]).
     #                          Forces sequential Phase-C execution because the
     #                          token map is shared mutable state.
-    #   global_run           — uses the module-level singleton from scrub_text.py;
+    #   global_run            uses the module-level singleton from scrub_text.py;
     #                          tokens are stable across all batches in a CLI run.
     #
     # Read scope from any NLP work-item params (all items in one batch must use
@@ -511,7 +511,7 @@ def detect_phi_batch(
     heuristic_changed: dict[
         int, list[str]
     ] = {}  # resource_idx -> [path_hints that changed]
-    # Fields where NLP failed and a blanket redact fired — Phase D records
+    # Fields where NLP failed and a blanket redact fired  Phase D records
     # these as action=redact/reason=nlp_fallback instead of the original
     # action name, so the manifest never claims NLP succeeded when it didn't.
     work_item_fallback: dict[int, set[int]] = {}  # resource_idx -> {work_item_id}
@@ -534,7 +534,7 @@ def detect_phi_batch(
         ``_tokenize`` call (delegated through ``_apply_replacement*``).
 
         Returns ``(res_idx, resource_changed, heuristic_paths, fallback_wi,
-        fallback_paths)`` — the last two identify fields where NLP failed and a
+        fallback_paths)``  the last two identify fields where NLP failed and a
         blanket redact fired, so Phase D records the *actual* outcome instead
         of claiming NLP processing succeeded.
         """
@@ -573,7 +573,7 @@ def detect_phi_batch(
 
         def _redact_fallback(field: _FieldText, exc: BaseException) -> None:
             _log.error(
-                "nlp_batch_replace_failed res=%d key=%s — redacting",
+                "nlp_batch_replace_failed res=%d key=%s  redacting",
                 res_idx,
                 field.key,
             )
@@ -589,7 +589,7 @@ def detect_phi_batch(
                 ACTION_FALLBACK.labels(
                     action=_fb_action, reason=type(exc).__name__
                 ).inc()
-            except Exception:  # noqa: BLE001 — metrics must never break the pipeline
+            except Exception:  # noqa: BLE001  metrics must never break the pipeline
                 pass
             if field.work_item is _HEURISTIC_SENTINEL:
                 heuristic_paths.append(field.path_hint)
@@ -638,7 +638,7 @@ def detect_phi_batch(
                 except Exception as exc:
                     if _is_bug(exc):
                         # A programming defect (e.g. AttributeError) must not be
-                        # masked as a redaction — re-raise so it is observable.
+                        # masked as a redaction  re-raise so it is observable.
                         raise
                     _redact_fallback(field, exc)
 
@@ -674,7 +674,7 @@ def detect_phi_batch(
         # ``_run_resource`` already handles ordinary failures inline (blanket
         # redact) and deliberately re-raises only programming defects (see
         # ``_is_bug``). Swallowing that here would leave the resource's free
-        # text untouched and emit it — a PHI leak the sequential path below
+        # text untouched and emit it  a PHI leak the sequential path below
         # does not have. Drain every future first so no worker is still
         # mutating a resource dict, then re-raise the first defect so the
         # whole batch fails closed.
@@ -741,12 +741,12 @@ def detect_phi_batch(
                 wi_id = id(work_item)
                 if wi_id in res_phase_a:
                     # Phase A could not navigate the field and already recorded
-                    # the blanket redact — that is the outcome, not an NLP run.
+                    # the blanket redact  that is the outcome, not an NLP run.
                     continue
                 changed = res_changes.get(wi_id, False)
                 if wi_id in res_fallback:
                     # NLP failed for (at least one field of) this work item and
-                    # a blanket redact fired — record the actual outcome, not
+                    # a blanket redact fired  record the actual outcome, not
                     # the original action name, so scoring sees the redaction.
                     all_manifest_entries[i].append(
                         {
@@ -758,7 +758,7 @@ def detect_phi_batch(
                     )
                     continue
                 if work_item.action_type == "nlp_detect_act" and not changed:
-                    # Text was scanned but no PII found — record as
+                    # Text was scanned but no PII found  record as
                     # "scanned" so the scoring system knows this path
                     # was examined (prevents false-positive coverage gaps).
                     all_manifest_entries[i].append(

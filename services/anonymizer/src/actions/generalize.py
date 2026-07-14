@@ -2,7 +2,7 @@
 
 Supported generalization strategies (set via ``params['strategy']``):
 
-  date_year       — truncate a date/dateTime to the year only
+  date_year        truncate a date/dateTime to the year only
                     "1991-01-04"         → "1991"
                     "1991-01-04T00:00:00" → "1991"
 
@@ -13,32 +13,32 @@ Supported generalization strategies (set via ``params['strategy']``):
                     and date_year_month). ``cap_age: 89`` on a birthDate maps
                     everyone older than 89 to the same year. Off unless set.
 
-  date_year_month — truncate to year-month
+  date_year_month  truncate to year-month
                     "1980-02-04"         → "1980-02"
 
-  date_year_instant — truncate to year but keep a valid FHIR instant format
+  date_year_instant  truncate to year but keep a valid FHIR instant format
                     "2024-03-15T10:30:00Z" → "2024-01-01T00:00:00Z"
                     Use for fields typed as instant (e.g. meta.lastUpdated)
                     where year-only would fail FHIR schema validation.
 
-  age_bracket     — convert a date to an age bracket string
+  age_bracket      convert a date to an age bracket string
                     "1991-01-04" → "30-39"  (bracket_size defaults to 10)
 
-  number_round    — round a number to the nearest ``precision``
+  number_round     round a number to the nearest ``precision``
                     90 with precision=10 → 90
                     94 with precision=10 → 90
 
-  zip_prefix      — keep only the first ``prefix_len`` chars of a string
+  zip_prefix       keep only the first ``prefix_len`` chars of a string
                     "12345" with prefix_len=3 → "123"
 
-  category        — map a value to a broader category using a lookup table
+  category         map a value to a broader category using a lookup table
                     supplied via ``params['mapping']``  (dict)
 
-  redact_if_rare  — redact if the value is in a configured rare-value
+  redact_if_rare   redact if the value is in a configured rare-value
                     denylist, otherwise keep unchanged. Useful for
                     demographic/QI categories D7.2 §3.3.1-3.3.2 flags as
                     high-risk in small counts (rare ethnicity/nationality
-                    values, rare disease codes) — declare the known-rare
+                    values, rare disease codes)  declare the known-rare
                     values via ``params['rare_values']`` (list of strings)
                     since this per-element action has no visibility into the
                     dataset's actual value frequencies (that needs the
@@ -189,8 +189,8 @@ def _capped_year_or_none(value, params):
     value implies an age above the cap, else ``None`` (caller applies its normal
     strategy).
 
-    HIPAA Safe Harbor §164.514(b)(2)(i)(C): ages over 89 — and any date element
-    indicative of such an age, including the year — must be collapsed into one
+    HIPAA Safe Harbor §164.514(b)(2)(i)(C): ages over 89  and any date element
+    indicative of such an age, including the year  must be collapsed into one
     "90 or older" category. This is opt-in per rule via ``params['cap_age']``
     (the highest age kept as-is; typically 89). All subjects above the cap map
     to the same constant FHIR year (``reference_year - (cap_age + 1)``) so they
@@ -257,7 +257,7 @@ def _generalize_category(value, mapping, unmapped="[REDACTED]"):
     result = mapping.get(str(value))
     if result is None:
         _log.warning(
-            "category_unmapped resource_field has a value not in the mapping — "
+            "category_unmapped resource_field has a value not in the mapping  "
             "replacing with fallback %r",
             unmapped,
         )
@@ -269,7 +269,7 @@ def _generalize_redact_if_rare(value, rare_values, replacement="[REDACTED]"):
     """Redact *value* when it is in the configured rare-value denylist.
 
     D7.2 §3.3.1/§3.3.2: rare categorical values (uncommon ethnicity/nationality
-    entries, rare disease codes) are quasi-identifiers on their own — a low
+    entries, rare disease codes) are quasi-identifiers on their own  a low
     dataset frequency for that value increases re-identification risk even
     when the field itself (e.g. "ethnicity") is otherwise unremarkable.
     ``rare_values`` is author-declared (this action has no dataset-wide
@@ -356,7 +356,7 @@ def generalize_by_path(resource: dict, el: dict, params: dict) -> None:
     path = el["path"].split(".")[1:]
     if len(path) == 0:
         raise ValueError(
-            f"Empty path after removing resource type root in generalize — "
+            f"Empty path after removing resource type root in generalize  "
             f"refusing to clear entire resource (original path: {el['path']!r})"
         )
     ret = find_nodes(resource, path[:-1], [])

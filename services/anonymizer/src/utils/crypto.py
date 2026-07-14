@@ -1,4 +1,4 @@
-"""utils.crypto — RSA encryption helpers, CSPRNG utilities, and permit-scoped
+"""utils.crypto  RSA encryption helpers, CSPRNG utilities, and permit-scoped
 HMAC key derivation.
 
 Provides RSA-OAEP encrypt/decrypt for the ``encrypt``/``decrypt`` actions,
@@ -9,11 +9,11 @@ reused across different data permits").  Includes a path-traversal guard on
 key file paths.
 
 Public API:
-    rsa_encrypt(plaintext, key_path)  — encrypt bytes with a PEM public key
-    rsa_decrypt(ciphertext, key_path) — decrypt bytes with a PEM private key
-    bounded_random(low, high)         — CSPRNG integer in [low, high)
-    hash_key_id()                     — active MEDANON_HASH_KEY_ID (rotation stamp)
-    derive_permit_key(base, permit_id) — HKDF-SHA256 permit-scoped key (hex)
+    rsa_encrypt(plaintext, key_path)   encrypt bytes with a PEM public key
+    rsa_decrypt(ciphertext, key_path)  decrypt bytes with a PEM private key
+    bounded_random(low, high)          CSPRNG integer in [low, high)
+    hash_key_id()                      active MEDANON_HASH_KEY_ID (rotation stamp)
+    derive_permit_key(base, permit_id)  HKDF-SHA256 permit-scoped key (hex)
 """
 
 import hashlib
@@ -184,7 +184,7 @@ def derive_permit_key(base_key: str, *, permit_id: str, key_id: str = "") -> str
     into the derivation so a key rotation changes every permit's derived key
     together, in a traceable way.
 
-    Raises ``ValueError`` if *permit_id* is empty — callers must resolve the
+    Raises ``ValueError`` if *permit_id* is empty  callers must resolve the
     permit context before calling this (see ``utils.permit_context``).
     """
     if not permit_id:

@@ -1,4 +1,4 @@
-"""NLP detector adapter — delegates to the NLP microservice over HTTP."""
+"""NLP detector adapter  delegates to the NLP microservice over HTTP."""
 
 from __future__ import annotations
 

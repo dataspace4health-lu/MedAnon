@@ -65,7 +65,7 @@ def _classify(det: dict) -> dict[str, Any]:
 
 
 # Structural (semantic) quasi-identifiers D7.2 §3.3.1 names but regex/NER can't
-# see — demographic FHIR fields. Each: (Patient sub-path, type, recommendation,
+# see  demographic FHIR fields. Each: (Patient sub-path, type, recommendation,
 # Art 9(1) special-category). "Special" values reveal racial/ethnic/religious
 # origin → §3.3.1 flags them for special safeguards.
 _STRUCTURAL_QI_FIELDS: list[tuple[str, str, str, bool]] = [
@@ -101,7 +101,7 @@ def _scan_structural_qis(resources: list[dict]) -> list[dict[str, Any]]:
     """Detect semantic demographic quasi-identifiers (§3.3.1) on Patients.
 
     Regex/NER PII scanning cannot classify marital status, ethnicity, nationality,
-    language or religion — they are structured coded fields. This scan reports
+    language or religion  they are structured coded fields. This scan reports
     one quasi-identifier finding per distinct field present, flagging
     special-category (Art 9(1)) ones.
     """
@@ -140,7 +140,7 @@ def _scan_structural_qis(resources: list[dict]) -> list[dict[str, Any]]:
                             "classification": "quasi_identifier",
                             "kind": None,
                             "recommendation": (
-                                "special-category data (Art 9(1)) — retain only with "
+                                "special-category data (Art 9(1))  retain only with "
                                 "explicit justification + safeguards (§3.3.1)"
                                 if special
                                 else "group to lowest useful detail (§3.3.1)"

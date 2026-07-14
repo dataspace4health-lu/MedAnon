@@ -1,4 +1,4 @@
-"""Opt-in encrypted body staging (A1) — gzip + Fernet for staged FHIR resources.
+"""Opt-in encrypted body staging (A1)  gzip + Fernet for staged FHIR resources.
 
 By default the staging table stores **references only** (no PHI at rest); Phase 2
 re-fetches bodies from the source FHIR server. When ``MEDANON_STAGE_BODIES=encrypted``
@@ -68,7 +68,7 @@ def decrypt_resource(blob: bytes) -> dict:
         packed = _fernet().decrypt(bytes(blob))
     except InvalidToken as exc:
         raise StageBlobKeyError(
-            f"Staged resource blob could not be decrypted — the {_KEY_ENV} value "
+            f"Staged resource blob could not be decrypted  the {_KEY_ENV} value "
             f"may have changed since it was staged."
         ) from exc
     return json.loads(gzip.decompress(packed))

@@ -2,8 +2,8 @@
 
 Statically checks a config profile against a catalogue of well-known PHI/PII
 FHIR paths (``KNOWN_PHI_PATHS``) and reports which ones are *not* covered by any
-rule's ``match`` expression.  This surfaces gaps — e.g. a profile that redacts
-``Patient.name`` but forgets ``Patient.telecom`` — before the profile is ever
+rule's ``match`` expression.  This surfaces gaps  e.g. a profile that redacts
+``Patient.name`` but forgets ``Patient.telecom``  before the profile is ever
 run against real data.
 
 The linter is intentionally conservative: it only reasons about static

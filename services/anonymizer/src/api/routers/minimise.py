@@ -1,6 +1,6 @@
 """Data minimisation endpoint: /minimise/assess (D7.2 §3).
 
-Reads a FHIR payload and returns a Minimisation Report — direct/quasi identifier
+Reads a FHIR payload and returns a Minimisation Report  direct/quasi identifier
 classification, granularity recommendations, and (optionally) purpose-limitation
 flags. Evaluate-and-recommend only; no transformation is performed, so this runs
 locally regardless of any microservice split.

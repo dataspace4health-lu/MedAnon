@@ -2,11 +2,11 @@
 
 Spec: https://hl7.org/fhir/uv/bulkdata/
 
-    GET  /fhir/$export                    — system-level bulk export
-    GET  /fhir/Patient/$export            — patient-level bulk export
-    GET  /fhir/Group/{group_id}/$export   — group-level bulk export
-    GET  /fhir/export-status/{job_id}     — poll export status
-    DELETE /fhir/export-status/{job_id}  — cancel pending export
+    GET  /fhir/$export                     system-level bulk export
+    GET  /fhir/Patient/$export             patient-level bulk export
+    GET  /fhir/Group/{group_id}/$export    group-level bulk export
+    GET  /fhir/export-status/{job_id}      poll export status
+    DELETE /fhir/export-status/{job_id}   cancel pending export
 
 All export-trigger endpoints return HTTP 202 with a ``Content-Location``
 header pointing to the polling URL, as required by the spec.

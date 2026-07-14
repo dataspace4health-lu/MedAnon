@@ -2,18 +2,18 @@
 
 Controlled by ``MEDANON_AUTH_PROVIDER`` (default: ``auto``):
 
-  ``auto``    — current legacy behaviour: DB key → env key → SMART bearer → open
-  ``apikey``  — only X-API-Key accepted (no bearer, no open access)
-  ``oidc``    — OIDC JWT (Bearer header) + optional X-API-Key dual-accept
+  ``auto``     current legacy behaviour: DB key → env key → SMART bearer → open
+  ``apikey``   only X-API-Key accepted (no bearer, no open access)
+  ``oidc``     OIDC JWT (Bearer header) + optional X-API-Key dual-accept
                 (``MEDANON_AUTH_ALLOW_API_KEY=true``, default true)
-  ``none``    — open access (all callers granted admin; local dev only)
+  ``none``     open access (all callers granted admin; local dev only)
 
 The existing ``get_auth_context()`` in ``api/auth.py`` delegates here when the
 provider is not ``auto``, so the old code path is 100% preserved for legacy
 deployments.
 
 Provider selection can be changed at any time by editing ``MEDANON_AUTH_PROVIDER``
-and restarting — no code changes needed.
+and restarting  no code changes needed.
 """
 
 from __future__ import annotations
@@ -49,7 +49,7 @@ class AuthProvider(Protocol):
 
 
 class OpenProvider:
-    """No authentication — every caller gets admin.  Local dev only."""
+    """No authentication  every caller gets admin.  Local dev only."""
 
     provider_name = "none"
 
@@ -117,7 +117,7 @@ class OidcProvider:
 
     Downgrade guard: if the Bearer token's ``iss`` matches ``OIDC_ISSUER`` but
     JWT validation fails, we reject with 401 rather than falling through to
-    API-key — a compromised or expired token must not silently downgrade.
+    API-key  a compromised or expired token must not silently downgrade.
     """
 
     provider_name = "oidc"
@@ -177,7 +177,7 @@ class OidcProvider:
                 # admin) in Keycloak, or set OIDC_DEFAULT_ROLE to grant a floor.
                 if not roles:
                     logger.warning(
-                        "oidc_no_role subject=%s — rejecting (assign a realm role "
+                        "oidc_no_role subject=%s  rejecting (assign a realm role "
                         "or set OIDC_DEFAULT_ROLE)",
                         subject,
                     )
@@ -190,7 +190,7 @@ class OidcProvider:
                     roles=roles,
                     auth_method="oidc",
                 )
-            # Bearer from another issuer (SMART, legacy) — try SMART introspection
+            # Bearer from another issuer (SMART, legacy)  try SMART introspection
             try:
                 from api.auth import _resolve_bearer_context
 
@@ -233,7 +233,7 @@ def get_provider() -> AuthProvider | None:
         cls = _PROVIDERS.get(mode)
         if cls is None:
             logger.warning(
-                "Unknown MEDANON_AUTH_PROVIDER=%s — falling back to auto", mode
+                "Unknown MEDANON_AUTH_PROVIDER=%s  falling back to auto", mode
             )
             return None
         _active_provider = cls()

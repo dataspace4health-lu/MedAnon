@@ -49,7 +49,7 @@ async def catalog_descriptor(request: Request):
     passport = payload.get("passport")
     job_id = payload.get("job_id")
     if passport is None and job_id:
-        from api.services.reports import get_passport_store
+        from pipeline.reports import get_passport_store
 
         store = get_passport_store()
         if store is not None:

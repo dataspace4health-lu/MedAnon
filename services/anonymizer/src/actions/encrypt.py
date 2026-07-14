@@ -1,4 +1,4 @@
-"""encrypt — RSA-OAEP field encryption action.
+"""encrypt  RSA-OAEP field encryption action.
 
 Encrypts matched FHIR field values with the public key at
 ``MEDANON_RSA_PUBLIC_KEY``.  The ciphertext is Base64-encoded and written back
@@ -58,7 +58,7 @@ def encrypt_by_path(resource: dict, el: dict, params: dict) -> None:
     path = path.split(".")[1:]  # Remove root
     if len(path) == 0:
         raise ValueError(
-            f"Empty path after removing resource type root in encrypt — "
+            f"Empty path after removing resource type root in encrypt  "
             f"refusing to clear entire resource (original path: {el['path']!r})"
         )
     ret = find_nodes(ret, path[:-1], [])

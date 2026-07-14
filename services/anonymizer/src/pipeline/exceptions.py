@@ -1,7 +1,7 @@
 """Typed exception hierarchy for the de-identification pipeline.
 
 Replaces the historical pattern of bare ``except Exception:`` blocks that
-collapsed *every* failure — including programming bugs — into a silent
+collapsed *every* failure  including programming bugs  into a silent
 redaction.  With typed exceptions, the correction stage can apply a policy
 per error *kind* and, crucially, a bug in an action (e.g. a ``generalize``
 defect) surfaces as a distinct, observable event instead of masquerading as a
@@ -14,15 +14,15 @@ failure; let everything else (``AttributeError``, ``TypeError``, ``KeyError``
 from a genuine bug) propagate to the job-level error boundary.
 
     DeidError
-     ├─ ActionError          — a transformation action failed
+     ├─ ActionError           a transformation action failed
      │   ├─ GeneralizeError
      │   └─ EncryptError
-     ├─ FhirPathError        — FHIRPath compile / node navigation failed
-     │   └─ FallbackRedactError  — the safety-fallback redact itself failed
-     ├─ NlpError             — NLP detection / replacement failed
-     │   ├─ NlpUnavailableError   — the NLP service is unreachable / disabled
-     │   └─ NlpSpanError          — a detected (start, end) span was malformed
-     └─ NormalizationError   — a source adapter failed to parse/serialize input
+     ├─ FhirPathError         FHIRPath compile / node navigation failed
+     │   └─ FallbackRedactError   the safety-fallback redact itself failed
+     ├─ NlpError              NLP detection / replacement failed
+     │   ├─ NlpUnavailableError    the NLP service is unreachable / disabled
+     │   └─ NlpSpanError           a detected (start, end) span was malformed
+     └─ NormalizationError    a source adapter failed to parse/serialize input
 
 These are deliberately lightweight (no behavior beyond ``Exception``); their
 value is the *type*, which lets call sites and the correction stage discriminate
@@ -73,7 +73,7 @@ class NlpUnavailableError(NlpError, RuntimeError):
     than pass the original text through.
 
     Also subclasses ``RuntimeError`` so existing ``except RuntimeError``
-    handlers (and tests) that predate the typed hierarchy keep working — the
+    handlers (and tests) that predate the typed hierarchy keep working  the
     historical contract was a bare ``RuntimeError`` for this condition.
     """
 

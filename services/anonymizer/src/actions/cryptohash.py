@@ -1,4 +1,4 @@
-"""cryptohash — HMAC-SHA3-256 pseudonymisation action.
+"""cryptohash  HMAC-SHA3-256 pseudonymisation action.
 
 Replaces matched FHIR field values with a deterministic hex digest so identical
 inputs always map to identical outputs (longitudinal linkage without leaking
@@ -26,7 +26,7 @@ _warned_lock = threading.Lock()
 def _normalized_node_str(value: Any) -> str:
     if isinstance(value, dict):
         # Keep historical serialization behavior for backward-compatible hashes.
-        # Must use stdlib json.dumps (with spaces) — changing separators changes
+        # Must use stdlib json.dumps (with spaces)  changing separators changes
         # the hash output and breaks all existing pseudonymized data.
         return _json_stdlib.dumps(value)
     return str(value)
@@ -35,7 +35,7 @@ def _normalized_node_str(value: Any) -> str:
 def _resolve_secret_key(params: dict) -> str | None:
     """Return the HMAC secret key, scoped to the active data permit when one is set.
 
-    Priority order (GDPR Art. 32 — secrets must not live in config files):
+    Priority order (GDPR Art. 32  secrets must not live in config files):
     1. Environment variable named by ``params['secret_key_env']``
     2. Environment variable ``MEDANON_HASH_KEY`` (global default)
     3. Inline ``params['secret_key']`` value (permitted only for local dev/testing)
@@ -43,7 +43,7 @@ def _resolve_secret_key(params: dict) -> str | None:
     When a permit context is active (``utils.permit_context``), the
     resolved base key is HKDF-derived per permit so the same subject
     produces unrelated hashes under different permits (D7.2 §4.4). In
-    regulated mode a permit context is required — see
+    regulated mode a permit context is required  see
     :func:`utils.permit_context.require_permit_if_regulated`.
     """
     env_name = params.get("secret_key_env")
@@ -76,7 +76,7 @@ def _compute_hash(msg: bytes, params: dict) -> str:
     if secret_key:
         return _hmac.new(str(secret_key).encode(), msg, digestmod=digestmod).hexdigest()
 
-    # Plain hashing without HMAC is dangerous — must be explicitly allowed, and
+    # Plain hashing without HMAC is dangerous  must be explicitly allowed, and
     # is never permitted in regulated mode (EHDS/D7.2 §4.4: an unsalted/unkeyed
     # hash of direct identifiers does not qualify as pseudonymisation).
     from utils.regulated import regulated_mode
@@ -106,7 +106,7 @@ def _compute_hash(msg: bytes, params: dict) -> str:
             _hash_log.warning(
                 "No HMAC key configured (MEDANON_HASH_KEY is unset). "
                 "Falling back to plain %s without a secret key. "
-                "This produces deterministic, reversible hashes via rainbow tables — "
+                "This produces deterministic, reversible hashes via rainbow tables  "
                 "NOT suitable for production pseudonymization under GDPR Art. 4(5).",
                 hash_type.upper(),
             )
@@ -135,7 +135,7 @@ def cryptohash_by_path(resource: dict, el: dict, params: dict) -> None:
     path = path.split(".")[1:]  # Remove root
     if len(path) == 0:
         raise ValueError(
-            f"Empty path after removing resource type root in cryptohash — "
+            f"Empty path after removing resource type root in cryptohash  "
             f"refusing to clear entire resource (original path: {el['path']!r})"
         )
     ret = find_nodes(ret, path[:-1], [])

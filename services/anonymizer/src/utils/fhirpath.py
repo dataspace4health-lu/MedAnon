@@ -1,14 +1,14 @@
-"""utils.fhirpath — FHIRPath traversal helpers.
+"""utils.fhirpath  FHIRPath traversal helpers.
 
 Lightweight, pure-Python FHIRPath evaluation used by the pipeline's
 ``rule_matcher`` and action implementations.  Only the subset of FHIRPath
-needed for the rule engine is implemented — complex predicates and axis
+needed for the rule engine is implemented  complex predicates and axis
 navigation beyond simple dot-notation and ``where()`` are not supported.
 
 Public API:
-    find_nodes(resource, path)    — return list of (parent_dict, key) pairs
-    error(msg, *args)             — raise FHIRPathError
-    not_implemented(feature)      — raise NotImplementedError with context
+    find_nodes(resource, path)     return list of (parent_dict, key) pairs
+    error(msg, *args)              raise FHIRPathError
+    not_implemented(feature)       raise NotImplementedError with context
 """
 
 from datetime import datetime
@@ -41,7 +41,7 @@ def find_nodes(node, path_list, wheres):
             return find_nodes(node[clean_key], path_list[1:], wheres)
         else:
             return []
-    # node is a scalar (str, int, etc.) — no children to traverse
+    # node is a scalar (str, int, etc.)  no children to traverse
     return []
 
 
@@ -50,3 +50,24 @@ def get_date(date_str, date_format):
         return datetime.strptime(date_str, date_format)
     except ValueError:
         return None
+
+
+def _substitute_nodes(node, key, value, new_value) -> None:
+    """Recursively replace ``node[key] == value`` with *new_value* in place.
+
+    A generic FHIR node value-substituter shared by the ``substitute`` action,
+    the gPAS orchestrator, and the gPAS adapter (write-back of pseudonyms).
+    Lives here (not in ``actions/``) so adapters can reuse it without an
+    upward ``integrations -> actions`` import.
+    """
+    if isinstance(node, list):
+        for item in node:
+            _substitute_nodes(item, key, value, new_value)
+    elif isinstance(node, dict) and key in node:
+        if isinstance(node[key], list):
+            for idx, data in enumerate(node[key]):
+                if data == value:
+                    node[key][idx] = new_value
+        else:
+            if node[key] == value:
+                node[key] = new_value

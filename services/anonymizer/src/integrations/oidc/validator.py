@@ -1,4 +1,4 @@
-"""Generic OIDC JWT validator — provider-agnostic (Keycloak, Azure AD, Auth0 ...).
+"""Generic OIDC JWT validator  provider-agnostic (Keycloak, Azure AD, Auth0 ...).
 
 Configured entirely by env vars; swapping Keycloak for Azure AD is a
 config-only change with zero code changes:
@@ -14,7 +14,7 @@ config-only change with zero code changes:
     OIDC_ROLE_MAP={"MedAnon.Admin":"admin","MedAnon.Analyst":"analyst","MedAnon.Viewer":"viewer"}
 
 The module imports ``jwt`` (PyJWT) and ``jwt.algorithms`` lazily so that the
-module can be imported in environments where PyJWT is not installed — functions
+module can be imported in environments where PyJWT is not installed  functions
 return ``None`` or raise ``ImportError`` in that case.
 """
 
@@ -80,7 +80,7 @@ def _derive_jwks_url(base: str) -> str:
 
 
 def _jwks_url() -> str:
-    # 1. Explicit override — recommended for split-horizon / locked-down networks.
+    # 1. Explicit override  recommended for split-horizon / locked-down networks.
     url = os.environ.get("OIDC_JWKS_URL", "").strip()
     if url:
         return url
@@ -115,7 +115,7 @@ def _role_map() -> dict[str, str]:
     try:
         return json.loads(raw)
     except (json.JSONDecodeError, ValueError):
-        logger.warning("OIDC_ROLE_MAP is not valid JSON — using defaults")
+        logger.warning("OIDC_ROLE_MAP is not valid JSON  using defaults")
         return {}
 
 
@@ -152,7 +152,7 @@ def _get_jwks_client():
             logger.info("oidc_jwks_client_init url=%s", url)
         except ImportError:
             logger.warning(
-                "PyJWT not installed — OIDC validation disabled. "
+                "PyJWT not installed  OIDC validation disabled. "
                 "Add PyJWT to requirements.txt to enable."
             )
             return None
@@ -203,7 +203,7 @@ def _default_role() -> str:
 
     Empty (the default) = DENY BY DEFAULT: a user who authenticates but has no
     recognised role gets zero roles, and the OIDC provider rejects the request
-    with 403. This is the production-safe posture for PHI — access must be
+    with 403. This is the production-safe posture for PHI  access must be
     explicitly granted, never implied by mere authentication. Set
     ``OIDC_DEFAULT_ROLE=viewer`` to restore the old "any authenticated user can
     read" behaviour.

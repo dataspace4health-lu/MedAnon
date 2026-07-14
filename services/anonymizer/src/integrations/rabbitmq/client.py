@@ -1,4 +1,4 @@
-"""AMQP client — robust connection + confirm-mode publisher.
+"""AMQP client  robust connection + confirm-mode publisher.
 
 Wraps aio-pika with:
   * ``connect_robust`` auto-reconnect (re-declares topology on reconnect),
@@ -80,7 +80,7 @@ class AmqpClient:
     async def publish(self, msg: StageMessage, *, kind: str = "wf") -> None:
         """Publish a stage message with a publisher-confirm + timeout.
 
-        Raises on circuit-open or confirm timeout — callers treat a publish
+        Raises on circuit-open or confirm timeout  callers treat a publish
         failure as "leave it in the ledger; the reaper will republish".
         """
         import aio_pika

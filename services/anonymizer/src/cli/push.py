@@ -1,4 +1,4 @@
-"""CLI push subcommand — upload resources to a FHIR server."""
+"""CLI push subcommand  upload resources to a FHIR server."""
 
 import os
 from pathlib import Path
@@ -97,4 +97,4 @@ def run_push(args):
             )
 
     status = ":thumbs_up:" if errors == 0 else ":warning:"
-    print(f"{status} Pushed {total} resource(s) to {server} — {errors} error(s)")
+    print(f"{status} Pushed {total} resource(s) to {server}  {errors} error(s)")

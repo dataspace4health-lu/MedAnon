@@ -3,7 +3,7 @@
 Export jobs may reference a saved input source by ``source_id``. The source's
 ``server_url`` is injected into ``job.params`` at submit time (a URL is not a
 secret), but the bearer token is kept **encrypted** in the source store and
-decrypted only here, in the worker process, at fetch time — it is never persisted
+decrypted only here, in the worker process, at fetch time  it is never persisted
 in the job store.
 
 Resolution order:

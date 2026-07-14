@@ -1,8 +1,8 @@
-"""Permit service layer (WS8b) — CRUD + lifecycle over a permit store.
+"""Permit service layer (WS8b)  CRUD + lifecycle over a permit store.
 
 Wraps :mod:`pipeline.governance` so the router stays thin: it validates input,
 drives the domain state machine, persists via the store, and raises typed
-errors the router maps to HTTP status codes. The store is pluggable — an
+errors the router maps to HTTP status codes. The store is pluggable  an
 in-memory store for local dev/tests, a Postgres store in production (following
 the ``integrations.postgres.trust_profile_store`` pattern; selected here so the
 swap is a one-line change).
@@ -36,7 +36,7 @@ _store: Any = InMemoryPermitStore()
 def init_permit_store(*, store: Any = None) -> Any:
     """Install the process-wide permit store (called once at startup).
 
-    Passing ``store=None`` resets to a fresh in-memory store — used by tests
+    Passing ``store=None`` resets to a fresh in-memory store  used by tests
     that want isolation without threading a store through every call.
     """
     global _store
@@ -59,7 +59,7 @@ class PermitService:
     def __init__(self, store: Any = None) -> None:
         # Capture only an *explicitly injected* store (used by tests). Otherwise
         # resolve the process-wide store lazily on every access via the ``_store``
-        # property — a service constructed at import time (the permits router's
+        # property  a service constructed at import time (the permits router's
         # module-level singleton) must pick up the durable store installed later
         # by ``init_permit_store()`` at startup. Previously the router froze to
         # the pre-startup in-memory default, so permits never reached Postgres

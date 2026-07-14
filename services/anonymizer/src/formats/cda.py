@@ -7,7 +7,7 @@ Scrubs PHI from standard CDA R2 / CCDA sections:
   - dataEnterer (data entry person)
   - participant (referenced persons)
   - informant (informants)
-  - custodian (custodian organization — kept structural but IDs blanked)
+  - custodian (custodian organization  kept structural but IDs blanked)
   - componentOf/encompassingEncounter (encounter IDs, responsible party)
 
 The de-identification is structure-preserving: XML schema validity is maintained.
@@ -35,7 +35,7 @@ HL7_NS = {"hl7": "urn:hl7-org:v3"}
 # Context-local transformation manifest. Set by ``deidentify_cda_with_manifest``
 # so the two low-level blanking primitives (which every scrubber funnels through)
 # record what they cleared without threading a manifest arg through ~14 functions.
-# A ContextVar is isolated per call — safe under ``asyncio.to_thread`` (the
+# A ContextVar is isolated per call  safe under ``asyncio.to_thread`` (the
 # executing context is copied), unlike a shared module list.
 _cda_manifest: contextvars.ContextVar[dict | None] = contextvars.ContextVar(
     "_cda_manifest", default=None
@@ -438,7 +438,7 @@ def deidentify_cda(xml_text: str) -> str:
 def deidentify_cda_with_manifest(xml_text: str) -> tuple[str, list[dict]]:
     """Like :func:`deidentify_cda` but also returns the transformation manifest.
 
-    The manifest is a list of ``{element, attribute?, action, count}`` entries —
+    The manifest is a list of ``{element, attribute?, action, count}`` entries
     one per distinct field type cleared (e.g. ``given``/``family`` blanked,
     ``telecom@value`` blanked), with a count of occurrences. No PHI values.
     """

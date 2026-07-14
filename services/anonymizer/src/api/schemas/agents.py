@@ -129,7 +129,7 @@ class FieldScanRequest(BaseModel):
         description="Optional free-text user guidance on how to treat fields "
         "(e.g. 'pseudonymize all identifiers', 'generalize dates to year'). "
         "Injected as a sanitized system instruction the model follows when "
-        "classifying — never mixed into the untrusted field tree.",
+        "classifying  never mixed into the untrusted field tree.",
     )
     granularity: Literal["values", "whole"] = Field(
         default="values",

@@ -1,8 +1,8 @@
-"""gPAS HTTP transport layer — URL resolution, retry loop, cache helpers, domain listing.
+"""gPAS HTTP transport layer  URL resolution, retry loop, cache helpers, domain listing.
 
 Depends on:
-  .circuit_breaker — _gpas_circuit_breaker singleton
-  .protocol        — FHIR Parameters builders and response parsers
+  .circuit_breaker  _gpas_circuit_breaker singleton
+  .protocol         FHIR Parameters builders and response parsers
 """
 
 import hashlib
@@ -120,7 +120,7 @@ def _resolve_gpas_headers(params):
     if token and basic_user and basic_pass:
         gpas_log.warning(
             "Both GPAS_TOKEN (Bearer) and GPAS_BASIC_USER/GPAS_BASIC_PASS are set. "
-            "Bearer token takes precedence — Basic auth credentials will be ignored."
+            "Bearer token takes precedence  Basic auth credentials will be ignored."
         )
 
     if token:
@@ -144,7 +144,7 @@ def _resolve_gpas_headers(params):
 # brute-forceable for low-entropy PHI (DOB, MRN, ZIP). We therefore refuse the
 # plain fallback unless MEDANON_HASH_ALLOW_PLAIN=true (same gate as the
 # ``cryptohash`` action); when refused, caching is disabled rather than storing
-# weakly-blinded PHI — gPAS is still called, just without the cache layer.
+# weakly-blinded PHI  gPAS is still called, just without the cache layer.
 _HASH_KEY_BYTES: bytes = os.environ.get("MEDANON_HASH_KEY", "").strip().encode()
 
 
@@ -164,7 +164,7 @@ def _blind_identifier(value: str) -> str:
     original identifiers (patient IDs, names, DOBs) never appear in Redis
     or the in-process LRU cache.
 
-    The hash is HMAC-SHA256 keyed with ``MEDANON_HASH_KEY`` — deterministic
+    The hash is HMAC-SHA256 keyed with ``MEDANON_HASH_KEY``  deterministic
     (same input always maps to the same key) but not reversible without the
     secret.  This preserves cache hit rates while ensuring no PHI is stored
     in any cache backend.  Without the key, blinding is only attempted when
@@ -172,7 +172,7 @@ def _blind_identifier(value: str) -> str:
     already turned caching off and this function is not reached for storage.
 
     De-pseudonymize results are **never** cached because the cache value
-    would be the original PHI value — see ``_cache_set`` usage.
+    would be the original PHI value  see ``_cache_set`` usage.
     """
     raw = value.encode("utf-8")
     if _HASH_KEY_BYTES:
@@ -239,7 +239,7 @@ def _parse_gpas_domains_from_html(html_text):
 def list_gpas_domains(params):
     """Fetch and return configured gPAS domain names from the admin UI."""
     if not _gpas_circuit_breaker.allow_request():
-        raise GpasUnavailableError("gPAS circuit breaker OPEN — cannot list domains")
+        raise GpasUnavailableError("gPAS circuit breaker OPEN  cannot list domains")
     url = _resolve_gpas_admin_url(params)
     auth_headers = _resolve_gpas_headers(params)
     headers = {"Accept": "text/html"}
@@ -260,7 +260,7 @@ def list_gpas_domains(params):
 
 
 # ---------------------------------------------------------------------------
-# HTTP transport — retry loop with exponential back-off
+# HTTP transport  retry loop with exponential back-off
 # ---------------------------------------------------------------------------
 
 
@@ -270,7 +270,7 @@ def _call_gpas_operation(base_url, operation, fhir_params, params):
     Args:
         base_url: gPAS [base] URL (e.g. https://host:port/ttp-fhir/fhir/gpas)
         operation: FHIR operation name without $ (e.g. "pseudonymizeAllowCreate")
-        fhir_params: dict — the FHIR Parameters JSON body
+        fhir_params: dict  the FHIR Parameters JSON body
         params: rule params (for headers / timeout config)
     Returns:
         Parsed JSON response (dict)
@@ -280,7 +280,7 @@ def _call_gpas_operation(base_url, operation, fhir_params, params):
     if not _gpas_circuit_breaker.allow_request():
         GPAS_CALL_COUNT.labels(operation=operation, status="error").inc()
         raise GpasUnavailableError(
-            f"gPAS is unavailable — circuit breaker OPEN for ${operation}. "
+            f"gPAS is unavailable  circuit breaker OPEN for ${operation}. "
             f"Processing halted; retry after gPAS recovers."
         )
 
@@ -292,12 +292,12 @@ def _call_gpas_operation(base_url, operation, fhir_params, params):
     except UpstreamSaturated as exc:
         GPAS_CALL_COUNT.labels(operation=operation, status="error").inc()
         raise GpasUnavailableError(
-            f"gPAS bulkhead saturated for ${operation} — retry shortly"
+            f"gPAS bulkhead saturated for ${operation}  retry shortly"
         ) from exc
 
 
 def _call_gpas_operation_impl(base_url, operation, fhir_params, params):
-    """Inner implementation of _call_gpas_operation — actual HTTP loop.
+    """Inner implementation of _call_gpas_operation  actual HTTP loop.
 
     Split out so the bulkhead semaphore is not held while raising or while the
     caller serialises results; the slot is owned strictly for the HTTP round
@@ -322,7 +322,7 @@ def _call_gpas_operation_impl(base_url, operation, fhir_params, params):
             "gpas_retry_backoff_sec", os.environ.get("GPAS_RETRY_BACKOFF_SEC", 0.2)
         )
     )
-    # Build headers once — env-var and param lookups are redundant on every
+    # Build headers once  env-var and param lookups are redundant on every
     # retry attempt; X-Request-ID is fixed for the lifetime of this call.
     headers = _resolve_gpas_headers(params)
 
@@ -347,7 +347,7 @@ def _call_gpas_operation_impl(base_url, operation, fhir_params, params):
                     if resp.data
                     else ""
                 )
-                # Extract diagnostics for internal logging only — never include
+                # Extract diagnostics for internal logging only  never include
                 # raw diagnostics in the raised exception because gPAS may echo
                 # back the original value (e.g. "Value 'abc-123' not found") which
                 # constitutes a PHI leak into API error responses and job error fields.
@@ -370,7 +370,7 @@ def _call_gpas_operation_impl(base_url, operation, fhir_params, params):
                     internal_detail,
                 )
 
-                # Build the safe public error message — operational info only.
+                # Build the safe public error message  operational info only.
                 # Do not call list_gpas_domains() here: it adds a second HTTP round-trip
                 # on every "Unknown domain" error and amplifies load when misconfigured.
                 # The full diagnostic is available at DEBUG level above.
@@ -383,7 +383,7 @@ def _call_gpas_operation_impl(base_url, operation, fhir_params, params):
                 )
                 GPAS_CALL_COUNT.labels(operation=operation, status="error").inc()
                 if should_retry:
-                    # Retryable server error (5xx/429) with retries exhausted —
+                    # Retryable server error (5xx/429) with retries exhausted
                     # raise GpasUnavailableError so callers' circuit-breaker
                     # handlers catch this the same way as network failures.
                     _gpas_circuit_breaker.record_failure()

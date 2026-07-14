@@ -89,7 +89,7 @@ class PostgresConfigStore:
     # ------------------------------------------------------------------
 
     def list_all(self) -> list[dict]:
-        """Return metadata for all configs — system first, then user-defined."""
+        """Return metadata for all configs  system first, then user-defined."""
         conn = self._get_conn()
         try:
             with conn:

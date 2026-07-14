@@ -7,7 +7,7 @@ caller-supplied descriptive metadata, enriched with the privacy/quality facts a
 Transformation Passport already carries (record count, achieved k/l/t,
 anonymisation vs pseudonymisation, DP parameters, retention).
 
-Output is discovery metadata only — no PHI, no record-level content. It is a
+Output is discovery metadata only  no PHI, no record-level content. It is a
 dependency-free dict (stdlib) so it slots into the JSON API surface directly; a
 consumer can serialise it to Turtle/RDF with any JSON-LD processor.
 

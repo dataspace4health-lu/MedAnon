@@ -1,9 +1,9 @@
 """Scoring API endpoints.
 
-POST  /score              — score a single de-identified resource (ad-hoc)
-POST  /jobs/{job_id}/score — trigger on-demand scoring for a completed job
-GET   /jobs/{job_id}/score — retrieve cached score for a job
-GET   /jobs/{job_id}/score/report — retrieve Markdown audit report
+POST  /score               score a single de-identified resource (ad-hoc)
+POST  /jobs/{job_id}/score  trigger on-demand scoring for a completed job
+GET   /jobs/{job_id}/score  retrieve cached score for a job
+GET   /jobs/{job_id}/score/report  retrieve Markdown audit report
 """
 
 from __future__ import annotations
@@ -101,7 +101,7 @@ async def score_job(job_id: str, config_profile: str | None = None):
     except JobNotComplete:
         raise HTTPException(
             status_code=409,
-            detail="Job not yet complete — scoring requires a finished job",
+            detail="Job not yet complete  scoring requires a finished job",
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))

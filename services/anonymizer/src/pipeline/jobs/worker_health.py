@@ -61,7 +61,7 @@ class _Handler(BaseHTTPRequestHandler):
             self._respond(404, b"Not Found")
 
     def _handle_ready(self) -> None:
-        from api.services.health import CRITICAL_CHECKS, HealthCheckService
+        from pipeline.health import CRITICAL_CHECKS, HealthCheckService
 
         # ``critical_only`` + a tight per-probe timeout keep the whole response
         # inside the healthcheck client's 3 s window (docker-compose.yml). Gating

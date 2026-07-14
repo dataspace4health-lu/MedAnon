@@ -80,7 +80,7 @@ def get_pool(
     """Return the shared connection pool, creating it on first call.
 
     Subsequent calls with the **same** *db_url* return the existing pool.
-    Calling with a *different* URL raises ``RuntimeError`` — call
+    Calling with a *different* URL raises ``RuntimeError``  call
     ``close_pool()`` first if a reconnect is needed.
     """
     global _pool, _db_url

@@ -3,7 +3,7 @@
 Module-level holders for the active :class:`PostgresSourceStore` (saved input
 sources) and :class:`PostgresDestinationStore` (saved S3 output destinations),
 initialised during FastAPI startup when the app database (PostgreSQL) is
-available. Both are PostgreSQL-only — there is no SQLite fallback for saved
+available. Both are PostgreSQL-only  there is no SQLite fallback for saved
 connection credentials, mirroring the SQL-source store.
 """
 

@@ -7,7 +7,7 @@ returns plaintext.  Public read methods (:meth:`list_all`, :meth:`get`) omit the
 encrypted password entirely; only :meth:`get_encrypted_password` exposes it, and
 only for the connect path.
 
-PostgreSQL-only (no SQLite fallback) — saved credentials belong in the durable
+PostgreSQL-only (no SQLite fallback)  saved credentials belong in the durable
 app database, mirroring ``PostgresApiKeyStore``.
 """
 
@@ -26,7 +26,7 @@ logger = logging.getLogger("medanon.sql_connection_store.postgres")
 class PostgresSqlConnectionStore:
     """PostgreSQL-backed saved SQL-source connection store."""
 
-    # Self-healing DDL — keeps the store usable when the feature is added to an
+    # Self-healing DDL  keeps the store usable when the feature is added to an
     # existing deployment whose app-db volume predates this table (sql/init.sql
     # only runs on a fresh volume). Kept in sync with sql/init.sql.
     _SCHEMA_DDL = """
@@ -58,7 +58,7 @@ class PostgresSqlConnectionStore:
         concurrently at startup, two sessions can both pass the catalog check
         and then collide on ``pg_type``/``pg_class`` (errors
         ``DuplicateTable``/``DuplicateObject``/``UniqueViolation``). The object
-        exists either way, so those races are treated as success — only genuine
+        exists either way, so those races are treated as success  only genuine
         errors propagate. See the equivalent guard in ``workflow_store`` and
         ``staging/store``.
         """
@@ -75,7 +75,7 @@ class PostgresSqlConnectionStore:
                 cur.execute(self._SCHEMA_DDL)
             conn.commit()
         except _BENIGN:
-            # Lost a concurrent CREATE race — the table/index now exists.
+            # Lost a concurrent CREATE race  the table/index now exists.
             conn.rollback()
             logger.debug("sql_connections schema already created concurrently")
         except Exception:
@@ -145,7 +145,7 @@ class PostgresSqlConnectionStore:
         }
 
     def list_all(self) -> list[dict]:
-        """Return all connections (public — no password)."""
+        """Return all connections (public  no password)."""
         conn = self._get_conn()
         try:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
