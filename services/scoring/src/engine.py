@@ -45,6 +45,26 @@ _quality_eval = QualityEvaluator()
 _MAX_PATIENTS: int = int(os.environ.get("MEDANON_SCORE_MAX_PATIENTS", "10000"))
 
 
+# Quasi-identifier extractor, resolved once and cached at module level.  It was
+# previously imported inside ``record_resource`` on *every* Patient (inside the
+# accumulator lock) — hoisting the resolution out of the per-resource hot loop
+# avoids a repeated import lookup in the critical section.
+_extract_patient_qi = None
+
+
+def _get_qi_extractor():
+    """Return the cached ``analytics.risk._extract_patient_qi`` (or a no-op)."""
+    global _extract_patient_qi
+    if _extract_patient_qi is None:
+        try:
+            from risk import _extract_patient_qi as _fn
+
+            _extract_patient_qi = _fn
+        except ImportError:
+            _extract_patient_qi = lambda _r: ("", "", "")  # noqa: E731 - tiny fallback
+    return _extract_patient_qi
+
+
 def compute_composite(
     privacy: PrivacyDecision,
     utility: ModuleScore,
@@ -53,17 +73,15 @@ def compute_composite(
     """Multiplicative aggregation — no dimension compensates for another."""
     if not privacy.passed:
         return 0.0, "FAIL"
-    if privacy.threshold <= 0:
-        privacy_score = 1.0
-    else:
-        privacy_score = 1.0 - (privacy.risk_score / privacy.threshold)
-        # When risk_score exactly equals threshold, privacy.passed=True (gate uses <=)
-        # but privacy_score collapses to 0.0 → composite = 0 → spurious FAIL.
-        # Preserve a minimal positive contribution so the composite decision
-        # matches the gate: a resource that barely passed privacy should not
-        # be reported as FAIL at the aggregate level.
-        if privacy.passed and privacy_score <= 0.0:
-            privacy_score = 0.001
+    # Privacy contribution = residual-privacy level = 1 - re-identification risk.
+    # ``risk_score`` and this factor are both dimensionless in [0, 1]; the gate
+    # threshold is a PASS/FAIL decision boundary, not a normaliser, so it must
+    # not scale the composite. The previous ``1 - risk/threshold`` mapping drove
+    # any resource that merely *passed* near the boundary toward 0 — a clean
+    # privacy posture could still score ~0 — which is why legitimately safe
+    # cohorts graded F. A passed resource now contributes in proportion to its
+    # actual residual risk.
+    privacy_score = max(0.0, min(1.0, 1.0 - privacy.risk_score))
     raw = privacy_score * utility.score * quality.score
     # `composite` is on the 0-100 scale (already multiplied by 100). Persist it
     # as-is in `score.avg_composite`; the React UI does Math.round(value) + "%"
@@ -125,6 +143,7 @@ def _get_remote_client():
         return None
     if _REMOTE_CLIENT is None or _REMOTE_CLIENT_URL != url:
         from integrations.scoring import get_remote_scoring_client
+
         _REMOTE_CLIENT = get_remote_scoring_client()
         _REMOTE_CLIENT_URL = url
     return _REMOTE_CLIENT
@@ -218,11 +237,17 @@ class ScoreCollector:
         "_error_count",
         "_total_count",
         "_config_profile",
+        "_text_risk_hits",
+        "_identifier_risk_hits",
+        "_config_risk_sum",
+        "_config_risk_count",
+        "_uncovered_paths",
         "_lock",
     )
 
     def __init__(self, config_profile: str = "auto") -> None:
         import threading
+
         self._pass_count: int = 0
         self._fail_count: int = 0
         self._composite_sum: float = 0.0
@@ -234,6 +259,26 @@ class ScoreCollector:
         self._error_count: int = 0
         self._total_count: int = 0
         self._config_profile = config_profile
+        # Count of resources where the privacy evaluator detected actual PII
+        # in free text (text_risk > 0) or found HIPAA-sensitive fields that
+        # were not covered by any de-identification rule (identifier_risk > 0).
+        # These are used by the score gate for zero-tolerance PII enforcement
+        # independent of the composite score.
+        self._text_risk_hits: int = 0
+        self._identifier_risk_hits: int = 0
+        # Accumulate per-resource config_identifier_risk so the aggregate
+        # batch_privacy can report the average coverage gap across all scored
+        # resources (only counted when settings was available, i.e. > 0.0 or
+        # settings was passed and rules were found — tracked via _config_risk_count).
+        self._config_risk_sum: float = 0.0
+        self._config_risk_count: int = 0
+        # Frequency of each uncovered HIPAA-sensitive path across the batch, so
+        # the score gate's structured block report can name the *exact* paths
+        # that leaked (not just a count). Bounded by the small fixed set of
+        # HIPAA_SENSITIVE_PATHS, so unbounded growth is not a concern.
+        import collections
+
+        self._uncovered_paths: collections.Counter = collections.Counter()
         # Guards all mutable accumulators below.  ``record_resource`` and
         # ``aggregate`` may run concurrently from the parallel finalize stage
         # in the pipeline; without this lock, increments and the reservoir
@@ -289,13 +334,29 @@ class ScoreCollector:
 
         # Heavy scoring is intentionally outside the lock to avoid serialising
         # CPU-bound work; only the accumulation below is critical-section.
-        result = score_resource(
-            original,
-            deidentified,
-            manifest_entries,
-            settings,
-            self._config_profile,
-        )
+        # Use the local engine directly — score_resource() would route each
+        # call to the remote scoring microservice (one HTTP POST per resource),
+        # which multiplies into tens of thousands of round-trips during bulk
+        # export. The remote service runs the identical algorithm; local scoring
+        # is correct and orders of magnitude faster in the hot loop.
+        try:
+            result = _score_resource_local(
+                original,
+                deidentified,
+                manifest_entries,
+                settings,
+                self._config_profile,
+            )
+        except Exception:
+            # Scoring raised unexpectedly — _total_count was already
+            # incremented in the first critical section so we must balance
+            # _fail_count here, otherwise aggregate() computes totals from
+            # pass+fail that are one less than _total_count.
+            with self._lock:
+                self._error_count += 1
+                self._fail_count += 1
+                self._min_composite = min(self._min_composite, 0.0)
+            raise
 
         with self._lock:
             self._composite_sum += result.composite
@@ -309,15 +370,36 @@ class ScoreCollector:
             else:
                 self._fail_count += 1
 
+            # Track zero-tolerance PII leakage independently of the composite
+            # score gate.  text_risk > 0 means regex/NER found an actual PII
+            # pattern (SSN, phone, email, etc.) in the de-identified output.
+            # identifier_risk > 0 means a HIPAA-sensitive field existed in the
+            # resource but no de-identification rule touched it.
+            if result.privacy:
+                if result.privacy.text_risk > 0:
+                    self._text_risk_hits += 1
+                if result.privacy.identifier_risk > 0:
+                    self._identifier_risk_hits += 1
+                    # Harvest the exact uncovered paths from the coverage
+                    # evidence so the gate report can name them. ``unmatched``
+                    # is already truncated to 10 per resource in privacy.py.
+                    for ev in result.privacy.evidence or []:
+                        if getattr(ev, "check", "") == "identifier_coverage":
+                            for path in (ev.details or {}).get("unmatched", []):
+                                self._uncovered_paths[path] += 1
+                # Accumulate config_identifier_risk when settings was available.
+                # _config_coverage() returns 0.0 both when settings=None AND when
+                # all rules fired — use config_risk_count to track only cases
+                # where settings was present (i.e. the evaluator had rules to check).
+                if result.privacy.config_identifier_risk > 0.0:
+                    self._config_risk_sum += result.privacy.config_identifier_risk
+                    self._config_risk_count += 1
+
             # Accumulate Patient QI tuples for batch-level k-anonymity
             # (reservoir sampling).
             if deidentified.get("resourceType") == "Patient":
                 self._patient_seen += 1
-                try:
-                    from risk import _extract_patient_qi
-                    qi = _extract_patient_qi(deidentified)
-                except ImportError:
-                    qi = ("", "", "")
+                qi = _get_qi_extractor()(deidentified)
                 if len(self._patient_qis) < _MAX_PATIENTS:
                     self._patient_qis.append(qi)
                 else:
@@ -345,6 +427,28 @@ class ScoreCollector:
                 self._patient_qis,
             )
 
+        # Inject the per-resource average config_identifier_risk into batch_privacy.
+        # evaluate_batch_from_qis() returns config_identifier_risk=0.0 because it
+        # only has QI tuples, not per-resource settings.  We correct that here
+        # by substituting the average accumulated during record_resource() calls.
+        avg_config_risk = (
+            self._config_risk_sum / self._config_risk_count
+            if self._config_risk_count > 0
+            else 0.0
+        )
+        if batch_privacy is not None and avg_config_risk > 0.0:
+            # Replace the placeholder 0.0 with the actual computed average.
+            batch_privacy = PrivacyDecision(
+                risk_score=batch_privacy.risk_score,
+                passed=batch_privacy.passed,
+                threshold=batch_privacy.threshold,
+                attacker_risk=batch_privacy.attacker_risk,
+                identifier_risk=batch_privacy.identifier_risk,
+                config_identifier_risk=round(avg_config_risk, 4),
+                text_risk=batch_privacy.text_risk,
+                evidence=batch_privacy.evidence,
+            )
+
         avg_composite = self._composite_sum / total if total else 0.0
         min_composite = (
             self._min_composite if self._min_composite != float("inf") else 0.0
@@ -366,4 +470,11 @@ class ScoreCollector:
             "avg_quality": round(avg_quality, 4),
             "batch_privacy": batch_privacy.to_dict() if batch_privacy else None,
             "config_profile": self._config_profile,
+            # Zero-tolerance PII leak counters — used by the score gate for a
+            # hard block independent of the composite score.
+            "text_risk_hits": self._text_risk_hits,
+            "identifier_risk_hits": self._identifier_risk_hits,
+            # Exact HIPAA paths left uncovered, most frequent first — drives the
+            # gate's structured "what leaked" block. [(path, resource_count), …]
+            "uncovered_paths": self._uncovered_paths.most_common(20),
         }

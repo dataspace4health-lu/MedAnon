@@ -125,6 +125,8 @@ def score_batch_endpoint(req: BatchScoreRequest) -> dict[str, Any]:
             errors += 1
             results.append({"error": "scoring_failed"})
 
-    REQUESTS.labels(endpoint="score_batch", outcome="ok" if errors == 0 else "partial").inc()
+    REQUESTS.labels(
+        endpoint="score_batch", outcome="ok" if errors == 0 else "partial"
+    ).inc()
     LATENCY.labels(endpoint="score_batch").observe(time.monotonic() - t0)
     return {"count": len(results), "errors": errors, "results": results}
