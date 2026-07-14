@@ -20,7 +20,7 @@ import logging
 import psycopg2.extras
 from psycopg2.pool import ThreadedConnectionPool
 
-from pipeline.governance.permit import Permit
+from domain.permit import Permit
 
 logger = logging.getLogger("medanon.permit_store.postgres")
 

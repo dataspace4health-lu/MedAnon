@@ -1,6 +1,6 @@
 """Data-governance domain: permits, lifecycle, and store (D7.2 §2)."""
 
-from pipeline.governance.permit import (
+from domain.permit import (
     Permit,
     PermitStatus,
     PermitTransitionError,

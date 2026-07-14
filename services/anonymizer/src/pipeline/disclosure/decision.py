@@ -63,7 +63,7 @@ def assess_export_decision(
     :func:`analytics.privacy_risk.assess_privacy_risk` and ``minimisation`` via
     :func:`pipeline.minimization.assess_minimisation`.
 
-    When a :class:`pipeline.governance.permit.Permit` is supplied, the release is
+    When a :class:`domain.permit.Permit` is supplied, the release is
     additionally bound to it (WS4 permit-scoping): it must be active, the
     *recipient* must match, and the declared variables must stay within the
     permit's authorised scope.

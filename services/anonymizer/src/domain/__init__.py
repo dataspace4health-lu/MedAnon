@@ -8,3 +8,8 @@ from domain.jobs import (  # noqa: F401
     JobStatus,
     JobStoreUnavailable,
 )
+from domain.permit import (  # noqa: F401
+    Permit,
+    PermitStatus,
+    PermitTransitionError,
+)

@@ -41,7 +41,6 @@ ignore_imports =
     integrations.fhir.reader -> pipeline.jobs.staged_worker._core
     integrations.gpas.client -> actions.substitute
     integrations.nlp.remote_detector -> api.schemas.nlp
-    integrations.postgres.permit_store -> pipeline.governance.permit
     integrations.postgres.trust_profile_store -> pipeline.trust_profile
     integrations.scoring.client -> pipeline.scoring.models
     integrations.storage -> pipeline.jobs.audit_artifact

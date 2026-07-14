@@ -66,7 +66,7 @@ def assess_and_gate_disclosure(
 
     Extracted as a standalone, dependency-light function (no staging/job-store
     coupling) so it is unit-testable without driving the full staged job.
-    Resolves *permit_id* to a :class:`~pipeline.governance.permit.Permit` when
+    Resolves *permit_id* to a :class:`~domain.permit.Permit` when
     present. An unknown permit id degrades to ``permit=None`` rather than
     raising — the submission endpoint already validated the permit exists via
     ``api.deps.resolve_active_permit``, and permits are never deleted (only

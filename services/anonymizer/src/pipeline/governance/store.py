@@ -12,7 +12,7 @@ from __future__ import annotations
 import threading
 from typing import Iterable
 
-from pipeline.governance.permit import Permit
+from domain.permit import Permit
 
 
 class InMemoryPermitStore:
