@@ -872,7 +872,7 @@ def _finalize_batch(
     # launching an unnecessary thread when NLP is not configured at all.
     _nlp_adapter_available = False
     if _ATTACHMENT_SCAN:
-        from pipeline.deidentify import _get_nlp_adapter
+        from integrations.nlp.adapter import _get_nlp_adapter
 
         _nlp_adapter_available = _get_nlp_adapter() is not None
     _run_nlp_stage = _has_nlp or _nlp_adapter_available

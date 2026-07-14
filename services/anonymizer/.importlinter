@@ -34,9 +34,5 @@ layers =
     integrations
     analytics | utils | domain | formats
 ignore_imports =
-    integrations.ai.agents.config_generator -> pipeline.config.loader
-    integrations.ai.agents.config_generator -> pipeline.deidentify
-    integrations.ai.agents.pii_detector -> pipeline.deidentify
     integrations.postgres.trust_profile_store -> pipeline.trust_profile
     integrations.scoring.client -> pipeline.scoring.models
-    integrations.storage.delivery -> pipeline.connectors

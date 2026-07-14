@@ -359,7 +359,7 @@ def detect_pii_leaks(
     # Layer 2: NER, one batched call for the whole chunk.
     adapter = None
     try:
-        from pipeline.deidentify import _get_nlp_adapter
+        from integrations.nlp.adapter import _get_nlp_adapter
 
         adapter = _get_nlp_adapter()
     except ImportError:

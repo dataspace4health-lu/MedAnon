@@ -68,7 +68,7 @@ async def _resolve_source_url(source_id: str, fallback_url: str) -> str:
     an explicit ``server_url`` on the request still works.
     """
     try:
-        from pipeline.connectors import get_source_store
+        from integrations.connectors import get_source_store
 
         store = get_source_store()
         if store is None:
@@ -105,7 +105,7 @@ def _saved_id_from_active(active: str | None) -> str | None:
         active = active[len("saved:") :]
     if not active or active in ("source", "target"):
         return None
-    from pipeline.connectors import get_source_store
+    from integrations.connectors import get_source_store
 
     store = get_source_store()
     if store is None:
@@ -161,7 +161,7 @@ def effective_target_id(
 async def _resolve_target_url(target_id: str, fallback_url: str | None) -> str | None:
     """Return the validated URL for a saved target FHIR server (mirrors source)."""
     try:
-        from pipeline.connectors import get_source_store
+        from integrations.connectors import get_source_store
 
         store = get_source_store()
         if store is None:

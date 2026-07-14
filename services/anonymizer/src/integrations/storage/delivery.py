@@ -65,7 +65,7 @@ def resolve_destination_spec(dest_id: str | None) -> DestinationSpec | None:
     if not dest_id:
         return None
 
-    from pipeline.connectors import get_destination_store
+    from integrations.connectors import get_destination_store
 
     store = get_destination_store()
     if store is None:

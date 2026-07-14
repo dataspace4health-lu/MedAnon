@@ -4,7 +4,7 @@ Module-level holder for the active :class:`PostgresSettingsStore` (deployment-wi
 admin-managed application defaults), initialised during FastAPI startup when the
 app database (PostgreSQL) is available. PostgreSQL-only  there is no SQLite
 fallback; when unset, the settings service serves the built-in defaults and
-rejects writes. Mirrors :mod:`pipeline.connectors`.
+rejects writes. Mirrors :mod:`integrations.connectors`.
 """
 
 from __future__ import annotations

@@ -163,7 +163,7 @@ async def _main() -> None:
                 PostgresDestinationStore,
                 PostgresSourceStore,
             )
-            from pipeline.connectors import (
+            from integrations.connectors import (
                 init_destination_store,
                 init_source_store,
             )

@@ -20,7 +20,7 @@ import os
 
 def _saved_server_token(server_id: str) -> str | None:
     """Decrypt the stored token for a saved FHIR server, or None."""
-    from pipeline.connectors import get_source_store
+    from integrations.connectors import get_source_store
 
     store = get_source_store()
     if store is None:

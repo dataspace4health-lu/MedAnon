@@ -168,6 +168,17 @@ async def _startup() -> None:
     except Exception:
         pass  # metrics are optional in some test contexts
 
+    # Wire the deep config validator into the AI config generator so it can
+    # validate generated YAML through Settings without importing pipeline.config
+    # (layering: adapters must not depend on the pipeline core).
+    try:
+        from integrations.ai.agents import config_generator
+        from pipeline.config.loader import validate_config_yaml
+
+        config_generator.set_config_validator(validate_config_yaml)
+    except Exception:
+        logger.warning("config_validator_wiring_failed", exc_info=True)
+
     # Refuse to start with plain (un-keyed) hashing outside a dev environment.
     # Plain SHA3 is reversible via rainbow tables  must never reach production.
     _allow_plain = os.environ.get("MEDANON_HASH_ALLOW_PLAIN", "").strip().lower() in (
@@ -384,7 +395,7 @@ async def _startup() -> None:
                 PostgresDestinationStore,
                 PostgresSourceStore,
             )
-            from pipeline.connectors import (
+            from integrations.connectors import (
                 init_destination_store,
                 init_source_store,
             )
@@ -601,7 +612,7 @@ async def _startup() -> None:
         async def _prewarm_nlp() -> None:
             try:
                 loop = asyncio.get_event_loop()
-                from pipeline.deidentify import _get_nlp_adapter
+                from integrations.nlp.adapter import _get_nlp_adapter
 
                 await loop.run_in_executor(None, _get_nlp_adapter)
                 logger.info("nlp_prewarm complete")

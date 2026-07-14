@@ -589,3 +589,30 @@ class Settings:
             "on_unsatisfiable": on_unsatisfiable,
             "suppress_linked": suppress_linked,
         }
+
+
+def validate_config_yaml(yaml_text: str) -> tuple[bool, str]:
+    """Validate a config YAML string by loading it through Settings.
+
+    Returns (is_valid, error_message); the message is empty on success. This is
+    the deep validator injected into the AI config generator at startup, so the
+    generator (an adapter) never imports the config loader directly.
+    """
+    import os
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".yaml", delete=False, encoding="utf-8"
+    ) as tmp:
+        tmp.write(yaml_text)
+        tmp_path = tmp.name
+    try:
+        Settings(tmp_path)
+        return True, ""
+    except Exception as exc:
+        return False, str(exc)
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass

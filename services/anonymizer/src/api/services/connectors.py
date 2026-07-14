@@ -24,7 +24,7 @@ class ConnectorStoreUnavailable(Exception):
 
 
 def _source_store():
-    from pipeline.connectors import get_source_store
+    from integrations.connectors import get_source_store
 
     store = get_source_store()
     if store is None:
@@ -36,7 +36,7 @@ def _source_store():
 
 
 def _destination_store():
-    from pipeline.connectors import get_destination_store
+    from integrations.connectors import get_destination_store
 
     store = get_destination_store()
     if store is None:

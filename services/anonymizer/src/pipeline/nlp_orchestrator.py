@@ -320,7 +320,8 @@ def detect_phi_batch(
              cache-prewarming for local Presidio).
     Phase C: Per-resource replacement with proper token_state isolation.
     """
-    from pipeline.deidentify import _get_nlp_adapter, _resolve_fail_mode
+    from integrations.nlp.adapter import _get_nlp_adapter
+    from pipeline.deidentify import _resolve_fail_mode
     from pipeline.exceptions import NlpUnavailableError
     from actions.redact import redact_by_path
 

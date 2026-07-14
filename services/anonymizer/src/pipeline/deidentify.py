@@ -29,6 +29,13 @@ from actions.encrypt import encrypt_by_path
 from actions.decrypt import decrypt_by_path
 from pipeline.exceptions import NlpError, NlpUnavailableError
 
+from domain.actions import (
+    DEIDENT_ACTION_NAMES,
+    DEPSEUDO_ACTION_NAMES,
+    PSEUDO_ACTION_NAMES,
+)
+from integrations.nlp.adapter import _get_nlp_adapter
+
 _log = logging.getLogger("medanon.actions")
 
 # Exception types that signal a *programming defect*, not a recoverable runtime
@@ -48,10 +55,9 @@ def _is_bug(exc: BaseException) -> bool:
 # NLP adapter  resolved lazily on first call
 # ---------------------------------------------------------------------------
 
-_nlp_adapter = None
-_NLP_UNAVAILABLE = object()  # sentinel: tried to init and returned no adapter
-_nlp_adapter_lock = threading.Lock()
-_nlp_adapter_initialised = False  # True once the lock section has run (even if no URL)
+# The NLP adapter singleton and _get_nlp_adapter() live in
+# integrations.nlp.adapter (imported above); the adapter package owns its
+# lifecycle. Tests inject a mock by assigning integrations.nlp.adapter._nlp_adapter.
 
 # NLP failure mode: "redact" (default, safe fallback) | "raise" (hard fail)
 # "skip" was removed  it silently passed unscrubbed PHI through when NLP was unavailable.
@@ -119,41 +125,6 @@ def _ensure_nlp_detector_imports():
 
     _nlp_resolve_entities = _re
     _nlp_scrub_xhtml = _sx
-
-
-def _get_nlp_adapter():
-    """Return the NLP detector adapter, creating it once on first use.
-
-    Requires ``NLP_SERVICE_URL`` to be set  the NLP engine runs exclusively
-    as the NLP microservice (``RemoteNlpAdapter``).  Returns ``None`` if the
-    env var is absent  callers must handle this gracefully.
-
-    Thread-safe: the initialisation block runs exactly once under a lock.
-    Fast path: after initialisation the lock is never acquired again.
-    """
-    global _nlp_adapter, _nlp_adapter_initialised
-    # Fast path  if _nlp_adapter is already set (by init or by test injection),
-    # skip the lock entirely. Using `is not None` rather than the initialised flag
-    # means tests can inject a mock by simply assigning the module attribute.
-    if _nlp_adapter is not None:
-        return None if _nlp_adapter is _NLP_UNAVAILABLE else _nlp_adapter
-    with _nlp_adapter_lock:
-        # Re-check under the lock: another thread may have initialised first.
-        if _nlp_adapter is not None:
-            return None if _nlp_adapter is _NLP_UNAVAILABLE else _nlp_adapter
-        nlp_url = os.environ.get("NLP_SERVICE_URL", "")
-        if nlp_url:
-            from integrations.nlp.adapter import RemoteNlpAdapter
-
-            _nlp_adapter = RemoteNlpAdapter()
-        else:
-            _log.warning(
-                "NLP_SERVICE_URL not set  NLP scrubbing unavailable. "
-                "Set NLP_SERVICE_URL=http://nlp-lb:8200 to enable."
-            )
-            _nlp_adapter = _NLP_UNAVAILABLE
-        _nlp_adapter_initialised = True
-    return None if _nlp_adapter is _NLP_UNAVAILABLE else _nlp_adapter
 
 
 def nlp_scrub_by_path(resource: dict, el: dict, params: dict) -> None:
@@ -772,6 +743,19 @@ depseudo_actions = {
 
 # Backward-compatible alias
 actions = deident_actions
+
+# Drift guard: the dispatch dicts above must cover exactly the domain vocabulary
+# (domain/actions.py), which config validation and the AI config generator read.
+# Fail fast at import if an action is added to one but not the other.
+assert frozenset(deident_actions) == DEIDENT_ACTION_NAMES, (
+    "deident_actions keys drifted from domain.actions.DEIDENT_ACTION_NAMES"
+)
+assert frozenset(pseudo_actions) == PSEUDO_ACTION_NAMES, (
+    "pseudo_actions keys drifted from domain.actions.PSEUDO_ACTION_NAMES"
+)
+assert frozenset(depseudo_actions) == DEPSEUDO_ACTION_NAMES, (
+    "depseudo_actions keys drifted from domain.actions.DEPSEUDO_ACTION_NAMES"
+)
 
 
 # ---------------------------------------------------------------------------

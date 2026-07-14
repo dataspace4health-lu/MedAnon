@@ -1027,7 +1027,7 @@ class PrivacyRiskEvaluator:
         """Run Presidio NER scan via existing NLP adapter."""
         detections: list[dict] = []
         try:
-            from pipeline.deidentify import _get_nlp_adapter
+            from integrations.nlp.adapter import _get_nlp_adapter
 
             adapter = _get_nlp_adapter()
             if adapter is None:

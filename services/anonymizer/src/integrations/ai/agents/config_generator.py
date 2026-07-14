@@ -38,17 +38,9 @@ def _load_valid_actions() -> frozenset[str]:
     as invalid).  Reading the registries keeps it correct automatically.
     """
     try:
-        from pipeline.deidentify import (
-            deident_actions,
-            pseudo_actions,
-            depseudo_actions,
-        )
+        from domain.actions import ALL_ACTION_NAMES
 
-        return (
-            frozenset(deident_actions)
-            | frozenset(pseudo_actions)
-            | frozenset(depseudo_actions)
-        )
+        return ALL_ACTION_NAMES
     except Exception:
         # Safe static fallback if the registry import fails for any reason.
         return frozenset(
@@ -353,13 +345,24 @@ def _extract_yaml_from_response(text: str) -> str:
     return "\n".join(lines).strip()
 
 
+# The deep config validator (Settings-based) is injected at startup via
+# set_config_validator, so this adapter never imports pipeline.config. When it
+# is not wired, the self-contained structural checks below still run.
+_deep_validator = None
+
+
+def set_config_validator(fn) -> None:
+    """Wire the deep config validator (composition root). See _validate_yaml_config."""
+    global _deep_validator
+    _deep_validator = fn
+
+
 def _validate_yaml_config(yaml_text: str) -> tuple[bool, str]:
-    """Validate generated YAML through the existing Settings loader.
+    """Validate generated YAML: self-contained structural checks first, then the
+    injected deep validator (the config loader, wired at startup) when present.
 
     Returns (is_valid, error_message). Error message is empty on success.
     """
-    import tempfile
-
     try:
         parsed = yaml.safe_load(yaml_text)
         if not isinstance(parsed, dict):
@@ -376,20 +379,8 @@ def _validate_yaml_config(yaml_text: str) -> tuple[bool, str]:
             if not rule.get("match", "").strip():
                 return False, f"Rule {i + 1}: empty match expression"
 
-        from pipeline.config.loader import Settings
-
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            suffix=".yaml",
-            delete=False,
-            encoding="utf-8",
-        ) as tmp:
-            tmp.write(yaml_text)
-            tmp_path = tmp.name
-        try:
-            Settings(tmp_path)
-        finally:
-            os.unlink(tmp_path)
+        if _deep_validator is not None:
+            return _deep_validator(yaml_text)
         return True, ""
     except Exception as exc:
         return False, str(exc)

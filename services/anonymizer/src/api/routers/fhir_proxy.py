@@ -69,7 +69,7 @@ def _resolve_saved_source(
     saved base plus the relative ``path``.
     """
     from integrations.sql_source.secrets import decrypt_secret
-    from pipeline.connectors import get_source_store
+    from integrations.connectors import get_source_store
 
     store = get_source_store()
     if store is None:

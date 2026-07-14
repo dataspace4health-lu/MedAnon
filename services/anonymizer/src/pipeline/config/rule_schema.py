@@ -222,14 +222,10 @@ class RuleModel(BaseModel):
 
 
 def _known_action_names() -> frozenset[str]:
-    """Action names from the dispatch registries (lazy import  no cycle)."""
-    from pipeline.deidentify import deident_actions, depseudo_actions, pseudo_actions
+    """Canonical action vocabulary (domain contract, guarded against the engine)."""
+    from domain.actions import ALL_ACTION_NAMES
 
-    return (
-        frozenset(deident_actions)
-        | frozenset(pseudo_actions)
-        | frozenset(depseudo_actions)
-    )
+    return ALL_ACTION_NAMES
 
 
 def validate_rules_schema(rules: list[dict]) -> list[str]:
