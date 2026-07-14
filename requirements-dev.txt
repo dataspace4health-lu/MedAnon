@@ -17,3 +17,8 @@ httpx==0.28.1
 
 # scripts/check_env.py parses docker-compose.yml.
 PyYAML==6.0.3
+
+# `make lint-imports` / the CI `lint-python` job. Enforces the anonymizer
+# layering contract (services/anonymizer/.importlinter): dependencies must point
+# downward. Pin exactly -- grimp's graph analysis can shift between releases.
+import-linter==2.13

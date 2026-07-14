@@ -17,6 +17,7 @@ ANONYMIZER_IMAGE ?= medanon:latest
 # on machines that install the deps system-wide.
 PYBIN       := $(if $(wildcard $(VENV)/bin/python3),$(CURDIR)/$(VENV)/bin/python3,python3)
 RUFF        := $(if $(wildcard $(VENV)/bin/ruff),$(CURDIR)/$(VENV)/bin/ruff,ruff)
+LINT_IMPORTS := $(if $(wildcard $(VENV)/bin/lint-imports),$(CURDIR)/$(VENV)/bin/lint-imports,lint-imports)
 
 # Worker replica count — read from .env (default 2 if not set or .env absent).
 # gPAS and NLP always run as a single instance (scaling them does not improve
@@ -39,7 +40,7 @@ AI_MODEL    := $(lastword $(subst /, ,$(AI_PROVIDER)))
 ANONYMIZER_PORT := $(shell grep -s '^ANONYMIZER_PORT=' .env | cut -d= -f2 | tr -d '[:space:]')
 ANONYMIZER_PORT := $(if $(ANONYMIZER_PORT),$(ANONYMIZER_PORT),8000)
 
-.PHONY: help setup test test-cov lint format batch fetch sync-check \
+.PHONY: help setup test test-cov lint lint-imports format batch fetch sync-check \
         up down down-wipe logs build build-ui build-sdv up-sdv build-healthcheck clean \
         init-domains preflight verify _dirs ai-up ai-pull ai-status \
         helm-install helm-uninstall helm-lint helm-template helm-build-gpas \
@@ -54,6 +55,7 @@ help:
 	@echo "  make test               Run full test suite"
 	@echo "  make test-cov           Run tests with coverage report"
 	@echo "  make lint               Run ruff linter"
+	@echo "  make lint-imports       Check the anonymizer layering contract (import-linter)"
 	@echo "  make format             Auto-format with ruff"
 	@echo "  make batch              Run batch processing + analytics"
 	@echo "  make fetch              Pull resources from HAPI FHIR, anonymize, write NDJSON"
@@ -119,6 +121,8 @@ ci-local:
 	@$(RUFF) check services/anonymizer/src
 	@echo "── ruff format --check (all service trees) ─────────────────"
 	@$(RUFF) format --check services/
+	@echo "── anonymizer layering contract ────────────────────────────"
+	@cd $(ANONYMIZER) && PYTHONPATH=src $(LINT_IMPORTS)
 	@echo "── env drift ───────────────────────────────────────────────"
 	@$(PYBIN) scripts/check_env.py
 	@echo "── env catalogue up to date ────────────────────────────────"
@@ -149,6 +153,13 @@ install-hooks:
 # Settings live in the root ruff.toml; the version is pinned in requirements-dev.txt.
 lint:
 	$(RUFF) check services/anonymizer/src
+
+# Architecture guardrail: enforces the anonymizer layering contract in
+# services/anonymizer/.importlinter (dependencies point downward). The baseline
+# of 22 known upward imports is ignored so CI is green today; any NEW upward
+# import fails. Delete an ignore line as the coupling refactor removes it.
+lint-imports:
+	@cd $(ANONYMIZER) && PYTHONPATH=src $(LINT_IMPORTS)
 
 # Formats every service tree, not just the anonymizer. pipeline/scoring/ is kept
 # manually in sync with services/scoring/src/ (see sync-check), so formatting one

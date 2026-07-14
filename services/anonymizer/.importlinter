@@ -1,0 +1,58 @@
+# import-linter layering contract for the anonymizer service.
+#
+# Enforces the intended hexagonal dependency direction: dependencies point
+# DOWNWARD only (interface -> application -> transforms -> adapters -> foundation).
+# An import that reaches UP a layer breaks the contract.
+#
+# The `ignore_imports` list below is a BASELINE RATCHET. Every entry is a known,
+# pre-existing upward import (22 of them, from the 2026-07 dependency audit). CI
+# is green today because they are ignored, but any NEW upward import fails the
+# build. As each violation is fixed in the coupling refactor, DELETE its line
+# here; the contract tightens automatically and can never regress.
+#
+# Run:  make lint-imports   (from repo root)
+# Or:   cd services/anonymizer && PYTHONPATH=src lint-imports
+
+[importlinter]
+root_packages =
+    api
+    pipeline
+    actions
+    integrations
+    analytics
+    utils
+    domain
+    formats
+
+[importlinter:contract:layering]
+name = anonymizer layering (dependencies point downward)
+type = layers
+layers =
+    api
+    pipeline
+    actions
+    integrations
+    analytics | utils | domain | formats
+ignore_imports =
+    actions.cryptohash -> pipeline.permit_context
+    actions.date_shift -> pipeline.permit_context
+    actions.tokenize -> pipeline.permit_context
+    integrations.ai.agents.config_generator -> pipeline.config.loader
+    integrations.ai.agents.config_generator -> pipeline.deidentify
+    integrations.ai.agents.pii_detector -> pipeline.deidentify
+    integrations.fhir.bulk -> api.deps
+    integrations.fhir.reader -> pipeline.jobs.staged_worker._core
+    integrations.gpas.client -> actions.substitute
+    integrations.nlp.remote_detector -> api.schemas.nlp
+    integrations.postgres.permit_store -> pipeline.governance.permit
+    integrations.postgres.trust_profile_store -> pipeline.trust_profile
+    integrations.scoring.client -> pipeline.scoring.models
+    integrations.storage -> pipeline.jobs.audit_artifact
+    integrations.storage -> pipeline.manifest
+    integrations.storage -> pipeline.scoring.gate
+    integrations.storage.delivery -> pipeline.connectors
+    pipeline.jobs.executor_export -> api.services.scoring_helpers
+    pipeline.jobs.staged_worker._core -> api.services.scoring_helpers
+    pipeline.jobs.staged_worker._risk -> api.services.permits
+    pipeline.jobs.staged_worker._risk -> api.services.reports
+    pipeline.jobs.worker_health -> api.services.health
