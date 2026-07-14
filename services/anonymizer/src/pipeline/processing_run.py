@@ -14,9 +14,11 @@ import json
 import logging
 import os
 import sqlite3
+from contextlib import AbstractContextManager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from utils.sqlite_store import connect as sqlite_connect
 
 _log = logging.getLogger("medanon.processing_run")
 
@@ -33,11 +35,9 @@ class SqliteProcessingRunStore:
         Path(self._path).parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
-    def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self._path, check_same_thread=False, timeout=10)
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.row_factory = sqlite3.Row
-        return conn
+    def _connect(self) -> "AbstractContextManager[sqlite3.Connection]":
+        """WAL connection, committed and **closed** on exit. See utils.sqlite_store."""
+        return sqlite_connect(self._path)
 
     def _init_db(self) -> None:
         with self._connect() as conn:
@@ -148,12 +148,20 @@ class SqliteProcessingRunStore:
 
         return [_row_to_dict(r) for r in rows], total
 
-    def get_stats(self, window_days: int = 90) -> dict:
+    def get_stats(
+        self, window_days: int = 90, config_profile: str | None = None
+    ) -> dict:
         """Aggregate statistics across recent runs.
 
         ``window_days`` limits the breakdown queries to the last N days so
         they stay index-friendly as history grows.  All-time totals
         (total_runs, total_resources) are still computed across the full table.
+        ``config_profile`` restricts every aggregate to a single profile.
+
+        Score keys mirror ``ScoreCollector.summary()``; ``avg_utility`` and
+        ``avg_quality`` are 0-1 module scores and privacy derives from
+        ``1 - batch_privacy.risk_score``, so all three are scaled to 0-100 to
+        match the already-scaled ``avg_composite``.
         """
         from datetime import timedelta
 
@@ -161,51 +169,70 @@ class SqliteProcessingRunStore:
             datetime.now(timezone.utc) - timedelta(days=window_days)
         ).isoformat()
 
+        prof_sql = " AND config_profile = ?" if config_profile else ""
+        prof_args: list = [config_profile] if config_profile else []
+        # All-time totals carry no window predicate, so they need their own WHERE.
+        totals_sql = " WHERE config_profile = ?" if config_profile else ""
+
         with self._connect() as conn:
             agg = conn.execute(
-                """
+                f"""
                 SELECT
-                    COUNT(*)                                                               AS total_runs,
-                    COUNT(CASE WHEN score IS NOT NULL THEN 1 END)                         AS scored_runs,
-                    AVG(CAST(json_extract(score, '$.avg_composite') AS REAL))              AS avg_composite,
-                    COALESCE(SUM(resource_count), 0)                                       AS total_resources
+                    COUNT(CASE WHEN score IS NOT NULL THEN 1 END) AS scored_runs,
+                    COUNT(CASE WHEN json_extract(score, '$.pii_leak_blocked') = 1
+                               THEN 1 END)                        AS blocked_runs,
+                    AVG(CAST(json_extract(score, '$.avg_composite') AS REAL)) AS avg_composite,
+                    AVG(MAX(0.0, MIN(1.0,
+                        1.0 - CAST(json_extract(score, '$.batch_privacy.risk_score') AS REAL)
+                    )) * 100.0)                                   AS avg_privacy,
+                    AVG(CAST(json_extract(score, '$.avg_utility') AS REAL) * 100.0) AS avg_utility,
+                    AVG(CAST(json_extract(score, '$.avg_quality') AS REAL) * 100.0) AS avg_quality
                 FROM processing_runs
-                WHERE created_at >= ?
+                WHERE created_at >= ?{prof_sql}
                 """,
-                (window_cutoff,),
+                [window_cutoff, *prof_args],
             ).fetchone()
 
             totals = conn.execute(
-                """
+                f"""
                 SELECT
                     COUNT(*) AS total_runs,
                     COALESCE(SUM(resource_count), 0) AS total_resources
-                FROM processing_runs
-                """
+                FROM processing_runs{totals_sql}
+                """,
+                prof_args,
             ).fetchone()
 
             by_endpoint = {
                 r["endpoint"]: r["cnt"]
                 for r in conn.execute(
                     "SELECT endpoint, COUNT(*) AS cnt FROM processing_runs"
-                    " WHERE created_at >= ? GROUP BY endpoint ORDER BY cnt DESC LIMIT 20",
-                    (window_cutoff,),
+                    f" WHERE created_at >= ?{prof_sql}"
+                    " GROUP BY endpoint ORDER BY cnt DESC LIMIT 20",
+                    [window_cutoff, *prof_args],
                 ).fetchall()
             }
             by_profile = {
                 r["config_profile"]: r["cnt"]
                 for r in conn.execute(
                     "SELECT config_profile, COUNT(*) AS cnt FROM processing_runs"
-                    " WHERE created_at >= ? GROUP BY config_profile ORDER BY cnt DESC LIMIT 20",
-                    (window_cutoff,),
+                    f" WHERE created_at >= ?{prof_sql}"
+                    " GROUP BY config_profile ORDER BY cnt DESC LIMIT 20",
+                    [window_cutoff, *prof_args],
                 ).fetchall()
             }
 
-        avg = agg["avg_composite"]
+        def _round(v) -> float | None:
+            return round(float(v), 1) if v is not None else None
+
         return {
             "total_runs": totals["total_runs"],
             "scored_runs": agg["scored_runs"] or 0,
-            "avg_composite": round(float(avg), 1) if avg is not None else None,
+            "blocked_runs": agg["blocked_runs"] or 0,
+            "avg_composite": _round(agg["avg_composite"]),
+            "avg_privacy": _round(agg["avg_privacy"]),
+            "avg_utility": _round(agg["avg_utility"]),
+            "avg_quality": _round(agg["avg_quality"]),
             "total_resources": totals["total_resources"] or 0,
             "runs_by_endpoint": by_endpoint,
             "runs_by_profile": by_profile,

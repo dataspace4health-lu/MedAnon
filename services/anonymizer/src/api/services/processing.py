@@ -106,6 +106,71 @@ class ProcessingService:
             )
             raise ProcessingError("Unexpected processing error", status=500) from exc
 
+    async def process_ndjson_stream(
+        self, line_aiter: AsyncIterator[str], settings
+    ) -> AsyncIterator[str]:
+        """Stream-process NDJSON with bounded memory (no full-body buffering).
+
+        Consumes lines lazily from *line_aiter* and de-identifies them in batches
+        of ``_BATCH_SIZE``, yielding each batch's result JSON strings before the
+        next batch is read — so at most one batch is held in memory and the input
+        may be arbitrarily large. Parse errors are emitted in place; a gPAS outage
+        yields a fatal sentinel and stops; a blocked PII leak yields an explicit
+        placeholder (fail-closed — the offending resource is never streamed).
+        """
+
+        async def _flush(chunk: list[dict]) -> tuple[list[str], bool]:
+            """Return (result-json-strings, fatal). fatal=True stops the stream."""
+            out: list[str] = []
+            try:
+                results = await asyncio.to_thread(
+                    process_data_batch, chunk, settings, None, _SCORING_ON
+                )
+                out.extend(_json_dumps(r) for r in results)
+                return out, False
+            except GpasUnavailableError:
+                out.append(GPAS_FATAL_JSON)
+                return out, True
+            except Exception:
+                # Per-resource fallback so one poison record doesn't sink the batch.
+                for res in chunk:
+                    try:
+                        r = await asyncio.to_thread(
+                            process_data_batch, [res], settings, None, _SCORING_ON
+                        )
+                        out.append(_json_dumps(r[0]))
+                    except GpasUnavailableError:
+                        out.append(GPAS_FATAL_JSON)
+                        return out, True
+                    except PiiLeakError as pexc:
+                        out.append(_json_dumps({"error": f"pii_leak_blocked — {pexc}"}))
+                    except Exception as exc:
+                        out.append(_json_dumps({"error": f"processing error — {exc}"}))
+                return out, False
+
+        batch: list[dict] = []
+        async for raw in line_aiter:
+            line = raw.strip()
+            if not line or line.startswith("//"):
+                continue
+            try:
+                resource = _json_loads(line)
+            except (ValueError, TypeError) as exc:
+                yield _json_dumps({"error": f"invalid JSON — {exc}"})
+                continue
+            batch.append(resource)
+            if len(batch) >= _BATCH_SIZE:
+                results, fatal = await _flush(batch)
+                for o in results:
+                    yield o
+                batch = []
+                if fatal:
+                    return
+        if batch:
+            results, _ = await _flush(batch)
+            for o in results:
+                yield o
+
     async def process_ndjson_lines(
         self, lines: list[str], settings
     ) -> AsyncIterator[str]:

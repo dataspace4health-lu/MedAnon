@@ -182,15 +182,22 @@ Output ONLY a JSON array of detections. If no PII found, output [].
 """
 
 
-def _extract_text_fields(resource: dict) -> list[tuple[str, str]]:
-    """Extract (field_path, text_value) tuples from a FHIR resource."""
+def _extract_text_fields(resource: dict, min_len: int = 15) -> list[tuple[str, str]]:
+    """Extract (field_path, text_value) tuples from a FHIR resource.
+
+    ``min_len`` is the shortest string value that is scanned. The default (15)
+    targets free-text narrative; the Resource Explorer lowers it (``min_len=1``)
+    to scan EVERY string field, so short direct identifiers that live in
+    structured fields — an SSN, a phone number, a ``name.family`` — are seen by
+    regex/NER too, not just prose.
+    """
     results: list[tuple[str, str]] = []
     rtype = resource.get("resourceType", "")
 
     def _walk(obj: object, path: str, depth: int = 0) -> None:
         if depth > 12:
             return
-        if isinstance(obj, str) and len(obj) >= 15:
+        if isinstance(obj, str) and len(obj) >= min_len:
             results.append((path, obj))
         elif isinstance(obj, dict):
             for k, v in obj.items():
@@ -205,89 +212,138 @@ def _extract_text_fields(resource: dict) -> list[tuple[str, str]]:
     return results
 
 
+def _regex_detections(
+    resource_id: str,
+    resource_type: str,
+    text_fields: list[tuple[str, str]],
+) -> list[dict]:
+    """Layer 1: deterministic pattern match over the resource's free text."""
+    out: list[dict] = []
+    for field_path, text in text_fields:
+        for name, pattern in PII_PATTERNS.items():
+            for match in pattern.finditer(text):
+                out.append(
+                    {
+                        "resource_id": resource_id,
+                        "resource_type": resource_type,
+                        "field_path": field_path,
+                        "type": name,
+                        "evidence": match.group()[:30],
+                        "confidence": 0.9,
+                        "severity": _SEVERITY_MAP.get(name, "medium"),
+                        "source": "regex",
+                    }
+                )
+    return out
+
+
+def _ner_detections(adapter, indexed: list[tuple[str, str, str, str]]) -> list[dict]:
+    """Layer 2: one batched NER call for every text field across every resource.
+
+    *indexed* is ``[(resource_id, resource_type, field_path, text), ...]``.
+
+    Previously this issued ``adapter.detect(text)`` once per field per resource,
+    serially — with ``NLP_SERVICE_URL`` set (always, in the shipped compose
+    stack) that is one HTTP round-trip per field.  ``detect_batch`` collapses
+    them into one request per chunk.
+
+    Raises whatever the adapter raises.  The caller decides how to record the
+    degradation; it must not be swallowed, or the gate silently drops a layer
+    while still reporting that it ran.
+    """
+    if not indexed:
+        return []
+    hits_per_text = adapter.detect_batch(
+        [text for _, _, _, text in indexed],
+        [],  # entities: all
+        0.5,  # threshold
+        "en",  # language
+    )
+    if len(hits_per_text) != len(indexed):
+        raise ValueError(
+            f"detect_batch returned {len(hits_per_text)} results "
+            f"for {len(indexed)} texts"
+        )
+
+    out: list[dict] = []
+    for (resource_id, resource_type, field_path, _text), hits in zip(
+        indexed, hits_per_text
+    ):
+        for hit in hits:
+            etype = (
+                hit[2]
+                if isinstance(hit, (tuple, list)) and len(hit) >= 3
+                else "UNKNOWN"
+            )
+            out.append(
+                {
+                    "resource_id": resource_id,
+                    "resource_type": resource_type,
+                    "field_path": field_path,
+                    "type": etype.lower(),
+                    "evidence": f"NER entity: {etype}",
+                    "confidence": 0.7,
+                    "severity": _SEVERITY_MAP.get(etype, "medium"),
+                    "source": "ner",
+                }
+            )
+    return out
+
+
 def detect_pii_leaks(
     resources: list[dict],
     *,
     use_ai: bool = True,
+    min_len: int = 15,
 ) -> dict:
-    """Scan de-identified resources for residual PII.
+    """Scan de-identified resources for residual PII in string content.
 
-    Combines three detection layers:
-    1. Regex patterns (fast, no model needed)
-    2. NER scan (Presidio — when available)
+    By default this is a **free-text** content scanner: ``_extract_text_fields``
+    only walks strings of >= 15 characters, so a leaked ``name.family`` or
+    ``identifier.value`` in a structured field is invisible to it — those are the
+    job of the structural coverage check in :mod:`pipeline.identifier_gate`.
+
+    Lower ``min_len`` (the Resource Explorer passes ``min_len=1``) to scan EVERY
+    string field, so regex/NER also see short structured identifiers. Recall
+    rises at the cost of more NER noise; callers filter by severity.
+
+    Three layers:
+    1. Regex patterns (deterministic, no model needed)
+    2. NER scan (Presidio, batched — when the adapter is available)
     3. LLM contextual analysis (when AI enabled + local model available)
 
     Returns: {
         "detections": [...],
         "summary": {"total": N, "critical": N, "high": N, "medium": N},
         "layers_used": ["regex", "ner", "ai"],
+        "degraded": [<layer that was requested but failed>, ...],
     }
+
+    ``layers_used`` lists layers that actually produced a result.  A layer that
+    was attempted and failed appears in ``degraded`` instead — it previously
+    appeared in ``layers_used`` regardless, so an NLP outage silently reduced
+    the scan to regex while still reporting that NER had run.
     """
     all_detections: list[dict] = []
     layers_used: list[str] = ["regex"]
+    degraded: list[str] = []
 
+    # Layer 1 + text extraction, and the flat index the batched NER layer needs.
+    ner_index: list[tuple[str, str, str, str]] = []
     for resource in resources:
-        text_fields = _extract_text_fields(resource)
+        text_fields = _extract_text_fields(resource, min_len=min_len)
         resource_id = resource.get("id", "unknown")
         resource_type = resource.get("resourceType", "unknown")
 
-        # Layer 1: Regex patterns
-        for field_path, text in text_fields:
-            for name, pattern in PII_PATTERNS.items():
-                for match in pattern.finditer(text):
-                    all_detections.append(
-                        {
-                            "resource_id": resource_id,
-                            "resource_type": resource_type,
-                            "field_path": field_path,
-                            "type": name,
-                            "evidence": match.group()[:30],
-                            "confidence": 0.9,
-                            "severity": _SEVERITY_MAP.get(name, "medium"),
-                            "source": "regex",
-                        }
-                    )
+        all_detections.extend(
+            _regex_detections(resource_id, resource_type, text_fields)
+        )
+        ner_index.extend(
+            (resource_id, resource_type, field_path, text)
+            for field_path, text in text_fields
+        )
 
-        # Layer 2: NER scan (existing Presidio adapter)
-        try:
-            from pipeline.deidentify import _get_nlp_adapter
-
-            adapter = _get_nlp_adapter()
-            if adapter is not None:
-                if "ner" not in layers_used:
-                    layers_used.append("ner")
-                for field_path, text in text_fields:
-                    try:
-                        hits = adapter.detect(
-                            text,
-                            entities=[],
-                            threshold=0.5,
-                            language="en",
-                        )
-                        for hit in hits:
-                            etype = (
-                                hit[2]
-                                if isinstance(hit, tuple) and len(hit) >= 3
-                                else "UNKNOWN"
-                            )
-                            all_detections.append(
-                                {
-                                    "resource_id": resource_id,
-                                    "resource_type": resource_type,
-                                    "field_path": field_path,
-                                    "type": etype.lower(),
-                                    "evidence": f"NER entity: {etype}",
-                                    "confidence": 0.7,
-                                    "severity": _SEVERITY_MAP.get(etype, "medium"),
-                                    "source": "ner",
-                                }
-                            )
-                    except Exception:
-                        pass
-        except ImportError:
-            pass
-
-        # Layer 3: LLM contextual analysis
+        # Layer 3: LLM contextual analysis (per resource — needs the whole doc)
         if use_ai and text_fields:
             try:
                 ai_hits = _ai_scan_resource(resource, text_fields)
@@ -299,6 +355,25 @@ def detect_pii_leaks(
                     layers_used.append("ai")
             except Exception as exc:
                 _log.debug("ai_pii_scan_skipped: %s", exc)
+
+    # Layer 2: NER, one batched call for the whole chunk.
+    adapter = None
+    try:
+        from pipeline.deidentify import _get_nlp_adapter
+
+        adapter = _get_nlp_adapter()
+    except ImportError:
+        pass
+    if adapter is not None and ner_index:
+        try:
+            all_detections.extend(_ner_detections(adapter, ner_index))
+            layers_used.append("ner")
+        except Exception as exc:
+            degraded.append("ner")
+            _log.error(
+                "pii_gate_ner_layer_failed error_type=%s — scan degraded to regex only",
+                type(exc).__name__,
+            )
 
     # Deduplicate by (field_path, type, evidence prefix)
     seen: set[tuple[str, str, str]] = set()
@@ -320,6 +395,7 @@ def detect_pii_leaks(
         "detections": unique,
         "summary": summary,
         "layers_used": layers_used,
+        "degraded": degraded,
     }
 
 

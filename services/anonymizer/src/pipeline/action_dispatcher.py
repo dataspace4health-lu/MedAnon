@@ -90,6 +90,31 @@ BatchWork = PseudonymizationTask
 NlpWork = PHIDetectionTask
 
 
+def _stable_value_key(v):
+    """Value-based identity for the (path, action, value, params) dedup key.
+
+    Stable across runs, threads and processes: an earlier version used ``id()``
+    of the matched value, which is only unique within an object's lifetime and
+    is reused after GC — under parallel processing that produced
+    non-reproducible output, a disqualifier for a privacy tool.
+
+    Defined at module scope rather than inside ``evaluate_and_dispatch``'s rule
+    loop, which allocated a fresh closure per rule per resource (104,672 of them
+    for a 2000-resource batch on the default profile).
+    """
+    if v is None or isinstance(v, (str, int, float, bool)):
+        return v
+    try:
+        # Sorted keys make the digest stable across runs / Python processes
+        # (orjson preserves insertion order otherwise).
+        return _json_dumps_sorted(v)
+    except Exception:
+        # Last-resort fallback — identity is OK here because the only path that
+        # hits this branch is non-JSON-serializable objects, which never come
+        # from FHIR resources in practice.
+        return f"unhashable:{id(v)}"
+
+
 def _bare_path_prefix(expr: str) -> str:
     """Trim a FHIRPath expression to its leading bare dot-path.
 
@@ -155,10 +180,10 @@ def evaluate_and_dispatch(
 
     for rule in applicable_rules:
         action = rule["action"]
-        params = _resolve_rule_params(rule, settings)
 
         # Conditional rules (E2.4): skip this rule entirely when its optional
         # condition/conditions block does not hold for the current resource.
+        # Evaluated before params are resolved — a condition never reads them.
         if not evaluate_rule_condition(rule, resource):
             audit_log.debug(
                 "rule_skipped_condition action=%s match=%s",
@@ -175,18 +200,6 @@ def evaluate_and_dispatch(
                     }
                 )
             continue
-
-        # Apply domain_map override: route this resource type to its leaf gPAS domain.
-        # Only runs for gpas_pseudonymize/gpas_depseudonymize when the config has a domain_map.
-        if action in GPAS_PSEUDO_ACTIONS or action in GPAS_DEPSEUDO_ACTIONS:
-            _domain_map = getattr(settings, "domain_map", None)
-            if _domain_map:
-                resource_type = (
-                    resource.get("resourceType") if isinstance(resource, dict) else None
-                )
-                if resource_type and resource_type in _domain_map:
-                    params = dict(params)  # shallow copy — gpas_domain is a scalar
-                    params["gpas_domain"] = _domain_map[resource_type]
 
         # Evaluate FHIRPath match candidates, collecting node elements
         matched_elements: list[dict] = []
@@ -258,31 +271,33 @@ def evaluate_and_dispatch(
                         continue
                     raise
 
-        # Filter elements already processed by a prior rule with the same action.
-        # Dedup key uses a *stable, value-based* identity so output is
-        # deterministic across runs and threads.  Previously this used id() of
-        # mutable matched values, which is only unique within an object's
-        # lifetime and can be reused after GC — under parallel processing that
-        # produced non-reproducible output (a privacy-tool disqualifier).
-        def _stable_value_key(v):
-            if v is None or isinstance(v, (str, int, float, bool)):
-                return v
-            try:
-                # Sorted keys make the digest stable across runs / Python
-                # processes (orjson preserves insertion order otherwise).
-                return _json_dumps_sorted(v)
-            except Exception:
-                # Last-resort fallback — identity is OK here because the only
-                # path that hits this branch is non-JSON-serializable objects,
-                # which never come from FHIR resources in practice.
-                return f"unhashable:{id(v)}"
+        # Nothing matched: no params to resolve, no fingerprint to compute, no
+        # dedup key to build. On the bundled default profile 86.6% of rule
+        # evaluations land here (42 of the 103 rules are `*.`-wildcards that
+        # apply to every resource type), and each one used to pay a
+        # _resolve_rule_params call plus a JSON serialisation of its params.
+        if not matched_elements:
+            continue
+
+        params = _resolve_rule_params(rule, settings)
+
+        # Apply domain_map override: route this resource type to its leaf gPAS domain.
+        # Only runs for gpas_pseudonymize/gpas_depseudonymize when the config has a domain_map.
+        if action in GPAS_PSEUDO_ACTIONS or action in GPAS_DEPSEUDO_ACTIONS:
+            _domain_map = getattr(settings, "domain_map", None)
+            if _domain_map:
+                resource_type = (
+                    resource.get("resourceType") if isinstance(resource, dict) else None
+                )
+                if resource_type and resource_type in _domain_map:
+                    params = dict(params)  # shallow copy — gpas_domain is a scalar
+                    params["gpas_domain"] = _domain_map[resource_type]
 
         # Include a param fingerprint in the dedup key so two rules with the
         # same action but different params on the same path/value are both
         # applied.  Without this, a stricter follow-on rule (e.g. a second
         # generalize with a different strategy) is silently dropped, which is
         # a quiet privacy regression.
-        # Use _stable_value_key on sorted params items for a cheap stable digest.
         try:
             params_key = _stable_value_key(
                 {k: params[k] for k in sorted(params) if not k.startswith("_")}
@@ -296,6 +311,14 @@ def evaluate_and_dispatch(
             el_val = el.get("value")
             val_key = _stable_value_key(el_val)
             path_key = (el_path, action, val_key, params_key)
+            # Skip if this (path, action, value, params) was already selected —
+            # by a prior rule OR by an earlier candidate of *this same* rule.
+            # ``_build_match_candidates`` expands a wildcard like ``*.id`` into
+            # both ``*.id`` and ``Patient.id``; on a typed resource both match
+            # the identical nodes, so we must record each selection as we go or
+            # the same element is processed (and manifest-logged) twice. Value-
+            # based collapse is safe: the write-back replaces every occurrence
+            # equal to the value, so one representative covers all duplicates.
             if path_key in processed_paths:
                 audit_log.debug(
                     "rule_skipped_duplicate action=%s path=%s",
@@ -303,12 +326,10 @@ def evaluate_and_dispatch(
                     el_path,
                 )
                 continue
+            processed_paths.add(path_key)
             elements_to_process.append(el)
 
         for el in elements_to_process:
-            el_val = el.get("value")
-            val_key = _stable_value_key(el_val)
-            processed_paths.add((el.get("path", "?"), action, val_key, params_key))
             # Surface config conflicts: same path claimed by a different action.
             el_path = el.get("path", "?")
             prior = path_action_seen.get(el_path)

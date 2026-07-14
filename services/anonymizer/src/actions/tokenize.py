@@ -35,7 +35,12 @@ input length if ``preserve_length`` is true (default), else a fixed 12 chars.
 
 Determinism is provided by ``HMAC-SHA256(MEDANON_HASH_KEY, namespace:value)``.
 Production deployments must set ``MEDANON_HASH_KEY``; plain SHA-256 is only
-permitted when ``MEDANON_HASH_ALLOW_PLAIN=true``.
+permitted when ``MEDANON_HASH_ALLOW_PLAIN=true`` — and never in regulated mode
+(EHDS/D7.2 §4.4: an unsalted/unkeyed hash of direct identifiers does not
+qualify as pseudonymisation). When a data-permit context is active
+(``pipeline.permit_context``) the key is additionally scoped per permit, so
+the same input produces unrelated tokens under different permits (§4.4:
+pseudonyms MUST NOT be reused across permits).
 """
 
 from __future__ import annotations
@@ -68,8 +73,13 @@ def _derive_stream(namespace: str, value: str) -> "_Stream":
     msg = f"{namespace}:{value}".encode()
     secret_key = os.environ.get("MEDANON_HASH_KEY") or ""
     if secret_key:
+        from pipeline.permit_context import scope_key_to_permit
+
+        secret_key = scope_key_to_permit(secret_key, action="tokenize")
         seed = _hmac.new(secret_key.encode(), msg, digestmod="sha256").digest()
     else:
+        from utils.regulated import regulated_mode
+
         allow_plain = os.environ.get(
             "MEDANON_HASH_ALLOW_PLAIN", ""
         ).strip().lower() in (
@@ -77,6 +87,11 @@ def _derive_stream(namespace: str, value: str) -> "_Stream":
             "true",
             "yes",
         )
+        if regulated_mode():
+            raise ValueError(
+                "MEDANON_REGULATED_MODE is on: plain hashing is not permitted. "
+                "Set MEDANON_HASH_KEY for HMAC-based tokenization."
+            )
         if not allow_plain:
             raise ValueError(
                 "No HMAC key configured (MEDANON_HASH_KEY is unset) and "

@@ -118,6 +118,15 @@ class JobService:
             # Risk-driven export: generalization plan and achieved privacy metrics.
             # Present only for risk-driven-export jobs; None for all other types.
             "achieved_privacy": _build_achieved_privacy(checkpoint),
+            # Risk-driven export: the Fig-6 disclosure decision made on the
+            # actual output before release (D7.2 §5.4). None for other job types.
+            "disclosure": (checkpoint.get("transformation_passport") or {}).get(
+                "disclosure"
+            ),
+            # Risk-driven export: the full Transformation Passport (D7.2 §5.5.1)
+            # — privacy model + achieved k/l/t, tools, privacy-risk assessment,
+            # and disclosure. Anonymous by construction (no PHI). None otherwise.
+            "transformation_passport": checkpoint.get("transformation_passport"),
         }
 
     def submit_bulk_export(self, server_url: str, params: dict) -> dict:

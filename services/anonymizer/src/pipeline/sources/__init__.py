@@ -26,6 +26,7 @@ from pipeline.sources.tabular_adapter import (
     TabularAdapter,
     apply_column_rules,
     recommend_column_action,
+    resolve_column_manifest,
     rules_for_table,
 )
 
@@ -38,5 +39,6 @@ __all__ = [
     "TabularAdapter",
     "apply_column_rules",
     "recommend_column_action",
+    "resolve_column_manifest",
     "rules_for_table",
 ]

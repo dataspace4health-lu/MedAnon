@@ -244,9 +244,7 @@ class PostgresTrustProfileStore:
         if meta is None:
             raise KeyError(f"Trust profile '{name}' not found.")
         if meta["is_system"]:
-            raise PermissionError(
-                f"System trust profile '{name}' cannot be deleted."
-            )
+            raise PermissionError(f"System trust profile '{name}' cannot be deleted.")
         conn = self._get_conn()
         try:
             with conn:

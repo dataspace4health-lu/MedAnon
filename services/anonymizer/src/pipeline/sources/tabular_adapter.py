@@ -270,6 +270,41 @@ def rules_for_table(rules: list[dict], table: str) -> list[dict]:
     return resolved
 
 
+def resolve_column_manifest(
+    settings=None,
+    columns=None,
+    *,
+    rules: list[dict] | None = None,
+) -> list[dict]:
+    """Return the transformation manifest for a tabular file (no cell values).
+
+    Lists the ``column:<name>`` rules that apply to columns actually present in
+    the file as ``{column, action, rule}`` entries — the tabular analogue of the
+    FHIR transformation manifest, released as a separate artifact.
+    """
+    src_rules = rules if rules is not None else (getattr(settings, "rules", []) or [])
+    # columns=None → don't filter (the rules are already table-scoped, e.g. SQL);
+    # a column list → include only rules whose column is present in the file.
+    present = set(columns) if columns is not None else None
+    out: list[dict] = []
+    for rule in src_rules:
+        if not isinstance(rule, dict):
+            continue
+        match = rule.get("match", "")
+        if not isinstance(match, str) or not match.startswith(_COLUMN_PREFIX):
+            continue
+        column = match[len(_COLUMN_PREFIX) :].strip()
+        action = rule.get("action")
+        if not column or not action:
+            continue
+        if present is not None and column not in present:
+            continue
+        out.append(
+            {"column": column, "action": action, "rule": rule.get("name") or match}
+        )
+    return out
+
+
 def apply_column_rules(
     rows: list[dict],
     settings=None,

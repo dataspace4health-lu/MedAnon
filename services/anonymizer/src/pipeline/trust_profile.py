@@ -18,9 +18,11 @@ import json
 import logging
 import os
 import sqlite3
+from contextlib import AbstractContextManager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from utils.sqlite_store import connect as sqlite_connect
 
 _log = logging.getLogger("medanon.trust_profile")
 
@@ -135,11 +137,9 @@ class SqliteTrustProfileStore:
         self._migrate_columns()
         self._seed_system_profiles()
 
-    def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self._path, check_same_thread=False, timeout=10)
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.row_factory = sqlite3.Row
-        return conn
+    def _connect(self) -> "AbstractContextManager[sqlite3.Connection]":
+        """WAL connection, committed and **closed** on exit. See utils.sqlite_store."""
+        return sqlite_connect(self._path)
 
     def _init_db(self) -> None:
         with self._connect() as conn:
@@ -166,7 +166,9 @@ class SqliteTrustProfileStore:
         SQLite has no ``ADD COLUMN IF NOT EXISTS``; gate on ``PRAGMA table_info``.
         """
         with self._connect() as conn:
-            cols = {r["name"] for r in conn.execute("PRAGMA table_info(trust_profiles)")}
+            cols = {
+                r["name"] for r in conn.execute("PRAGMA table_info(trust_profiles)")
+            }
             if "use_case" not in cols:
                 conn.execute(
                     "ALTER TABLE trust_profiles ADD COLUMN use_case TEXT NOT NULL DEFAULT ''"
@@ -269,7 +271,9 @@ class SqliteTrustProfileStore:
             "phases": meta["phases"] if phases is None else phases,
             "thresholds": meta["thresholds"] if thresholds is None else thresholds,
             "targets": meta["targets"] if targets is None else targets,
-            "intended_use": meta["intended_use"] if intended_use is None else intended_use,
+            "intended_use": meta["intended_use"]
+            if intended_use is None
+            else intended_use,
             "use_case": meta["use_case"] if use_case is None else use_case,
         }
         with self._connect() as conn:
@@ -325,8 +329,12 @@ def _row_to_dict(row: dict) -> dict:
         "intended_use": row.get("intended_use", "") or "",
         "use_case": row.get("use_case", "") or "",
         "is_system": bool(row.get("is_system")),
-        "created_at": created if isinstance(created, str) else (created.isoformat() if created else None),
-        "updated_at": updated if isinstance(updated, str) else (updated.isoformat() if updated else None),
+        "created_at": created
+        if isinstance(created, str)
+        else (created.isoformat() if created else None),
+        "updated_at": updated
+        if isinstance(updated, str)
+        else (updated.isoformat() if updated else None),
     }
 
 
@@ -341,7 +349,9 @@ def init_trust_profile_store(db_path: str | None = None, *, store: Any = None) -
     """Initialise the module-level singleton. Pass ``store=`` for the Postgres
     backend, or a path/None for the SQLite fallback."""
     global _trust_profile_store
-    _trust_profile_store = store if store is not None else SqliteTrustProfileStore(db_path)
+    _trust_profile_store = (
+        store if store is not None else SqliteTrustProfileStore(db_path)
+    )
     return _trust_profile_store
 
 

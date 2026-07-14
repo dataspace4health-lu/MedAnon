@@ -14,9 +14,7 @@ class WorkflowStepRequest(BaseModel):
 
 class WorkflowSubmitRequest(BaseModel):
     name: str = Field(..., description="Human-readable workflow name")
-    steps: list[WorkflowStepRequest] = Field(
-        ..., min_length=1, description="DAG steps"
-    )
+    steps: list[WorkflowStepRequest] = Field(..., min_length=1, description="DAG steps")
     params: dict = Field(default_factory=dict)
 
 

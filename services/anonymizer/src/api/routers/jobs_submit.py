@@ -15,7 +15,13 @@ import os
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
 
-from api.deps import _get_url_from_request_or_env, _validate_server_url, limiter
+from api.deps import (
+    _get_url_from_request_or_env,
+    _validate_server_url,
+    limiter,
+    require_admin_for_reversal,
+    resolve_active_permit,
+)
 from api.schemas.jobs import (
     BatchPatientExportRequest,
     BulkExportJobRequest,
@@ -30,7 +36,11 @@ from api.routers.jobs_common import (
     _check_idempotency,
     _resolve_import_target_url,
     _resolve_optional_target_url,
+    _resolve_source_url,
+    _resolve_target_url,
     _service,
+    effective_source_id,
+    effective_target_id,
 )
 from api.services.jobs import JobStoreUnavailable
 from utils import audit
@@ -38,6 +48,21 @@ from utils import idempotency as _idem
 
 router = APIRouter()
 logger = logging.getLogger("medanon")
+
+
+def _validate_permit_and_reversal(request: Request, req) -> None:
+    """Validate an export job's ``permit_id`` and enforce admin-only reversal.
+
+    D7.2 §4.4: a supplied ``permit_id`` must resolve to an active permit (422
+    otherwise) so pseudonymisation can be scoped to it; and a config profile
+    that can reverse pseudonymisation/decrypt is admin-only regardless of
+    endpoint (Art 66(3)). Both checks run at submission time so the caller gets
+    a clear error before the background worker starts.
+    """
+    resolve_active_permit(getattr(req, "permit_id", None))
+    from pipeline.config.service import get_settings as _get_settings
+
+    require_admin_for_reversal(request, _get_settings(req.config_profile))
 
 
 @router.post("/jobs/bulk-export", status_code=202)
@@ -55,7 +80,11 @@ async def submit_bulk_export(req: BulkExportJobRequest, request: Request):
     )
     if cached is not None:
         return JSONResponse(status_code=cached["status"], content=cached["body"])
+    _validate_permit_and_reversal(request, req)
     server_url = await _get_url_from_request_or_env(req.server_url, "FHIR_SOURCE_URL")
+    source_id = effective_source_id(req.source_id, req.server_url)
+    if source_id:
+        server_url = await _resolve_source_url(source_id, server_url)
     target_url = await _resolve_optional_target_url(req.target_url)
     target_token = req.target_token or os.environ.get("FHIR_TARGET_TOKEN") or None
     try:
@@ -70,8 +99,11 @@ async def submit_bulk_export(req: BulkExportJobRequest, request: Request):
                 "token": req.token,
                 "timeout": req.timeout,
                 "config_profile": req.config_profile,
+                "permit_id": req.permit_id,
                 "target_url": target_url,
                 "target_token": target_token,
+                "source_id": source_id,
+                "destination_id": req.destination_id,
             },
         )
     except JobStoreUnavailable:
@@ -169,6 +201,7 @@ async def submit_sql_export(req: SqlExportJobRequest, request: Request):
         "output_format": req.output_format.lower(),
         "config_profile": req.config_profile,
         "chunk_size": req.chunk_size,
+        "destination_id": req.destination_id,
     }
     if req.rules is not None:
         params["rules"] = req.rules
@@ -192,7 +225,11 @@ async def submit_cohort(req: CohortJobRequest, request: Request):
     idem_key, body_hash, cached = _check_idempotency(request, "/v1/jobs/cohort", req)
     if cached is not None:
         return JSONResponse(status_code=cached["status"], content=cached["body"])
+    _validate_permit_and_reversal(request, req)
     server_url = await _get_url_from_request_or_env(req.server_url, "FHIR_SOURCE_URL")
+    source_id = effective_source_id(req.source_id, req.server_url)
+    if source_id:
+        server_url = await _resolve_source_url(source_id, server_url)
     target_url = await _resolve_optional_target_url(req.target_url)
     target_token = req.target_token or os.environ.get("FHIR_TARGET_TOKEN") or None
     try:
@@ -206,8 +243,11 @@ async def submit_cohort(req: CohortJobRequest, request: Request):
                 "token": req.token,
                 "timeout": req.timeout,
                 "config_profile": req.config_profile,
+                "permit_id": req.permit_id,
                 "target_url": target_url,
                 "target_token": target_token,
+                "source_id": source_id,
+                "destination_id": req.destination_id,
             },
         )
     except JobStoreUnavailable:
@@ -232,7 +272,11 @@ async def submit_patient_export(req: PatientExportJobRequest, request: Request):
     )
     if cached is not None:
         return JSONResponse(status_code=cached["status"], content=cached["body"])
+    _validate_permit_and_reversal(request, req)
     server_url = await _get_url_from_request_or_env(req.server_url, "FHIR_SOURCE_URL")
+    source_id = effective_source_id(req.source_id, req.server_url)
+    if source_id:
+        server_url = await _resolve_source_url(source_id, server_url)
     target_url = await _resolve_optional_target_url(req.target_url)
     target_token = req.target_token or os.environ.get("FHIR_TARGET_TOKEN") or None
     try:
@@ -245,8 +289,11 @@ async def submit_patient_export(req: PatientExportJobRequest, request: Request):
                 "token": req.token,
                 "timeout": req.timeout,
                 "config_profile": req.config_profile,
+                "permit_id": req.permit_id,
                 "target_url": target_url,
                 "target_token": target_token,
+                "source_id": source_id,
+                "destination_id": req.destination_id,
             },
         )
     except JobStoreUnavailable:
@@ -275,7 +322,11 @@ async def submit_batch_patient_export(req: BatchPatientExportRequest, request: R
     )
     if cached is not None:
         return JSONResponse(status_code=cached["status"], content=cached["body"])
+    _validate_permit_and_reversal(request, req)
     server_url = await _get_url_from_request_or_env(req.server_url, "FHIR_SOURCE_URL")
+    source_id = effective_source_id(req.source_id, req.server_url)
+    if source_id:
+        server_url = await _resolve_source_url(source_id, server_url)
     target_url = await _resolve_optional_target_url(req.target_url)
     target_token = req.target_token or os.environ.get("FHIR_TARGET_TOKEN") or None
     try:
@@ -288,8 +339,11 @@ async def submit_batch_patient_export(req: BatchPatientExportRequest, request: R
                 "token": req.token,
                 "timeout": req.timeout,
                 "config_profile": req.config_profile,
+                "permit_id": req.permit_id,
                 "target_url": target_url,
                 "target_token": target_token,
+                "source_id": source_id,
+                "destination_id": req.destination_id,
             },
         )
     except JobStoreUnavailable:
@@ -329,13 +383,19 @@ async def submit_bulk_import(req: BulkImportJobRequest, request: Request):
     )
     if cached is not None:
         return JSONResponse(status_code=cached["status"], content=cached["body"])
-    target_url = await _resolve_import_target_url(req.target_url)
+    target_id = effective_target_id(req.target_id, req.target_url)
+    if target_id:
+        # Saved target server: URL from the store, token resolved server-side.
+        target_url = await _resolve_target_url(target_id, req.target_url)
+        target_token = None
+    else:
+        target_url = await _resolve_import_target_url(req.target_url)
+        target_token = req.target_token or os.environ.get("FHIR_TARGET_TOKEN") or None
     if not target_url:
         raise HTTPException(
             status_code=400,
             detail="No target URL provided and FHIR_TARGET_URL env var is not set",
         )
-    target_token = req.target_token or os.environ.get("FHIR_TARGET_TOKEN") or None
     try:
         job_dict = await asyncio.to_thread(
             _service.submit_bulk_import,
@@ -344,6 +404,7 @@ async def submit_bulk_import(req: BulkImportJobRequest, request: Request):
                 "ndjson_path": req.ndjson_path,
                 "target_url": target_url,
                 "target_token": target_token,
+                "target_id": target_id,
                 "timeout": req.timeout,
                 "parallel": req.parallel,
                 "batch_size": req.batch_size,
@@ -392,7 +453,19 @@ async def submit_risk_driven_export(req: RiskDrivenExportJobRequest, request: Re
             status_code=400,
             detail="No server_url provided and FHIR_SOURCE_URL env var is not set",
         )
-    await _validate_server_url(server_url)
+    source_id = effective_source_id(req.source_id, req.server_url)
+    if source_id:
+        server_url = await _resolve_source_url(source_id, server_url)
+    else:
+        await _validate_server_url(server_url)
+
+    # D7.2 §4.4: validate the permit up front (clear 422 at submission time,
+    # rather than a generic failure deep in the background worker) and
+    # enforce the admin-only-reversal RBAC check for the resolved profile.
+    resolve_active_permit(req.permit_id)
+    from pipeline.config.service import get_settings as _get_settings
+
+    require_admin_for_reversal(request, _get_settings(req.config_profile))
 
     token = req.token or os.environ.get("FHIR_SOURCE_TOKEN") or None
     try:
@@ -407,6 +480,12 @@ async def submit_risk_driven_export(req: RiskDrivenExportJobRequest, request: Re
                 "timeout": req.timeout,
                 "config_profile": req.config_profile,
                 "privacy_model": req.privacy_model,
+                "permit_id": req.permit_id,
+                "recipient": req.recipient,
+                "declared_paths": req.declared_paths,
+                "optout_ids": req.optout_ids,
+                "source_id": source_id,
+                "destination_id": req.destination_id,
             },
         )
     except JobStoreUnavailable:

@@ -22,5 +22,3 @@ def init_sql_connection_store(store) -> None:
 def get_sql_connection_store():
     """Return the active store, or None when the app DB is not configured."""
     return _sql_connection_store
-
-

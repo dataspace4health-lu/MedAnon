@@ -56,6 +56,17 @@ class PiiDetectionRequest(BaseModel):
         default=True,
         description="Enable AI-powered contextual analysis (requires local model).",
     )
+    min_field_len: int = Field(
+        default=15,
+        ge=1,
+        le=1000,
+        description=(
+            "Shortest string value to scan. Default 15 targets free-text "
+            "narrative; set 1 to scan every string field (catches short "
+            "structured identifiers like SSN/phone/name at the cost of more "
+            "NER noise)."
+        ),
+    )
 
 
 class PiiDetectionResponse(BaseModel):
@@ -142,6 +153,47 @@ class FieldScanResponse(BaseModel):
     detail: str = ""
 
 
+class FieldSketchRequest(BaseModel):
+    resource_types: list[str] = Field(
+        default_factory=list,
+        max_length=64,
+        description="Resource types to sample from the configured source FHIR "
+        "server (e.g. ['Patient', 'Observation']). Ignored when ``resources`` "
+        "is supplied.",
+    )
+    resources: list[dict] = Field(
+        default_factory=list,
+        max_length=1000,
+        description="Pre-sampled FHIR resources (e.g. the user's uploaded "
+        "examples). When present, the server sketches THESE instead of querying "
+        "the source server; grouped by ``resourceType`` server-side.",
+    )
+    n_per_type: int = Field(
+        default=25,
+        ge=1,
+        le=200,
+        description="Max resources to sample per type when sampling the source "
+        "server. Higher values catch rarer optional fields at more I/O cost.",
+    )
+    include_values: bool = Field(
+        default=False,
+        description="When true, each leaf carries a truncated raw SAMPLE value "
+        "instead of a PHI-free shape/enum. The returned sketch then contains "
+        "PHI, so it is not cached and, when later sent to a model, engages the "
+        "local-guard (fail-closed).",
+    )
+
+
+class FieldSketchResponse(BaseModel):
+    sketch: str = ""
+    types: list[str] = Field(default_factory=list)
+    leaf_count: int = 0
+    included_count: int = 0
+    truncated: bool = False
+    source: str = ""  # "fhir" | "inline" | "error"
+    detail: str = ""
+
+
 class ChatMessage(BaseModel):
     role: str = Field(..., description="'user' or 'assistant'.")
     content: str = Field(..., max_length=8000)
@@ -192,8 +244,12 @@ class ChatRequest(BaseModel):
     )
     config_yaml: str = Field(
         default="",
-        max_length=20000,
-        description="Optional current config YAML for context.",
+        max_length=60000,
+        description="Optional current config YAML for context. Cap matches "
+        "``field_context`` (the user's own authored config, already bounded by "
+        "the request body cap); a comprehensive field-complete profile easily "
+        "exceeds 20k chars. The prompt injects only a truncated prefix "
+        "(``MEDANON_AI_CONFIG_CONTEXT_MAX``) to fit the model context.",
     )
     history: list[ChatMessage] = Field(
         default_factory=list,

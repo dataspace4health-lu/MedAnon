@@ -69,10 +69,9 @@ def _identifier_coverage_blocks() -> bool:
     with a warning when the only finding is uncovered HIPAA fields and no actual
     PII pattern was detected. Mirrors the sync-path knob in ``scoring_helpers``.
     """
-    return (
-        os.environ.get("MEDANON_GATE_IDENTIFIER_MODE", "block").strip().lower()
-        != "warn"
-    )
+    from utils.regulated import gate_identifier_mode
+
+    return gate_identifier_mode() != "warn"
 
 
 # ---------------------------------------------------------------------------
@@ -99,6 +98,16 @@ class ScoreGateBlocked(Exception):
 # ---------------------------------------------------------------------------
 # Grade helper
 # ---------------------------------------------------------------------------
+
+
+def _batch_min_k(batch_privacy: dict) -> int | None:
+    """Pull min_k from the batch attacker-model evidence, if present."""
+    for ev in batch_privacy.get("evidence", []) or []:
+        if ev.get("check") == "attacker_model_batch":
+            mk = (ev.get("details") or {}).get("min_k")
+            if isinstance(mk, int):
+                return mk
+    return None
 
 
 def _grade(composite: float) -> str:
@@ -207,6 +216,35 @@ def check_score_gate(score_summary: dict | None, config_profile: str = "auto") -
                 "released because no actual PII pattern was detected, but "
                 f"coverage is incomplete — review profile '{profile}'."
             )
+
+    # ── 1c. POPULATION k-ANONYMITY GATE (authoritative attacker model) ───────
+    # Re-identification risk under k-anonymity is a population property (≈ 1/k),
+    # so it is measured across the cohort in ScoreCollector.aggregate(), not on
+    # single records — the per-resource attacker heuristic is advisory only (see
+    # privacy._attacker_model). This is the authoritative attacker-model FAIL: a
+    # cohort that did not reach the safe k is withheld regardless of composite,
+    # so retained quasi-identifiers can only be released when the population
+    # actually protects them.
+    if req_privacy and batch_privacy and batch_privacy.get("passed") is False:
+        min_k = _batch_min_k(batch_privacy)
+        krisk = batch_privacy.get("risk_score")
+        if min_k is not None:
+            detail = f"smallest equivalence class has k = {min_k} (need k ≥ 5)"
+        elif isinstance(krisk, (int, float)):
+            detail = f"cohort re-identification risk = {krisk:.2f} (threshold 0.30)"
+        else:
+            detail = "cohort re-identification risk is above the safe threshold"
+        issues.append(
+            "Population re-identification risk is too high — "
+            f"{detail}; an attacker could single out individuals from the "
+            "released quasi-identifiers (gender, birth date, postal code)"
+        )
+        fixes.append(
+            "Generalise quasi-identifiers across the cohort: birth dates to year "
+            "or decade, postal codes to a 3-digit prefix, and suppress or bucket "
+            "rare gender/ethnicity combinations until every equivalence class "
+            "has at least 5 patients."
+        )
 
     # ── 2. COMPOSITE SCORE GATE ──────────────────────────────────────────────
     composite_blocked = avg_composite < min_comp
@@ -348,9 +386,7 @@ def check_score_gate(score_summary: dict | None, config_profile: str = "auto") -
         "identifier_risk_hits": identifier_risk_hits,
         # [{"path": "Patient.name", "resource_count": 120}, …] — the exact
         # HIPAA-sensitive paths left uncovered, most frequent first.
-        "leaked_fields": [
-            {"path": p, "resource_count": c} for p, c in uncovered_paths
-        ],
+        "leaked_fields": [{"path": p, "resource_count": c} for p, c in uncovered_paths],
         "issues": issues,
         "fixes": fixes,
         "message": message,

@@ -73,6 +73,15 @@ _PII_TYPE_WEIGHTS: dict[str, float] = {
 # NER entities and unknown regex types fall back to the legacy per-entity weight.
 _DEFAULT_PII_WEIGHT = 0.15
 
+# Per-resource attacker-model advisory ceiling. Quasi-identifier retention on a
+# single record is a *linkability* signal (Art. 29 WP216), not a re-identification
+# verdict: under k-anonymity the actual risk is 1/k where k is the equivalence-
+# class size — a population property only the batch evaluator can measure. So the
+# per-resource heuristic is kept strictly below RISK_THRESHOLD; it lowers the
+# composite as more QIs are exposed but never fails a resource on its own. The
+# batch k-anonymity gate owns the authoritative attacker-model FAIL.
+_ATTACKER_ADVISORY_CAP: float = RISK_THRESHOLD * 0.9
+
 
 # ---------------------------------------------------------------------------
 # HIPAA identifier detection helpers
@@ -365,13 +374,13 @@ class PrivacyRiskEvaluator:
         suppressed = sum(1 for v in qi if not v)
         total = len(qi)
 
-        # Per-resource risk: based on how many QI fields remain identifiable.
-        # suppressed=3: all QIs treated → 0 risk
-        # suppressed=2: one QI exposed → low risk
-        # suppressed=1: two QIs exposed → near-threshold risk (informational)
-        # suppressed=0: all three QIs exposed → high risk
-        risk_map = {3: 0.0, 2: 0.05, 1: 0.15, 0: 0.35}
-        risk = risk_map.get(suppressed, 0.35)
+        # Advisory risk scales with the fraction of QI fields still exposed,
+        # capped strictly below RISK_THRESHOLD (see _ATTACKER_ADVISORY_CAP): more
+        # exposed QIs lower the composite but never FAIL a resource on their own,
+        # because per-record QI retention says nothing about the equivalence-class
+        # size k. The batch k-anonymity gate makes the authoritative attacker call.
+        exposed = total - suppressed
+        risk = round(_ATTACKER_ADVISORY_CAP * (exposed / total), 4) if total else 0.0
 
         qi_details = {
             "gender": qi[0] if len(qi) > 0 else None,
@@ -633,8 +642,7 @@ class PrivacyRiskEvaluator:
             # T-closeness EMD (categorical, equal ground distance).
             all_keys = set(global_dist) | set(counts)
             emd = 0.5 * sum(
-                abs((counts.get(k, 0) / n) - global_dist.get(k, 0.0))
-                for k in all_keys
+                abs((counts.get(k, 0) / n) - global_dist.get(k, 0.0)) for k in all_keys
             )
             max_emd = max(max_emd, emd)
 

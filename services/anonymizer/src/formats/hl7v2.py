@@ -62,20 +62,27 @@ HL7V2_SCRUB_FIELDS: dict[str, list[int]] = {
 # ---------------------------------------------------------------------------
 
 
-def _blank_field(segment: "hl7.Segment", field_index: int) -> None:
+def _blank_field(segment: "hl7.Segment", field_index: int) -> bool:
     """Set *segment* field at 1-based *field_index* to an empty string.
 
+    Returns True when a non-empty value was actually cleared (for the manifest).
     Silently skips when the segment has fewer fields than expected so that
     non-standard or shortened messages are handled gracefully.
     """
     try:
+        had_value = bool(str(segment[field_index]).strip())
         segment[field_index] = ""
+        return had_value
     except IndexError:
-        pass
+        return False
 
 
-def _scrub_segment(segment: "hl7.Segment") -> None:
-    """Blank all PHI fields in *segment* according to ``HL7V2_SCRUB_FIELDS``."""
+def _scrub_segment(segment: "hl7.Segment", manifest: list | None = None) -> None:
+    """Blank all PHI fields in *segment* according to ``HL7V2_SCRUB_FIELDS``.
+
+    When *manifest* is provided, one ``{segment, field, action}`` entry is
+    appended for each field that actually held a value (no PHI values recorded).
+    """
     try:
         name = str(segment[0][0])
     except (IndexError, TypeError):
@@ -84,7 +91,11 @@ def _scrub_segment(segment: "hl7.Segment") -> None:
     if not indices:
         return
     for idx in indices:
-        _blank_field(segment, idx)
+        cleared = _blank_field(segment, idx)
+        if manifest is not None and cleared:
+            manifest.append(
+                {"segment": name, "field": f"{name}-{idx}", "action": "blank"}
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -111,6 +122,17 @@ def deidentify_hl7v2(message_text: str) -> str:
         ValueError: If *message_text* is empty or cannot be parsed as a valid
             HL7 v2 message.
     """
+    output, _ = deidentify_hl7v2_with_manifest(message_text)
+    return output
+
+
+def deidentify_hl7v2_with_manifest(message_text: str) -> tuple[str, list[dict]]:
+    """Like :func:`deidentify_hl7v2` but also returns the transformation manifest.
+
+    The manifest is a list of ``{segment, field, action}`` entries \u2014 one per PHI
+    field that actually held a value and was blanked (e.g. ``PID-5`` PatientName).
+    No PHI values are recorded.
+    """
     # Strip BOM and normalize line endings so the parser always sees \r
     text = message_text.lstrip("\ufeff")
     text = text.replace("\r\n", "\n").replace("\r", "\n")
@@ -126,10 +148,11 @@ def deidentify_hl7v2(message_text: str) -> str:
     except Exception as exc:
         raise ValueError(f"Invalid HL7 v2 message: {exc}") from exc
 
+    manifest: list[dict] = []
     for segment in message:
-        _scrub_segment(segment)
+        _scrub_segment(segment, manifest)
 
-    return str(message).replace("\r", "\n")
+    return str(message).replace("\r", "\n"), manifest
 
 
 def deidentify_hl7v2_batch(batch_text: str) -> str:

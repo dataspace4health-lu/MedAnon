@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import time
 import uuid
 from collections import Counter
@@ -34,18 +33,33 @@ def _is_scoring_enabled() -> bool:
 
 
 def _get_config_profile(settings) -> str:
-    """Extract config profile name from settings object."""
-    if hasattr(settings, "filename"):
-        name = getattr(settings, "filename", "auto") or "auto"
-        # Strip path and extension: config_hipaa_safe_harbor.yaml → hipaa
-        if "/" in name:
-            name = name.rsplit("/", 1)[-1]
-        if name.startswith("config_"):
-            name = name[7:]
-        if name.endswith(".yaml"):
-            name = name[:-5]
-        return name
-    return "auto"
+    """Canonical config profile name for a settings object.
+
+    Bundled profiles resolve through the alias registry
+    (``config_hipaa_safe_harbor.yaml`` → ``hipaa``), so the sync process path
+    records the same name the job/bulk path does.  Deriving the name from the
+    filename stem instead yields ``hipaa_safe_harbor`` / ``value_masking``,
+    which splits the analytics dashboard's per-profile aggregates and its
+    filter dropdown across two spellings of one profile.
+
+    User-defined configs have no alias and keep their own name.
+    """
+    from pipeline.config.service import canonical_profile_name
+
+    filename = getattr(settings, "filename", None)
+    if not filename:
+        return "auto"
+
+    canonical = canonical_profile_name(filename)
+    if canonical:
+        return canonical
+
+    name = filename.rsplit("/", 1)[-1]
+    if name.startswith("config_"):
+        name = name[7:]
+    if name.endswith(".yaml"):
+        name = name[:-5]
+    return name or "auto"
 
 
 def score_json_line(collector, line: str, settings=None) -> None:
@@ -281,8 +295,9 @@ def _identifier_coverage_blocks() -> bool:
         warn            — uncovered HIPAA fields warn only; only detected PII
                           (text_risk) in the output blocks
     """
-    mode = os.environ.get("MEDANON_GATE_IDENTIFIER_MODE", "block").strip().lower()
-    return mode != "warn"
+    from utils.regulated import gate_identifier_mode
+
+    return gate_identifier_mode() != "warn"
 
 
 def extract_pii_leak_info(score: dict | None) -> "dict | None":

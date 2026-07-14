@@ -166,6 +166,22 @@ def build_qi_index(
     qi_paths = [q["path"] for q in qis]
     qi_kinds = [q["kind"] for q in qis]
 
+    # Sensitive attribute for l-diversity / t-closeness — configurable per
+    # D7.2 §5.5.4 (``privacy_model.sensitive_attributes``, a list of FHIRPaths),
+    # grouped by leading resource type. When omitted, ``{"Condition": None}``
+    # keeps the historical default (Condition codes via _extract_condition_code).
+    _sens_attrs = privacy_model.get("sensitive_attributes") or []
+    sens_by_type: dict[str, list[str] | None] = {}
+    for _p in _sens_attrs:
+        _rt = _p.split(".", 1)[0]
+        existing = sens_by_type.get(_rt)
+        if isinstance(existing, list):
+            existing.append(_p)
+        else:
+            sens_by_type[_rt] = [_p]
+    if not sens_by_type:
+        sens_by_type = {"Condition": None}
+
     # Accumulators
     patient_ids: list[str] = []
     patient_qi_tuples: list[tuple[str, ...]] = []
@@ -201,6 +217,15 @@ def build_qi_index(
             pid = str(resource.get("id") or "")
             qi_values = tuple(_extract_field_value(resource, path) for path in qi_paths)
 
+            # Patient-level sensitive attributes (e.g. Patient.maritalStatus) —
+            # read directly off the Patient, keyed by its own id.
+            _pat_sens = sens_by_type.get("Patient")
+            if isinstance(_pat_sens, list) and pid:
+                for _sp in _pat_sens:
+                    _v = _extract_field_value(resource, _sp)
+                    if _v:
+                        conditions_by_patient[pid].add(_v)
+
             if len(patient_ids) < reservoir_size:
                 patient_ids.append(pid)
                 patient_qi_tuples.append(qi_values)
@@ -216,12 +241,20 @@ def build_qi_index(
                     patient_ids[j] = pid
                     patient_qi_tuples[j] = qi_values
 
-        elif rtype == "Condition":
-            code = _extract_condition_code(resource)
-            if code:
-                pid = _extract_subject_patient_id(resource)
-                if pid:
-                    conditions_by_patient[pid].add(code)
+        elif rtype in sens_by_type:
+            # Linked-resource sensitive attribute correlated to its subject.
+            pid = _extract_subject_patient_id(resource)
+            if pid:
+                _paths = sens_by_type[rtype]
+                if _paths is None:  # Condition default
+                    code = _extract_condition_code(resource)
+                    if code:
+                        conditions_by_patient[pid].add(code)
+                else:
+                    for _sp in _paths:
+                        _v = _extract_field_value(resource, _sp)
+                        if _v:
+                            conditions_by_patient[pid].add(_v)
 
         if total_resources % 10_000 == 0:
             _log.debug(

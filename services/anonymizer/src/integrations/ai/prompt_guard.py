@@ -17,9 +17,7 @@ _CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 # Zero-width / direction-control characters used to hide injected text:
 # U+200B-200F (zero-width space/joiners + LRM/RLM), U+2028/2029 (line seps),
 # U+202A-202E (bidi embedding overrides), U+2060 (word joiner), U+FEFF (BOM).
-_INVISIBLE_CHARS = re.compile(
-    "[​-‏  ‪-‮⁠﻿]"
-)
+_INVISIBLE_CHARS = re.compile("[​-‏  ‪-‮⁠﻿]")
 # 3+ consecutive newlines → 2 (defeats "push the system prompt out" padding).
 _NEWLINE_RUNS = re.compile(r"\n{3,}")
 
@@ -35,9 +33,7 @@ def sanitize_untrusted(text: str, max_len: int = 4000) -> str:
     cleaned = _INVISIBLE_CHARS.sub("", cleaned)
     cleaned = _NEWLINE_RUNS.sub("\n\n", cleaned)
     if len(cleaned) > max_len:
-        _log.warning(
-            "prompt_guard_truncated len=%d max=%d", len(cleaned), max_len
-        )
+        _log.warning("prompt_guard_truncated len=%d max=%d", len(cleaned), max_len)
         cleaned = cleaned[:max_len]
     return cleaned.strip()
 

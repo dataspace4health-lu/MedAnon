@@ -225,9 +225,7 @@ def extract_roles(claims: dict) -> frozenset[str]:
         else:
             role_values = []
     mapping = _role_map()
-    internal = frozenset(
-        mapping[r] for r in role_values if r in mapping
-    )
+    internal = frozenset(mapping[r] for r in role_values if r in mapping)
     if internal:
         return internal
     default = _default_role()

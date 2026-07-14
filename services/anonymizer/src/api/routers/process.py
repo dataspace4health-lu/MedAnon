@@ -6,17 +6,19 @@ import logging
 import os
 import time
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from fastapi.responses import Response, StreamingResponse
 
 import pipeline.config as config
 from pipeline.io_formats import parse_payload_bytes, serialize_payload
+from pipeline.permit_context import permit_scope
 from utils.tasks import retain_task
 
 from api.deps import (
     MAX_BODY_BYTES,
     get_settings_dep,
     limiter,
+    resolve_active_permit,
     _runtime_settings,
     _extract_full_urls,
     _unwrap_to_resources,
@@ -46,6 +48,125 @@ _RATE_RAW = os.environ.get("MEDANON_RATE_RAW", "200/minute")
 _RATE_BATCH = os.environ.get("MEDANON_RATE_BATCH", "60/minute")
 
 _service = ProcessingService()
+
+
+def _split_interactive_lines(lines: list[str]) -> tuple[str, str]:
+    """Split the streamed NDJSON into clean data + a manifest sidecar.
+
+    Released data must never carry the transformation manifest inline — it ships
+    as a separate artifact. Parses each de-identified line, extracts the manifest
+    from ``meta.tag`` (server-side, authoritative), strips it from the resource,
+    and returns ``(clean_ndjson, manifest_ndjson)``. Unparseable/error lines pass
+    through to the data unchanged and contribute no manifest line.
+    """
+    from pipeline.manifest import extract_manifest_entries, strip_manifest_tag
+    from utils.json_fast import dumps as _dumps, loads as _loads
+
+    clean: list[str] = []
+    manifest: list[str] = []
+    for line in lines:
+        try:
+            resource = _loads(line)
+        except (ValueError, TypeError):
+            clean.append(line)
+            continue
+        if isinstance(resource, dict) and "error" not in resource:
+            entries = extract_manifest_entries(resource)
+            strip_manifest_tag(resource)
+            manifest.append(
+                _dumps(
+                    {
+                        "resourceType": resource.get("resourceType", "Unknown"),
+                        "id": resource.get("id"),
+                        "rules": entries,
+                    }
+                )
+            )
+            clean.append(_dumps(resource))
+        else:
+            clean.append(line)
+    tail = "\n" if clean else ""
+    return "\n".join(clean) + tail, ("\n".join(manifest) + ("\n" if manifest else ""))
+
+
+async def _deliver_interactive(
+    destination_id: str,
+    lines: list[str],
+    profile: str,
+    score: dict | None,
+    count: int,
+) -> None:
+    """Deliver the interactive de-identified output to S3 (best-effort).
+
+    The browser download is the primary result; this is an opt-in side delivery,
+    so a failure is logged rather than surfaced (the client already has the data).
+    Delivers three correlated artifacts under distinct prefixes (data/, manifests/,
+    audit/) with a shared generated stem — the manifest is split OUT of the data
+    so the released clinical data never carries it inline (matches the job path).
+    """
+    import uuid
+    from types import SimpleNamespace
+
+    from integrations.storage.delivery import deliver_content
+    from pipeline.jobs.audit_artifact import build_audit
+
+    stem = uuid.uuid4().hex
+    clean_ndjson, manifest_ndjson = _split_interactive_lines(lines)
+    job_like = SimpleNamespace(
+        id=stem,
+        type="process-batch",
+        params={"config_profile": profile, "destination_id": destination_id},
+        status=None,
+        created_at=None,
+        checkpoint_data=None,
+    )
+    try:
+        delivered: dict[str, str] = {}
+        delivered["data"] = await asyncio.to_thread(
+            deliver_content,
+            clean_ndjson,
+            suffix=".ndjson",
+            destination_id=destination_id,
+            key_id=stem,
+            artifact="data",
+        )
+        if manifest_ndjson:
+            delivered["manifest"] = await asyncio.to_thread(
+                deliver_content,
+                manifest_ndjson,
+                suffix=".manifest.ndjson",
+                destination_id=destination_id,
+                key_id=stem,
+                artifact="manifest",
+            )
+        summary = {"total_resources": count, "config_profile": profile, "score": score}
+        audit = build_audit(job_like, summary=summary, delivered=delivered)
+        await asyncio.to_thread(
+            deliver_content,
+            json.dumps(audit),
+            suffix=".audit.json",
+            destination_id=destination_id,
+            key_id=stem,
+            artifact="audit",
+        )
+        logger.info(
+            "process_batch_delivered stem=%s artifacts=%s", stem, list(delivered)
+        )
+    except Exception:
+        logger.warning(
+            "process_batch_delivery_failed stem=%s dest=%s",
+            stem,
+            destination_id,
+            exc_info=True,
+        )
+
+
+_PERMIT_ID_DESC = (
+    "Active data-permit id (TEHDAS2 D7.2 §4.4) scoping pseudonymisation keys "
+    "and gPAS domains to this permit, so the same subject cannot be linked "
+    "across permits. Required in regulated mode for any profile using "
+    "cryptohash/tokenize/date_shift/gpas_pseudonymize/gpas_depseudonymize."
+)
 
 
 def _attach_pii_warning(result, pii_leak: dict) -> None:
@@ -113,13 +234,14 @@ async def process(
     request: Request,
     resource: dict | list = Body(...),
     settings: config.Settings = Depends(get_settings_dep),
+    permit_id: str | None = Query(None, description=_PERMIT_ID_DESC),
 ):
     """Process a single FHIR resource or a FHIR Bundle.
 
     Accepts any valid FHIR JSON object or a JSON array of resources.
     Applies the configured rules and returns the pseudonymized/de-identified result.
     """
-
+    resolve_active_permit(permit_id)
     resource, dynamic_settings = _unwrap_parameters_payload(resource)
     if dynamic_settings:
         await _validate_dynamic_settings(dynamic_settings)
@@ -157,7 +279,8 @@ async def process(
 
     t0 = time.monotonic()
     try:
-        result = await _service.process_resource(resource, runtime_settings)
+        with permit_scope(permit_id):
+            result = await _service.process_resource(resource, runtime_settings)
     except ProcessingError as exc:
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
 
@@ -207,6 +330,7 @@ async def process(
 async def process_ndjson(
     request: Request,
     settings: config.Settings = Depends(get_settings_dep),
+    permit_id: str | None = Query(None, description=_PERMIT_ID_DESC),
 ):
     """Process a stream of newline-delimited FHIR resources (NDJSON / x-ndjson).
 
@@ -214,6 +338,7 @@ async def process_ndjson(
     Lines starting with '//' are treated as comments and skipped.
     Returns a streaming NDJSON response — one processed JSON object per line.
     """
+    resolve_active_permit(permit_id)
     body = await request.body()
     if len(body) > MAX_BODY_BYTES:
         raise HTTPException(
@@ -252,14 +377,15 @@ async def process_ndjson(
         count = 0
         t0 = time.monotonic()
         disconnected = False
-        async for line in _service.process_ndjson_lines(lines, runtime_settings):
-            if await request.is_disconnected():
-                logger.info("NDJSON: client disconnected")
-                disconnected = True
-                break
-            score_json_line(collector, line, runtime_settings)
-            yield line + "\n"
-            count += 1
+        with permit_scope(permit_id):
+            async for line in _service.process_ndjson_lines(lines, runtime_settings):
+                if await request.is_disconnected():
+                    logger.info("NDJSON: client disconnected")
+                    disconnected = True
+                    break
+                score_json_line(collector, line, runtime_settings)
+                yield line + "\n"
+                count += 1
         score = collector.aggregate() if collector else None
         pii_leak = apply_pii_leak_override(score) if score else None
         if not disconnected:
@@ -282,6 +408,114 @@ async def process_ndjson(
     return StreamingResponse(_generate(), media_type="application/x-ndjson")
 
 
+# Accepted NDJSON content types (only the *type* is checked — no size limit).
+_NDJSON_CTYPES = frozenset(
+    {
+        "application/x-ndjson",
+        "application/ndjson",
+        "application/octet-stream",
+        "text/plain",
+        "",
+    }
+)
+
+# Optional safety valve for /process/stream. 0 (default) = unlimited. When set,
+# a request over the cap is rejected up front (413) if it declares a large
+# Content-Length, and truncated with an explicit error line if it streams past
+# the cap without one (chunked upload).
+_STREAM_MAX_BYTES = int(os.environ.get("MEDANON_STREAM_MAX_BYTES", "0"))
+
+
+@router.post("/process/stream")
+@limiter.limit(_RATE_NDJSON)
+async def process_stream(
+    request: Request,
+    settings: config.Settings = Depends(get_settings_dep),
+    permit_id: str | None = Query(None, description=_PERMIT_ID_DESC),
+):
+    """De-identify NDJSON as a true stream — **no request-body size limit**.
+
+    Reads the request body incrementally (never buffering the whole payload) and
+    streams de-identified NDJSON back, one processed resource per line in input
+    order. Only ``MEDANON_BATCH_SIZE`` resources are held at a time, so the input
+    may be arbitrarily large (millions of resources in one request).
+
+    Only the ``Content-Type`` is validated (must be NDJSON); this endpoint is
+    exempt from the global body-size guard. Stream the file with a chunked / large
+    upload, e.g. ``curl --data-binary @big.ndjson -H 'Content-Type: application/x-ndjson'``.
+
+    Note: the always-on output PII barrier still runs per resource (fail-closed).
+    The opt-in pre-privacy Trust Gate and score trailer are skipped here — they
+    require buffering the whole input, which this endpoint deliberately avoids.
+    """
+    ctype = request.headers.get("content-type", "").split(";")[0].strip().lower()
+    if ctype not in _NDJSON_CTYPES:
+        raise HTTPException(
+            status_code=415,
+            detail="Content-Type must be NDJSON (application/x-ndjson).",
+        )
+    # Optional cap: reject up front when the declared size already exceeds it.
+    if _STREAM_MAX_BYTES:
+        cl = request.headers.get("content-length")
+        if cl and cl.isdigit() and int(cl) > _STREAM_MAX_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Body exceeds MEDANON_STREAM_MAX_BYTES ({_STREAM_MAX_BYTES})",
+            )
+    resolve_active_permit(permit_id)
+    runtime_settings = _runtime_settings(settings)
+
+    # Mutable state shared with the line reader: total bytes + truncation flag.
+    stream_state = {"bytes": 0, "truncated": False}
+
+    async def _lines():
+        """Yield UTF-8 lines from the raw request stream (bounded buffer).
+
+        Enforces the optional MEDANON_STREAM_MAX_BYTES cap on the fly; once the
+        response has started streaming a status code can no longer change, so an
+        over-cap chunked upload is stopped and flagged for an error trailer.
+        """
+        buf = bytearray()
+        async for chunk in request.stream():
+            stream_state["bytes"] += len(chunk)
+            if _STREAM_MAX_BYTES and stream_state["bytes"] > _STREAM_MAX_BYTES:
+                stream_state["truncated"] = True
+                return
+            buf.extend(chunk)
+            start = 0
+            while True:
+                nl = buf.find(b"\n", start)
+                if nl < 0:
+                    break
+                yield bytes(buf[start:nl]).decode("utf-8", "replace")
+                start = nl + 1
+            del buf[:start]
+        if buf.strip():
+            yield bytes(buf).decode("utf-8", "replace")
+
+    async def _generate():
+        # Note: no request.is_disconnected() poll here — it reads the same ASGI
+        # ``receive`` channel as request.stream() and would corrupt the input.
+        # StreamingResponse already aborts the generator on client disconnect.
+        with permit_scope(permit_id):
+            async for line in _service.process_ndjson_stream(
+                _lines(), runtime_settings
+            ):
+                yield line + "\n"
+        if stream_state["truncated"]:
+            yield (
+                json.dumps(
+                    {
+                        "error": "stream_max_bytes_exceeded",
+                        "limit_bytes": _STREAM_MAX_BYTES,
+                    }
+                )
+                + "\n"
+            )
+
+    return StreamingResponse(_generate(), media_type="application/x-ndjson")
+
+
 @router.post("/process/raw")
 @limiter.limit(_RATE_RAW)
 async def process_raw(
@@ -289,6 +523,7 @@ async def process_raw(
     output_format: str = "json",
     input_format: str = "auto",
     settings: config.Settings = Depends(get_settings_dep),
+    permit_id: str | None = Query(None, description=_PERMIT_ID_DESC),
 ):
     """Black-box endpoint supporting JSON, XML, and NDJSON input/output.
 
@@ -299,6 +534,7 @@ async def process_raw(
     Output:
     - output_format in {json, xml, ndjson}
     """
+    resolve_active_permit(permit_id)
     body = await request.body()
     if len(body) > MAX_BODY_BYTES:
         raise HTTPException(
@@ -337,12 +573,17 @@ async def process_raw(
         )
 
         t0 = time.monotonic()
-        result = await _service.process_resource(payload, runtime_settings)
+        with permit_scope(permit_id):
+            result = await _service.process_resource(payload, runtime_settings)
 
         pii_leak = None
         if _is_scoring_enabled():
             pii_leak = await check_and_persist_with_leak(
-                result, "/v1/process/raw", runtime_settings, t0, trust_passport=passport or None
+                result,
+                "/v1/process/raw",
+                runtime_settings,
+                t0,
+                trust_passport=passport or None,
             )
         elif passport:
             retain_task(
@@ -395,6 +636,13 @@ async def process_raw(
 async def process_batch(
     request: Request,
     settings: config.Settings = Depends(get_settings_dep),
+    permit_id: str | None = Query(None, description=_PERMIT_ID_DESC),
+    destination_id: str | None = Query(
+        None,
+        description="When set, also deliver the de-identified data + audit record "
+        "to this saved S3 destination (distinct data/ and audit/ prefixes, shared "
+        "stem). The browser download is unaffected.",
+    ),
 ):
     """Process FHIR resources in any format (JSON, NDJSON, XML) and stream NDJSON output.
 
@@ -407,6 +655,7 @@ async def process_batch(
     rewriting, then each entry resource is streamed as NDJSON.
     Non-Bundle inputs are unwrapped and streamed individually.
     """
+    resolve_active_permit(permit_id)
     body = await request.body()
     if len(body) > MAX_BODY_BYTES:
         raise HTTPException(
@@ -453,29 +702,43 @@ async def process_batch(
         count = 0
         t0 = time.monotonic()
         disconnected = False
-        if is_bundle:
-            async for line in _service.process_bundle_stream(payload, runtime_settings):
-                if await request.is_disconnected():
-                    logger.info("process_batch: client disconnected")
-                    disconnected = True
-                    break
-                score_json_line(collector, line, runtime_settings)
-                yield line + "\n"
-                count += 1
-        else:
-            resources = _unwrap_to_resources(payload)
-            async for line in _service.process_resource_stream(
-                resources, runtime_settings
-            ):
-                if await request.is_disconnected():
-                    logger.info("process_batch: client disconnected")
-                    disconnected = True
-                    break
-                score_json_line(collector, line, runtime_settings)
-                yield line + "\n"
-                count += 1
+        # Accumulate the de-identified output only when an S3 delivery was
+        # requested (single-patient scale — bounded). No buffering otherwise.
+        delivered_lines: list[str] | None = [] if destination_id else None
+        with permit_scope(permit_id):
+            if is_bundle:
+                async for line in _service.process_bundle_stream(
+                    payload, runtime_settings
+                ):
+                    if await request.is_disconnected():
+                        logger.info("process_batch: client disconnected")
+                        disconnected = True
+                        break
+                    score_json_line(collector, line, runtime_settings)
+                    if delivered_lines is not None:
+                        delivered_lines.append(line)
+                    yield line + "\n"
+                    count += 1
+            else:
+                resources = _unwrap_to_resources(payload)
+                async for line in _service.process_resource_stream(
+                    resources, runtime_settings
+                ):
+                    if await request.is_disconnected():
+                        logger.info("process_batch: client disconnected")
+                        disconnected = True
+                        break
+                    score_json_line(collector, line, runtime_settings)
+                    if delivered_lines is not None:
+                        delivered_lines.append(line)
+                    yield line + "\n"
+                    count += 1
         score = collector.aggregate() if collector else None
         pii_leak = apply_pii_leak_override(score) if score else None
+        if destination_id and not disconnected and delivered_lines is not None:
+            await _deliver_interactive(
+                destination_id, delivered_lines, profile, score, count
+            )
         if not disconnected:
             yield stream_trailer(count, score, pii_leak=pii_leak) + "\n"
         if score is not None or passport:

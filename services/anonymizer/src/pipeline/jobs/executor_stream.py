@@ -6,6 +6,7 @@ chunk-processing helpers used by all export executors.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import queue
@@ -14,6 +15,7 @@ import time
 
 from domain.jobs import JobStatus
 from pipeline.jobs.checkpoint import save_checkpoint
+from pipeline.manifest import strip_manifest_tag
 from pipeline.processor import _BATCH_SIZE, process_data_batch
 from utils.json_fast import dumps as _json_dumps, loads as _json_loads
 
@@ -34,6 +36,30 @@ _PIPELINE_ENABLED: bool = os.environ.get(
 _COMPRESS_RESULTS: bool = os.environ.get(
     "MEDANON_COMPRESS_RESULTS", "false"
 ).strip().lower() in ("1", "true", "yes")
+# The transformation manifest is released as a SEPARATE artifact (its own S3
+# prefix + access control), never embedded per-resource. On by default; the
+# streaming export writes a `<data>.manifest.ndjson` sidecar that publish_result
+# delivers alongside the data + audit.
+_MANIFEST_ARTIFACT_ENABLED: bool = os.environ.get(
+    "MEDANON_MANIFEST_ARTIFACT_ENABLED", "true"
+).strip().lower() in ("1", "true", "yes")
+
+
+@contextlib.contextmanager
+def manifest_sidecar(data_path: str):
+    """Yield ``(manifest_path, manifest_fh)`` for the streaming export.
+
+    Returns ``(None, None)`` when the manifest artifact is disabled. The sidecar
+    is written next to *data_path*; ``publish_result`` delivers it under the
+    ``manifests/`` prefix and removes the local file afterwards.
+    """
+    if not _MANIFEST_ARTIFACT_ENABLED:
+        yield None, None
+        return
+    mpath = f"{data_path}.manifest.ndjson"
+    with open(mpath, "w", encoding="utf-8") as mfh:
+        yield mpath, mfh
+
 
 # FHIR infrastructure resource types excluded from bulk export.
 INFRA_RESOURCE_TYPES = frozenset(
@@ -388,6 +414,7 @@ class DeidentificationPipeline:
         label: str,
         summary=None,
         cursor_state=None,
+        manifest_fh=None,
     ):
         self._gen = gen
         self._settings = settings
@@ -399,6 +426,9 @@ class DeidentificationPipeline:
         self._label = label
         self._summary = summary
         self._cursor_state = cursor_state
+        # When set, one manifest line per resource is streamed to this sidecar
+        # handle (the transformation-manifest artifact, delivered separately).
+        self._manifest_fh = manifest_fh
         self._cancelled = False
         self._chunk_queue: queue.Queue = queue.Queue(maxsize=_PIPELINE_QUEUE_SIZE)
         self._fetch_error: Exception | None = None
@@ -519,7 +549,7 @@ class DeidentificationPipeline:
         self, chunk: list[dict], checkpoint_writer: CheckpointWriter
     ) -> None:
         """Process one chunk: de-identify (no lock) then write results (locked)."""
-        _want_manifest = self._summary is not None
+        _want_manifest = self._summary is not None or self._manifest_fh is not None
         _chunk_start = time.monotonic()
         # Snapshot before processing: process_data_batch mutates dicts in-place
         # during finalize. If it raises mid-batch, process_with_bisect_fallback restores from
@@ -556,17 +586,28 @@ class DeidentificationPipeline:
             chunk_idx = self._chunk_count
             self._chunk_count += 1
             for idx, result in enumerate(_results):
-                self._fh.write(_json_dumps(result) + "\n")
-                self._count += 1
+                _is_error = _from_bisect and result.get("error")
+                entries = (
+                    None if _is_error else (_manifests[idx] if _manifests else None)
+                )
                 if self._summary is not None:
-                    if _from_bisect and result.get("error"):
+                    if _is_error:
                         self._summary.record_error(
                             result.get("resourceType", "Unknown")
                         )
                     else:
-                        entries = _manifests[idx] if _manifests else None
                         self._summary.record_resource(result, manifest_entries=entries)
+                if self._manifest_fh is not None:
+                    if not _is_error:
+                        write_manifest_line(self._manifest_fh, result, entries)
+                    # Released data must not carry the manifest inline — it ships
+                    # as the separate manifest artifact.
+                    strip_manifest_tag(result)
+                self._fh.write(_json_dumps(result) + "\n")
+                self._count += 1
             self._fh.flush()
+            if self._manifest_fh is not None:
+                self._manifest_fh.flush()
             count_now = self._count
 
         # Checkpoint + cancellation check (outside lock — enqueue is thread-safe)
@@ -592,6 +633,26 @@ class DeidentificationPipeline:
                 )
 
 
+def write_manifest_line(manifest_fh, result: dict, entries) -> None:
+    """Write one transformation-manifest line for *result* to the sidecar handle.
+
+    Shape: ``{"resourceType", "id", "rules": [<manifest entries>]}`` — the entries
+    already carry only rule name/match/action/path (no PHI values). Resources with
+    no fired rule still get a line (empty ``rules``) so the manifest is a complete
+    per-resource ledger of the released data.
+    """
+    manifest_fh.write(
+        _json_dumps(
+            {
+                "resourceType": result.get("resourceType", "Unknown"),
+                "id": result.get("id"),
+                "rules": entries or [],
+            }
+        )
+        + "\n"
+    )
+
+
 def stream_and_deidentify(
     gen,
     settings,
@@ -603,6 +664,7 @@ def stream_and_deidentify(
     label: str,
     summary=None,
     cursor_state=None,
+    manifest_fh=None,
 ) -> tuple[int, bool]:
     """Buffer resources from *gen* into chunks and process each via
     :func:`~pipeline.processor.process_data_batch`, writing results to *fh*.
@@ -631,6 +693,7 @@ def stream_and_deidentify(
             label,
             summary,
             cursor_state=cursor_state,
+            manifest_fh=manifest_fh,
         ).run()
 
     # Sequential fallback path (used when MEDANON_PIPELINE_ENABLED=false).
@@ -638,37 +701,52 @@ def stream_and_deidentify(
     chunk: list[dict] = []
     _first_chunk = True
 
+    _want_manifest = summary is not None or manifest_fh is not None
+
     def _flush() -> bool:
         nonlocal count, _first_chunk
         _snapshots = [_json_dumps(r) for r in chunk]
         try:
-            results = process_data_batch(
+            out = process_data_batch(
                 chunk,
                 settings,
                 pseudonymizer,
                 attach_manifest=True,
+                _return_manifest=_want_manifest,
             )
-            for result in results:
+            results, manifests = out if _want_manifest else (out, None)
+            for idx, result in enumerate(results):
+                entries = manifests[idx] if manifests else None
+                if summary is not None:
+                    summary.record_resource(result, manifest_entries=entries)
+                if manifest_fh is not None:
+                    write_manifest_line(manifest_fh, result, entries)
+                    strip_manifest_tag(result)
                 fh.write(_json_dumps(result) + "\n")
                 count += 1
-                if summary is not None:
-                    summary.record_resource(result, manifest_entries=None)
         except Exception:
             fresh_chunk = [_json_loads(s) for s in _snapshots]
             # Binary-search fallback: isolates bad resources in log₂(N) depth.
             pairs = process_with_bisect_fallback(
-                fresh_chunk, settings, pseudonymizer, want_manifest=False
+                fresh_chunk, settings, pseudonymizer, want_manifest=_want_manifest
             )
-            for result, _ in pairs:
-                fh.write(_json_dumps(result) + "\n")
+            for result, entries in pairs:
+                _is_error = bool(result.get("error"))
                 if summary is not None:
-                    if result.get("error"):
+                    if _is_error:
                         summary.record_error(result.get("resourceType", "Unknown"))
                     else:
-                        summary.record_resource(result, manifest_entries=None)
+                        summary.record_resource(result, manifest_entries=entries)
+                if manifest_fh is not None:
+                    if not _is_error:
+                        write_manifest_line(manifest_fh, result, entries)
+                    strip_manifest_tag(result)
+                fh.write(_json_dumps(result) + "\n")
                 count += 1
 
         fh.flush()
+        if manifest_fh is not None:
+            manifest_fh.flush()
 
         if _first_chunk or count % _PROGRESS_INTERVAL < len(chunk):
             chk = {"phase": "processing", "lines_written": count}

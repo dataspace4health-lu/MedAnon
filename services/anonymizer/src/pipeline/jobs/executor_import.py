@@ -44,11 +44,13 @@ def _execute_bulk_import(job: Job, store, staging) -> None:
     from integrations.storage import get_result_storage
     from utils.thread_pool import get_executor
 
+    from pipeline.jobs.source_resolver import resolve_target_token
+
     params = job.params
     source_job_id = params.get("job_id")
     ndjson_path = params.get("ndjson_path")
     target_url = params["target_url"]
-    target_token = params.get("target_token") or os.environ.get("FHIR_TARGET_TOKEN")
+    target_token = resolve_target_token(params)
     timeout = float(params.get("timeout", 30))
     parallel = int(
         params.get("parallel", os.environ.get("MEDANON_UPLOAD_PARALLEL", "4"))

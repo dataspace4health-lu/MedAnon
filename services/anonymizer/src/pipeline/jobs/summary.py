@@ -31,6 +31,7 @@ class JobSummaryCollector:
         "_job_id",
         "_started_at",
         "_score_collector",
+        "_detail",
     )
 
     def __init__(
@@ -46,6 +47,11 @@ class JobSummaryCollector:
         self._job_id = job_id
         self._started_at: float = time.monotonic()
         self._score_collector = None
+        # Job-detail payload for the Jobs UI, accumulated in this same pass so
+        # the browser never downloads and walks the NDJSON result.
+        from pipeline.jobs.detail import JobDetailAccumulator
+
+        self._detail = JobDetailAccumulator()
         # Try to initialize scoring (may be disabled via env)
         try:
             from pipeline.scoring.constants import SCORING_ENABLED
@@ -78,17 +84,29 @@ class JobSummaryCollector:
             return
         if "error" in resource:
             self._error_count += 1
+            self._detail.record(resource, None)
             if self._score_collector is not None:
                 self._score_collector.record_error()
             return
         rtype = resource.get("resourceType", "Unknown")
         self._type_counts[rtype] += 1
-        # Score the resource — use pre-parsed entries when the caller supplies
-        # them to avoid re-parsing the JSON-encoded manifest from meta.tag.
+
+        # The manifest is the sole authoritative record of what was transformed,
+        # and it feeds BOTH the score collector and the job-detail PII map. Use
+        # the caller's pre-parsed entries when supplied (the streaming export
+        # passes them) to avoid re-parsing the JSON from meta.tag per resource.
+        if manifest_entries is None:
+            manifest_entries = _extract_manifest_entries(resource)
+
+        # Detail must be accumulated BEFORE the caller strips meta.tag from the
+        # released resource, which the streaming export does immediately after.
+        try:
+            self._detail.record(resource, manifest_entries)
+        except Exception:
+            _log.debug("job_detail_record_error rtype=%s", rtype, exc_info=True)
+
         if self._score_collector is not None:
             try:
-                if manifest_entries is None:
-                    manifest_entries = _extract_manifest_entries(resource)
                 self._score_collector.record_resource(
                     original=None,
                     deidentified=resource,
@@ -101,8 +119,13 @@ class JobSummaryCollector:
     def record_error(self, resource_type: str = "Unknown") -> None:
         """Record a processing error."""
         self._error_count += 1
+        self._detail.record({"resourceType": resource_type, "error": True}, None)
         if self._score_collector is not None:
             self._score_collector.record_error()
+
+    def detail_dict(self) -> dict:
+        """Job-detail payload for ``GET /v1/jobs/{id}/detail`` (Jobs UI)."""
+        return self._detail.to_dict()
 
     def generate_audit_report(self, export_meta: dict | None = None) -> str | None:
         """Generate the Markdown audit report; returns None when scoring is disabled."""

@@ -95,6 +95,7 @@ class AgentService:
         self,
         resources: list[dict],
         use_ai: bool = True,
+        min_len: int = 15,
     ) -> dict:
         ai_service_url = self._ai_service_url()
         if ai_service_url:
@@ -103,10 +104,13 @@ class AgentService:
                 ai_service_url,
                 resources,
                 use_ai,
+                min_len,
             )
         from integrations.ai.agents.pii_detector import detect_pii_leaks
 
-        return await asyncio.to_thread(detect_pii_leaks, resources, use_ai=use_ai)
+        return await asyncio.to_thread(
+            detect_pii_leaks, resources, use_ai=use_ai, min_len=min_len
+        )
 
     async def scan_fields(
         self,
@@ -135,6 +139,46 @@ class AgentService:
             granularity=granularity,
             include_values=include_values,
             guidance=guidance,
+        )
+
+    async def field_sketch(
+        self,
+        *,
+        resource_types: list[str],
+        resources: list[dict],
+        n_per_type: int = 25,
+        include_values: bool = False,
+    ) -> dict:
+        """Build a compact, PHI-safe field sketch for AI context.
+
+        No model call: this is pure resource-to-schema compaction. When
+        ``resources`` is supplied it sketches those (grouped by resourceType);
+        otherwise it samples ``resource_types`` from the source FHIR server.
+        Runs off the event loop (FHIR I/O + walking) and never raises.
+        """
+        from integrations.ai.agents.field_sketch import (
+            build_field_sketch,
+            group_by_resource_type,
+            sample_source_and_sketch,
+        )
+
+        if resources:
+            by_type = group_by_resource_type(resources)
+            if not by_type:
+                return {"sketch": "", "types": [], "source": "error",
+                        "detail": "no resources with a resourceType provided"}
+            result = await asyncio.to_thread(
+                build_field_sketch, by_type, include_values=include_values
+            )
+            result["source"] = "inline"
+            result["detail"] = ""
+            return result
+
+        return await asyncio.to_thread(
+            sample_source_and_sketch,
+            resource_types,
+            n_per_type=n_per_type,
+            include_values=include_values,
         )
 
     async def explain_config(
@@ -335,6 +379,7 @@ class AgentService:
         base_url: str,
         resources: list[dict],
         use_ai: bool,
+        min_len: int = 15,
     ) -> dict:
         from api.schemas.agents import PiiDetectionResponse
 
@@ -342,7 +387,7 @@ class AgentService:
         parsed = AgentService._post_proxy_json(
             base_url,
             path,
-            {"resources": resources, "use_ai": use_ai},
+            {"resources": resources, "use_ai": use_ai, "min_field_len": min_len},
         )
         return AgentService._validate_response(
             parsed,

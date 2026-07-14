@@ -24,12 +24,12 @@ def _now() -> str:
 
 
 class StepStatus(str, Enum):
-    PENDING = "pending"      # not yet scheduled (deps unmet)
-    READY = "ready"          # deps met, enqueue in flight
-    RUNNING = "running"      # job claimed by a worker
+    PENDING = "pending"  # not yet scheduled (deps unmet)
+    READY = "ready"  # deps met, enqueue in flight
+    RUNNING = "running"  # job claimed by a worker
     DONE = "done"
     ERROR = "error"
-    SKIPPED = "skipped"      # an upstream dependency failed
+    SKIPPED = "skipped"  # an upstream dependency failed
     CANCELLED = "cancelled"
 
 
@@ -49,8 +49,8 @@ TERMINAL_STEP_STATES = frozenset(
 
 @dataclass
 class WorkflowStep:
-    id: str                              # unique within the workflow, e.g. "fetch"
-    job_type: str                        # existing executor type
+    id: str  # unique within the workflow, e.g. "fetch"
+    job_type: str  # existing executor type
     params: dict = field(default_factory=dict)
     depends_on: list[str] = field(default_factory=list)
     status: StepStatus = StepStatus.PENDING
@@ -66,8 +66,8 @@ class Workflow:
     steps: list[WorkflowStep]
     status: WorkflowStatus = WorkflowStatus.PENDING
     params: dict = field(default_factory=dict)
-    backend: str = "internal"            # internal | argo
-    external_ref: str | None = None      # e.g. Argo Workflow name
+    backend: str = "internal"  # internal | argo
+    external_ref: str | None = None  # e.g. Argo Workflow name
     created_at: str = field(default_factory=_now)
     updated_at: str = field(default_factory=_now)
 

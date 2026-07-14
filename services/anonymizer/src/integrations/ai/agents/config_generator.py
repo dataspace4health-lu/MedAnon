@@ -485,9 +485,8 @@ def generate_config(
     if source_context.strip():
         # Server-derived facts (type list + counts), not user input — safe to
         # embed directly. Sanitised defensively in case of an unusual server.
-        source_block = (
-            "\n\n## ACTUAL SOURCE DATA\n"
-            + sanitize_untrusted(source_context.strip())
+        source_block = "\n\n## ACTUAL SOURCE DATA\n" + sanitize_untrusted(
+            source_context.strip()
         )
     system_msg = (
         _SYSTEM_PROMPT.format(

@@ -16,7 +16,7 @@ from fastapi.responses import Response
 
 from api.deps import MAX_BODY_BYTES, limiter
 from api.services.tabular import TabularService
-from pipeline.exceptions import NormalizationError
+from pipeline.exceptions import NormalizationError, OutputBlocked
 from pipeline.processor import PiiLeakError
 
 router = APIRouter()
@@ -130,6 +130,14 @@ async def process_tabular(request: Request):
         raise HTTPException(
             status_code=422,
             detail={"code": "pii_leak_detected", "message": str(exc)},
+        ) from exc
+    except OutputBlocked as exc:
+        # The score-summary half of the barrier (enforce_output in
+        # pipeline.sources.run). Without this clause it fell through to the
+        # generic handler below and surfaced as a 500.
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "output_blocked", "message": str(exc)},
         ) from exc
     except NormalizationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

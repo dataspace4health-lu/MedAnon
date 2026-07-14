@@ -74,6 +74,8 @@ class GeneralizationPlan:
     suppressed_ids    Patient ids to suppress (post-generalisation small classes).
     achieved_k        Minimum equivalence-class size after applying the plan.
     achieved_l        Minimum l-diversity value (None if not computed).
+    achieved_t        Max t-closeness distance over classes (None if not computed;
+                      lower is better, feasible when ≤ target_t).
     suppressed_count  Number of Patients suppressed.
     suppression_rate  suppressed_count / total_patients.
     information_loss  Normalised mean level (0 = no generalisation).
@@ -89,6 +91,7 @@ class GeneralizationPlan:
     suppressed_ids: set[str] = field(default_factory=set)
     achieved_k: int = 0
     achieved_l: int | None = None
+    achieved_t: float | None = None
     suppressed_count: int = 0
     suppression_rate: float = 0.0
     information_loss: float = 0.0
@@ -171,6 +174,57 @@ def _compute_l_diversity(
     return min(len(codes) for codes in group_codes.values())
 
 
+def _compute_t_closeness(
+    generalised: list[tuple[str, ...]],
+    patient_ids: list[str],
+    suppressed_ids: set[str],
+    conditions_by_patient: dict[str, set[str]],
+) -> float:
+    """Max t-closeness distance over surviving equivalence classes.
+
+    t-closeness (Li 2007): the distribution of the sensitive attribute in each
+    equivalence class must stay within a threshold *t* of the global
+    distribution. Here the sensitive attribute is the set of Condition codes;
+    each (patient, code) pair contributes one observation. Distance is the
+    total-variation distance ``0.5 * Σ|p_class(v) − p_global(v)|`` in [0, 1].
+
+    Returns the maximum distance across classes (0.0 when no condition data or
+    no surviving patients); the plan is t-close when this is ≤ target_t.
+    """
+    if not conditions_by_patient:
+        return 0.0
+    from collections import Counter, defaultdict
+
+    global_counts: Counter = Counter()
+    class_counts: dict[tuple, Counter] = defaultdict(Counter)
+    class_totals: dict[tuple, int] = defaultdict(int)
+    global_total = 0
+    for qi_tuple, pid in zip(generalised, patient_ids):
+        if pid in suppressed_ids:
+            continue
+        for code in conditions_by_patient.get(pid) or ():
+            global_counts[code] += 1
+            class_counts[qi_tuple][code] += 1
+            global_total += 1
+            class_totals[qi_tuple] += 1
+
+    if global_total == 0:
+        return 0.0
+
+    max_tv = 0.0
+    for qi_tuple, ccount in class_counts.items():
+        ct = class_totals[qi_tuple]
+        if ct == 0:
+            continue
+        tv = 0.5 * sum(
+            abs(ccount.get(code, 0) / ct - gc / global_total)
+            for code, gc in global_counts.items()
+        )
+        if tv > max_tv:
+            max_tv = tv
+    return round(max_tv, 6)
+
+
 def _information_loss(node: tuple[int, ...], max_levels: list[int]) -> float:
     """Normalised mean level (0 = no generalisation, 1 = full suppression)."""
     if not node:
@@ -196,6 +250,7 @@ def solve(qi_index: "QiIndex", privacy_model: dict) -> GeneralizationPlan:
     t0 = time.monotonic()
     target_k: int = privacy_model["target_k"]
     target_l: int | None = privacy_model.get("target_l")
+    target_t: float | None = privacy_model.get("target_t")
     max_suppression: float = privacy_model.get("max_suppression", 0.05)
     on_unsatisfiable: str = privacy_model.get("on_unsatisfiable", "max_generalize")
 
@@ -277,6 +332,18 @@ def solve(qi_index: "QiIndex", privacy_model: dict) -> GeneralizationPlan:
             if achieved_l < target_l:
                 continue
 
+        # Feasibility check 4: t-closeness (optional)
+        achieved_t: float | None = None
+        if target_t is not None and qi_index.conditions_by_patient:
+            achieved_t = _compute_t_closeness(
+                generalised,
+                qi_index.patient_ids,
+                suppressed_ids,
+                qi_index.conditions_by_patient,
+            )
+            if achieved_t > target_t:
+                continue
+
         # This node is feasible.  Since nodes are sorted by information_loss
         # (ascending), the first feasible node is also the optimal one.
         best_plan = GeneralizationPlan(
@@ -285,6 +352,7 @@ def solve(qi_index: "QiIndex", privacy_model: dict) -> GeneralizationPlan:
             suppressed_ids=suppressed_ids,
             achieved_k=min_k_after_suppress,
             achieved_l=achieved_l,
+            achieved_t=achieved_t,
             suppressed_count=len(suppressed_ids),
             suppression_rate=supp_rate,
             information_loss=il,
@@ -326,19 +394,29 @@ def solve(qi_index: "QiIndex", privacy_model: dict) -> GeneralizationPlan:
         # Force-suppress remaining small classes even past the cap (we've
         # already tried everything; document this in the plan).
         achieved_l = None
-        if target_l is not None and qi_index.conditions_by_patient:
-            achieved_l = _compute_l_diversity(
-                generalised,
-                qi_index.patient_ids,
-                suppressed_ids,
-                qi_index.conditions_by_patient,
-            )
+        achieved_t = None
+        if qi_index.conditions_by_patient:
+            if target_l is not None:
+                achieved_l = _compute_l_diversity(
+                    generalised,
+                    qi_index.patient_ids,
+                    suppressed_ids,
+                    qi_index.conditions_by_patient,
+                )
+            if target_t is not None:
+                achieved_t = _compute_t_closeness(
+                    generalised,
+                    qi_index.patient_ids,
+                    suppressed_ids,
+                    qi_index.conditions_by_patient,
+                )
         best_plan = GeneralizationPlan(
             levels={p: lvl for p, lvl in zip(qi_paths, top_node)},
             node=top_node,
             suppressed_ids=suppressed_ids,
             achieved_k=min_k,
             achieved_l=achieved_l,
+            achieved_t=achieved_t,
             suppressed_count=len(suppressed_ids),
             suppression_rate=len(suppressed_ids) / max(total_patients, 1),
             information_loss=_information_loss(top_node, max_levels),
@@ -349,11 +427,12 @@ def solve(qi_index: "QiIndex", privacy_model: dict) -> GeneralizationPlan:
         )
 
     _log.info(
-        "solve_done feasible=%s achieved_k=%d achieved_l=%s "
+        "solve_done feasible=%s achieved_k=%d achieved_l=%s achieved_t=%s "
         "suppressed=%d/%.1f%% il=%.3f node=%s nodes_evaluated=%d time=%.2fs",
         best_plan.feasible,
         best_plan.achieved_k,
         best_plan.achieved_l,
+        best_plan.achieved_t,
         best_plan.suppressed_count,
         best_plan.suppression_rate * 100,
         best_plan.information_loss,

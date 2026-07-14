@@ -115,6 +115,24 @@ async def _main() -> None:
     except Exception as exc:
         logger.warning("processing_run_store_start_failed: %s", exc)
 
+    # Job detail cache — the worker WRITES it at finalize (the API only reads).
+    # Computing it here is what keeps the browser out of the data path: the UI
+    # renders counts/PII/fields without ever downloading the NDJSON result.
+    try:
+        from pipeline.job_detail import init_job_detail_store
+
+        if pg_pool is not None:
+            from integrations.postgres.job_detail_store import PostgresJobDetailStore
+
+            init_job_detail_store(store=PostgresJobDetailStore(pg_pool))
+            logger.info("job_detail_store=postgres")
+        else:
+            jd_db = os.environ.get("MEDANON_JOB_DETAIL_DB", "/output/job_details.db")
+            init_job_detail_store(jd_db)
+            logger.info("job_detail_store=sqlite path=%s", jd_db)
+    except Exception as exc:
+        logger.warning("job_detail_store_start_failed: %s", exc)
+
     staging_url = os.environ.get("MEDANON_STAGING_DB_URL", "").strip()
     staging_store = await setup_staging(staging_url, app_db_url, pg_pool)
     if staging_store is not None:
@@ -135,6 +153,26 @@ async def _main() -> None:
             logger.info("sql_connection_store=postgres")
         except Exception as exc:
             logger.warning("sql_connection_store_start_failed: %s", exc)
+
+    # Dataspace connector stores — the worker resolves the input-source token
+    # and the S3 output destination at finalize time, so it needs these stores
+    # too (not just the API). Without them, publish_result cannot deliver.
+    if pg_pool is not None:
+        try:
+            from integrations.postgres.connector_stores import (
+                PostgresDestinationStore,
+                PostgresSourceStore,
+            )
+            from pipeline.connectors import (
+                init_destination_store,
+                init_source_store,
+            )
+
+            init_source_store(PostgresSourceStore(pg_pool))
+            init_destination_store(PostgresDestinationStore(pg_pool))
+            logger.info("connector_stores=postgres")
+        except Exception as exc:
+            logger.warning("connector_stores_start_failed: %s", exc)
 
     # Workflow engine — needed in the worker so the job terminal hook can
     # advance DAG steps. Postgres-only ("staging is the ledger").

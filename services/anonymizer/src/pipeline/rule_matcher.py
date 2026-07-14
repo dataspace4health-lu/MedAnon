@@ -533,7 +533,12 @@ def warm_rule_caches(settings) -> int:
                 pass
     elapsed_ms = (time.monotonic() - t0) * 1000
     _log = __import__("logging").getLogger("medanon.rule_matcher")
-    _log.debug("fhirpath_warmup rules=%d compiled=%d elapsed_ms=%.1f", len(rules), compiled, elapsed_ms)
+    _log.debug(
+        "fhirpath_warmup rules=%d compiled=%d elapsed_ms=%.1f",
+        len(rules),
+        compiled,
+        elapsed_ms,
+    )
     return compiled
 
 

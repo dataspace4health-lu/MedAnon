@@ -14,13 +14,33 @@ import logging
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import PlainTextResponse
 
-from api.schemas.scoring import ScoreResourceRequest
+from api.schemas.scoring import (
+    FieldClassifyRequest,
+    FieldClassifyResponse,
+    ScoreResourceRequest,
+)
 from api.services.scoring import ScoringService
 
 router = APIRouter()
 logger = logging.getLogger("medanon")
 
 _service = ScoringService()
+
+
+@router.post("/classify-fields", response_model=FieldClassifyResponse)
+async def classify_fields(req: FieldClassifyRequest):
+    """Classify FHIR leaf paths as direct / quasi / non identifiers.
+
+    Deterministic and model-free: reuses ``HIPAA_SENSITIVE_PATHS`` and the
+    severity grading the structural output gate enforces, so the labels match
+    what the engine actually blocks. This is the authoritative classification
+    the Resource Explorer consumes for its per-field direct/quasi badges.
+    """
+    from pipeline.field_classification import classify_paths
+
+    return FieldClassifyResponse(
+        classes=classify_paths(req.resource_type, req.paths)
+    )
 
 
 @router.post("/score")

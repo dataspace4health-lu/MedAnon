@@ -1,8 +1,21 @@
 """Pass 1.5: batch NLP detection and replacement.
 
-Collects texts from all deferred PHIDetectionTask items, runs entity detection
-in a single batch (one HTTP call for remote, or cache-prewarming for local),
-then applies replacements per-resource with proper token_state isolation.
+Collects texts from all deferred PHIDetectionTask items, then applies
+replacements per-resource with proper token_state isolation.
+
+Round-trips to the NLP service, by action:
+
+- ``nlp_detect_act`` calls ``adapter.detect``, which is backed by the
+  content-addressed cache in :mod:`integrations.nlp.cache`. Phase B prewarms
+  that cache for every unique text in the chunk with one ``detect_batch`` call,
+  so Phase C serves them locally.
+- ``nlp_scrub`` / ``nlp_detect`` call ``adapter.analyze_and_replace``, which
+  sends mutable ``token_state`` with the request and therefore *cannot* be
+  content-cached. Phase C batches each resource's contiguous run of these
+  fields into one ``analyze_and_replace_batch`` call. Prior to that they cost
+  one round-trip per field, and the Phase-B prewarm issued a batch call no
+  consumer ever read.
+- XHTML fields scrub each text node inside the markup and stay per-node.
 
 Mirrors the gPAS batch pattern in ``gpas_orchestrator.py``.
 """
@@ -109,6 +122,80 @@ def _apply_nlp_detect_act(
         text = _replace_span(text, start, end, entity_type, ea, token_state)
 
     return text, True
+
+
+def _batch_key(field: _FieldText) -> "tuple | None":
+    """Group key for fields whose replacement can be issued in one call, else None.
+
+    Only ``nlp_scrub`` / ``nlp_detect`` on a plain (non-XHTML) field qualify.
+    They route to ``adapter.analyze_and_replace``, which sends ``token_state``
+    with the request and therefore cannot consult the content-addressed
+    detection cache — so today they cost one HTTP round-trip *per field*.
+
+    ``nlp_detect_act`` is excluded on purpose: it calls ``adapter.detect``,
+    which the Phase-B prewarm has already served from the cache, so batching it
+    would add a round-trip rather than remove one.  XHTML fields are excluded
+    because replacement runs per text node *inside* the markup, not on the
+    field value.
+    """
+    if field.is_xhtml:
+        return None
+    if field.work_item.action_type == "nlp_detect_act":
+        return None
+    entities, threshold, language = field.nlp_params
+    mode = str(field.work_item.params.get("mode", "tokenize"))
+    return (tuple(entities), threshold, language, mode)
+
+
+def _contiguous_batch_runs(fields: list[_FieldText]):
+    """Split *fields* into order-preserving runs that share one :func:`_batch_key`.
+
+    Order is load-bearing: ``token_state`` assigns surrogates (``[[PERSON_1]]``,
+    ``[[PERSON_2]]``, …) on first encounter of a surface form, so reordering
+    fields renumbers them.  Runs are *contiguous*, so a batched run produces
+    exactly the surrogates the original per-field loop produced — the NLP
+    service applies replacement items sequentially against the same shared
+    ``token_state``.
+
+    Yields ``(key, [field, ...])``; ``key is None`` marks a single field that
+    must go through the per-field path.
+    """
+    run: list[_FieldText] = []
+    run_key: "tuple | None" = None
+    for field in fields:
+        key = _batch_key(field)
+        if run and key != run_key:
+            yield run_key, run
+            run, run_key = [], None
+        if key is None:
+            yield None, [field]
+            continue
+        if not run:
+            run_key = key
+        run.append(field)
+    if run:
+        yield run_key, run
+
+
+def _apply_replacement_batch(
+    run: list[_FieldText], run_key: tuple, adapter, token_state
+):
+    """Scrub every field in *run* with a single ``analyze_and_replace_batch`` call.
+
+    Returns the replaced texts, one per field, in input order.  A short or long
+    response is a protocol error: raising here routes the whole run to the
+    caller's blanket-redact fallback rather than mis-aligning results to fields.
+    """
+    entities, threshold, language, mode = run_key
+    results = adapter.analyze_and_replace_batch(
+        [f.text for f in run], list(entities), threshold, language, mode, token_state
+    )
+    if len(results) != len(run):
+        raise ValueError(
+            f"analyze_and_replace_batch returned {len(results)} results "
+            f"for {len(run)} fields"
+        )
+    return results
 
 
 def _apply_replacement(field: _FieldText, adapter, token_state):
@@ -233,18 +320,24 @@ def detect_phi_batch(
              cache-prewarming for local Presidio).
     Phase C: Per-resource replacement with proper token_state isolation.
     """
-    from pipeline.deidentify import _get_nlp_adapter, _NLP_FAIL_MODE
+    from pipeline.deidentify import _get_nlp_adapter, _resolve_fail_mode
     from pipeline.exceptions import NlpUnavailableError
     from actions.redact import redact_by_path
 
     adapter = _get_nlp_adapter()
     if adapter is None:
-        # Fallback: redact all NLP-targeted fields
+        # Fallback: redact all NLP-targeted fields.
+        #
+        # The mode is resolved *per work item*: a profile's ``nlp.fail_mode`` is
+        # injected into each rule's params by ``rule_matcher._merge_profile_nlp``,
+        # and it overrides the process-global ``MEDANON_NLP_FAIL_MODE``. Reading
+        # the global directly here ignored the profile entirely, so a compliance
+        # profile asking to hard-fail got a silent redaction instead.
         for i, nlp_works in enumerate(all_nlp_works):
             if not nlp_works or resources[i] is None:
                 continue
             for work_item in nlp_works:
-                if _NLP_FAIL_MODE == "raise":
+                if _resolve_fail_mode(work_item.params) == "raise":
                     raise NlpUnavailableError(
                         "NLP adapter unavailable — cannot process batch"
                     )
@@ -267,6 +360,11 @@ def detect_phi_batch(
 
     # Phase A: Extract all text fields from config-rule PHIDetectionTask items.
     all_fields: list[_FieldText] = []
+    # Work items blanket-redacted here because their field could not be
+    # navigated. Phase D must skip them: the redact recorded below is the
+    # actual outcome, and a second entry naming the NLP action would claim a
+    # scrub that never ran.
+    phase_a_redacted: dict[int, set[int]] = {}
     for i, (resource, nlp_works) in enumerate(zip(resources, all_nlp_works)):
         if resource is None or not nlp_works:
             continue
@@ -275,6 +373,7 @@ def detect_phi_batch(
             if not fields:
                 # Path navigation failed or field empty — redact as fallback
                 redact_by_path(resource, work_item.element, {})
+                phase_a_redacted.setdefault(i, set()).add(id(work_item))
                 if _MANIFEST_ENABLED:
                     all_manifest_entries[i].append(
                         {
@@ -298,13 +397,14 @@ def detect_phi_batch(
     # fields the user never asked to transform. Read lazily so the env var is
     # respected per process without import-order coupling.
     if _attachment_scan_enabled():
-        _ATTACH_SIGNALS = ("\"data\"", "data:", "Base64Binary")
+        _ATTACH_SIGNALS = ('"data"', "data:", "Base64Binary")
         claimed: set[tuple] = {(id(f.owner), f.key) for f in all_fields}
         heuristic_fields: list[_FieldText] = []
         for i, resource in enumerate(resources):
             if resource is None:
                 continue
             import json as _json
+
             _serialized = _json.dumps(resource, separators=(",", ":"))
             if not any(sig in _serialized for sig in _ATTACH_SIGNALS):
                 continue
@@ -329,12 +429,23 @@ def detect_phi_batch(
             wi_params[wi_id] = _resolve_nlp_params(f.work_item)
         f.nlp_params = wi_params[wi_id]
 
-    # Phase B: Batch detection — pre-warm cache for all unique texts
+    # Phase B: Batch detection — pre-warm the content-addressed detection cache.
     # Group by (entities, threshold, language) so mixed-param configs get
     # correct detection results instead of using first-field params for all.
+    #
+    # Only texts that Phase C will look up via ``adapter.detect`` are worth
+    # prewarming, i.e. plain (non-XHTML) ``nlp_detect_act`` fields. The other
+    # two consumers cannot hit the cache:
+    #   - ``nlp_scrub`` / ``nlp_detect`` route to ``analyze_and_replace``, which
+    #     sends mutable ``token_state`` with the request and never consults the
+    #     cache; prewarming them issued a batch call nothing read.
+    #   - XHTML fields scrub each text node *inside* the markup, so the cache
+    #     key (the whole field text) never matches what Phase C looks up.
     param_groups: dict[tuple, set[str]] = {}
     for f in all_fields:
         if not f.text or not f.text.strip():
+            continue
+        if f.is_xhtml or f.work_item.action_type != "nlp_detect_act":
             continue
         entities, threshold, language = f.nlp_params
         key = (tuple(entities), threshold, language)
@@ -427,6 +538,8 @@ def detect_phi_batch(
         blanket redact fired, so Phase D records the *actual* outcome instead
         of claiming NLP processing succeeded.
         """
+        from pipeline.deidentify import _is_bug
+
         if token_state is None:
             token_state = {"next": {}, "map": {}, "reverse": {}}
 
@@ -435,69 +548,99 @@ def detect_phi_batch(
         fallback_wi: set[int] = set()
         fallback_paths: set[str] = set()
 
-        for field in fields:
+        def _write_back(field: _FieldText, result: str) -> None:
+            if field.base64_encoded:
+                result = base64.b64encode(result.encode("utf-8")).decode("ascii")
+            if field.data_uri_prefix:
+                result = field.data_uri_prefix + result
+            if token_lock is not None:
+                with token_lock:
+                    field.owner[field.key] = result
+            else:
+                field.owner[field.key] = result
+            if field.work_item is _HEURISTIC_SENTINEL:
+                heuristic_paths.append(field.path_hint)
+            else:
+                resource_changed[id(field.work_item)] = True
+
+        def _mark_unchanged(field: _FieldText) -> None:
             wi_id = id(field.work_item)
+            if (
+                wi_id not in resource_changed
+                and field.work_item is not _HEURISTIC_SENTINEL
+            ):
+                resource_changed[wi_id] = False
+
+        def _redact_fallback(field: _FieldText, exc: BaseException) -> None:
+            _log.error(
+                "nlp_batch_replace_failed res=%d key=%s — redacting",
+                res_idx,
+                field.key,
+            )
+            field.owner[field.key] = "[REDACTED]"
             try:
-                if field.is_xhtml:
-                    result, changed = _apply_replacement_xhtml(
-                        field, adapter, token_state
-                    )
-                else:
-                    result, changed = _apply_replacement(field, adapter, token_state)
+                from utils.metrics import ACTION_FALLBACK
 
-                if changed:
-                    if field.base64_encoded:
-                        result = base64.b64encode(result.encode("utf-8")).decode(
-                            "ascii"
-                        )
-                    if field.data_uri_prefix:
-                        result = field.data_uri_prefix + result
-                    if token_lock is not None:
-                        with token_lock:
-                            field.owner[field.key] = result
-                    else:
-                        field.owner[field.key] = result
-                    if field.work_item is _HEURISTIC_SENTINEL:
-                        heuristic_paths.append(field.path_hint)
-                    else:
-                        resource_changed[wi_id] = True
-                elif (
-                    wi_id not in resource_changed
-                    and field.work_item is not _HEURISTIC_SENTINEL
-                ):
-                    resource_changed[wi_id] = False
-            except Exception as exc:
-                from pipeline.deidentify import _is_bug
-
-                if _is_bug(exc):
-                    # A programming defect (e.g. AttributeError) must not be
-                    # masked as a redaction — re-raise so it is observable.
-                    raise
-                _log.error(
-                    "nlp_batch_replace_failed res=%d key=%s — redacting",
-                    res_idx,
-                    field.key,
+                _fb_action = (
+                    "nlp_attachment_scan"
+                    if field.work_item is _HEURISTIC_SENTINEL
+                    else str(field.work_item.action_type)
                 )
-                field.owner[field.key] = "[REDACTED]"
-                try:
-                    from utils.metrics import ACTION_FALLBACK
+                ACTION_FALLBACK.labels(
+                    action=_fb_action, reason=type(exc).__name__
+                ).inc()
+            except Exception:  # noqa: BLE001 — metrics must never break the pipeline
+                pass
+            if field.work_item is _HEURISTIC_SENTINEL:
+                heuristic_paths.append(field.path_hint)
+                fallback_paths.add(field.path_hint)
+            else:
+                resource_changed[id(field.work_item)] = True
+                fallback_wi.add(id(field.work_item))
 
-                    _fb_action = (
-                        "nlp_attachment_scan"
-                        if field.work_item is _HEURISTIC_SENTINEL
-                        else str(field.work_item.action_type)
+        _can_batch = hasattr(adapter, "analyze_and_replace_batch")
+
+        for run_key, run in _contiguous_batch_runs(fields):
+            # Batched path: one round-trip for a contiguous run of scrub fields
+            # sharing the same (entities, threshold, language, mode).
+            if run_key is not None and len(run) > 1 and _can_batch:
+                try:
+                    results = _apply_replacement_batch(
+                        run, run_key, adapter, token_state
                     )
-                    ACTION_FALLBACK.labels(
-                        action=_fb_action, reason=type(exc).__name__
-                    ).inc()
-                except Exception:  # noqa: BLE001 — metrics must never break the pipeline
-                    pass
-                if field.work_item is _HEURISTIC_SENTINEL:
-                    heuristic_paths.append(field.path_hint)
-                    fallback_paths.add(field.path_hint)
-                else:
-                    resource_changed[wi_id] = True
-                    fallback_wi.add(wi_id)
+                except Exception as exc:
+                    if _is_bug(exc):
+                        raise
+                    for field in run:
+                        _redact_fallback(field, exc)
+                    continue
+                for field, result in zip(run, results):
+                    if result != field.text:
+                        _write_back(field, result)
+                    else:
+                        _mark_unchanged(field)
+                continue
+
+            for field in run:
+                try:
+                    if field.is_xhtml:
+                        result, changed = _apply_replacement_xhtml(
+                            field, adapter, token_state
+                        )
+                    else:
+                        result, changed = _apply_replacement(
+                            field, adapter, token_state
+                        )
+                    if changed:
+                        _write_back(field, result)
+                    else:
+                        _mark_unchanged(field)
+                except Exception as exc:
+                    if _is_bug(exc):
+                        # A programming defect (e.g. AttributeError) must not be
+                        # masked as a redaction — re-raise so it is observable.
+                        raise
+                    _redact_fallback(field, exc)
 
         return res_idx, resource_changed, heuristic_paths, fallback_wi, fallback_paths
 
@@ -528,7 +671,16 @@ def detect_phi_batch(
                 )
                 sequential_fallback.append((res_idx, fields))
 
+        # ``_run_resource`` already handles ordinary failures inline (blanket
+        # redact) and deliberately re-raises only programming defects (see
+        # ``_is_bug``). Swallowing that here would leave the resource's free
+        # text untouched and emit it — a PHI leak the sequential path below
+        # does not have. Drain every future first so no worker is still
+        # mutating a resource dict, then re-raise the first defect so the
+        # whole batch fails closed.
+        phase_c_exc: BaseException | None = None
         for fut in as_completed(futures):
+            failed_idx = futures[fut]
             try:
                 idx, rc, hp, fwi, fpaths = fut.result()
                 work_item_changed[idx] = rc
@@ -538,8 +690,16 @@ def detect_phi_batch(
                     work_item_fallback[idx] = fwi
                 if fpaths:
                     heuristic_fallback[idx] = fpaths
-            except Exception:
-                _log.error("nlp_phase_c_error res=%d", futures[fut])
+            except Exception as exc:
+                _log.error(
+                    "nlp_phase_c_error res=%d error_type=%s",
+                    failed_idx,
+                    type(exc).__name__,
+                )
+                if phase_c_exc is None:
+                    phase_c_exc = exc
+        if phase_c_exc is not None:
+            raise phase_c_exc
 
         for res_idx, fields in sequential_fallback:
             idx, rc, hp, fwi, fpaths = _run_resource(res_idx, fields)
@@ -576,8 +736,13 @@ def detect_phi_batch(
                 continue
             res_changes = work_item_changed.get(i, {})
             res_fallback = work_item_fallback.get(i, set())
+            res_phase_a = phase_a_redacted.get(i, set())
             for work_item in nlp_works:
                 wi_id = id(work_item)
+                if wi_id in res_phase_a:
+                    # Phase A could not navigate the field and already recorded
+                    # the blanket redact — that is the outcome, not an NLP run.
+                    continue
                 changed = res_changes.get(wi_id, False)
                 if wi_id in res_fallback:
                     # NLP failed for (at least one field of) this work item and

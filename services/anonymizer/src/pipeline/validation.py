@@ -1,59 +1,56 @@
-"""Unified output-validation barrier.
+"""Aggregate output-validation barrier (raw PII scan + score-summary gate).
 
-Historically the engine had *two* asymmetric, opt-in safety gates:
+Where each check actually runs — verified against the call graph, not intent:
 
-  - ``processor._run_pii_gate`` — a raw-resource PII scan (``detect_pii_fast``)
-    that ran inside ``_finalize_batch`` but only when ``MEDANON_PII_GATE`` was
-    set (default off).
-  - ``scoring.gate.check_score_gate`` — a rich score-summary gate (hard
-    PII-leak check + composite-score threshold) that ran **only** on the async
-    export path, *after* the output file was written, and deleted the file on
-    block.
+- **Raw-resource PII scan.**  One implementation:
+  :func:`pipeline.gate.blocking_raw_detections`.  It is reached two ways.
+  :func:`pipeline.gate.run_pii_gate` calls it from ``processor._finalize_batch``,
+  the choke point *every* ``process_data_batch`` caller passes through (batch
+  API, NDJSON streaming, async bulk/cohort jobs, staged worker, Bundle inner
+  processing) and raises :class:`pipeline.gate.PiiLeakError`.  This module's
+  :func:`_run_raw_pii_scan` calls it to fold the same decision into an
+  aggregate verdict.  It blocks ``critical`` (names/SSN/MRN) and ``high``
+  (phone/email/street address) HIPAA direct identifiers by default — see
+  ``pii_detector.block_severities``.
 
-The sync ``/process`` path could only *flag* a leak after the bytes were
-already streamed.  Three paths, three behaviours, none mandatory.
+  Note the scan is *content*-based and only walks strings of >= 15 characters,
+  so it catches residual identifiers in free text, not a leaked ``name.family``
+  in a structured field.  Structural coverage is the score-summary gate's job.
 
-This module exposes ``validate_output`` / ``enforce_output``, which combine
-*both* checks into one verdict (raising :class:`OutputBlocked`).  How the two
-checks reach output in practice:
+- **Score-summary gate.**  Needs an aggregated ``score_summary``, which only
+  exists when ``MEDANON_SCORING_ENABLED`` is set.  It runs in the API service
+  layer (``scoring_helpers``), directly in ``jobs.executor_export`` and
+  ``integrations.storage``, and bundled with the raw scan in
+  :func:`enforce_output`.
 
-- **Raw-resource PII scan — always on, at the choke point.**  Every caller of
-  ``process_data_batch`` runs the raw scan in ``_finalize_batch`` via
-  ``pipeline.gate.run_pii_gate`` (raising :class:`pipeline.gate.PiiLeakError`,
-  which the whole API layer already handles).  Post-C1 it blocks both
-  ``critical`` (names/SSN/MRN) and ``high`` (phone/email/street address) HIPAA
-  direct identifiers — see ``pii_detector.block_severities``.
-- **Score-summary gate — opt-in.**  The richer ``text_risk`` / ``identifier_risk``
-  / composite-score checks need an aggregated ``score_summary``, which is only
-  computed when scoring is enabled (``MEDANON_SCORING_ENABLED``).  It runs in the
-  API service layer (``scoring_helpers``) and, bundled with the raw scan, in
-  ``enforce_output`` on the connector source-pull and bulk-export paths
-  (``pipeline.sources.run`` / ``routers.fhir_bulk``) where a ``score_summary``
-  is available.
+:func:`enforce_output` is therefore *not* on the FHIR path — its only caller is
+``pipeline.sources.run``, the seam that drives the non-FHIR source adapters
+(HL7 v2 / CDA / DICOM / tabular) through the engine.  The FHIR path gets the raw
+scan via ``run_pii_gate`` and the score gate via the callers listed above.
 
-So ``text_risk`` blocking is guaranteed only when scoring is enabled; the raw
-scan is the unconditional safety net and now covers the same direct identifiers.
+Both checks raise :class:`~pipeline.exceptions.OutputBlocked`;
+``PiiLeakError`` is a subclass, so a handler may catch either.  Enablement
+policy (including regulated mode overriding the soft-release env knobs) lives in
+:mod:`utils.regulated` so the two entry points cannot disagree.
 """
 
 from __future__ import annotations
 
 import logging
-import os
 from dataclasses import dataclass, field
 
+from pipeline.exceptions import OutputBlocked
+from pipeline.gate import blocking_raw_detections
+from utils.regulated import output_gate_enabled
+
+__all__ = [
+    "OutputBlocked",
+    "ValidationVerdict",
+    "validate_output",
+    "enforce_output",
+]
+
 _log = logging.getLogger("medanon.validation")
-
-
-class OutputBlocked(Exception):
-    """Raised when the unified validation barrier blocks output release.
-
-    ``str(exc)`` is the complete plain-language feedback (suitable for
-    ``job.error`` or an HTTP 422 detail).
-    """
-
-    def __init__(self, message: str, reasons: list[str] | None = None) -> None:
-        self.reasons = reasons or []
-        super().__init__(message)
 
 
 @dataclass
@@ -68,43 +65,23 @@ class ValidationVerdict:
 def _gate_enabled() -> bool:
     """Whether the unified barrier is active.
 
-    Default is now **ON**.  Set ``MEDANON_OUTPUT_GATE_ENABLED=false`` to disable
-    (e.g. for a throughput-only pipeline with externally-trusted input).  The
-    legacy ``MEDANON_PII_GATE`` / ``MEDANON_SCORE_GATE_ENABLED`` flags still act
-    as explicit per-check overrides inside the individual checks below.
+    Thin alias for :func:`utils.regulated.output_gate_enabled`, kept because
+    callers and tests import this name.  The policy itself lives in
+    ``utils.regulated`` so that ``pipeline.gate`` can consult it without
+    importing this module (which would be a cycle).
     """
-    explicit = os.environ.get("MEDANON_OUTPUT_GATE_ENABLED", "").strip().lower()
-    if explicit in ("false", "0", "no"):
-        return False
-    return True
+    return output_gate_enabled()
 
 
 def _run_raw_pii_scan(results: list[dict]) -> list[str]:
-    """Raw-resource PII scan (the former ``_run_pii_gate``).
+    """Raw-resource PII scan, as reasons for the aggregate verdict.
 
-    Returns a list of human-readable critical-leak reasons (empty = clean).
-    Honours the legacy ``MEDANON_PII_GATE`` override: when explicitly set to
-    false the raw scan is skipped (the score-summary gate still runs).
+    Delegates the decision to :func:`pipeline.gate.blocking_raw_detections` —
+    the single implementation, which also backs the ``process_data_batch``
+    choke point.  Enablement (including the regulated-mode override of the
+    legacy ``MEDANON_PII_GATE=false``) is decided there.
     """
-    if os.environ.get("MEDANON_PII_GATE", "").strip().lower() in ("false", "0", "no"):
-        return []
-
-    valid = [r for r in results if isinstance(r, dict) and "error" not in r]
-    if not valid:
-        return []
-
-    try:
-        from integrations.ai.agents.pii_detector import (
-            blocking_detections,
-            detect_pii_fast,
-        )
-    except ImportError:
-        # The detector is optional; absence must not crash the pipeline.
-        _log.debug("pii_detector_unavailable — skipping raw PII scan")
-        return []
-
-    detections = detect_pii_fast(valid)
-    blocking = blocking_detections(detections)
+    blocking = blocking_raw_detections(results)
     if not blocking:
         return []
 

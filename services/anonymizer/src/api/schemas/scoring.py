@@ -5,6 +5,29 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 
+class FieldClassifyRequest(BaseModel):
+    """Request body for POST /v1/classify-fields."""
+
+    resource_type: str = Field(
+        ...,
+        min_length=1,
+        max_length=64,
+        description="FHIR resource type the paths belong to (e.g. 'Patient').",
+    )
+    paths: list[str] = Field(
+        ...,
+        min_length=1,
+        max_length=4000,
+        description="FHIR leaf paths to classify (may carry .where()/[i]).",
+    )
+
+
+class FieldClassifyResponse(BaseModel):
+    """Response for POST /v1/classify-fields: {path: 'direct'|'quasi'|'non'}."""
+
+    classes: dict[str, str] = Field(default_factory=dict)
+
+
 class ScoreResourceRequest(BaseModel):
     """Request body for POST /v1/score."""
 

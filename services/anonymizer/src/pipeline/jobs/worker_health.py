@@ -3,15 +3,48 @@
 Serves ``/health``, ``/ready``, and ``/metrics`` on the Prometheus metrics
 port (default 9091).  Replaces ``prometheus_client.start_http_server()`` so
 that a single port handles both health probes and metrics exposition.
+
+``/ready`` reports on the worker's **upstreams** (gPAS, Redis, the FHIR servers)
+*and* on its own consume loop.  It used to report only the former, so Docker
+called the container healthy for ten minutes while the loop raised on every
+iteration and every claimed job was stranded in the Redis pending-entries list.
+A worker that cannot consume is not ready, whatever its upstreams say.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 import threading
+import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from pathlib import Path
 
 logger = logging.getLogger("medanon.worker_health")
+
+# The consume loop and a dedicated background task both refresh this file (see
+# ``jobs.worker._touch_heartbeat``). The background task ticks every 15 s, so a
+# file older than this means the loop is wedged, the process is gone, or the
+# output directory is not writable. Generous enough not to flap on a slow tick.
+_HEARTBEAT_MAX_AGE_SEC = float(
+    os.environ.get("MEDANON_WORKER_HEARTBEAT_MAX_AGE_SEC", "60")
+)
+
+
+def _heartbeat_check() -> str:
+    """``ok`` | ``stale: …`` | ``missing: …`` for the worker's own consume loop."""
+    path = Path(
+        os.path.join(os.environ.get("MEDANON_OUTPUT_DIR", "/output"), "worker_healthy")
+    )
+    try:
+        age = time.time() - path.stat().st_mtime
+    except FileNotFoundError:
+        return f"missing: {path} was never written (is /output writable by this uid?)"
+    except OSError as exc:
+        return f"missing: {exc}"
+    if age > _HEARTBEAT_MAX_AGE_SEC:
+        return f"stale: last beat {age:.0f}s ago (max {_HEARTBEAT_MAX_AGE_SEC:.0f}s)"
+    return "ok"
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -28,10 +61,25 @@ class _Handler(BaseHTTPRequestHandler):
             self._respond(404, b"Not Found")
 
     def _handle_ready(self) -> None:
-        from api.services.health import HealthCheckService
+        from api.services.health import CRITICAL_CHECKS, HealthCheckService
 
-        checks = HealthCheckService().check_readiness(timeout=3.0)
-        ready = all(v == "ok" for v in checks.values())
+        # ``critical_only`` + a tight per-probe timeout keep the whole response
+        # inside the healthcheck client's 3 s window (docker-compose.yml). Gating
+        # on the advisory services *and* probing them was a double bug: a slow
+        # ``trust_gate`` both failed the ``all(...)`` gate and pushed the probe
+        # past 3 s, so the client disconnected (BrokenPipe) and the container
+        # flapped to unhealthy while every job still ran.
+        checks = HealthCheckService().check_readiness(timeout=2.0, critical_only=True)
+        # The worker's own liveness, not just its upstreams'. Without this a
+        # wedged consume loop reports healthy while the queue silently backs up.
+        worker_loop = _heartbeat_check()
+        checks["worker_loop"] = worker_loop
+
+        # Gate on the critical upstreams (mirrors the API's /ready) plus the
+        # consume loop.
+        ready = worker_loop == "ok" and all(
+            v == "ok" for k, v in checks.items() if k in CRITICAL_CHECKS
+        )
         import json
 
         body = json.dumps({"ready": ready, "checks": checks}).encode()

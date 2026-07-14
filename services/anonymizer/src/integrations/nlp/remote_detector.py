@@ -515,7 +515,24 @@ def analyze_and_replace_batch_remote(
 
     url = _nlp_service_url("/v1/detect/batch")
     try:
-        raw = proxy_post_json(url, payload, timeout=60)
+        # Bulkhead: the other three NLP call sites take it, this one did not.
+        # Without it a batched replacement run bypasses BULKHEAD_NLP_MAX_CONCURRENT
+        # entirely. Saturation returns placeholders (fail-closed) rather than
+        # dropping into the sub-batch retry below, which would amplify load on an
+        # already-degraded service.
+        from utils.bulkhead import bulkhead, UpstreamSaturated
+
+        try:
+            with bulkhead(
+                "nlp", wait_sec=float(os.environ.get("BULKHEAD_NLP_WAIT_SEC", "1"))
+            ):
+                raw = proxy_post_json(url, payload, timeout=_NLP_BATCH_TIMEOUT)
+        except UpstreamSaturated:
+            _log.warning(
+                "nlp_bulkhead_saturated — returning %d redacted placeholders",
+                len(texts),
+            )
+            return [_nlp_fallback_token(t) for t in texts]
         result = _validate_batch_response(raw)
         returned_state = result.get("token_state", {})
         token_state.update(returned_state)

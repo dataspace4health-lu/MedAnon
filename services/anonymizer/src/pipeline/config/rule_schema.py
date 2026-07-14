@@ -58,12 +58,15 @@ class GeneralizeParams(ParamsBase):
         "number_round",
         "zip_prefix",
         "category",
+        "redact_if_rare",
     ] = "date_year"
     bracket_size: int = Field(default=10, gt=0)
     precision: int = Field(default=10, gt=0)
     prefix_length: int = Field(default=3, gt=0)
     mapping: dict[str, Any] | None = None
     unmapped: str | None = None
+    rare_values: list[str] | None = None
+    replacement: str | None = None
 
 
 class MaskParams(ParamsBase):
@@ -222,8 +225,10 @@ def _known_action_names() -> frozenset[str]:
     """Action names from the dispatch registries (lazy import — no cycle)."""
     from pipeline.deidentify import deident_actions, depseudo_actions, pseudo_actions
 
-    return frozenset(deident_actions) | frozenset(pseudo_actions) | frozenset(
-        depseudo_actions
+    return (
+        frozenset(deident_actions)
+        | frozenset(pseudo_actions)
+        | frozenset(depseudo_actions)
     )
 
 

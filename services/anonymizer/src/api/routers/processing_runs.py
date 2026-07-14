@@ -64,7 +64,9 @@ async def list_processing_runs(
 
 @router.get("/stats", response_model=ProcessingRunStatsResponse)
 async def processing_run_stats(
-    config_profile: str | None = Query(None, description="Filter statistics to a specific config profile"),
+    config_profile: str | None = Query(
+        None, description="Filter statistics to a specific config profile"
+    ),
 ):
     """Aggregate statistics across all processing runs, optionally filtered by config profile."""
     store = _get_store()

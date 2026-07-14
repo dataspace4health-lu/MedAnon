@@ -323,7 +323,8 @@ class UtilityEvaluator:
         """
         deid_refs = self._collect_references(deidentified)
         deid_relative = {
-            r for r in deid_refs
+            r
+            for r in deid_refs
             if not r.startswith("http")
             and not r.startswith("#")
             and not r.startswith("urn:")
@@ -340,7 +341,8 @@ class UtilityEvaluator:
             return 1.0
 
         orig_relative = {
-            r for r in self._collect_references(original)
+            r
+            for r in self._collect_references(original)
             if not r.startswith("http")
             and not r.startswith("#")
             and not r.startswith("urn:")
@@ -431,8 +433,11 @@ class UtilityEvaluator:
 
         # 2. Gender distribution for Patient resources.
         orig_patients = [r for r in originals if r.get("resourceType") == "Patient"]
-        deid_patients = [r for r in deidentified_batch if r.get("resourceType") == "Patient"]
+        deid_patients = [
+            r for r in deidentified_batch if r.get("resourceType") == "Patient"
+        ]
         if orig_patients and deid_patients:
+
             def _gender_dist(pts: list[dict]) -> dict:
                 d: dict[str, int] = {}
                 for p in pts:
@@ -452,7 +457,9 @@ class UtilityEvaluator:
             return bool(self._collect_codings(r))
 
         orig_code_rate = sum(1 for r in originals if _has_coding(r)) / len(originals)
-        deid_code_rate = sum(1 for r in deidentified_batch if _has_coding(r)) / len(deidentified_batch)
+        deid_code_rate = sum(1 for r in deidentified_batch if _has_coding(r)) / len(
+            deidentified_batch
+        )
         code_rate_delta = abs(orig_code_rate - deid_code_rate)
         checks.append(max(0.0, 1.0 - code_rate_delta * 2))
 
@@ -508,13 +515,17 @@ class UtilityEvaluator:
                 Evidence(
                     check="longitudinal_linkability",
                     value=0.0,
-                    details={"reason": "id field absent — longitudinal tracking impossible"},
+                    details={
+                        "reason": "id field absent — longitudinal tracking impossible"
+                    },
                     severity="warning",
                 )
             )
             return 0.0
 
-        _DETERMINISTIC = frozenset({"cryptohash", "gpas_pseudonymize", "tokenize", "encrypt"})
+        _DETERMINISTIC = frozenset(
+            {"cryptohash", "gpas_pseudonymize", "tokenize", "encrypt"}
+        )
         _IDENTITY_FIELDS = frozenset({"id", "identifier"})
 
         if not manifest_entries:
@@ -529,13 +540,18 @@ class UtilityEvaluator:
             return 1.0
 
         identity_entries = [
-            e for e in manifest_entries
+            e
+            for e in manifest_entries
             if any(f in (e.get("path", "") or "") for f in _IDENTITY_FIELDS)
         ]
 
         if not identity_entries:
             evidence.append(
-                Evidence(check="longitudinal_linkability", value=1.0, details={"identity_entries": 0})
+                Evidence(
+                    check="longitudinal_linkability",
+                    value=1.0,
+                    details={"identity_entries": 0},
+                )
             )
             return 1.0
 
@@ -552,7 +568,8 @@ class UtilityEvaluator:
                     "identity_entries": len(identity_entries),
                     "deterministic": deterministic,
                     "non_deterministic": [
-                        e.get("action") for e in identity_entries
+                        e.get("action")
+                        for e in identity_entries
                         if e.get("action", "") not in _DETERMINISTIC
                     ][:5],
                 },

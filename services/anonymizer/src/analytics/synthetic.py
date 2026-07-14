@@ -23,9 +23,18 @@ downstream systems can distinguish synthetic from real de-identified data.
 
 from __future__ import annotations
 
+import json
 import random
 import uuid
+from collections import Counter
+from collections.abc import Callable
 from typing import Any
+
+# Dual-import shim: packaged in the monolith, flat in the analytics microservice.
+try:  # pragma: no cover - import shim
+    from analytics import dp
+except ImportError:  # pragma: no cover - analytics microservice layout
+    import dp  # type: ignore[no-redirect]
 
 
 _SYN_TAG = {
@@ -96,19 +105,85 @@ def _extract_distributions(
 
 
 # ---------------------------------------------------------------------------
+# Differential-privacy marginals (D7.2 §5.5.5)
+# ---------------------------------------------------------------------------
+
+
+def _noisy_weighted(
+    values: list,
+    epsilon: float,
+    accountant: dp.PrivacyAccountant,
+    label: str,
+    rng: random.Random | None,
+    key_fn: Callable[[Any], Any] = lambda x: x,
+) -> tuple[list, list[int]]:
+    """Turn a per-record value list into a DP-noised weighted distribution.
+
+    Buckets ``values`` by ``key_fn`` into a histogram, adds Laplace noise for
+    ``epsilon``-DP (charged to ``accountant``), and returns ``(population,
+    weights)`` for :meth:`random.Random.choices`. Sampling from these noisy
+    weights is post-processing, so the synthetic output inherits the DP
+    guarantee (Dwork & Roth 2014, Prop 2.1). If every bin noises to zero the
+    distribution falls back to uniform over the observed categories.
+    """
+    hist: Counter = Counter()
+    reps: dict[Any, Any] = {}
+    for v in values:
+        k = key_fn(v)
+        hist[k] += 1
+        reps.setdefault(k, v)
+    noisy = dp.dp_histogram(hist, epsilon, accountant=accountant, label=label, rng=rng)
+    population = [reps[k] for k in noisy]
+    weights = [max(0, w) for w in noisy.values()]
+    if sum(weights) == 0:
+        weights = [1] * len(population)
+    return population, weights
+
+
+# Patient marginal attributes, in a fixed order so the DP budget split is
+# deterministic and the accounting is reproducible.
+_PATIENT_MARGINALS = (
+    "genders",
+    "birth_years",
+    "zip_prefixes",
+    "marital_statuses",
+    "languages",
+)
+
+
+def _dp_patient_dists(
+    dists: dict[str, list[str]],
+    epsilon: float,
+    accountant: dp.PrivacyAccountant,
+    rng: random.Random | None,
+) -> dict[str, tuple[list, list[int]]]:
+    """Noised per-attribute weighted distributions splitting ``epsilon`` evenly."""
+    share = epsilon / len(_PATIENT_MARGINALS)
+    return {
+        key: _noisy_weighted(dists[key], share, accountant, f"marginal:{key}", rng)
+        for key in _PATIENT_MARGINALS
+    }
+
+
+# ---------------------------------------------------------------------------
 # Synthetic patient builder
 # ---------------------------------------------------------------------------
 
 
 def _make_patient(
     rng: random.Random,
-    dists: dict[str, list[str]],
+    pick: Callable[[str], str],
 ) -> dict[str, Any]:
-    """Build one synthetic FHIR Patient resource."""
-    gender = rng.choice(dists["genders"])
+    """Build one synthetic FHIR Patient resource.
+
+    ``pick(attr)`` returns a sampled value for an attribute; it is either uniform
+    over the per-record list (frequency-preserving) or a weighted draw from a
+    DP-noised distribution, depending on the caller.
+    """
+    gender = pick("genders")
 
     # Sample birth year and apply ±2-year jitter for diversity
-    raw_year = rng.choice(dists["birth_years"])
+    raw_year = pick("birth_years")
     if raw_year.isdigit() and len(raw_year) == 4:
         jittered = rng.randint(int(raw_year) - 2, int(raw_year) + 2)
         month = rng.randint(1, 12)
@@ -117,11 +192,11 @@ def _make_patient(
     else:
         birth_date = raw_year
 
-    zip_prefix = rng.choice(dists["zip_prefixes"])
+    zip_prefix = pick("zip_prefixes")
     postal_code = f"{zip_prefix}000" if zip_prefix else ""
 
-    marital = rng.choice(dists["marital_statuses"])
-    language = rng.choice(dists["languages"])
+    marital = pick("marital_statuses")
+    language = pick("languages")
 
     resource: dict[str, Any] = {
         "resourceType": "Patient",
@@ -213,17 +288,45 @@ def _extract_condition_distributions(
     }
 
 
+# Condition marginal attributes, fixed order for a deterministic budget split.
+_CONDITION_MARGINALS = ("codes", "clinical_statuses", "categories")
+
+
+def _dp_condition_dists(
+    dists: dict[str, list],
+    epsilon: float,
+    accountant: dp.PrivacyAccountant,
+    rng: random.Random | None,
+) -> dict[str, tuple[list, list[int]]]:
+    """Noised weighted distributions for the condition marginals.
+
+    Code and category values are dicts, so they are bucketed by their canonical
+    JSON form; the representative dict is carried through for sampling.
+    """
+
+    def _key(v: Any) -> Any:
+        return json.dumps(v, sort_keys=True) if isinstance(v, dict) else v
+
+    share = epsilon / len(_CONDITION_MARGINALS)
+    return {
+        key: _noisy_weighted(
+            dists[key], share, accountant, f"marginal:{key}", rng, _key
+        )
+        for key in _CONDITION_MARGINALS
+    }
+
+
 def _make_condition(
     rng: random.Random,
     patient_id: str,
-    dists: dict[str, list],
+    pick: Callable[[str], Any],
 ) -> dict[str, Any]:
     """Build one synthetic FHIR Condition resource linked to a Patient."""
     import copy
 
-    code = copy.deepcopy(rng.choice(dists["codes"]))
-    clinical_status = rng.choice(dists["clinical_statuses"])
-    category = copy.deepcopy(rng.choice(dists["categories"]))
+    code = copy.deepcopy(pick("codes"))
+    clinical_status = pick("clinical_statuses")
+    category = copy.deepcopy(pick("categories"))
 
     return {
         "resourceType": "Condition",
@@ -252,6 +355,9 @@ def generate_synthetic_patients(
     patients: list[dict],
     count: int,
     seed: int | None = None,
+    *,
+    dp_epsilon: float | None = None,
+    accountant: "dp.PrivacyAccountant | None" = None,
 ) -> list[dict]:
     """Generate *count* synthetic FHIR Patient resources from *patients*.
 
@@ -264,12 +370,19 @@ def generate_synthetic_patients(
                   least one record.
         count: Number of synthetic patients to generate (1 – 10 000).
         seed: Optional random seed for reproducibility.
+        dp_epsilon: If set, sample from **differentially-private** marginals — the
+            budget is split evenly across the attributes and charged to
+            *accountant* (or a fresh one sized to ``dp_epsilon``). The output then
+            satisfies ``dp_epsilon``-DP w.r.t. the input by post-processing.
+        accountant: Shared DP budget accountant (e.g. to co-account patients and
+            conditions under one total budget). Ignored when ``dp_epsilon`` is None.
 
     Returns:
         List of *count* synthetic FHIR Patient dicts.
 
     Raises:
         ValueError: If *patients* is empty or *count* is out of range.
+        dp.PrivacyBudgetExceeded: If DP marginals would overspend *accountant*.
     """
     if not patients:
         raise ValueError(
@@ -281,7 +394,17 @@ def generate_synthetic_patients(
     rng = random.Random(seed)
     dists = _extract_distributions(patients)
 
-    return [_make_patient(rng, dists) for _ in range(count)]
+    if dp_epsilon is not None:
+        acc = accountant or dp.PrivacyAccountant(epsilon=dp_epsilon)
+        # Deterministic noise only when a seed is given; otherwise use the DP
+        # core's CSPRNG (a non-seeded random.Random is not secure enough for noise).
+        noise_rng = rng if seed is not None else None
+        weighted = _dp_patient_dists(dists, dp_epsilon, acc, noise_rng)
+        pick: Callable[[str], str] = lambda attr: rng.choices(*weighted[attr])[0]  # noqa: E731
+    else:
+        pick = lambda attr: rng.choice(dists[attr])  # noqa: E731
+
+    return [_make_patient(rng, pick) for _ in range(count)]
 
 
 def generate_synthetic_conditions(
@@ -289,6 +412,9 @@ def generate_synthetic_conditions(
     synthetic_patients: list[dict],
     count_per_patient: int = 2,
     seed: int | None = None,
+    *,
+    dp_epsilon: float | None = None,
+    accountant: "dp.PrivacyAccountant | None" = None,
 ) -> list[dict]:
     """Generate synthetic Condition resources linked to *synthetic_patients*.
 
@@ -302,12 +428,17 @@ def generate_synthetic_conditions(
                             ``generate_synthetic_patients``).
         count_per_patient: Max conditions per patient (actual count is random 0–N).
         seed: Optional random seed for reproducibility.
+        dp_epsilon: If set, sample from DP-noised code/status/category marginals
+            (charged to *accountant*), so the diagnosis distribution — the
+            sensitive attribute — carries a formal DP guarantee too.
+        accountant: Shared DP budget accountant.
 
     Returns:
         List of synthetic FHIR Condition dicts.
 
     Raises:
         ValueError: If *conditions* or *synthetic_patients* is empty.
+        dp.PrivacyBudgetExceeded: If DP marginals would overspend *accountant*.
     """
     if not conditions:
         raise ValueError("conditions list must not be empty")
@@ -317,9 +448,17 @@ def generate_synthetic_conditions(
     rng = random.Random(seed)
     dists = _extract_condition_distributions(conditions)
 
+    if dp_epsilon is not None:
+        acc = accountant or dp.PrivacyAccountant(epsilon=dp_epsilon)
+        noise_rng = rng if seed is not None else None
+        weighted = _dp_condition_dists(dists, dp_epsilon, acc, noise_rng)
+        pick: Callable[[str], Any] = lambda attr: rng.choices(*weighted[attr])[0]  # noqa: E731
+    else:
+        pick = lambda attr: rng.choice(dists[attr])  # noqa: E731
+
     result: list[dict] = []
     for patient in synthetic_patients:
         n = rng.randint(0, count_per_patient)
         for _ in range(n):
-            result.append(_make_condition(rng, patient["id"], dists))
+            result.append(_make_condition(rng, patient["id"], pick))
     return result

@@ -73,6 +73,60 @@ def proxy_analyse_risk(body: bytes, content_type: str) -> dict:
         raise
 
 
+def proxy_analyse_privacy_risk(body: bytes, content_type: str) -> dict:
+    """Forward a /v1/analyse/privacy-risk request to the analytics service.
+
+    Returns the parsed JSON privacy-risk report dict. Raises ValueError on HTTP
+    errors or connection failures. Mirrors :func:`proxy_analyse_risk`.
+    """
+    if not _analytics_cb.allow_request():
+        raise ValueError("Analytics service unavailable — circuit breaker OPEN")
+    url = _analytics_url("/v1/analyse/privacy-risk")
+    try:
+        result = proxy_post_json(
+            url, body, content_type=content_type, timeout=_RISK_TIMEOUT
+        )
+        if not isinstance(result, dict):
+            raise ValueError(
+                f"Analytics returned {type(result).__name__}, expected dict"
+            )
+        _analytics_cb.record_success()
+        return result
+    except ProxyTimeoutError:
+        _analytics_cb.record_timeout()
+        raise
+    except Exception:
+        _analytics_cb.record_failure()
+        raise
+
+
+def proxy_synthetic_passport(body: bytes, content_type: str) -> dict:
+    """Forward a /v1/synthetic/passport request to the analytics service.
+
+    Returns the parsed JSON Synthetic Data Passport dict. Raises ValueError on
+    HTTP errors or connection failures. Mirrors :func:`proxy_analyse_risk`.
+    """
+    if not _analytics_cb.allow_request():
+        raise ValueError("Analytics service unavailable — circuit breaker OPEN")
+    url = _analytics_url("/v1/synthetic/passport")
+    try:
+        result = proxy_post_json(
+            url, body, content_type=content_type, timeout=_SYNTHETIC_TIMEOUT
+        )
+        if not isinstance(result, dict):
+            raise ValueError(
+                f"Analytics returned {type(result).__name__}, expected dict"
+            )
+        _analytics_cb.record_success()
+        return result
+    except ProxyTimeoutError:
+        _analytics_cb.record_timeout()
+        raise
+    except Exception:
+        _analytics_cb.record_failure()
+        raise
+
+
 def proxy_generate_synthetic(body: bytes, content_type: str, params: dict) -> bytes:
     """Forward a /v1/generate/synthetic request to the analytics service.
 

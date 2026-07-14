@@ -521,7 +521,8 @@ class QualityEvaluator:
                 # The system URI must still be the original vocabulary URI,
                 # not a redaction sentinel like "[REDACTED]".
                 checks.append(
-                    not system.startswith("[") and system.upper() not in {"REDACTED", "UNKNOWN"}
+                    not system.startswith("[")
+                    and system.upper() not in {"REDACTED", "UNKNOWN"}
                 )
                 # Code must look like a code (non-empty, not a sentinel).
                 checks.append(
@@ -610,7 +611,9 @@ class QualityEvaluator:
         with a sentinel).
         """
         rtype = r.get("resourceType", "")
-        rules = self._CARDINALITY_RULES.get(rtype, [("resourceType", 1, False), ("id", 1, False)])
+        rules = self._CARDINALITY_RULES.get(
+            rtype, [("resourceType", 1, False), ("id", 1, False)]
+        )
 
         checks: list[bool] = []
         for field, _min_card, is_array in rules:
@@ -621,9 +624,7 @@ class QualityEvaluator:
                 checks.append(val is not None and val != "" and val != [])
 
         score = sum(checks) / len(checks) if checks else 1.0
-        failed = [
-            rules[i][0] for i, ok in enumerate(checks) if not ok
-        ]
+        failed = [rules[i][0] for i, ok in enumerate(checks) if not ok]
         evidence.append(
             Evidence(
                 check="cardinality_constraints",
@@ -690,7 +691,11 @@ class QualityEvaluator:
 
         if orig_count == 0:
             evidence.append(
-                Evidence(check="structural_diff", value=1.0, details={"reason": "empty original"})
+                Evidence(
+                    check="structural_diff",
+                    value=1.0,
+                    details={"reason": "empty original"},
+                )
             )
             return 1.0
 
@@ -807,7 +812,9 @@ class QualityEvaluator:
         out: list[str] = []
         if isinstance(obj, dict):
             for k, v in obj.items():
-                if isinstance(v, str) and (k in _DQ_DATE_KEYS or k.endswith("DateTime")):
+                if isinstance(v, str) and (
+                    k in _DQ_DATE_KEYS or k.endswith("DateTime")
+                ):
                     out.append(v)
                 else:
                     out.extend(self._collect_dates(v, depth + 1))

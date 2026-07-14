@@ -517,6 +517,10 @@ rules:
   action: generalize
   params:
     strategy: date_decade
+    # HIPAA Safe Harbor 90+ rule: collapse ages over 89 into one category so
+    # centenarians / very-elderly small cells are not re-identifiable by decade.
+    # Remove cap_age to keep decade granularity for the 90+ cohort.
+    cap_age: 89
 
 - name: generalise deceased date to year
   match: Patient.deceasedDateTime
@@ -637,11 +641,22 @@ rules:
   params:
     substitute_with: "UNK"
 
+- name: mask ethnicity text value
+  match: Patient.extension.where(url='http://hl7.org/fhir/us/core/StructureDefinition/us-core-ethnicity').extension.where(url='text').valueString
+  action: substitute
+  params: *redacted
+
 
 # Geolocation — Patient.address carries a geolocation extension with nested
 # latitude/longitude as valueDecimal; mask to 0.0 to preserve structure.
 - name: mask patient address geolocation latitude
   match: Patient.address.extension.where(url='http://hl7.org/fhir/StructureDefinition/geolocation').extension.where(url='latitude').valueDecimal
+  action: substitute
+  params:
+    substitute_with: 0.0
+
+- name: mask patient address geolocation longitude
+  match: Patient.address.extension.where(url='http://hl7.org/fhir/StructureDefinition/geolocation').extension.where(url='longitude').valueDecimal
   action: substitute
   params:
     substitute_with: 0.0
@@ -668,6 +683,11 @@ rules:
 
 - name: mask birth place state
   match: Patient.extension.where(url='http://hl7.org/fhir/StructureDefinition/patient-birthPlace').valueAddress.state
+  action: substitute
+  params: *redacted
+
+- name: mask birth place country
+  match: Patient.extension.where(url='http://hl7.org/fhir/StructureDefinition/patient-birthPlace').valueAddress.country
   action: substitute
   params: *redacted
 

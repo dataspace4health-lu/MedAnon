@@ -297,13 +297,14 @@ class Settings:
 
         schema_errors = validate_rules_schema(rules)
         if schema_errors:
-            strict = os.environ.get(
-                "MEDANON_RULE_SCHEMA_STRICT", "false"
-            ).lower() in ("true", "1", "yes")
+            strict = os.environ.get("MEDANON_RULE_SCHEMA_STRICT", "false").lower() in (
+                "true",
+                "1",
+                "yes",
+            )
             if strict:
                 raise ValueError(
-                    "Rule schema validation failed:\n  "
-                    + "\n  ".join(schema_errors)
+                    "Rule schema validation failed:\n  " + "\n  ".join(schema_errors)
                 )
             for err in schema_errors:
                 _config_log.warning("rule_schema_violation %s", err)
@@ -488,6 +489,18 @@ class Settings:
                     f"privacy_model.target_l must be >= 2 (got {target_l})"
                 )
 
+        # target_t (optional t-closeness threshold; total-variation distance)
+        target_t = pm.get("target_t")
+        if target_t is not None:
+            try:
+                target_t = float(target_t)
+            except (TypeError, ValueError):
+                raise ValueError("privacy_model.target_t must be a float")
+            if not (0.0 <= target_t <= 1.0):
+                raise ValueError(
+                    f"privacy_model.target_t must be in [0, 1] (got {target_t})"
+                )
+
         # max_suppression
         max_suppression = pm.get("max_suppression", 0.05)
         try:
@@ -568,6 +581,7 @@ class Settings:
             "enabled": True,
             "target_k": target_k,
             "target_l": target_l,
+            "target_t": target_t,
             "max_suppression": max_suppression,
             "max_qi_count": max_qi_count,
             "quasi_identifiers": quasi_identifiers,

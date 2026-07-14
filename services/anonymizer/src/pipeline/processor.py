@@ -39,7 +39,8 @@ from contextlib import contextmanager
 
 from utils.json_fast import dumps_bytes as _json_dumps_bytes, loads as _json_loads
 from utils.metrics import PIPELINE_STAGE_LATENCY
-from utils.thread_pool import get_executor
+from utils.regulated import raw_pii_scan_enabled as _raw_pii_scan_enabled
+from utils.thread_pool import get_executor, submit_with_context
 from utils.tracing import get_tracer as _get_tracer
 
 from pipeline.correction import quarantine_record
@@ -93,6 +94,13 @@ audit_log = logging.getLogger("medanon.audit")
 # higher concurrency (see GPAS_SUBBATCH_PARALLEL, NLP_CLIENT_SUBBATCH_PARALLEL,
 # MEDANON_GLOBAL_MAX_THREADS, MEDANON_PARALLEL_WORKERS).
 _BATCH_SIZE = int(os.environ.get("MEDANON_BATCH_SIZE", "1000"))
+
+# Hard cap on Bundle.entry count. A Bundle is processed in a single
+# process_data_batch call (see _process_bundle for why it cannot be chunked), so
+# its size bounds peak memory and the gPAS request. 0 disables the guard.
+# The API paths are already bounded by MEDANON_MAX_BODY_BYTES; this covers the
+# CLI and library callers, which are not.
+_MAX_BUNDLE_ENTRIES = int(os.environ.get("MEDANON_MAX_BUNDLE_ENTRIES", "50000"))
 # Default 8 parallel workers — matches docker-compose.yml default.
 # Set to 0 to disable parallelism (sequential processing).
 _PARALLEL_WORKERS = int(os.environ.get("MEDANON_PARALLEL_WORKERS", "8"))
@@ -376,7 +384,7 @@ def _run_finalize_stage(
     _batch_ref_mapping,
     attach_manifest,
     processing_mode,
-    _return_manifest,
+    _keep_manifest,
     quarantine_info: "dict[int, dict] | None" = None,
 ):
     """Stage 4 — finalize: gPAS write-back + post-processing per resource.
@@ -404,7 +412,11 @@ def _run_finalize_stage(
                 )
                 continue
             try:
-                fut = pool.submit(
+                # submit_with_context — _assemble_resource may call
+                # depseudonymize_resource_identifiers, which reads the active
+                # permit context (pipeline.permit_context) for domain scoping.
+                fut = submit_with_context(
+                    pool,
                     _assemble_resource,
                     resource,
                     settings,
@@ -512,7 +524,7 @@ def _run_finalize_stage(
                 parsed[i] = None
                 all_gpas_works[i] = []
                 all_nlp_works[i] = []
-                if not _return_manifest:
+                if not _keep_manifest:
                     all_manifest_entries[i] = []
     else:
         # Small batch — sequential (no thread pool overhead)
@@ -562,7 +574,7 @@ def _run_finalize_stage(
             parsed[i] = None
             all_gpas_works[i] = []
             all_nlp_works[i] = []
-            if not _return_manifest:
+            if not _keep_manifest:
                 all_manifest_entries[i] = []
 
     return results
@@ -652,8 +664,13 @@ def process_data_batch(
                 _parallel_fell_back = False
                 for resource in resources:
                     try:
+                        # submit_with_context — _evaluate_rules dispatches
+                        # cryptohash/tokenize/date_shift, which read the
+                        # active permit context (pipeline.permit_context) to
+                        # scope their derived keys per permit.
                         futures.append(
-                            pool.submit(
+                            submit_with_context(
+                                pool,
                                 _evaluate_rules,
                                 resource,
                                 settings,
@@ -691,9 +708,7 @@ def process_data_batch(
                         )
                         if processing_mode != "skip":
                             raise
-                        quarantine_info[idx] = _quarantine_info_for(
-                            resources[idx], exc
-                        )
+                        quarantine_info[idx] = _quarantine_info_for(resources[idx], exc)
                         parsed.append(None)
                         all_gpas_works.append([])
                         all_nlp_works.append([])
@@ -926,6 +941,14 @@ def _finalize_batch(
 
     # Stage 4 — finalize: gPAS write-back + post-processing per resource (parallel).
     # shared_mapping is read-only here; each resource is independent.
+    #
+    # ``_run_finalize_stage`` frees each resource's manifest entries as it
+    # consumes them, to cap peak memory. The output gate's structural check
+    # reads those entries (which paths were transformed), and gPAS write-back
+    # appends to them *during* this stage — so they are only complete once it
+    # returns. Keep them alive across the gate call when the check will run.
+    _keep_manifest = _return_manifest or (_MANIFEST_ENABLED and _raw_pii_scan_enabled())
+
     with _stage_span("resource_assembly"):
         results = _run_finalize_stage(
             parsed,
@@ -940,16 +963,26 @@ def _finalize_batch(
             _batch_ref_mapping,
             attach_manifest,
             processing_mode,
-            _return_manifest,
+            _keep_manifest,
             quarantine_info=quarantine_info,
         )
 
-    # PII blocking gate — runs at the single choke point that all callers
-    # share: batch API, NDJSON streaming, async bulk/cohort jobs, staged
-    # worker, and Bundle inner processing all call process_data_batch.
+    # Output barrier — runs at the single choke point that all callers share:
+    # batch API, NDJSON streaming, async bulk/cohort jobs, staged worker, and
+    # Bundle inner processing all call process_data_batch.
     # Default-ON; disable with MEDANON_OUTPUT_GATE_ENABLED=false (or skip the
     # raw scan only with MEDANON_PII_GATE=false).
-    _run_pii_gate([r for r in results if r is not None])
+    if _keep_manifest:
+        _gate_results: list[dict] = []
+        _gate_manifests: list[list[dict]] = []
+        for _r, _m in zip(results, all_manifest_entries):
+            if _r is not None:
+                _gate_results.append(_r)
+                _gate_manifests.append(_m)
+        _run_pii_gate(_gate_results, _gate_manifests, settings)
+    else:
+        # No manifest available — the structural check no-ops, content scan only.
+        _run_pii_gate([r for r in results if r is not None])
 
     if _return_manifest:
         return results, all_manifest_entries
@@ -982,10 +1015,23 @@ def _process_bundle(
         else:
             pre_ids.append((None, None))
 
-    # Batch-process all inner resources in a single call so gPAS dedup spans
-    # the entire Bundle (not per-chunk).  process_data_batch already handles
-    # memory-bounded chunking internally via _BATCH_SIZE for the gPAS HTTP call.
+    # All inner resources go through in ONE process_data_batch call, deliberately:
+    # gPAS dedup and the ``bundle`` NLP token scope are both per-call, so chunking
+    # here would split a Bundle's pseudonym namespace and renumber its surrogates.
+    #
+    # ``process_data_batch`` does NOT chunk (``_BATCH_SIZE`` is only the default
+    # chunk size of ``process_data_stream``), so N entries mean N futures and an
+    # N-value gPAS request. The API paths cap the input at ``MEDANON_MAX_BODY_BYTES``
+    # (10 MB), but the CLI and library paths have no such bound, hence the explicit
+    # guard below rather than a comment claiming a chunking that does not exist.
     if inner_resources:
+        max_entries = _MAX_BUNDLE_ENTRIES
+        if max_entries and len(inner_resources) > max_entries:
+            raise ValueError(
+                f"Bundle has {len(inner_resources)} entries, over the "
+                f"MEDANON_MAX_BUNDLE_ENTRIES limit of {max_entries}. Split it, or "
+                f"stream it as NDJSON via process_data_stream, which is chunked."
+            )
         all_processed = process_data_batch(
             inner_resources, settings, pseudonymizer, attach_manifest=attach_manifest
         )
@@ -1116,7 +1162,9 @@ def process_data(resource, settings, pseudonymizer=None, attach_manifest: bool =
         # references can be rewritten for non-gPAS actions (tokenize/cryptohash)
         # the same way Bundle input is handled.
         _pre_ids = [
-            (r.get("resourceType"), r.get("id")) if isinstance(r, dict) else (None, None)
+            (r.get("resourceType"), r.get("id"))
+            if isinstance(r, dict)
+            else (None, None)
             for r in resource
         ]
         results = process_data_batch(

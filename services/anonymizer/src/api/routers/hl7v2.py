@@ -10,7 +10,9 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 
 from api.deps import MAX_BODY_BYTES, limiter
+from api.routers._format_delivery import deliver_format_output
 from api.services.hl7v2 import Hl7v2Service
+from pipeline.exceptions import OutputBlocked
 from pipeline.processor import PiiLeakError
 
 router = APIRouter()
@@ -53,11 +55,21 @@ async def process_hl7v2(request: Request):
     config_profile = request.query_params.get("config_profile") or None
 
     try:
-        result = await _service.process_single(message_text, config_profile)
+        result, manifest = await _service.process_single_with_manifest(
+            message_text, config_profile
+        )
     except PiiLeakError as exc:
         raise HTTPException(
             status_code=422,
             detail={"code": "pii_leak_detected", "message": str(exc)},
+        ) from exc
+    except OutputBlocked as exc:
+        # The score-summary half of the barrier (enforce_output in
+        # pipeline.sources.run). Without this clause it fell through to the
+        # generic handler below and surfaced as a 500.
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "output_blocked", "message": str(exc)},
         ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -67,7 +79,13 @@ async def process_hl7v2(request: Request):
         )
         raise HTTPException(status_code=500, detail="HL7 v2 processing error") from exc
 
-    return Response(content=result, media_type="text/plain; charset=utf-8")
+    delivered = await deliver_format_output(
+        result, suffix=".hl7", request=request, resource_type="HL7v2", manifest=manifest
+    )
+    headers = {"X-Delivered-To": delivered} if delivered else None
+    return Response(
+        content=result, media_type="text/plain; charset=utf-8", headers=headers
+    )
 
 
 @router.post("/process/hl7v2/batch")
@@ -109,4 +127,10 @@ async def process_hl7v2_batch(request: Request):
             status_code=500, detail="HL7 v2 batch processing error"
         ) from exc
 
-    return Response(content=result, media_type="text/plain; charset=utf-8")
+    delivered = await deliver_format_output(
+        result, suffix=".hl7", request=request, resource_type="HL7v2"
+    )
+    headers = {"X-Delivered-To": delivered} if delivered else None
+    return Response(
+        content=result, media_type="text/plain; charset=utf-8", headers=headers
+    )

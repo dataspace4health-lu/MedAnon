@@ -10,18 +10,43 @@ from utils.thread_pool import get_executor
 
 logger = logging.getLogger("medanon")
 
+# Checks that gate the ``/ready`` boolean (and therefore the k8s readinessProbe
+# in helm/charts/anonymizer). A failure here means this process cannot serve
+# de-identification traffic correctly, so pulling it from the load balancer is
+# the right response.
+#
+# Everything NOT listed here is advisory: it is probed and reported in
+# ``checks`` for observability, but it must never flip ``/ready`` to 503.
+# The analytics/scoring/trust-gate/AI services are optional strangler-fig
+# extractions that degrade gracefully, so gating readiness on them would let a
+# non-essential dependency evict the core engine from service.
+CRITICAL_CHECKS = frozenset({"gpas", "fhir", "fhir_target", "redis", "nlp", "postgres"})
+
 
 class HealthCheckService:
-    """Probes configured upstream services (gPAS, FHIR, NLP) for readiness."""
+    """Probes configured upstream services for readiness.
 
-    def check_readiness(self, timeout: float | None = None) -> dict[str, str]:
+    Critical upstreams (gPAS, FHIR, Redis, NLP, Postgres) gate readiness;
+    optional microservices (analytics, scoring, Trust Gate, AI) are reported
+    but advisory. See :data:`CRITICAL_CHECKS`.
+    """
+
+    def check_readiness(
+        self, timeout: float | None = None, critical_only: bool = False
+    ) -> dict[str, str]:
         """Probe all configured upstream services **in parallel**.
 
-        Returns a dict of ``{service_name: "ok"|"error"}`` for each configured
-        upstream.  Empty dict when no upstreams are configured.
+        Returns a dict of ``{service_name: "ok"|"error"|"timeout"}`` for each
+        configured upstream.  Empty dict when no upstreams are configured.
 
         Worst-case latency is bounded by the single slowest probe (~timeout)
         rather than the sum of all probes.
+
+        ``critical_only=True`` skips the advisory microservice probes entirely.
+        The worker's health server gates only on :data:`CRITICAL_CHECKS`, so
+        probing a slow-to-time-out ``trust_gate`` there just inflated ``/ready``
+        latency past the healthcheck client's own timeout, flapping the
+        container to unhealthy while every job still ran.
         """
         if timeout is None:
             timeout = float(os.environ.get("MEDANON_READY_TIMEOUT", "5.0"))
@@ -46,11 +71,25 @@ class HealthCheckService:
 
         nlp_url = os.environ.get("NLP_SERVICE_URL", "").strip()
         if nlp_url:
-            probes["nlp"] = (self._probe_nlp, (nlp_url, timeout))
+            probes["nlp"] = (self._probe_health, (nlp_url, timeout))
 
         app_db_url = os.environ.get("MEDANON_APP_DB_URL", "").strip()
         if app_db_url:
             probes["postgres"] = (self._probe_postgres, (timeout,))
+
+        # Advisory microservices — each exposes GET /health and is only probed
+        # when its URL is configured. Reported, never readiness-gating, and
+        # skipped entirely for a critical-only probe (they only add latency).
+        if not critical_only:
+            for name, env_var in (
+                ("analytics", "ANALYTICS_SERVICE_URL"),
+                ("scoring", "SCORING_SERVICE_URL"),
+                ("trust_gate", "TRUST_GATE_SERVICE_URL"),
+                ("ai", "AI_SERVICE_URL"),
+            ):
+                url = os.environ.get(env_var, "").strip()
+                if url:
+                    probes[name] = (self._probe_health, (url, timeout))
 
         if not probes:
             return {}
@@ -116,13 +155,18 @@ class HealthCheckService:
             logger.debug("readiness: redis unreachable: %s", exc)
             return "error"
 
-    def _probe_nlp(self, url: str, timeout: float) -> str:
+    def _probe_health(self, url: str, timeout: float) -> str:
+        """Probe a service's ``GET /health``.
+
+        Strict: any non-2xx response raises and is reported as ``error``. The
+        de-identification microservices all answer 200 when healthy.
+        """
         try:
             probe = url.rstrip("/") + "/health"
             _ureq.urlopen(probe, timeout=timeout)  # nosec B310
             return "ok"
         except Exception as exc:
-            logger.debug("readiness: nlp service unreachable: %s", exc)
+            logger.debug("readiness: %s unreachable: %s", url, exc)
             return "error"
 
     def _probe_postgres(self, timeout: float) -> str:

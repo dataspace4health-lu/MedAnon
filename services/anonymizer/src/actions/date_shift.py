@@ -32,7 +32,11 @@ YAML
 The offset is ``HMAC-SHA256(MEDANON_HASH_KEY, anchor) mod (max_days + 1)``,
 sign chosen by ``direction``.  Production deployments must set
 ``MEDANON_HASH_KEY``; plain SHA-256 is only allowed with
-``MEDANON_HASH_ALLOW_PLAIN=true``.
+``MEDANON_HASH_ALLOW_PLAIN=true`` — and never in regulated mode (EHDS/D7.2
+§4.4). When a data-permit context is active (``pipeline.permit_context``)
+the key is scoped per permit, so the same subject shifts by an unrelated
+offset under different permits (§4.4: pseudonyms MUST NOT be reused across
+permits) while staying deterministic within one permit.
 """
 
 from __future__ import annotations
@@ -98,8 +102,13 @@ def _signed_offset(anchor: str, max_days: int, direction: str) -> int:
     secret_key = os.environ.get("MEDANON_HASH_KEY") or ""
     msg = anchor.encode()
     if secret_key:
+        from pipeline.permit_context import scope_key_to_permit
+
+        secret_key = scope_key_to_permit(secret_key, action="date_shift")
         digest = _hmac.new(secret_key.encode(), msg, digestmod="sha256").digest()
     else:
+        from utils.regulated import regulated_mode
+
         allow_plain = os.environ.get(
             "MEDANON_HASH_ALLOW_PLAIN", ""
         ).strip().lower() in (
@@ -107,6 +116,11 @@ def _signed_offset(anchor: str, max_days: int, direction: str) -> int:
             "true",
             "yes",
         )
+        if regulated_mode():
+            raise ValueError(
+                "MEDANON_REGULATED_MODE is on: plain hashing is not permitted. "
+                "Set MEDANON_HASH_KEY for HMAC-based date shifting."
+            )
         if not allow_plain:
             raise ValueError(
                 "No HMAC key configured (MEDANON_HASH_KEY is unset) and "

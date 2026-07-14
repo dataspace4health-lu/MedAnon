@@ -25,6 +25,11 @@ _log = logging.getLogger("medanon.ai.config_chat")
 # The user narrows the resource scope when they need a specific type covered in
 # full; truncation drops WHOLE lines so the model never sees a half-path.
 _FIELD_CONTEXT_MAX = int(os.environ.get("MEDANON_AI_FIELD_CONTEXT_MAX", "7000"))
+# Prefix of the user's current config injected as editing context. The schema
+# accepts a much larger config (60k) than we can afford to inject on every turn;
+# this bounds the prompt to fit the model context. ~12000 chars ≈ 3k tokens.
+# Raise it for large-context models when the assistant needs the whole config.
+_CONFIG_CONTEXT_MAX = int(os.environ.get("MEDANON_AI_CONFIG_CONTEXT_MAX", "12000"))
 
 
 def _truncate_field_lines(text: str, max_len: int) -> str:
@@ -45,6 +50,7 @@ def _truncate_field_lines(text: str, max_len: int) -> str:
         kept.append(line)
         used += len(line) + 1
     return "\n".join(kept) + marker
+
 
 # Fixed refusal returned for off-topic requests (matches the system prompt).
 _OFF_TOPIC_REPLY = (
@@ -276,7 +282,9 @@ def _format_intake(intake: dict | None) -> str:
     if not intake:
         return ""
     parts: list[str] = []
-    rtypes = [str(t).strip() for t in (intake.get("resource_types") or []) if str(t).strip()]
+    rtypes = [
+        str(t).strip() for t in (intake.get("resource_types") or []) if str(t).strip()
+    ]
     if rtypes:
         parts.append(
             "Scope the proposed rules to these FHIR resource types: "
@@ -357,7 +365,9 @@ def _build_messages(
     # Field granularity directive — placed after the field tree so the
     # "leaf paths above" reference resolves. Falls back to the values-only
     # directive for any unrecognised value.
-    directive = _GRANULARITY_DIRECTIVE.get(granularity, _GRANULARITY_DIRECTIVE["values"])
+    directive = _GRANULARITY_DIRECTIVE.get(
+        granularity, _GRANULARITY_DIRECTIVE["values"]
+    )
     messages.append({"role": "system", "content": directive})
 
     # Action-selection policy — tells the model to pick the action that fits the
@@ -394,7 +404,7 @@ def _build_messages(
                 "role": "system",
                 "content": (
                     "The user is currently editing this configuration:\n"
-                    f"```yaml\n{config_yaml.strip()[:12000]}\n```"
+                    f"```yaml\n{config_yaml.strip()[:_CONFIG_CONTEXT_MAX]}\n```"
                 ),
             },
         )

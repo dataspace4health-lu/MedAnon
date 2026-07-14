@@ -54,7 +54,9 @@ class OpenProvider:
     provider_name = "none"
 
     def authenticate(self, request: Request) -> AuthContext:
-        return AuthContext(subject="anonymous", roles=frozenset({"admin"}), auth_method="none")
+        return AuthContext(
+            subject="anonymous", roles=frozenset({"admin"}), auth_method="none"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -122,7 +124,9 @@ class OidcProvider:
 
     def _allow_api_key(self) -> bool:
         return os.environ.get("MEDANON_AUTH_ALLOW_API_KEY", "true").lower() in (
-            "true", "1", "yes"
+            "true",
+            "1",
+            "yes",
         )
 
     def _extract_bearer(self, request: Request) -> str | None:
@@ -248,7 +252,9 @@ def auth_config() -> dict:
     }
     if oidc_issuer:
         config["oidc_issuer"] = oidc_issuer
-        config["oidc_client_id"] = os.environ.get("OIDC_CLIENT_ID", "medanon-ui").strip()
+        config["oidc_client_id"] = os.environ.get(
+            "OIDC_CLIENT_ID", "medanon-ui"
+        ).strip()
         config["oidc_scope"] = os.environ.get(
             "OIDC_SCOPE", "openid profile email"
         ).strip()

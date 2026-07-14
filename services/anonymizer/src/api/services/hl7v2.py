@@ -3,23 +3,26 @@
 import asyncio
 import logging
 
-from formats.hl7v2 import deidentify_hl7v2, deidentify_hl7v2_batch
+from formats.hl7v2 import (
+    deidentify_hl7v2_batch,
+    deidentify_hl7v2_with_manifest,
+)
 
 logger = logging.getLogger("medanon")
 
 
-def _engine_deidentify_hl7v2(message_text: str, config_profile: str) -> str:
-    """Run one HL7 v2 message through the full rule engine via the adapter.
-
-    Sync (runs in a worker thread).  Maps PID demographics to the FHIR IR,
-    applies the configured profile (redact / generalize / gPAS / NLP / scoring
-    + the validation barrier), and writes the result back into the message.
-    """
+def _engine_deidentify_hl7v2(
+    message_text: str, config_profile: str
+) -> tuple[str, list]:
+    """Run one HL7 v2 message through the rule engine, returning (msg, manifest)."""
     from pipeline.sources import Hl7v2Adapter
-    from pipeline.sources.run import run_through_engine
+    from pipeline.sources.run import run_through_engine_with_manifest
 
-    out = run_through_engine(Hl7v2Adapter(), message_text, config_profile)
-    return out.decode("utf-8") if isinstance(out, (bytes, bytearray)) else out
+    out, manifest = run_through_engine_with_manifest(
+        Hl7v2Adapter(), message_text, config_profile
+    )
+    msg = out.decode("utf-8") if isinstance(out, (bytes, bytearray)) else out
+    return msg, manifest
 
 
 class Hl7v2Service:
@@ -28,12 +31,18 @@ class Hl7v2Service:
     async def process_single(
         self, message_text: str, config_profile: str | None = None
     ) -> str:
-        """De-identify a single HL7 v2 message.
+        """De-identify a single HL7 v2 message (output only)."""
+        out, _ = await self.process_single_with_manifest(message_text, config_profile)
+        return out
 
-        When *config_profile* is provided the message is routed through the full
-        rule engine (the same one FHIR uses) via ``Hl7v2Adapter``.  When it is
-        ``None`` the legacy fixed-field scrubber is used (backward-compatible
-        default).
+    async def process_single_with_manifest(
+        self, message_text: str, config_profile: str | None = None
+    ) -> tuple[str, list]:
+        """De-identify one HL7 v2 message, returning (message, transformation manifest).
+
+        With *config_profile* the message routes through the full rule engine (the
+        same one FHIR uses) via ``Hl7v2Adapter``; without it the legacy fixed-field
+        scrubber is used. Both return a manifest of the fields transformed.
 
         Raises:
             ValueError / NormalizationError: invalid HL7 v2 message.
@@ -43,7 +52,7 @@ class Hl7v2Service:
             return await asyncio.to_thread(
                 _engine_deidentify_hl7v2, message_text, config_profile
             )
-        return await asyncio.to_thread(deidentify_hl7v2, message_text)
+        return await asyncio.to_thread(deidentify_hl7v2_with_manifest, message_text)
 
     async def process_batch(self, batch_text: str) -> str:
         """De-identify a batch of concatenated HL7 v2 messages.

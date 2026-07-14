@@ -42,6 +42,25 @@ _PROFILE_MAP = {
     "value-masking": "config_value_masking.yaml",
 }
 
+# Reverse lookup: config filename → canonical profile alias.  Callers that only
+# hold a resolved filename (e.g. ``Settings.filename``) must round-trip through
+# this rather than mangling the stem, otherwise the same profile is recorded
+# under two names — ``config_value_masking.yaml`` becomes ``value_masking``
+# while the alias is ``value-masking``, splitting per-profile aggregates.
+_FILENAME_TO_PROFILE = {v: k for k, v in _PROFILE_MAP.items() if v}
+
+
+def canonical_profile_name(filename: str | None) -> str | None:
+    """Canonical profile alias for a bundled config *filename*.
+
+    Returns ``None`` for user-defined configs, which have no alias and are
+    referred to by their own name.
+    """
+    if not filename:
+        return None
+    return _FILENAME_TO_PROFILE.get(filename.rsplit("/", 1)[-1])
+
+
 # TTL in seconds (0 = disabled; cache lives for the process lifetime).
 _CACHE_TTL = int(os.environ.get("MEDANON_CONFIG_CACHE_TTL", "0"))
 _last_clear: float = 0.0
@@ -114,6 +133,21 @@ def _resolve_profile(profile: str) -> str:
         f"Unknown profile '{profile}'. Built-in profiles: {valid}. "
         "For user-defined configs, create one via POST /v1/configs first."
     )
+
+
+def is_valid_profile(profile: str) -> bool:
+    """Return True if *profile* is a resolvable profile name (no YAML load).
+
+    Accepts a built-in alias (``_PROFILE_MAP``) or a user-defined profile whose
+    YAML exists in the user config dir. Used to validate a profile *reference*
+    (e.g. the instance-settings default) without paying the cost of loading and
+    parsing the config. Mirrors the resolution ``get_settings`` performs.
+    """
+    try:
+        _resolve_profile(profile)
+        return True
+    except ValueError:
+        return False
 
 
 def clear_settings_cache() -> None:

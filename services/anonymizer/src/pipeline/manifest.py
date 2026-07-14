@@ -86,6 +86,104 @@ def attach_suppressed_tag(resource: dict, reason: str = "k-anonymity") -> None:
     )
 
 
+def strip_manifest_tag(resource: dict) -> dict:
+    """Remove the transformation-manifest ``meta.tag`` from *resource* in place.
+
+    Used on the export path so released clinical data never carries the manifest
+    inline — the manifest is delivered as a separate artifact. Drops the now-empty
+    ``tag``/``meta`` containers so the output stays clean. Returns *resource*.
+    """
+    if not isinstance(resource, dict):
+        return resource
+    meta = resource.get("meta")
+    if not isinstance(meta, dict):
+        return resource
+    tags = meta.get("tag")
+    if isinstance(tags, list):
+        kept = [
+            t
+            for t in tags
+            if not (isinstance(t, dict) and t.get("system") == MANIFEST_SYSTEM)
+        ]
+        if kept:
+            meta["tag"] = kept
+        else:
+            meta.pop("tag", None)
+    if not meta:
+        resource.pop("meta", None)
+    return resource
+
+
+def split_ndjson_manifest(data_path: str) -> str | None:
+    """Split an embedded per-resource manifest out of an NDJSON export file.
+
+    Reads *data_path* (uncompressed NDJSON), pulls each resource's transformation
+    manifest from ``meta.tag``, strips it so the released clinical data is clean,
+    and writes a ``<data_path>.manifest.ndjson`` sidecar (one line per resource:
+    ``{resourceType, id, rules}``). Rewrites *data_path* in place with the cleaned
+    resources. Returns the sidecar path when at least one resource carried a
+    manifest, else ``None`` (nothing to split — data left untouched).
+
+    This is the universal fallback used by :func:`publish_result` so *every*
+    export type that writes NDJSON with an attached manifest (e.g. the staged
+    large-export path) releases the manifest as a separate artifact — without the
+    streaming path's inline sidecar. Best-effort: on any error the original file
+    is preserved and ``None`` is returned.
+    """
+    if not data_path.endswith(".ndjson"):
+        return None
+    from utils.json_fast import dumps as _dumps, loads as _loads
+
+    manifest_path = f"{data_path}.manifest.ndjson"
+    tmp_data = f"{data_path}.clean.tmp"
+    found = False
+    try:
+        with (
+            open(data_path, encoding="utf-8") as src,
+            open(tmp_data, "w", encoding="utf-8") as dfh,
+            open(manifest_path, "w", encoding="utf-8") as mfh,
+        ):
+            for line in src:
+                s = line.strip()
+                if not s:
+                    continue
+                try:
+                    r = _loads(s)
+                except (ValueError, TypeError):
+                    dfh.write(s + "\n")
+                    continue
+                if isinstance(r, dict) and "error" not in r:
+                    entries = extract_manifest_entries(r)
+                    if entries:
+                        found = True
+                    strip_manifest_tag(r)
+                    mfh.write(
+                        _dumps(
+                            {
+                                "resourceType": r.get("resourceType", "Unknown"),
+                                "id": r.get("id"),
+                                "rules": entries,
+                            }
+                        )
+                        + "\n"
+                    )
+                    dfh.write(_dumps(r) + "\n")
+                else:
+                    dfh.write(s + "\n")
+        if found:
+            os.replace(tmp_data, data_path)
+            return manifest_path
+    except Exception:
+        pass
+    # Nothing to split (or an error) — discard temp artifacts, leave data as-is.
+    for p in (tmp_data, manifest_path):
+        try:
+            os.unlink(p)
+        except OSError:
+            pass
+    return None
+
+
 def extract_manifest_entries(resource: dict) -> list[dict]:
     """Extract transformation manifest entries from a resource's meta.tag.
 

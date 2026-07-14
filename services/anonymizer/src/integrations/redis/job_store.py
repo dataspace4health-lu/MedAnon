@@ -493,6 +493,50 @@ class RedisJobStore:
             _log.warning("claim_stale_jobs_error: %s", type(exc).__name__)
             return []
 
+    def prune_dead_consumers(self, min_idle_ms: int = 3_600_000) -> int:
+        """Delete consumers with no pending messages that have been idle too long.
+
+        Every worker process mints a fresh ``worker-<uuid>`` at startup and never
+        removes the old one, so each restart leaks a consumer into the group's
+        ``XINFO CONSUMERS`` list. A production incident accumulated 150+; they are
+        harmless individually but inflate every XINFO scan and obscure the real
+        worker count in dashboards.
+
+        Only prunes consumers that hold **zero** pending entries -- a consumer
+        with pending work is either alive or holds messages a stale-claim pass
+        still needs to reclaim, so deleting it would drop that ownership. Runs on
+        a long interval (default 1 h idle) so a briefly-quiet live worker is never
+        pruned. Returns the number deleted.
+        """
+        try:
+            consumers = self._client.xinfo_consumers(_STREAM_KEY, _STREAM_GROUP)
+        except Exception as exc:
+            _log.warning("prune_dead_consumers_list_error: %s", type(exc).__name__)
+            return 0
+
+        deleted = 0
+        for c in consumers:
+            name = c.get("name", "")
+            # Never prune this process's own consumer, whatever its idle time.
+            if not name or name == self._consumer_id:
+                continue
+            if c.get("pending", 0) != 0:
+                continue
+            if c.get("idle", 0) < min_idle_ms:
+                continue
+            try:
+                self._client.xgroup_delconsumer(_STREAM_KEY, _STREAM_GROUP, name)
+                deleted += 1
+            except Exception as exc:
+                _log.warning(
+                    "prune_dead_consumers_del_error consumer=%s: %s",
+                    name,
+                    type(exc).__name__,
+                )
+        if deleted:
+            _log.info("pruned_dead_consumers count=%d", deleted)
+        return deleted
+
     def get_queue_depth(self) -> int:
         """Return the number of pending (unacknowledged) messages in the stream.
 

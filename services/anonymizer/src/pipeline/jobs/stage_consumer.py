@@ -84,7 +84,8 @@ async def _handle_message(stage, message, store, staging, client, wid) -> None:
         AMQP_CONSUMED.labels(stage=stage, outcome="skip").inc()
         logger.debug(
             "stage_consumer_idempotent_skip job=%s partition=%d",
-            msg.job_id, msg.partition_id,
+            msg.job_id,
+            msg.partition_id,
         )
         await _maybe_advance(stage, msg, store, staging, client)
         return
@@ -112,7 +113,10 @@ async def _handle_message(stage, message, store, staging, client, wid) -> None:
         AMQP_CONSUMED.labels(stage=stage, outcome="done").inc()
         logger.info(
             "stage_consumer_done stage=%s job=%s partition=%d processed=%d",
-            stage, msg.job_id, msg.partition_id, processed,
+            stage,
+            msg.job_id,
+            msg.partition_id,
+            processed,
         )
         await _maybe_advance(stage, msg, store, staging, client)
     except Exception as exc:
@@ -139,15 +143,23 @@ async def _handle_message(stage, message, store, staging, client, wid) -> None:
             AMQP_CONSUMED.labels(stage=stage, outcome="dead").inc()
             logger.error(
                 "stage_consumer_dead_letter stage=%s job=%s partition=%d attempts=%d",
-                stage, msg.job_id, msg.partition_id, attempt,
+                stage,
+                msg.job_id,
+                msg.partition_id,
+                attempt,
             )
         else:
             # Republish to the retry queue (delayed redelivery) with attempt+1.
             retry_msg = StageMessage(
-                workflow_id=msg.workflow_id, job_id=msg.job_id, step_id=msg.step_id,
-                stage=msg.stage, partition_id=msg.partition_id,
-                config_hash=msg.config_hash, attempt=attempt + 1,
-                tenant=msg.tenant, trace_id=msg.trace_id,
+                workflow_id=msg.workflow_id,
+                job_id=msg.job_id,
+                step_id=msg.step_id,
+                stage=msg.stage,
+                partition_id=msg.partition_id,
+                config_hash=msg.config_hash,
+                attempt=attempt + 1,
+                tenant=msg.tenant,
+                trace_id=msg.trace_id,
             )
             with _suppress():
                 await client.publish(retry_msg, kind="retry")
@@ -155,7 +167,11 @@ async def _handle_message(stage, message, store, staging, client, wid) -> None:
             AMQP_CONSUMED.labels(stage=stage, outcome="retry").inc()
             logger.warning(
                 "stage_consumer_retry stage=%s job=%s partition=%d attempt=%d: %s",
-                stage, msg.job_id, msg.partition_id, attempt, exc,
+                stage,
+                msg.job_id,
+                msg.partition_id,
+                attempt,
+                exc,
             )
 
 
@@ -192,8 +208,16 @@ def _process_partition_sync(stage, msg: StageMessage, job, store, staging) -> in
         break
 
     processed, _shard = process_one_partition(
-        job, staging, settings, pseudonymizer, "skip", output_dir,
-        "amqp_deid", collector, resource_type, msg.partition_id,
+        job,
+        staging,
+        settings,
+        pseudonymizer,
+        "skip",
+        output_dir,
+        "amqp_deid",
+        collector,
+        resource_type,
+        msg.partition_id,
     )
     return processed
 
@@ -231,15 +255,18 @@ async def _maybe_advance(stage, msg: StageMessage, store, staging, client) -> No
     if next_stage is None:
         return
     nxt = StageMessage(
-        workflow_id=msg.workflow_id, job_id=msg.job_id, step_id=next_stage,
-        stage=next_stage, partition_id=0, config_hash=msg.config_hash,
-        tenant=msg.tenant, trace_id=msg.trace_id,
+        workflow_id=msg.workflow_id,
+        job_id=msg.job_id,
+        step_id=next_stage,
+        stage=next_stage,
+        partition_id=0,
+        config_hash=msg.config_hash,
+        tenant=msg.tenant,
+        trace_id=msg.trace_id,
     )
     with _suppress():
         await client.publish(nxt)
-    logger.info(
-        "stage_join_advance job=%s %s -> %s", msg.job_id, stage, next_stage
-    )
+    logger.info("stage_join_advance job=%s %s -> %s", msg.job_id, stage, next_stage)
 
 
 def _next_stage(stage: str) -> str | None:

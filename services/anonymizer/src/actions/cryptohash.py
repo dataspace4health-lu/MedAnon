@@ -33,22 +33,33 @@ def _normalized_node_str(value: Any) -> str:
 
 
 def _resolve_secret_key(params: dict) -> str | None:
-    """Return the HMAC secret key.
+    """Return the HMAC secret key, scoped to the active data permit when one is set.
 
     Priority order (GDPR Art. 32 — secrets must not live in config files):
     1. Environment variable named by ``params['secret_key_env']``
     2. Environment variable ``MEDANON_HASH_KEY`` (global default)
     3. Inline ``params['secret_key']`` value (permitted only for local dev/testing)
+
+    When a permit context is active (``pipeline.permit_context``), the
+    resolved base key is HKDF-derived per permit so the same subject
+    produces unrelated hashes under different permits (D7.2 §4.4). In
+    regulated mode a permit context is required — see
+    :func:`pipeline.permit_context.require_permit_if_regulated`.
     """
     env_name = params.get("secret_key_env")
+    base_key = None
     if env_name:
-        key = os.environ.get(str(env_name))
-        if key:
-            return key
-    global_key = os.environ.get("MEDANON_HASH_KEY")
-    if global_key:
-        return global_key
-    return params.get("secret_key")
+        base_key = os.environ.get(str(env_name))
+    if not base_key:
+        base_key = os.environ.get("MEDANON_HASH_KEY")
+    if not base_key:
+        base_key = params.get("secret_key")
+    if not base_key:
+        return None
+
+    from pipeline.permit_context import scope_key_to_permit
+
+    return scope_key_to_permit(base_key, action="cryptohash")
 
 
 def _compute_hash(msg: bytes, params: dict) -> str:
@@ -65,12 +76,21 @@ def _compute_hash(msg: bytes, params: dict) -> str:
     if secret_key:
         return _hmac.new(str(secret_key).encode(), msg, digestmod=digestmod).hexdigest()
 
-    # Plain hashing without HMAC is dangerous — must be explicitly allowed
+    # Plain hashing without HMAC is dangerous — must be explicitly allowed, and
+    # is never permitted in regulated mode (EHDS/D7.2 §4.4: an unsalted/unkeyed
+    # hash of direct identifiers does not qualify as pseudonymisation).
+    from utils.regulated import regulated_mode
+
     allow_plain = os.environ.get("MEDANON_HASH_ALLOW_PLAIN", "").strip().lower() in (
         "1",
         "true",
         "yes",
     )
+    if regulated_mode():
+        raise ValueError(
+            "MEDANON_REGULATED_MODE is on: plain hashing is not permitted. "
+            "Set MEDANON_HASH_KEY for HMAC-based pseudonymization."
+        )
     if not allow_plain:
         raise ValueError(
             "No HMAC key configured (MEDANON_HASH_KEY is unset) and "

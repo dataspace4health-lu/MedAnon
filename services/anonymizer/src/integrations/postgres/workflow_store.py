@@ -177,9 +177,7 @@ class PostgresWorkflowStore:
         finally:
             self._put_conn(conn)
 
-    def set_workflow_status(
-        self, workflow_id: str, status: WorkflowStatus
-    ) -> None:
+    def set_workflow_status(self, workflow_id: str, status: WorkflowStatus) -> None:
         self._exec(
             "UPDATE medanon.workflows SET status=%s, updated_at=NOW() WHERE id=%s",
             (status.value, workflow_id),
@@ -345,7 +343,9 @@ def _row_to_workflow(wrow: dict, srows: list) -> Workflow:
         WorkflowStep(
             id=s["step_id"],
             job_type=s["job_type"],
-            params=s["params"] if isinstance(s["params"], dict) else json.loads(s["params"] or "{}"),
+            params=s["params"]
+            if isinstance(s["params"], dict)
+            else json.loads(s["params"] or "{}"),
             depends_on=list(s["depends_on"] or []),
             status=StepStatus(s["status"]),
             job_id=s["job_id"],

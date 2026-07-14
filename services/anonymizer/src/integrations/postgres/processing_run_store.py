@@ -31,11 +31,20 @@ class PostgresProcessingRunStore:
         safe_putconn(self._pool, conn)
 
     def ensure_schema(self) -> None:
-        """Idempotently add the ``trust_passport`` column to an existing table.
+        """Idempotently reconcile an existing table with the shape this store expects.
 
         The ``medanon.processing_runs`` table is created by the app-db init; this
-        only backfills the Trust Gate column for deployments that predate it.
-        ``ADD COLUMN IF NOT EXISTS`` is a no-op when the column already exists.
+        backfills the Trust Gate column for deployments that predate it and
+        migrates ``created_at`` off the legacy ``TEXT`` type.  Both steps are
+        no-ops once applied.
+
+        ``created_at`` was originally declared ``TEXT`` — a direct port of the
+        SQLite DDL.  Every windowed aggregate in :meth:`get_stats` compares it
+        against ``NOW()``, which PostgreSQL rejects outright ("operator does not
+        exist: text >= timestamp with time zone"), so the whole stats endpoint
+        500s.  The ``USING`` cast parses the ISO-8601 strings this store has
+        always written, and restores the ``created_at DESC`` index for the
+        window scan.
         """
         conn = self._get_conn()
         try:
@@ -44,6 +53,24 @@ class PostgresProcessingRunStore:
                     cur.execute(
                         "ALTER TABLE medanon.processing_runs "
                         "ADD COLUMN IF NOT EXISTS trust_passport JSONB"
+                    )
+                    cur.execute(
+                        """
+                        DO $$
+                        BEGIN
+                            IF EXISTS (
+                                SELECT 1 FROM information_schema.columns
+                                WHERE table_schema = 'medanon'
+                                  AND table_name   = 'processing_runs'
+                                  AND column_name  = 'created_at'
+                                  AND data_type   <> 'timestamp with time zone'
+                            ) THEN
+                                ALTER TABLE medanon.processing_runs
+                                    ALTER COLUMN created_at TYPE TIMESTAMPTZ
+                                    USING created_at::timestamptz;
+                            END IF;
+                        END $$;
+                        """
                     )
         finally:
             self._put_conn(conn)
@@ -139,7 +166,9 @@ class PostgresProcessingRunStore:
         finally:
             self._put_conn(conn)
 
-    def get_stats(self, window_days: int = 90, config_profile: str | None = None) -> dict:
+    def get_stats(
+        self, window_days: int = 90, config_profile: str | None = None
+    ) -> dict:
         """Aggregate statistics across recent runs.
 
         ``window_days`` limits the look-back window (default 90 days).
@@ -171,19 +200,36 @@ class PostgresProcessingRunStore:
                     totals = cur.fetchone()
 
                     # Recent window aggregates.
+                    #
+                    # Key names must match what ScoreCollector.summary() persists
+                    # (pipeline/scoring/engine.py): `avg_composite`, `avg_utility`,
+                    # `avg_quality`, `batch_privacy`, `pii_leak_blocked`.  There is
+                    # no `privacy_score`/`utility_score`/`quality_score`/`blocked`
+                    # key — reading those yields SQL NULL and the dashboard renders
+                    # an em dash for every average and 0 for every block.
+                    #
+                    # Scale: `avg_composite` is already 0-100, but `avg_utility` and
+                    # `avg_quality` are 0-1 module scores and privacy is derived from
+                    # `1 - risk_score` (clamped, mirroring engine._composite).  The UI
+                    # renders `Math.round(v)%`, so normalise all three to 0-100 here.
                     window_cutoff = f"NOW() - INTERVAL '{window_days} days'"
                     cur.execute(
                         f"""
                         SELECT
                             COUNT(*) FILTER (WHERE score IS NOT NULL)   AS scored_runs,
                             COUNT(*) FILTER (
-                                WHERE score IS NOT NULL
-                                AND (score->>'blocked')::boolean = true
+                                WHERE COALESCE(
+                                    (score->>'pii_leak_blocked')::boolean, false
+                                )
                             )                                            AS blocked_runs,
                             AVG((score->>'avg_composite')::float)        AS avg_composite,
-                            AVG((score->>'privacy_score')::float)        AS avg_privacy,
-                            AVG((score->>'utility_score')::float)        AS avg_utility,
-                            AVG((score->>'quality_score')::float)        AS avg_quality
+                            AVG(
+                                GREATEST(0.0, LEAST(1.0,
+                                    1.0 - (score->'batch_privacy'->>'risk_score')::float
+                                )) * 100.0
+                            )                                            AS avg_privacy,
+                            AVG((score->>'avg_utility')::float * 100.0)  AS avg_utility,
+                            AVG((score->>'avg_quality')::float * 100.0)  AS avg_quality
                         FROM medanon.processing_runs
                         WHERE created_at >= {window_cutoff} {profile_filter}
                         """,

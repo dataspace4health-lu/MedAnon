@@ -20,6 +20,7 @@ Usage:
         clean_xml = deidentify_cda(xml_text)
 """
 
+import contextvars
 import xml.etree.ElementTree as ET
 
 import defusedxml.ElementTree as DET
@@ -31,10 +32,28 @@ import defusedxml.ElementTree as DET
 CDA_NAMESPACE = "urn:hl7-org:v3"
 HL7_NS = {"hl7": "urn:hl7-org:v3"}
 
+# Context-local transformation manifest. Set by ``deidentify_cda_with_manifest``
+# so the two low-level blanking primitives (which every scrubber funnels through)
+# record what they cleared without threading a manifest arg through ~14 functions.
+# A ContextVar is isolated per call — safe under ``asyncio.to_thread`` (the
+# executing context is copied), unlike a shared module list.
+_cda_manifest: contextvars.ContextVar[dict | None] = contextvars.ContextVar(
+    "_cda_manifest", default=None
+)
 
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
+
+def _localname(tag: str) -> str:
+    """Strip the ``{namespace}`` prefix from a Clark-notation tag."""
+    return tag.rsplit("}", 1)[-1] if "}" in tag else tag
+
+
+def _record(element: str, action: str, attribute: str | None = None) -> None:
+    """Aggregate a cleared field into the active manifest (by element/attr/action)."""
+    agg = _cda_manifest.get()
+    if agg is None:
+        return
+    key = (element, attribute or "", action)
+    agg[key] = agg.get(key, 0) + 1
 
 
 def _ns(tag: str) -> str:
@@ -64,6 +83,8 @@ def _blank_element_text(elem) -> None:
         elem: An ``xml.etree.ElementTree.Element`` or None.
     """
     if elem is not None:
+        if elem.text:
+            _record(_localname(elem.tag), "blank_text")
         elem.text = None
 
 
@@ -75,6 +96,8 @@ def _blank_attribute(elem, attr: str) -> None:
         attr: The attribute name to blank (plain local name; not namespace-qualified).
     """
     if elem is not None and attr in elem.attrib:
+        if elem.get(attr):
+            _record(_localname(elem.tag), "blank_attribute", attr)
         elem.set(attr, "")
 
 
@@ -408,6 +431,17 @@ def deidentify_cda(xml_text: str) -> str:
         ValueError: If *xml_text* cannot be parsed as XML, or if the parsed
             document root is not a CDA ``<ClinicalDocument>`` element.
     """
+    output, _ = deidentify_cda_with_manifest(xml_text)
+    return output
+
+
+def deidentify_cda_with_manifest(xml_text: str) -> tuple[str, list[dict]]:
+    """Like :func:`deidentify_cda` but also returns the transformation manifest.
+
+    The manifest is a list of ``{element, attribute?, action, count}`` entries —
+    one per distinct field type cleared (e.g. ``given``/``family`` blanked,
+    ``telecom@value`` blanked), with a count of occurrences. No PHI values.
+    """
     try:
         root = DET.fromstring(xml_text.encode("utf-8"))
     except DET.ParseError as exc:
@@ -419,13 +453,27 @@ def deidentify_cda(xml_text: str) -> str:
             f"expected '{_ns('ClinicalDocument')}'"
         )
 
-    _scrub_record_target(root)
-    _scrub_author(root)
-    _scrub_legal_authenticator(root)
-    _scrub_data_enterer(root)
-    _scrub_participants(root)
-    _scrub_informants(root)
-    _scrub_encompassing_encounter(root)
+    agg: dict = {}
+    token = _cda_manifest.set(agg)
+    try:
+        _scrub_record_target(root)
+        _scrub_author(root)
+        _scrub_legal_authenticator(root)
+        _scrub_data_enterer(root)
+        _scrub_participants(root)
+        _scrub_informants(root)
+        _scrub_encompassing_encounter(root)
+    finally:
+        _cda_manifest.reset(token)
 
+    manifest = [
+        {
+            "element": el,
+            **({"attribute": attr} if attr else {}),
+            "action": action,
+            "count": count,
+        }
+        for (el, attr, action), count in agg.items()
+    ]
     serialized = ET.tostring(root, encoding="unicode", xml_declaration=False)
-    return '<?xml version="1.0" encoding="UTF-8"?>\n' + serialized
+    return '<?xml version="1.0" encoding="UTF-8"?>\n' + serialized, manifest

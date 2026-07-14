@@ -20,9 +20,10 @@ Never call ``shutdown()`` on the returned executor — it is shared.
 
 from __future__ import annotations
 
+import contextvars
 import os
 import threading
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 
 # Total thread budget across all integrations (gPAS sub-batches, FHIR fetch,
 # upload, bulk download, Pass 1 parallelism, etc.).  Default 64 supports
@@ -82,6 +83,26 @@ class _BoundedExecutor(ThreadPoolExecutor):
             raise
         future.add_done_callback(lambda _: self._semaphore.release())
         return future
+
+
+def submit_with_context(pool: ThreadPoolExecutor, fn, *args, **kwargs) -> Future:
+    """Submit *fn* to *pool*, preserving the caller's ``contextvars``.
+
+    ``ThreadPoolExecutor.submit`` does **not** copy the calling thread's
+    ``contextvars.Context`` into the worker thread (unlike ``asyncio.to_thread``
+    / ``loop.run_in_executor``, which do). Any contextvar the caller has set —
+    the correlation id (:mod:`pipeline.trace`), the active data-permit id
+    (:mod:`pipeline.permit_context`) — would silently reset to its default
+    inside the worker thread, which is a correctness bug for permit-scoped
+    pseudonymisation keys/domains (they would derive as *unscoped*, or raise
+    the regulated-mode "no permit" error, depending on context).
+
+    Use this instead of ``pool.submit`` wherever the submitted work reads a
+    contextvar (directly, or transitively via ``cryptohash``/``tokenize``/
+    ``date_shift``/``gpas_orchestrator``).
+    """
+    ctx = contextvars.copy_context()
+    return pool.submit(ctx.run, fn, *args, **kwargs)
 
 
 def get_executor() -> _BoundedExecutor:

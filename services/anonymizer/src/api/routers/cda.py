@@ -10,8 +10,9 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 
 from api.deps import MAX_BODY_BYTES, limiter
+from api.routers._format_delivery import deliver_format_output
 from api.services.cda import CdaService
-from pipeline.exceptions import NormalizationError
+from pipeline.exceptions import NormalizationError, OutputBlocked
 from pipeline.processor import PiiLeakError
 
 router = APIRouter()
@@ -49,11 +50,21 @@ async def process_cda(request: Request):
     config_profile = request.query_params.get("config_profile") or "auto"
 
     try:
-        result = await _service.process_single(xml_text, config_profile)
+        result, manifest = await _service.process_single_with_manifest(
+            xml_text, config_profile
+        )
     except PiiLeakError as exc:
         raise HTTPException(
             status_code=422,
             detail={"code": "pii_leak_detected", "message": str(exc)},
+        ) from exc
+    except OutputBlocked as exc:
+        # The score-summary half of the barrier (enforce_output in
+        # pipeline.sources.run). Without this clause it fell through to the
+        # generic handler below and surfaced as a 500.
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "output_blocked", "message": str(exc)},
         ) from exc
     except NormalizationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -63,4 +74,10 @@ async def process_cda(request: Request):
         )
         raise HTTPException(status_code=500, detail="CDA processing error") from exc
 
-    return Response(content=result, media_type="application/xml; charset=utf-8")
+    delivered = await deliver_format_output(
+        result, suffix=".xml", request=request, resource_type="CDA", manifest=manifest
+    )
+    headers = {"X-Delivered-To": delivered} if delivered else None
+    return Response(
+        content=result, media_type="application/xml; charset=utf-8", headers=headers
+    )

@@ -17,8 +17,10 @@ from __future__ import annotations
 import logging
 import os
 import sqlite3
+from contextlib import AbstractContextManager
 from datetime import datetime, timezone
 from pathlib import Path
+from utils.sqlite_store import connect as sqlite_connect
 
 _log = logging.getLogger("medanon.config_store")
 
@@ -67,11 +69,9 @@ class ConfigStore:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self._path, check_same_thread=False, timeout=10)
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.row_factory = sqlite3.Row
-        return conn
+    def _connect(self) -> "AbstractContextManager[sqlite3.Connection]":
+        """WAL connection, committed and **closed** on exit. See utils.sqlite_store."""
+        return sqlite_connect(self._path)
 
     def _init_db(self) -> None:
         with self._connect() as conn:

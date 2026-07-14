@@ -30,7 +30,8 @@ from pipeline.jobs.checkpoint import (
     save_checkpoint,
     _truncate_to_lines,
 )
-from integrations.storage import store_result
+from integrations.storage import publish_result
+from pipeline.jobs.source_resolver import resolve_source_token
 
 
 def execute_bulk_export_staged(job, store, staging) -> None:
@@ -47,7 +48,7 @@ def execute_bulk_export_staged(job, store, staging) -> None:
     resource_type = params.get("resource_type")
     type_filter = params.get("type_filter")
     since = params.get("since")
-    token = params.get("token") or os.environ.get("FHIR_SOURCE_TOKEN")
+    token = resolve_source_token(params)
     timeout = float(params.get("timeout", 30))
     profile = params.get("config_profile", "auto")
 
@@ -106,7 +107,7 @@ def execute_bulk_export_staged(job, store, staging) -> None:
     if not resource_types:
         _log.info("bulk_export_staged_empty job=%s", job.id)
         Path(output_path).write_text("")
-        job.result_path = store_result(job.id, output_path)
+        job.result_path = publish_result(job, output_path)
         save_checkpoint(
             store, job, {"phase": "done", "staged_count": 0, "processed": 0}
         )
@@ -259,8 +260,8 @@ def execute_bulk_export_staged(job, store, staging) -> None:
 
         staged_count = phase1_state.get("staged_count", staged_count)
 
-        job.result_path = store_result(job.id, output_path)
         summary_dict = collector.to_dict(file_size_bytes=os.path.getsize(output_path))
+        job.result_path = publish_result(job, output_path, audit=summary_dict)
         checkpoint_data: dict = {
             "phase": "done",
             "staged_count": staged_count,
@@ -281,7 +282,9 @@ def execute_bulk_export_staged(job, store, staging) -> None:
                     exc_info=True,
                 )
         save_checkpoint(store, job, checkpoint_data)
-        _persist_scoring_run(job, profile, summary_dict, "staged_bulk_export")
+        _persist_scoring_run(
+            job, profile, summary_dict, "staged_bulk_export", collector
+        )
         _log.info("staged_bulk_export_done job=%s processed=%d", job.id, processed)
 
     # ════════════════════════════════════════════════════════════════════════
@@ -327,8 +330,8 @@ def execute_bulk_export_staged(job, store, staging) -> None:
                 collector,
             )
 
-        job.result_path = store_result(job.id, output_path)
         summary_dict = collector.to_dict(file_size_bytes=os.path.getsize(output_path))
+        job.result_path = publish_result(job, output_path, audit=summary_dict)
         checkpoint_data: dict = {
             "phase": "done",
             "staged_count": staged_count,
@@ -349,7 +352,9 @@ def execute_bulk_export_staged(job, store, staging) -> None:
                     exc_info=True,
                 )
         save_checkpoint(store, job, checkpoint_data)
-        _persist_scoring_run(job, profile, summary_dict, "staged_bulk_export")
+        _persist_scoring_run(
+            job, profile, summary_dict, "staged_bulk_export", collector
+        )
         _log.info("staged_bulk_export_done job=%s processed=%d", job.id, processed)
 
 
@@ -364,7 +369,7 @@ def execute_cohort_staged(job, store, staging) -> None:
     search_type = params["search_type"]
     search_params_dict = params.get("search_params", {})
     everything_params = params.get("everything_params", {})
-    token = params.get("token") or os.environ.get("FHIR_SOURCE_TOKEN")
+    token = resolve_source_token(params)
     timeout = float(params.get("timeout", 30))
     profile = params.get("config_profile", "auto")
 
@@ -387,7 +392,7 @@ def execute_cohort_staged(job, store, staging) -> None:
         if count == 0:
             _log.info("cohort_staged_empty job=%s", job.id)
             Path(output_path).write_text("")
-            job.result_path = store_result(job.id, output_path)
+            job.result_path = publish_result(job, output_path)
             save_checkpoint(
                 store, job, {"phase": "done", "staged_count": 0, "processed": 0}
             )
@@ -479,8 +484,8 @@ def execute_cohort_staged(job, store, staging) -> None:
 
         staged_count = phase1_state.get("staged_count", staged_count)
 
-        job.result_path = store_result(job.id, output_path)
         summary_dict = collector.to_dict(file_size_bytes=os.path.getsize(output_path))
+        job.result_path = publish_result(job, output_path, audit=summary_dict)
         checkpoint_data = {
             "phase": "done",
             "staged_count": staged_count,
@@ -499,7 +504,7 @@ def execute_cohort_staged(job, store, staging) -> None:
                     "staged_cohort_audit_write_failed job=%s", job.id, exc_info=True
                 )
         save_checkpoint(store, job, checkpoint_data)
-        _persist_scoring_run(job, profile, summary_dict, "staged_cohort")
+        _persist_scoring_run(job, profile, summary_dict, "staged_cohort", collector)
         _log.info("staged_cohort_done job=%s processed=%d", job.id, processed)
 
     # ════════════════════════════════════════════════════════════════════════
@@ -531,8 +536,8 @@ def execute_cohort_staged(job, store, staging) -> None:
             collector,
         )
 
-        job.result_path = store_result(job.id, output_path)
         summary_dict = collector.to_dict(file_size_bytes=os.path.getsize(output_path))
+        job.result_path = publish_result(job, output_path, audit=summary_dict)
         checkpoint_data = {
             "phase": "done",
             "staged_count": staged_count,
@@ -551,7 +556,7 @@ def execute_cohort_staged(job, store, staging) -> None:
                     "staged_cohort_audit_write_failed job=%s", job.id, exc_info=True
                 )
         save_checkpoint(store, job, checkpoint_data)
-        _persist_scoring_run(job, profile, summary_dict, "staged_cohort")
+        _persist_scoring_run(job, profile, summary_dict, "staged_cohort", collector)
         _log.info("staged_cohort_done job=%s processed=%d", job.id, processed)
 
 
@@ -564,7 +569,7 @@ def execute_patient_export_staged(job, store, staging) -> None:
     params = job.params
     server_url = params["server_url"]
     patient_id = params["patient_id"]
-    token = params.get("token") or os.environ.get("FHIR_SOURCE_TOKEN")
+    token = resolve_source_token(params)
     timeout = float(params.get("timeout", 30))
     profile = params.get("config_profile", "auto")
 
@@ -671,8 +676,8 @@ def execute_patient_export_staged(job, store, staging) -> None:
 
         staged_count = phase1_state.get("staged_count", staged_count)
 
-        job.result_path = store_result(job.id, output_path)
         summary_dict = collector.to_dict(file_size_bytes=os.path.getsize(output_path))
+        job.result_path = publish_result(job, output_path, audit=summary_dict)
         checkpoint_data = {
             "phase": "done",
             "staged_count": staged_count,
@@ -691,7 +696,9 @@ def execute_patient_export_staged(job, store, staging) -> None:
                     "staged_patient_audit_write_failed job=%s", job.id, exc_info=True
                 )
         save_checkpoint(store, job, checkpoint_data)
-        _persist_scoring_run(job, profile, summary_dict, "staged_patient_export")
+        _persist_scoring_run(
+            job, profile, summary_dict, "staged_patient_export", collector
+        )
         _log.info("staged_patient_export_done job=%s processed=%d", job.id, processed)
 
     # ════════════════════════════════════════════════════════════════════════
@@ -723,8 +730,8 @@ def execute_patient_export_staged(job, store, staging) -> None:
             collector,
         )
 
-        job.result_path = store_result(job.id, output_path)
         summary_dict = collector.to_dict(file_size_bytes=os.path.getsize(output_path))
+        job.result_path = publish_result(job, output_path, audit=summary_dict)
         checkpoint_data = {
             "phase": "done",
             "staged_count": staged_count,
@@ -743,7 +750,9 @@ def execute_patient_export_staged(job, store, staging) -> None:
                     "staged_patient_audit_write_failed job=%s", job.id, exc_info=True
                 )
         save_checkpoint(store, job, checkpoint_data)
-        _persist_scoring_run(job, profile, summary_dict, "staged_patient_export")
+        _persist_scoring_run(
+            job, profile, summary_dict, "staged_patient_export", collector
+        )
         _log.info("staged_patient_export_done job=%s processed=%d", job.id, processed)
 
 
@@ -756,7 +765,7 @@ def execute_batch_patient_export_staged(job, store, staging) -> None:
     params = job.params
     server_url = params["server_url"]
     patient_ids = params["patient_ids"]
-    token = params.get("token") or os.environ.get("FHIR_SOURCE_TOKEN")
+    token = resolve_source_token(params)
     timeout = float(params.get("timeout", 30))
     profile = params.get("config_profile", "auto")
 
@@ -923,8 +932,8 @@ def execute_batch_patient_export_staged(job, store, staging) -> None:
         )
         return
 
-    job.result_path = store_result(job.id, output_path)
     summary_dict = collector.to_dict(file_size_bytes=os.path.getsize(output_path))
+    job.result_path = publish_result(job, output_path, audit=summary_dict)
     checkpoint_data = {
         "phase": "done",
         "staged_count": staged_count,
@@ -943,7 +952,9 @@ def execute_batch_patient_export_staged(job, store, staging) -> None:
                 "staged_batch_patient_audit_write_failed job=%s", job.id, exc_info=True
             )
     save_checkpoint(store, job, checkpoint_data)
-    _persist_scoring_run(job, profile, summary_dict, "staged_batch_patient_export")
+    _persist_scoring_run(
+        job, profile, summary_dict, "staged_batch_patient_export", collector
+    )
     _log.info(
         "staged_batch_patient_export_done job=%s processed=%d result_path=%s",
         job.id,
@@ -1010,8 +1021,8 @@ def execute_reprocess_staged(job, store, staging) -> None:
         staging_job_id=source_job_id,
     )
 
-    job.result_path = store_result(job.id, output_path)
     summary_dict = collector.to_dict(file_size_bytes=os.path.getsize(output_path))
+    job.result_path = publish_result(job, output_path, audit=summary_dict)
     checkpoint_data = {
         "phase": "done",
         "processed": processed,
@@ -1029,7 +1040,7 @@ def execute_reprocess_staged(job, store, staging) -> None:
                 "staged_reprocess_audit_write_failed job=%s", job.id, exc_info=True
             )
     save_checkpoint(store, job, checkpoint_data)
-    _persist_scoring_run(job, profile, summary_dict, "staged_reprocess")
+    _persist_scoring_run(job, profile, summary_dict, "staged_reprocess", collector)
     _log.info("staged_reprocess_done job=%s processed=%d", job.id, processed)
 
 

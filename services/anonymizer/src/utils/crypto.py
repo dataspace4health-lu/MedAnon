@@ -1,15 +1,23 @@
-"""utils.crypto — RSA encryption helpers and CSPRNG utilities.
+"""utils.crypto — RSA encryption helpers, CSPRNG utilities, and permit-scoped
+HMAC key derivation.
 
 Provides RSA-OAEP encrypt/decrypt for the ``encrypt``/``decrypt`` actions,
-and ``bounded_random()`` which uses ``secrets.randbelow()`` (CSPRNG) for
-all random offsets.  Includes a path-traversal guard on key file paths.
+``bounded_random()`` which uses ``secrets.randbelow()`` (CSPRNG) for
+all random offsets, and ``derive_permit_key()`` which scopes a base HMAC
+secret to a specific data permit (TEHDAS2 D7.2 §4.4: "Pseudonyms MUST NOT be
+reused across different data permits").  Includes a path-traversal guard on
+key file paths.
 
 Public API:
     rsa_encrypt(plaintext, key_path)  — encrypt bytes with a PEM public key
     rsa_decrypt(ciphertext, key_path) — decrypt bytes with a PEM private key
     bounded_random(low, high)         — CSPRNG integer in [low, high)
+    hash_key_id()                     — active MEDANON_HASH_KEY_ID (rotation stamp)
+    derive_permit_key(base, permit_id) — HKDF-SHA256 permit-scoped key (hex)
 """
 
+import hashlib
+import hmac as _hmac
 import os
 import secrets
 import threading
@@ -130,3 +138,57 @@ def rsa_decrypt(ciphertext, dec_params):
             f"RSA private key is {private_key.key_size} bits; minimum 2048 required"
         )
     return private_key.decrypt(ciphertext, _OAEP_PADDING)
+
+
+# ---------------------------------------------------------------------------
+# Key versioning + permit-scoped derivation (D7.2 §4.2 "key rotation", §4.4
+# "pseudonyms MUST NOT be reused across different data permits")
+# ---------------------------------------------------------------------------
+
+
+def hash_key_id() -> str:
+    """Return the active HMAC key-id stamp (``MEDANON_HASH_KEY_ID``, default 'v1').
+
+    Recorded in the Transformation Passport and audit events so a future key
+    rotation is detectable/attributable instead of silently invalidating
+    longitudinal linkage.
+    """
+    return os.environ.get("MEDANON_HASH_KEY_ID", "v1").strip() or "v1"
+
+
+def _hkdf_extract(salt: bytes, ikm: bytes) -> bytes:
+    return _hmac.new(salt, ikm, hashlib.sha256).digest()
+
+
+def _hkdf_expand(prk: bytes, info: bytes, length: int) -> bytes:
+    t = b""
+    okm = b""
+    counter = 1
+    while len(okm) < length:
+        t = _hmac.new(prk, t + info + bytes([counter]), hashlib.sha256).digest()
+        okm += t
+        counter += 1
+    return okm[:length]
+
+
+_PERMIT_KDF_SALT = b"medanon-permit-scope-v1"
+
+
+def derive_permit_key(base_key: str, *, permit_id: str, key_id: str = "") -> str:
+    """Derive a permit-scoped HMAC secret from *base_key* via HKDF-SHA256 (RFC 5869).
+
+    The same subject pseudonymised/tokenised/date-shifted under two different
+    permits must produce *unrelated* outputs (D7.2 §4.4), while remaining
+    deterministic *within* one permit so longitudinal linkage inside that
+    permit's scope still works. ``key_id`` (see :func:`hash_key_id`) is mixed
+    into the derivation so a key rotation changes every permit's derived key
+    together, in a traceable way.
+
+    Raises ``ValueError`` if *permit_id* is empty — callers must resolve the
+    permit context before calling this (see ``pipeline.permit_context``).
+    """
+    if not permit_id:
+        raise ValueError("derive_permit_key requires a non-empty permit_id")
+    prk = _hkdf_extract(_PERMIT_KDF_SALT, base_key.encode())
+    info = f"{key_id or hash_key_id()}:permit:{permit_id}".encode()
+    return _hkdf_expand(prk, info, 32).hex()

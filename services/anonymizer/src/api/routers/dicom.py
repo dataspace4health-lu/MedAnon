@@ -12,7 +12,9 @@ from fastapi import APIRouter, HTTPException, Request, UploadFile
 from fastapi.responses import Response
 
 from api.deps import limiter
+from api.routers._format_delivery import deliver_format_output
 from api.services.dicom import DicomService
+from pipeline.exceptions import OutputBlocked
 from pipeline.processor import PiiLeakError
 
 router = APIRouter()
@@ -49,11 +51,21 @@ async def process_dicom(request: Request):
     config_profile = request.query_params.get("config_profile") or None
 
     try:
-        result = await _service.process_single(body, config_profile)
+        result, manifest = await _service.process_single_with_manifest(
+            body, config_profile
+        )
     except PiiLeakError as exc:
         raise HTTPException(
             status_code=422,
             detail={"code": "pii_leak_detected", "message": str(exc)},
+        ) from exc
+    except OutputBlocked as exc:
+        # The score-summary half of the barrier (enforce_output in
+        # pipeline.sources.run). Without this clause it fell through to the
+        # generic handler below and surfaced as a 500.
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "output_blocked", "message": str(exc)},
         ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -62,15 +74,17 @@ async def process_dicom(request: Request):
         logger.error("dicom_process error: %s", type(exc).__name__, exc_info=False)
         raise HTTPException(status_code=500, detail="DICOM processing error") from exc
 
-    return Response(
-        content=result,
-        media_type="application/dicom",
-        headers={
-            "Content-Disposition": (
-                f'attachment; filename="deidentified_{uuid.uuid4().hex[:8]}.dcm"'
-            )
-        },
+    delivered = await deliver_format_output(
+        result, suffix=".dcm", request=request, resource_type="DICOM", manifest=manifest
     )
+    headers = {
+        "Content-Disposition": (
+            f'attachment; filename="deidentified_{uuid.uuid4().hex[:8]}.dcm"'
+        )
+    }
+    if delivered:
+        headers["X-Delivered-To"] = delivered
+    return Response(content=result, media_type="application/dicom", headers=headers)
 
 
 @router.post("/process/dicom/batch")
@@ -105,12 +119,14 @@ async def process_dicom_batch(request: Request, files: list[UploadFile]):
         ) from exc
 
     job_id = uuid.uuid4().hex[:12]
-    return Response(
-        content=zip_bytes,
-        media_type="application/zip",
-        headers={
-            "Content-Disposition": (
-                f'attachment; filename="dicom_deidentified_{job_id}.zip"'
-            )
-        },
+    delivered = await deliver_format_output(
+        zip_bytes, suffix=".zip", request=request, resource_type="DICOM"
     )
+    headers = {
+        "Content-Disposition": (
+            f'attachment; filename="dicom_deidentified_{job_id}.zip"'
+        )
+    }
+    if delivered:
+        headers["X-Delivered-To"] = delivered
+    return Response(content=zip_bytes, media_type="application/zip", headers=headers)

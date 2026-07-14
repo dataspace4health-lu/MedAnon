@@ -42,7 +42,7 @@ _MAX_TREE_VALUES = 48000
 _GRANULARITY_RULE = {
     "values": (
         "GRANULARITY — VALUES-ONLY. A path marked `(container)` is a structural "
-        "parent: set is_pii=false and suggested_action=\"\" for it, and instead "
+        'parent: set is_pii=false and suggested_action="" for it, and instead '
         "classify its LEAF sub-fields (the non-container paths under it). E.g. "
         "Patient.name is a container → not actionable; classify "
         "Patient.name.family and Patient.name.given. This keeps the FHIR "
@@ -51,7 +51,7 @@ _GRANULARITY_RULE = {
     "whole": (
         "GRANULARITY — WHOLE FIELD. For a path marked `(container)` that holds "
         "PII, classify the CONTAINER as PII with an action, and set is_pii=false "
-        "with suggested_action=\"\" for each of its leaf sub-fields. E.g. "
+        'with suggested_action="" for each of its leaf sub-fields. E.g. '
         "Patient.name (container) → is_pii=true, action=redact; "
         "Patient.name.family / .given → is_pii=false. The whole element is "
         "removed by the single container rule."

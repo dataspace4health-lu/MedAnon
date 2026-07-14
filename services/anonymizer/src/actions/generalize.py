@@ -6,6 +6,13 @@ Supported generalization strategies (set via ``params['strategy']``):
                     "1991-01-04"         → "1991"
                     "1991-01-04T00:00:00" → "1991"
 
+                    Optional ``cap_age`` (int) enables the HIPAA Safe Harbor
+                    90+ rule: any date implying an age above the cap collapses
+                    to one constant floor year so the 90+ cohort is a single
+                    indistinguishable category (also honoured by date_decade
+                    and date_year_month). ``cap_age: 89`` on a birthDate maps
+                    everyone older than 89 to the same year. Off unless set.
+
   date_year_month — truncate to year-month
                     "1980-02-04"         → "1980-02"
 
@@ -27,8 +34,18 @@ Supported generalization strategies (set via ``params['strategy']``):
   category        — map a value to a broader category using a lookup table
                     supplied via ``params['mapping']``  (dict)
 
-  redact_if_rare  — redact if the value matches a configurable list,
-                    otherwise keep.  Useful for gender/ethnicity.
+  redact_if_rare  — redact if the value is in a configured rare-value
+                    denylist, otherwise keep unchanged. Useful for
+                    demographic/QI categories D7.2 §3.3.1-3.3.2 flags as
+                    high-risk in small counts (rare ethnicity/nationality
+                    values, rare disease codes) — declare the known-rare
+                    values via ``params['rare_values']`` (list of strings)
+                    since this per-element action has no visibility into the
+                    dataset's actual value frequencies (that needs the
+                    dataset-wide lattice solver in ``pipeline.privacy``).
+                    "1991-01-04" with rare_values=["1991-01-04"] → "[REDACTED]"
+                    "Native Hawaiian" with rare_values=[...] → "[REDACTED]"
+                    "White" (not in rare_values) → "White" (unchanged)
 """
 
 from __future__ import annotations
@@ -149,18 +166,58 @@ def _generalize_date_decade(value):
     return f"{year[:3]}0" if year is not None else str(value).strip()
 
 
-def _generalize_age_bracket(value, bracket_size=10):
-    """Convert a birth date string (any layout) to an age bracket like '30-39'."""
+def _age_from_value(value):
+    """Return the current age in whole years for a birth date (any layout).
+
+    Returns ``None`` when no year can be recovered, so callers can fall back to
+    passing the value through unchanged.
+    """
     birth = _parse_date_loose(value)
     if birth is None:
         year = _extract_year(value)
         if year is None:
-            return str(value).strip()[:10]
+            return None
         birth = date(int(year), 1, 1)
     today = date.today()
-    age = (
+    return (
         today.year - birth.year - ((today.month, today.day) < (birth.month, birth.day))
     )
+
+
+def _capped_year_or_none(value, params):
+    """Return the single floor-year category when age-capping is enabled and the
+    value implies an age above the cap, else ``None`` (caller applies its normal
+    strategy).
+
+    HIPAA Safe Harbor §164.514(b)(2)(i)(C): ages over 89 — and any date element
+    indicative of such an age, including the year — must be collapsed into one
+    "90 or older" category. This is opt-in per rule via ``params['cap_age']``
+    (the highest age kept as-is; typically 89). All subjects above the cap map
+    to the same constant FHIR year (``reference_year - (cap_age + 1)``) so they
+    become indistinguishable while the field stays a valid FHIR ``date``.
+    ``reference_year`` defaults to the current year; set it explicitly for
+    reproducible output across calendar years.
+    """
+    cap = params.get("cap_age")
+    if cap is None:
+        return None
+    try:
+        cap = int(cap)
+    except (TypeError, ValueError):
+        return None
+    age = _age_from_value(value)
+    if age is None or age <= cap:
+        return None
+    ref = params.get("reference_year")
+    ref_year = int(ref) if ref is not None else date.today().year
+    return str(ref_year - (cap + 1))
+
+
+def _generalize_age_bracket(value, bracket_size=10):
+    """Convert a birth date string (any layout) to an age bracket like '30-39'."""
+    age = _age_from_value(value)
+    if age is None:
+        return str(value).strip()[:10]
     lower = (age // bracket_size) * bracket_size
     upper = lower + bracket_size - 1
     if upper >= 90:
@@ -208,13 +265,30 @@ def _generalize_category(value, mapping, unmapped="[REDACTED]"):
     return result
 
 
+def _generalize_redact_if_rare(value, rare_values, replacement="[REDACTED]"):
+    """Redact *value* when it is in the configured rare-value denylist.
+
+    D7.2 §3.3.1/§3.3.2: rare categorical values (uncommon ethnicity/nationality
+    entries, rare disease codes) are quasi-identifiers on their own — a low
+    dataset frequency for that value increases re-identification risk even
+    when the field itself (e.g. "ethnicity") is otherwise unremarkable.
+    ``rare_values`` is author-declared (this action has no dataset-wide
+    frequency visibility); values not listed pass through unchanged.
+    """
+    return replacement if str(value) in rare_values else value
+
+
 # -- strategy dispatcher -----------------------------------------------------
 
 _STRATEGIES = {
-    "date_year": lambda v, p: _generalize_date_year(v),
-    "date_year_month": lambda v, p: _generalize_date_year_month(v),
+    "date_year": lambda v, p: _capped_year_or_none(v, p) or _generalize_date_year(v),
+    "date_year_month": lambda v, p: (
+        _capped_year_or_none(v, p) or _generalize_date_year_month(v)
+    ),
     "date_year_instant": lambda v, p: _generalize_date_year_instant(v),
-    "date_decade": lambda v, p: _generalize_date_decade(v),
+    "date_decade": lambda v, p: (
+        _capped_year_or_none(v, p) or _generalize_date_decade(v)
+    ),
     "age_bracket": lambda v, p: _generalize_age_bracket(v, p.get("bracket_size", 10)),
     "number_round": lambda v, p: _generalize_number_round(v, p.get("precision", 10)),
     "zip_prefix": lambda v, p: _generalize_zip_prefix(
@@ -222,6 +296,11 @@ _STRATEGIES = {
     ),
     "category": lambda v, p: _generalize_category(
         v, p.get("mapping", {}), p.get("unmapped", "[REDACTED]")
+    ),
+    "redact_if_rare": lambda v, p: _generalize_redact_if_rare(
+        v,
+        frozenset(str(x) for x in p.get("rare_values", [])),
+        p.get("replacement", "[REDACTED]"),
     ),
 }
 

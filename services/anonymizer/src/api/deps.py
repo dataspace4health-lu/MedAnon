@@ -11,7 +11,7 @@ import socket
 import urllib.parse
 from typing import Any
 
-from fastapi import HTTPException, Query
+from fastapi import HTTPException, Query, Request
 
 from pydantic import ValidationError as _ValidationError
 
@@ -239,14 +239,77 @@ async def _validate_dynamic_settings(dynamic_settings: dict) -> None:
         await _validate_server_url(parsed.gpas_url)
 
 
+def require_admin_for_reversal(request: Request, settings) -> None:
+    """Raise 403 when *settings* can reverse pseudonymisation/decrypt and the
+    caller is not ``admin``.
+
+    TEHDAS2 D7.2 §4.4 / EHDS Art 66(3): reversibility of pseudonymisation "can
+    only be implemented by the HDAB or a designated TTP and not by the data
+    user". MedAnon maps the HDAB/TTP operator to the ``admin`` role and the
+    data user to ``analyst`` — a config profile containing
+    ``gpas_depseudonymize`` or ``decrypt`` rules is therefore admin-only,
+    regardless of which endpoint executes it.
+    """
+    from pipeline.config.reversal import settings_has_reversal_actions
+
+    if not settings_has_reversal_actions(settings):
+        return
+    auth = getattr(request.state, "auth", None)
+    if auth is None or not auth.has_role("admin"):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "This config profile can reverse pseudonymisation "
+                "(gpas_depseudonymize) or decrypt data. Per TEHDAS2 D7.2 "
+                "§4.4 / EHDS Art 66(3), reversal is restricted to the "
+                "HDAB/TTP-equivalent 'admin' role."
+            ),
+        )
+
+
+def resolve_active_permit(permit_id: str | None):
+    """Look up *permit_id* and require it to be active; return None if absent.
+
+    Raises HTTP 422 when *permit_id* is supplied but does not resolve to an
+    ``APPROVED`` permit that is currently within its validity window — this
+    gives callers a clear error at the request boundary rather than the
+    deep, generic ``PermitRequiredError`` raised mid-pipeline by
+    ``pipeline.permit_context`` when regulated mode requires one.
+    """
+    if not permit_id:
+        return None
+    from api.services.permits import PermitNotFoundError, PermitService
+
+    try:
+        permit = PermitService().get(permit_id)
+    except PermitNotFoundError:
+        raise HTTPException(
+            status_code=422, detail=f"permit_id {permit_id!r} does not exist"
+        )
+    if not permit.is_active():
+        raise HTTPException(
+            status_code=422,
+            detail=f"permit {permit_id!r} is not active (status={permit.status.value})",
+        )
+    return permit
+
+
 def get_settings_dep(
+    request: Request,
     config_profile: str = Query(
         "auto",
         description="Config profile: auto, minimal, gpas, gdpr, hipaa, research, structural, value-masking",
     ),
 ) -> config.Settings:
-    """FastAPI dependency that reads config_profile from the query string."""
-    return get_settings(config_profile)
+    """FastAPI dependency that reads config_profile from the query string.
+
+    Also enforces the D7.2 §4.4 admin-only-reversal RBAC check (see
+    :func:`require_admin_for_reversal`) — every router using this dependency
+    gets that check for free.
+    """
+    settings = get_settings(config_profile)
+    require_admin_for_reversal(request, settings)
+    return settings
 
 
 # ---------------------------------------------------------------------------

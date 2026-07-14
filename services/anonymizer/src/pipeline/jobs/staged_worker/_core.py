@@ -460,6 +460,16 @@ def _run_staged_phase2(
     """
     _staging_id = staging_job_id or job.id
 
+    # D7.2 §4.4 permit-scoped pseudonymisation: bind the whole Phase-2 processing
+    # to the job's data permit so gPAS domains / derived keys are scoped per
+    # permit. The compute-pool path copies this context into its worker threads
+    # via ``submit_with_context`` (a raw ``pool.submit`` would reset the
+    # contextvar to its default in the worker thread). No-op when unset.
+    from pipeline.permit_context import permit_scope
+    from utils.thread_pool import submit_with_context
+
+    _permit_id = (getattr(job, "params", None) or {}).get("permit_id")
+
     # Use the actual DB row count as the denominator.  On a crash-resume,
     # staged_count (from checkpoint) only reflects rows inserted in the
     # current session; previously-staged rows are skipped by ON CONFLICT DO
@@ -508,7 +518,10 @@ def _run_staged_phase2(
         else None
     )
     try:
-        with open(output_path, open_mode, encoding="utf-8") as fh:
+        with (
+            permit_scope(_permit_id),
+            open(output_path, open_mode, encoding="utf-8") as fh,
+        ):
             if _compute_pool is None:
                 # ── Sequential path (default) ──────────────────────────
                 while True:
@@ -603,7 +616,11 @@ def _run_staged_phase2(
                     if batch_rows is _SENTINEL:
                         break
 
-                    fut = _compute_pool.submit(
+                    # submit_with_context — the compute worker must inherit the
+                    # active permit_scope so its process_data_batch pseudonymises
+                    # under the same permit (D7.2 §4.4).
+                    fut = submit_with_context(
+                        _compute_pool,
                         _compute_batch_fallback_parallel,
                         batch_rows,
                         settings,
@@ -666,16 +683,30 @@ def process_one_partition(
                 chunk.append(row)
                 if len(chunk) >= _BATCH_SIZE:
                     ok, bad = _process_batch_with_fallback(
-                        chunk, settings, pseudonymizer, processing_mode,
-                        fh, staging, job.id, label, summary=collector,
+                        chunk,
+                        settings,
+                        pseudonymizer,
+                        processing_mode,
+                        fh,
+                        staging,
+                        job.id,
+                        label,
+                        summary=collector,
                     )
                     shard_ok += ok
                     shard_bad += bad
                     chunk = []
             if chunk:
                 ok, bad = _process_batch_with_fallback(
-                    chunk, settings, pseudonymizer, processing_mode,
-                    fh, staging, job.id, label, summary=collector,
+                    chunk,
+                    settings,
+                    pseudonymizer,
+                    processing_mode,
+                    fh,
+                    staging,
+                    job.id,
+                    label,
+                    summary=collector,
                 )
                 shard_ok += ok
                 shard_bad += bad
@@ -789,8 +820,16 @@ def _run_staged_phase2_partition_claim(
         # via the shared per-partition processor.
         try:
             part_processed, shard_path = process_one_partition(
-                job, staging, settings, pseudonymizer, processing_mode,
-                output_dir, label, collector, resource_type, partition_id,
+                job,
+                staging,
+                settings,
+                pseudonymizer,
+                processing_mode,
+                output_dir,
+                label,
+                collector,
+                resource_type,
+                partition_id,
             )
             staging.mark_partition_done(job.id, resource_type, partition_id)
             processed += part_processed
@@ -906,9 +945,7 @@ def _drain_partitions_in_processes(
     config_profile = (job.params or {}).get("config_profile", "auto")
     staging_db_url = getattr(staging, "_db_url", "")
     ctx = mp.get_context("spawn")
-    _log.info(
-        "%s_shards_process_pool job=%s workers=%d", label, job.id, parallelism
-    )
+    _log.info("%s_shards_process_pool job=%s workers=%d", label, job.id, parallelism)
     results: list[int] = []
     with ProcessPoolExecutor(max_workers=parallelism, mp_context=ctx) as pool:
         futures = [
@@ -954,6 +991,23 @@ def _run_staged_phase2_shards(
     never collide and load is naturally balanced.
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    # D7.2 §4.4 fail-closed: permit-scoped pseudonymisation is currently wired
+    # only through the stream output mode (``_run_staged_phase2``). The shards
+    # path fans work out to spawned processes / AMQP stage-consumers where the
+    # permit contextvar cannot propagate, so a permit-bound job here would
+    # silently produce UNSCOPED pseudonyms (reusable across permits — the exact
+    # thing §4.4 forbids). Refuse rather than mis-scope: the operator must use
+    # MEDANON_OUTPUT_MODE=stream for permit-bound exports until shards/AMQP
+    # permit propagation lands.
+    if (getattr(job, "params", None) or {}).get("permit_id"):
+        raise RuntimeError(
+            "permit-scoped pseudonymisation (permit_id) is not supported in "
+            "MEDANON_OUTPUT_MODE=shards — the shards/AMQP path cannot propagate "
+            "the permit context to its worker processes, which would produce "
+            "pseudonyms reusable across permits (D7.2 §4.4). Use "
+            "MEDANON_OUTPUT_MODE=stream for permit-bound exports."
+        )
 
     # Shards mode requires all rows staged before plan_partitions can bucket them.
     if phase1_thread is not None:
@@ -1068,14 +1122,28 @@ def _merge_shards(job_id: str, output_dir: str, output_path: str) -> int:
 # ---------------------------------------------------------------------------
 
 
-def _persist_scoring_run(job, profile: str, summary_dict: dict, endpoint: str) -> None:
+def _persist_scoring_run(
+    job, profile: str, summary_dict: dict, endpoint: str, collector=None
+) -> None:
     """Write a processing_run row for a completed staged job. Silent on failure.
 
     Uses ``summary_dict["duration_sec"]`` (populated by
     ``JobSummaryCollector.to_dict()``) to avoid needing a separate t0 variable
     in every executor.  ``job.id`` is reused as the run_id so the row can be
     correlated with the async job record.
+
+    When *collector* is supplied its job-detail payload is written too, so the
+    Jobs UI can render counts/PII/fields without downloading the NDJSON result.
+    The staged path is the one that actually runs for patient exports, so
+    omitting the collector here would leave the UI with no detail to read.
     """
+    if collector is not None:
+        try:
+            from pipeline.jobs.detail import save_job_detail
+
+            save_job_detail(job.id, collector.detail_dict())
+        except Exception:
+            _log.debug("staged_job_detail_failed job=%s", job.id, exc_info=True)
     try:
         from api.services.scoring_helpers import persist_run_sync
 

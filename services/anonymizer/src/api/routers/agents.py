@@ -3,6 +3,8 @@
 GET   /v1/ai/status          — provider health + circuit breaker state
 POST  /v1/ai/generate-config — generate config from natural language
 POST  /v1/ai/detect-pii      — scan de-identified resources for PII leaks
+POST  /v1/ai/scan-fields     — classify a field tree as PII + suggest actions
+POST  /v1/ai/field-sketch    — compact PHI-safe schema sketch for AI context
 POST  /v1/ai/explain         — explain config rules (supports SSE streaming)
 POST  /v1/ai/chat            — conversational Q&A about a config (SSE stream)
 POST  /v1/ai/compliance      — regulatory gap analysis
@@ -24,6 +26,8 @@ from api.schemas.agents import (
     ExplainRequest,
     FieldScanRequest,
     FieldScanResponse,
+    FieldSketchRequest,
+    FieldSketchResponse,
     PiiDetectionRequest,
     PiiDetectionResponse,
 )
@@ -78,7 +82,9 @@ async def detect_pii(body: PiiDetectionRequest, request: Request):
     contextual LLM analysis (requires local model via MEDANON_AI_PII_PROVIDER).
     """
     try:
-        result = await _service.detect_pii(body.resources, body.use_ai)
+        result = await _service.detect_pii(
+            body.resources, body.use_ai, body.min_field_len
+        )
     except Exception as exc:
         logger.error("ai_detect_pii_error: %s", exc)
         raise HTTPException(
@@ -106,6 +112,32 @@ async def scan_fields_endpoint(body: FieldScanRequest, request: Request):
         granularity=body.granularity,
         include_values=body.include_values,
         guidance=body.guidance,
+    )
+
+
+@router.post("/field-sketch", response_model=FieldSketchResponse)
+@limiter.limit("20/minute")
+async def field_sketch_endpoint(body: FieldSketchRequest, request: Request):
+    """Build a compact, PHI-safe schema sketch of the selected resource types.
+
+    Collapses many FHIR instances into one line per distinct leaf path (type,
+    presence frequency, cardinality, value digest) so the assistant sees ALL
+    fields of the selected types with example shapes while keeping the context
+    small. Supply ``resources`` to sketch uploaded examples, or ``resource_types``
+    to sample the configured source server. No model call is made; the result is
+    meant to be passed back as ``field_context`` to /chat or /scan-fields.
+    """
+    if not body.resources and not body.resource_types:
+        raise HTTPException(
+            status_code=422,
+            detail="provide 'resources' (to sketch inline) or 'resource_types' "
+            "(to sample the source FHIR server)",
+        )
+    return await _service.field_sketch(
+        resource_types=body.resource_types,
+        resources=body.resources,
+        n_per_type=body.n_per_type,
+        include_values=body.include_values,
     )
 
 

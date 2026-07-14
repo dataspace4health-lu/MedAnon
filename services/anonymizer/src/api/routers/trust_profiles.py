@@ -34,7 +34,9 @@ _NAME_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 def _get_store():
     store = get_trust_profile_store()
     if store is None:
-        raise HTTPException(status_code=503, detail="Trust profile store not initialised.")
+        raise HTTPException(
+            status_code=503, detail="Trust profile store not initialised."
+        )
     return store
 
 
@@ -74,7 +76,9 @@ def get_trust_profile(name: str, request: Request):
     _validate_name(name)
     meta = _get_store().get(name)
     if meta is None:
-        raise HTTPException(status_code=404, detail=f"Trust profile '{name}' not found.")
+        raise HTTPException(
+            status_code=404, detail=f"Trust profile '{name}' not found."
+        )
     return {"profile": meta}
 
 

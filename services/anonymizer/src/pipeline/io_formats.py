@@ -275,7 +275,9 @@ def read_input_file(input_path, in_format, strip_line_prefix="//"):
         return read_fhir_xml(input_path)
 
     if in_format == "ndjson":
-        return list(iter_ndjson(input_path, strip_line_prefix=strip_line_prefix or "//"))
+        return list(
+            iter_ndjson(input_path, strip_line_prefix=strip_line_prefix or "//")
+        )
 
     raise ValueError(f"Unsupported input format: {in_format}")
 
@@ -304,7 +306,7 @@ def iter_ndjson(input_path: str, strip_line_prefix: str = "//"):
             if not line:
                 continue
             if strip_line_prefix and line.startswith(strip_line_prefix):
-                line = line[len(strip_line_prefix):]
+                line = line[len(strip_line_prefix) :]
             try:
                 yield _json_loads(line)
             except (ValueError, TypeError) as exc:

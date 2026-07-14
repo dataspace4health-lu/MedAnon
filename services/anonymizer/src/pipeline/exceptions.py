@@ -89,3 +89,21 @@ class NormalizationError(DeidError):
     tabular adapters; replaces the bare ``ValueError`` raised today by the
     standalone ``formats/*`` scrubbers.
     """
+
+
+class OutputBlocked(Exception):
+    """The output-validation barrier refused to release a batch.
+
+    Deliberately *not* a ``DeidError``: nothing failed to de-identify.  The
+    barrier evaluated the result and withheld it.  Callers must translate this
+    into a refusal (HTTP 422, ``job.error``), never into a partial release.
+
+    Lives here rather than in :mod:`pipeline.validation` so that
+    :class:`pipeline.gate.PiiLeakError` can subclass it without an import cycle
+    (``validation`` imports ``gate``).  ``str(exc)`` is the complete
+    plain-language feedback; ``reasons`` is the machine-readable breakdown.
+    """
+
+    def __init__(self, message: str, reasons: list[str] | None = None) -> None:
+        self.reasons = reasons or []
+        super().__init__(message)

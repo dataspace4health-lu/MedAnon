@@ -80,6 +80,30 @@ _OUTPUT_DIR = os.environ.get("MEDANON_OUTPUT_DIR", "/output")
 _HEARTBEAT_PATH = os.path.join(
     os.environ.get("MEDANON_OUTPUT_DIR", "/output"), "worker_healthy"
 )
+
+
+def _touch_heartbeat() -> None:
+    """Refresh the liveness file. Never raises.
+
+    The heartbeat is an *observability* signal. A failure to write it says
+    nothing about whether this worker can process jobs, so it must never abort
+    the consume loop -- staleness of the file is itself the signal, and
+    ``worker_health`` surfaces it on ``/ready``.
+
+    Two call sites already did this correctly (startup and ``_heartbeat_loop``);
+    the two inside ``worker_loop`` did not. With ``/output`` bind-mounted from a
+    host directory the container's uid cannot write, every iteration raised
+    ``PermissionError`` here. In the idle branch that double-released the
+    semaphore; in the dispatch branch it stranded a message that had already
+    been claimed from the Redis stream, leaving it in the consumer group's
+    pending list forever. The queue drained into the PEL and no job ever ran.
+    """
+    try:
+        Path(_HEARTBEAT_PATH).touch()
+    except OSError as exc:
+        _worker_log.warning("heartbeat_touch_failed path=%s: %s", _HEARTBEAT_PATH, exc)
+
+
 _max_concurrent: int = 3
 _semaphore: asyncio.Semaphore | None = None
 _shutdown_event: asyncio.Event | None = None
@@ -90,9 +114,7 @@ _active_tasks: set = set()
 _inflight_messages: set[str] = set()
 # How often to refresh in-flight claims. Must be comfortably below the stale
 # timeout so a running job's idle timer never crosses it.
-_CLAIM_HEARTBEAT_SEC: int = int(
-    os.environ.get("MEDANON_CLAIM_HEARTBEAT_SEC", "30")
-)
+_CLAIM_HEARTBEAT_SEC: int = int(os.environ.get("MEDANON_CLAIM_HEARTBEAT_SEC", "30"))
 _DRAIN_TIMEOUT_SEC: int = int(os.environ.get("MEDANON_DRAIN_TIMEOUT_SEC", "300"))
 _STAGING_CLEANUP_INTERVAL_SEC: int = int(
     os.environ.get("MEDANON_STAGING_CLEANUP_INTERVAL_SEC", "3600")
@@ -383,18 +405,30 @@ async def _redis_index_sweep_loop() -> None:
     ``medanon:jobs:type:*`` index sets do not. Without this sweep, expired
     job IDs remain in those indexes forever.
 
+    Also prunes dead stream consumers: every worker restart mints a new
+    ``worker-<uuid>`` and never removes the old one, so the consumer group's
+    membership list grows without bound.
+
     No-op when the store backend is not Redis.
     """
     while True:
         await asyncio.sleep(_REDIS_INDEX_SWEEP_INTERVAL_SEC)
-        if _store is None or not hasattr(_store, "cleanup_orphan_index"):
+        if _store is None:
             continue
-        try:
-            removed = await asyncio.to_thread(_store.cleanup_orphan_index)
-            if removed:
-                _worker_log.info("redis_index_sweep removed=%d", removed)
-        except Exception as exc:
-            _worker_log.warning("redis_index_sweep_error: %s", type(exc).__name__)
+        if hasattr(_store, "cleanup_orphan_index"):
+            try:
+                removed = await asyncio.to_thread(_store.cleanup_orphan_index)
+                if removed:
+                    _worker_log.info("redis_index_sweep removed=%d", removed)
+            except Exception as exc:
+                _worker_log.warning("redis_index_sweep_error: %s", type(exc).__name__)
+        if hasattr(_store, "prune_dead_consumers"):
+            try:
+                pruned = await asyncio.to_thread(_store.prune_dead_consumers)
+                if pruned:
+                    _worker_log.info("dead_consumer_prune removed=%d", pruned)
+            except Exception as exc:
+                _worker_log.warning("dead_consumer_prune_error: %s", type(exc).__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -422,9 +456,7 @@ async def _run_job(job: Job) -> None:
         refreshed = _store.get(job.id)
     except Exception as exc:
         # Store blip — proceed with the snapshot rather than dropping the job.
-        _worker_log.warning(
-            "job_refresh_failed id=%s: %s", job.id, type(exc).__name__
-        )
+        _worker_log.warning("job_refresh_failed id=%s: %s", job.id, type(exc).__name__)
         refreshed = job
     if refreshed is None:
         _worker_log.info("job_deleted_before_start id=%s", job.id)
@@ -493,7 +525,11 @@ async def _run_job(job: Job) -> None:
             # stays deleted — only the explanation is now machine-readable).
             report = getattr(exc, "report", None)
             if report:
-                cp = (job.checkpoint_data or {}) if hasattr(job, "checkpoint_data") else {}
+                cp = (
+                    (job.checkpoint_data or {})
+                    if hasattr(job, "checkpoint_data")
+                    else {}
+                )
                 cp["block_report"] = report
                 save_checkpoint(_store, job, cp)
             _worker_log.warning("job_score_gate_blocked id=%s", job.id)
@@ -894,24 +930,15 @@ async def worker_loop() -> None:
             )
 
     _poll_count = 0
-    try:
-        Path(_HEARTBEAT_PATH).touch()
-    except OSError as exc:
-        _worker_log.warning("heartbeat_touch_failed path=%s: %s", _HEARTBEAT_PATH, exc)
+    _touch_heartbeat()
 
     # Background heartbeat task — runs independently of the semaphore so that
     # the heartbeat file stays fresh even when all job slots are occupied.
     async def _heartbeat_loop():
         while not _shutdown_event.is_set():
-            try:
-                Path(_HEARTBEAT_PATH).touch()
-            except OSError as exc:
-                # Log degraded state so operators can diagnose failed liveness
-                # probes (e.g. /output mounted read-only).  Do not break the
-                # loop — heartbeat file staleness already signals the problem.
-                _worker_log.warning(
-                    "heartbeat_touch_failed path=%s: %s", _HEARTBEAT_PATH, exc
-                )
+            # Degraded state is logged, never raised: heartbeat staleness is
+            # itself the signal (e.g. /output read-only or owned by another uid).
+            _touch_heartbeat()
             try:
                 await asyncio.wait_for(_shutdown_event.wait(), timeout=15)
             except asyncio.TimeoutError:
@@ -926,12 +953,18 @@ async def worker_loop() -> None:
         if _shutdown_event.is_set():
             _semaphore.release()
             break
+        # Ownership of the permit acquired above. Once a job is dispatched,
+        # ``_run_and_release`` releases it in its ``finally``; the error handler
+        # below must not release it a second time. ``asyncio.Semaphore.release()``
+        # has no owner check, so a double release silently raises the permit
+        # count above ``_max_concurrent`` and stops bounding concurrency.
+        released = False
         try:
             job, message_id = await _get_next_job(is_event_driven)
             if job is None:
                 _semaphore.release()
-                # Touch heartbeat even on idle loops
-                Path(_HEARTBEAT_PATH).touch()
+                released = True
+                _touch_heartbeat()
                 if not is_event_driven:
                     # Use wait with timeout so shutdown signal can interrupt sleep
                     try:
@@ -939,9 +972,17 @@ async def worker_loop() -> None:
                     except asyncio.TimeoutError:
                         pass
                 continue
-            # Touch heartbeat on every job dispatch
-            Path(_HEARTBEAT_PATH).touch()
+
+            # Dispatch FIRST. ``_get_next_job`` has already claimed the message
+            # from the Redis consumer group, and anything that raises between the
+            # claim and the dispatch strands it in the pending-entries list: no
+            # task runs it, nothing ACKs it, and only a worker restart past the
+            # stale-recovery timeout reclaims it. The heartbeat comes after, and
+            # cannot raise.
             asyncio.create_task(_run_and_release(job, message_id))
+            released = True  # the task owns the permit now
+            _touch_heartbeat()
+
             # Periodically update the queue depth metric (every 50 jobs)
             _poll_count += 1
             if _poll_count % 50 == 0 and hasattr(_store, "get_queue_depth"):
@@ -952,7 +993,8 @@ async def worker_loop() -> None:
                 except Exception:
                     pass
         except Exception as exc:
-            _semaphore.release()
+            if not released:
+                _semaphore.release()
             _worker_log.error("worker_loop_error: %s", exc)
             await asyncio.sleep(2)
 

@@ -22,6 +22,75 @@ _log = logging.getLogger("medanon.storage.s3")
 _S3_PREFIX = "s3://"
 
 
+def make_minio_client(
+    endpoint: str,
+    access_key: str,
+    secret_key: str,
+    *,
+    secure: bool = False,
+    region: str | None = None,
+):
+    """Construct a MinIO/S3 client.
+
+    Shared by the global result store and per-destination dataspace delivery so
+    both build the client the same way. ``region`` is passed through for AWS S3
+    and other stores that require it for signing.
+    """
+    from minio import Minio
+
+    return Minio(
+        endpoint,
+        access_key=access_key,
+        secret_key=secret_key,
+        secure=secure,
+        region=region,
+    )
+
+
+# Content types by artifact suffix. The delivered set is NDJSON data, a gzipped
+# manifest sidecar, an audit JSON, and (tabular/sql jobs) a ZIP — labelling them
+# all as NDJSON makes the audit record undownloadable in a browser and confuses
+# any consumer that dispatches on Content-Type.
+_CONTENT_TYPES = (
+    (".ndjson.gz", "application/gzip"),
+    (".json.gz", "application/gzip"),
+    (".gz", "application/gzip"),
+    (".zip", "application/zip"),
+    (".json", "application/json"),
+    (".ndjson", "application/x-ndjson"),
+    (".xml", "application/fhir+xml"),
+)
+
+
+def content_type_for(path: str) -> str:
+    """Return the Content-Type for *path* based on its suffix."""
+    name = os.path.basename(path).lower()
+    for suffix, ctype in _CONTENT_TYPES:
+        if name.endswith(suffix):
+            return ctype
+    return "application/octet-stream"
+
+
+def put_file(
+    client,
+    bucket: str,
+    object_name: str,
+    local_path: str,
+    content_type: str | None = None,
+) -> int:
+    """Upload *local_path* to ``bucket/object_name``. Returns the byte size."""
+    file_size = os.path.getsize(local_path)
+    with open(local_path, "rb") as data:
+        client.put_object(
+            bucket,
+            object_name,
+            data,
+            file_size,
+            content_type=content_type or content_type_for(local_path),
+        )
+    return file_size
+
+
 class _S3TextStream:
     """Line-iterating text wrapper around a MinIO HTTPResponse.
 
@@ -79,13 +148,8 @@ class S3ResultStorage:
         *,
         secure: bool = False,
     ) -> None:
-        from minio import Minio
-
-        self._client = Minio(
-            endpoint,
-            access_key=access_key,
-            secret_key=secret_key,
-            secure=secure,
+        self._client = make_minio_client(
+            endpoint, access_key, secret_key, secure=secure
         )
         self._bucket = bucket
         self._ensure_bucket()
@@ -111,15 +175,7 @@ class S3ResultStorage:
     def write_from_path(self, job_id: str, local_path: str) -> str:
         """Upload the local NDJSON file to MinIO and return the S3 result key."""
         object_name = f"{job_id}.ndjson"
-        file_size = os.path.getsize(local_path)
-        with open(local_path, "rb") as data:
-            self._client.put_object(
-                self._bucket,
-                object_name,
-                data,
-                file_size,
-                content_type="application/x-ndjson",
-            )
+        file_size = put_file(self._client, self._bucket, object_name, local_path)
         key = f"{_S3_PREFIX}{self._bucket}/{object_name}"
         _log.info("s3_upload_done job=%s size_bytes=%d key=%s", job_id, file_size, key)
         return key
@@ -129,6 +185,23 @@ class S3ResultStorage:
         obj_name = self._object_name(result_key)
         response = self._client.get_object(self._bucket, obj_name)
         return _S3TextStream(response)
+
+    def iter_bytes(self, result_key: str, chunk_size: int = 65536):
+        """Yield raw byte chunks for the stored object.
+
+        Binary-safe (a result may be a ``.zip``, which ``open_stream`` would
+        corrupt by decoding), and bounded: the object is never buffered whole, so
+        a multi-GB export streams through the API at ``chunk_size`` peak memory.
+        The urllib3 connection is released even when the client disconnects
+        mid-download and the generator is closed early.
+        """
+        obj_name = self._object_name(result_key)
+        response = self._client.get_object(self._bucket, obj_name)
+        try:
+            yield from response.stream(chunk_size)
+        finally:
+            response.close()
+            response.release_conn()
 
     def get_download_url(self, result_key: str, expires: int = 3600) -> str | None:
         """Return a presigned GET URL valid for *expires* seconds."""

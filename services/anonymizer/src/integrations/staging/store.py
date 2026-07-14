@@ -895,8 +895,13 @@ class StagingStore:
             self._put_conn(conn)
 
     def is_partition_done(
-        self, job_id: str, partition_id: int, *, input_checksum: str = "",
-        config_hash: str = "", processor_version: str = "",
+        self,
+        job_id: str,
+        partition_id: int,
+        *,
+        input_checksum: str = "",
+        config_hash: str = "",
+        processor_version: str = "",
     ) -> bool:
         """Idempotency stamp check: True if this partition was already processed
         with the SAME (input_checksum, config_hash, processor_version).
@@ -999,7 +1004,12 @@ class StagingStore:
                          WHERE job_id = %s AND partition_id = %s
                         RETURNING attempt_count, max_attempts
                         """,
-                        (error_code or None, error_message or None, job_id, partition_id),
+                        (
+                            error_code or None,
+                            error_message or None,
+                            job_id,
+                            partition_id,
+                        ),
                     )
                     row = cur.fetchone()
                     return int(row[0]) if row else 0
@@ -1046,9 +1056,13 @@ class StagingStore:
                                dead_lettered_at = NOW()
                         """,
                         (
-                            job_id, partition_id, stage,
-                            job_id, partition_id,
-                            error_code or None, error_message or None,
+                            job_id,
+                            partition_id,
+                            stage,
+                            job_id,
+                            partition_id,
+                            error_code or None,
+                            error_message or None,
                             config_hash or None,
                         ),
                     )

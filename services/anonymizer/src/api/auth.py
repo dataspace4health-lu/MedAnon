@@ -70,6 +70,7 @@ OPEN_PATHS = frozenset(
         "/",
         "/.well-known/smart-configuration",
         "/v1/auth/config",  # open: SPA fetches before login
+        "/v1/runtime-config",  # open: non-secret routing config (active source/target)
     }
 )
 
@@ -77,6 +78,7 @@ ENDPOINT_ROLES: dict[str, str] = {
     "/v1/process": "analyst",
     "/v1/process/raw": "analyst",
     "/v1/process/ndjson": "analyst",
+    "/v1/process/stream": "analyst",
     "/v1/process/batch": "analyst",
     "/v1/process/from-server": "analyst",
     "/v1/process/everything": "analyst",
@@ -88,7 +90,14 @@ ENDPOINT_ROLES: dict[str, str] = {
     "/v1/process/tabular": "analyst",
     "/v1/process/tabular/inspect": "analyst",
     "/v1/analyse/risk": "analyst",
+    "/v1/analyse/privacy-risk": "analyst",
+    "/v1/minimise/assess": "analyst",
+    "/v1/export/decision": "admin",
+    "/v1/export/statistical": "analyst",
+    "/v1/exposure/assess": "analyst",
+    "/v1/catalog/descriptor": "analyst",
     "/v1/generate/synthetic": "analyst",
+    "/v1/synthetic/passport": "analyst",
     "/v1/process/and-upload": "admin",
     "/v1/process/round-trip": "admin",
     "/v1/process/bulk-export": "admin",
@@ -124,12 +133,16 @@ ENDPOINT_ROLES: dict[str, str] = {
     "/v1/dashboard/summary": "viewer",
     # Per-client API key management (admin-only)
     "/v1/api-keys": "admin",
+    # Instance settings — admin-only on read and write (no non-admin access)
+    "/v1/settings": "admin",
 }
 
 # Prefix-based role mapping for parameterized paths (e.g. /v1/jobs/{job_id}).
 # Checked when ENDPOINT_ROLES produces no exact match.
 ENDPOINT_ROLE_PREFIXES: dict[str, str] = {
     "/v1/admin/": "admin",
+    "/v1/permits": "admin",  # data-permit governance (list/create/{id}/lifecycle)
+    "/v1/reports": "analyst",  # transformation-passport reports (anonymous, read-only)
     "/v1/jobs/bulk-export": "admin",  # exact — listed first for priority
     "/v1/jobs/bulk-import": "admin",  # uploads to target FHIR server — requires admin
     "/v1/jobs/batch-patient-export": "analyst",
@@ -141,6 +154,8 @@ ENDPOINT_ROLE_PREFIXES: dict[str, str] = {
     "/v1/workflows/": "analyst",  # covers /v1/workflows/{id}; admin step types enforced in router
     "/v1/configs/": "viewer",  # covers /v1/configs/{name} — writes enforce admin in router
     "/v1/sql-connections": "analyst",  # list/test; create/delete enforce admin in router
+    "/v1/source-connections": "analyst",  # list/test; create/delete enforce admin in router
+    "/v1/output-destinations": "analyst",  # list/test; create/delete enforce admin in router
     "/v1/process/sql/": "analyst",  # SQL schema inspect
     "/fhir/Group/": "admin",  # /fhir/Group/{id}/$export
     "/fhir/export-status/": "analyst",  # /fhir/export-status/{job_id}

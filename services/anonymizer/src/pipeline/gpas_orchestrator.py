@@ -98,6 +98,96 @@ def _extract_gpas_params(settings) -> dict | None:
 # ---------------------------------------------------------------------------
 
 
+def _write_back_pseudonyms(
+    resource: dict,
+    gpas_work: list[PseudonymizationTask],
+    batch_mapping: dict,
+    processing_mode: str,
+    manifest_entries: list | None,
+    caller: str,
+) -> None:
+    """Substitute each work item's pseudonym into *resource*, in place.
+
+    Shared by :func:`pseudonymize_resource_identifiers` (which fetches the
+    mapping itself) and :func:`apply_pseudonym_mapping` (which is handed a
+    mapping the batch pre-fetch already produced).  The two carried byte-identical
+    copies of this loop; *caller* is the only thing that ever differed, and only
+    inside an error message.  Two copies of a privacy-critical write-back is one
+    too many: a fix to the fallback-redact path in one silently misses the other.
+
+    A missing pseudonym is a fail-closed redact in ``skip`` mode and a hard error
+    otherwise.  A work item whose path resolves to the resource root is refused
+    outright rather than clearing the whole resource.
+    """
+    for item in gpas_work:
+        pseudonym = batch_mapping.get(item.serialized_value)
+
+        if pseudonym is None:
+            if processing_mode != "skip":
+                raise ValueError(
+                    f"gPAS did not return a pseudonym for value "
+                    f"(path={item.element['path']})"
+                )
+            audit_log.warning(
+                "gpas_no_pseudonym path=%s", item.element.get("path", "?")
+            )
+            try:
+                perform_deidentification("redact", resource, item.element, {})
+                if _MANIFEST_ENABLED and manifest_entries is not None:
+                    manifest_entries.append(
+                        {
+                            "rule": item.rule.get("name", item.rule.get("match", "?")),
+                            "action": "redact",
+                            "path": item.element.get("path", "?"),
+                        }
+                    )
+            except Exception as exc:
+                audit_log.warning(
+                    "fallback_redact_failed path=%s error_type=%s",
+                    item.element.get("path", "?"),
+                    type(exc).__name__,
+                    exc_info=False,
+                )
+            continue
+
+        path = item.element["path"].split(".")[1:]
+        if len(path) == 0:
+            audit_log.warning(
+                "gpas_root_path_skipped caller=%s path=%s — refusing to clear "
+                "entire resource",
+                caller,
+                item.element.get("path", "?"),
+            )
+            if processing_mode != "skip":
+                raise ValueError(
+                    f"Empty path after removing resource type root in {caller} — "
+                    f"refusing to clear entire resource "
+                    f"(original path: {item.element['path']!r})"
+                )
+            continue
+
+        ret = find_nodes(resource, path[:-1], [])
+        # Restore the urn:uuid: prefix when the original value had it. The prefix
+        # was stripped in action_dispatcher so the bare UUID reaches gPAS (so
+        # "urn:uuid:abc-123" and "abc-123" get the same pseudonym). We put it back
+        # so the rewritten reference remains a valid urn:uuid: URI.
+        original = item.element["value"]
+        replacement = (
+            f"urn:uuid:{pseudonym}"
+            if isinstance(original, str) and original.startswith("urn:uuid:")
+            else pseudonym
+        )
+        _substitute_nodes(ret, path[-1], original, replacement)
+        if _MANIFEST_ENABLED and manifest_entries is not None:
+            manifest_entries.append(
+                {
+                    "rule": item.rule.get("name", item.rule.get("match", "?")),
+                    "action": item.rule.get("action", "gpas_pseudonymize"),
+                    "path": item.element.get("path", "?"),
+                }
+            )
+
+
 def pseudonymize_resource_identifiers(
     resource: dict,
     gpas_work: list[PseudonymizationTask],
@@ -127,6 +217,8 @@ def pseudonymize_resource_identifiers(
     # gets exactly one HTTP call.  A single resource may have fields that map
     # to different leaf domains (e.g. Patient.id → patient-admin, but a
     # contained Observation.id → observation).
+    from pipeline.permit_context import scope_domain_to_permit
+
     domain_to_params: dict[str, dict] = {}
     domain_to_values: dict[str, list[str]] = {}
     for item in gpas_work:
@@ -140,8 +232,15 @@ def pseudonymize_resource_identifiers(
                 f"targeting path '{item.element.get('path', '?')}'. "
                 "Check your config profile's gpas_domain parameter."
             )
+        # D7.2 §4.4: pseudonyms MUST NOT be reused across permits — scope the
+        # gPAS domain to the active permit context (fails closed when
+        # regulated mode has no permit context set). ``item.params`` is a
+        # cached, shared dict (see ``_gpas_params_lru``) — never mutate it in
+        # place, or the permit scope from one request would leak into the
+        # next. Store a shallow copy carrying the scoped domain instead.
+        domain = scope_domain_to_permit(domain, action="gpas_pseudonymize")
         if domain not in domain_to_params:
-            domain_to_params[domain] = item.params
+            domain_to_params[domain] = {**item.params, "gpas_domain": domain}
             domain_to_values[domain] = []
         domain_to_values[domain].append(item.serialized_value)
 
@@ -216,73 +315,14 @@ def pseudonymize_resource_identifiers(
             if partial:
                 batch_mapping.update(partial)
 
-    # Write each pseudonym back into the resource
-    for item in gpas_work:
-        original_value = item.serialized_value
-        pseudonym = batch_mapping.get(original_value)
-
-        if pseudonym is None:
-            if processing_mode == "skip":
-                audit_log.warning(
-                    "gpas_no_pseudonym path=%s", item.element.get("path", "?")
-                )
-                try:
-                    perform_deidentification("redact", resource, item.element, {})
-                    if _MANIFEST_ENABLED and manifest_entries is not None:
-                        manifest_entries.append(
-                            {
-                                "rule": item.rule.get(
-                                    "name", item.rule.get("match", "?")
-                                ),
-                                "action": "redact",
-                                "path": item.element.get("path", "?"),
-                            }
-                        )
-                except Exception as exc2:
-                    audit_log.warning(
-                        "fallback_redact_failed path=%s error_type=%s",
-                        item.element.get("path", "?"),
-                        type(exc2).__name__,
-                        exc_info=False,
-                    )
-                continue
-            raise ValueError(
-                f"gPAS did not return a pseudonym for value (path={item.element['path']})"
-            )
-
-        path = item.element["path"].split(".")[1:]
-        if len(path) == 0:
-            audit_log.warning(
-                "gpas_root_path_skipped path=%s — refusing to clear entire resource",
-                item.element.get("path", "?"),
-            )
-            if processing_mode != "skip":
-                raise ValueError(
-                    f"Empty path after removing resource type root in pseudonymize_resource_identifiers "
-                    f"— refusing to clear entire resource (original path: {item.element['path']!r})"
-                )
-            continue
-        ret = find_nodes(resource, path[:-1], [])
-        # Restore urn:uuid: prefix when the original field value had it. The prefix
-        # was stripped in action_dispatcher to ensure the bare UUID reaches gPAS (so
-        # "urn:uuid:abc-123" and "abc-123" get the same pseudonym). We put it back
-        # so the rewritten reference remains a valid urn:uuid: URI.
-        _orig_val = item.element["value"]
-        _write_back = (
-            f"urn:uuid:{pseudonym}"
-            if isinstance(_orig_val, str) and _orig_val.startswith("urn:uuid:")
-            else pseudonym
-        )
-        _substitute_nodes(ret, path[-1], _orig_val, _write_back)
-        if _MANIFEST_ENABLED and manifest_entries is not None:
-            manifest_entries.append(
-                {
-                    "rule": item.rule.get("name", item.rule.get("match", "?")),
-                    "action": item.rule.get("action", "gpas_pseudonymize"),
-                    "path": item.element.get("path", "?"),
-                }
-            )
-
+    _write_back_pseudonyms(
+        resource,
+        gpas_work,
+        batch_mapping,
+        processing_mode,
+        manifest_entries,
+        caller="pseudonymize_resource_identifiers",
+    )
     return batch_mapping
 
 
@@ -305,14 +345,24 @@ def depseudonymize_resource_identifiers(
         return
 
     from integrations.gpas.client import gpas_depseudonymize_batch
+    from pipeline.permit_context import scope_domain_to_permit
 
-    # Group by domain
+    # Group by domain. Reversal re-exposes direct identifiers, so — same as
+    # the pseudonymize path — the domain is scoped to the active permit
+    # context (D7.2 §4.4) and a permit is required in regulated mode. RBAC
+    # restriction to the HDAB-equivalent (admin) role is enforced at the API
+    # boundary (see ``pipeline.config.reversal``), since role information is
+    # not available this deep in the pipeline.
     domain_to_params: dict[str, dict] = {}
     domain_to_values: dict[str, list[str]] = {}
     for item in depseudo_work:
         domain = item.params.get("gpas_domain", "")
+        if domain:
+            domain = scope_domain_to_permit(domain, action="gpas_depseudonymize")
         if domain not in domain_to_params:
-            domain_to_params[domain] = item.params
+            domain_to_params[domain] = (
+                {**item.params, "gpas_domain": domain} if domain else item.params
+            )
             domain_to_values[domain] = []
         domain_to_values[domain].append(item.serialized_value)
 
@@ -335,6 +385,28 @@ def depseudonymize_resource_identifiers(
                 )
                 continue
             raise
+
+    # D7.2 §4.4: reversal of pseudonymisation must be logged (it re-exposes the
+    # original direct identifiers and may only be performed by the HDAB/TTP).
+    # Emit a PHI-safe audit event — domains + counts only, never the recovered
+    # originals or the pseudonyms themselves. Guarded so audit never breaks the
+    # pipeline (same posture as pipeline.privacy.apply).
+    if batch_mapping:
+        try:
+            from utils.audit import emit as audit_emit
+
+            audit_emit(
+                "pseudonym.reverse",
+                resource_type=resource.get("resourceType", "unknown"),
+                action="gpas_depseudonymize",
+                outcome="success",
+                detail={
+                    "domains": sorted(domain_to_values.keys()),
+                    "reversed_count": len(batch_mapping),
+                },
+            )
+        except Exception:  # noqa: BLE001 — audit must never break the pipeline
+            pass
 
     # Write back originals
     for item in depseudo_work:
@@ -384,68 +456,14 @@ def apply_pseudonym_mapping(
     if not gpas_work:
         return batch_mapping
 
-    for item in gpas_work:
-        original_value = item.serialized_value
-        pseudonym = batch_mapping.get(original_value)
-
-        if pseudonym is None:
-            if processing_mode == "skip":
-                audit_log.warning(
-                    "gpas_no_pseudonym path=%s", item.element.get("path", "?")
-                )
-                try:
-                    perform_deidentification("redact", resource, item.element, {})
-                    if _MANIFEST_ENABLED and manifest_entries is not None:
-                        manifest_entries.append(
-                            {
-                                "rule": item.rule.get(
-                                    "name", item.rule.get("match", "?")
-                                ),
-                                "action": "redact",
-                                "path": item.element.get("path", "?"),
-                            }
-                        )
-                except Exception as exc2:
-                    audit_log.warning(
-                        "fallback_redact_failed path=%s error_type=%s",
-                        item.element.get("path", "?"),
-                        type(exc2).__name__,
-                        exc_info=False,
-                    )
-                continue
-            raise ValueError(
-                f"gPAS did not return a pseudonym for value (path={item.element['path']})"
-            )
-
-        path = item.element["path"].split(".")[1:]
-        if len(path) == 0:
-            audit_log.warning(
-                "gpas_writeback_root_path_skipped path=%s",
-                item.element.get("path", "?"),
-            )
-            if processing_mode != "skip":
-                raise ValueError(
-                    f"Empty path after removing resource type root in apply_pseudonym_mapping "
-                    f"— refusing to clear entire resource (original path: {item.element['path']!r})"
-                )
-            continue
-        ret = find_nodes(resource, path[:-1], [])
-        _orig_val = item.element["value"]
-        _write_back = (
-            f"urn:uuid:{pseudonym}"
-            if isinstance(_orig_val, str) and _orig_val.startswith("urn:uuid:")
-            else pseudonym
-        )
-        _substitute_nodes(ret, path[-1], _orig_val, _write_back)
-        if _MANIFEST_ENABLED and manifest_entries is not None:
-            manifest_entries.append(
-                {
-                    "rule": item.rule.get("name", item.rule.get("match", "?")),
-                    "action": item.rule.get("action", "gpas_pseudonymize"),
-                    "path": item.element.get("path", "?"),
-                }
-            )
-
+    _write_back_pseudonyms(
+        resource,
+        gpas_work,
+        batch_mapping,
+        processing_mode,
+        manifest_entries,
+        caller="apply_pseudonym_mapping",
+    )
     return batch_mapping
 
 
@@ -493,6 +511,8 @@ def pseudonymize_identifier_batch(
     # Group values by their resolved gpas_domain so each distinct domain gets
     # exactly one HTTP call.  Without this, domain_map routing would send all
     # resource types to the same domain during the N>1 batch pre-fetch.
+    from pipeline.permit_context import scope_domain_to_permit
+
     domain_to_params: dict[str, dict] = {}
     domain_to_values: dict[str, list[str]] = {}
 
@@ -507,8 +527,12 @@ def pseudonymize_identifier_batch(
                     f"targeting path '{item.element.get('path', '?')}'. "
                     "Check your config profile's gpas_domain parameter."
                 )
+            # D7.2 §4.4: scope to the active permit (fails closed in regulated
+            # mode without one). ``item.params`` may be the cached, shared
+            # per-profile dict — never mutate it; store a scoped copy.
+            domain = scope_domain_to_permit(domain, action="gpas_pseudonymize")
             if domain not in domain_to_params:
-                domain_to_params[domain] = item.params
+                domain_to_params[domain] = {**item.params, "gpas_domain": domain}
                 domain_to_values[domain] = []
             domain_to_values[domain].append(item.serialized_value)
 
@@ -520,13 +544,25 @@ def pseudonymize_identifier_batch(
     _EXTRA_KEY = "\x00extra"
     if extra_values_by_domain:
         for _ref_domain, _ref_vals in extra_values_by_domain.items():
-            _sentinel = f"{_EXTRA_KEY}\x00{_ref_domain}"
+            # Scope identically to the primary-ID call above so a reference to
+            # an already-pseudonymized id resolves to the *same* pseudonym
+            # under the same permit (reference rewriting requires this).
+            _ref_domain_scoped = scope_domain_to_permit(
+                _ref_domain, action="gpas_pseudonymize"
+            )
+            _sentinel = f"{_EXTRA_KEY}\x00{_ref_domain_scoped}"
             _ref_params = dict(gpas_params)
-            _ref_params["gpas_domain"] = _ref_domain
+            _ref_params["gpas_domain"] = _ref_domain_scoped
             domain_to_params[_sentinel] = _ref_params
             domain_to_values[_sentinel] = list(_ref_vals)
     elif extra_values:
-        domain_to_params[_EXTRA_KEY] = gpas_params
+        _raw_default_domain = gpas_params.get("gpas_domain", "")
+        _default_domain = (
+            scope_domain_to_permit(_raw_default_domain, action="gpas_pseudonymize")
+            if _raw_default_domain
+            else _raw_default_domain
+        )
+        domain_to_params[_EXTRA_KEY] = {**gpas_params, "gpas_domain": _default_domain}
         domain_to_values[_EXTRA_KEY] = list(extra_values)
 
     if not domain_to_values:

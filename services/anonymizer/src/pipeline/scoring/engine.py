@@ -73,17 +73,15 @@ def compute_composite(
     """Multiplicative aggregation — no dimension compensates for another."""
     if not privacy.passed:
         return 0.0, "FAIL"
-    if privacy.threshold <= 0:
-        privacy_score = 1.0
-    else:
-        privacy_score = 1.0 - (privacy.risk_score / privacy.threshold)
-        # When risk_score exactly equals threshold, privacy.passed=True (gate uses <=)
-        # but privacy_score collapses to 0.0 → composite = 0 → spurious FAIL.
-        # Preserve a minimal positive contribution so the composite decision
-        # matches the gate: a resource that barely passed privacy should not
-        # be reported as FAIL at the aggregate level.
-        if privacy.passed and privacy_score <= 0.0:
-            privacy_score = 0.001
+    # Privacy contribution = residual-privacy level = 1 - re-identification risk.
+    # ``risk_score`` and this factor are both dimensionless in [0, 1]; the gate
+    # threshold is a PASS/FAIL decision boundary, not a normaliser, so it must
+    # not scale the composite. The previous ``1 - risk/threshold`` mapping drove
+    # any resource that merely *passed* near the boundary toward 0 — a clean
+    # privacy posture could still score ~0 — which is why legitimately safe
+    # cohorts graded F. A passed resource now contributes in proportion to its
+    # actual residual risk.
+    privacy_score = max(0.0, min(1.0, 1.0 - privacy.risk_score))
     raw = privacy_score * utility.score * quality.score
     # `composite` is on the 0-100 scale (already multiplied by 100). Persist it
     # as-is in `score.avg_composite`; the React UI does Math.round(value) + "%"

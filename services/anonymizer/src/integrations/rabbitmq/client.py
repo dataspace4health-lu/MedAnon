@@ -52,7 +52,9 @@ class AmqpClient:
         self._lock = asyncio.Lock()
         self._cb = CircuitBreaker(
             name="amqp",
-            failure_threshold=int(os.environ.get("MEDANON_AMQP_CB_FAILURE_THRESHOLD", "5")),
+            failure_threshold=int(
+                os.environ.get("MEDANON_AMQP_CB_FAILURE_THRESHOLD", "5")
+            ),
             recovery_timeout_sec=float(
                 os.environ.get("MEDANON_AMQP_CB_RECOVERY_TIMEOUT_SEC", "30")
             ),
@@ -198,8 +200,14 @@ async def publish_partitions(
         except Exception:  # depth probe is best-effort
             pass
         msg = StageMessage(
-            workflow_id=workflow_id, job_id=job_id, step_id=stage, stage=stage,
-            partition_id=pid, config_hash=config_hash, tenant=tenant, trace_id=trace_id,
+            workflow_id=workflow_id,
+            job_id=job_id,
+            step_id=stage,
+            stage=stage,
+            partition_id=pid,
+            config_hash=config_hash,
+            tenant=tenant,
+            trace_id=trace_id,
         )
         try:
             await broker.publish(msg)

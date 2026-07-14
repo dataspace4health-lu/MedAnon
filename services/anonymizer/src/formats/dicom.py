@@ -132,7 +132,7 @@ DICOM_PS315_TAGS: frozenset[tuple[int, int]] = frozenset(
 )
 
 
-def _walk_and_scrub(dataset) -> None:  # type: ignore[type-arg]
+def _walk_and_scrub(dataset, manifest: list | None = None) -> None:  # type: ignore[type-arg]
     """Recursively remove all DICOM_PS315_TAGS from *dataset*.
 
     For SQ (Sequence) data elements each contained item is visited recursively
@@ -142,6 +142,8 @@ def _walk_and_scrub(dataset) -> None:  # type: ignore[type-arg]
 
     Args:
         dataset: a ``pydicom.Dataset`` (or compatible mapping) to scrub in place.
+        manifest: when provided, one ``{tag, keyword, action}`` entry is appended
+            for each removed attribute (the transformation manifest, no PHI values).
     """
     tags_to_delete: list = []
 
@@ -150,13 +152,21 @@ def _walk_and_scrub(dataset) -> None:  # type: ignore[type-arg]
 
         if tag in DICOM_PS315_TAGS:
             tags_to_delete.append(elem.tag)
+            if manifest is not None:
+                manifest.append(
+                    {
+                        "tag": f"({elem.tag.group:04X},{elem.tag.element:04X})",
+                        "keyword": getattr(elem, "keyword", "") or "",
+                        "action": "remove",
+                    }
+                )
             # No need to recurse into a sequence we are about to delete.
             continue
 
         # Recurse into sequences that are *not* themselves scheduled for removal.
         if elem.VR == "SQ":
             for item in elem.value:
-                _walk_and_scrub(item)
+                _walk_and_scrub(item, manifest)
 
     for tag in tags_to_delete:
         del dataset[tag]
@@ -183,6 +193,18 @@ def deidentify_dicom(raw_bytes: bytes) -> bytes:
     Raises:
         ValueError: If *raw_bytes* cannot be parsed as a valid DICOM object.
     """
+    output, _ = deidentify_dicom_with_manifest(raw_bytes)
+    return output
+
+
+def deidentify_dicom_with_manifest(raw_bytes: bytes) -> tuple[bytes, list[dict]]:
+    """Like :func:`deidentify_dicom` but also returns the transformation manifest.
+
+    The manifest is a list of ``{tag, keyword, action}`` entries — one per removed
+    attribute, plus the two mandatory de-identification markers stamped on. It
+    carries no PHI (attribute identity + action only) and is released as a
+    separate artifact from the de-identified pixel data.
+    """
     import pydicom
     import pydicom.errors
 
@@ -191,23 +213,21 @@ def deidentify_dicom(raw_bytes: bytes) -> bytes:
     except pydicom.errors.InvalidDicomError as exc:
         raise ValueError("Invalid DICOM data") from exc
 
-    _walk_and_scrub(ds)
+    manifest: list[dict] = []
+    _walk_and_scrub(ds, manifest)
 
     # Stamp mandatory de-identification markers (PS3.15 §E.3.1)
-    patient_identity_removed = pydicom.DataElement(
-        tag=(0x0012, 0x0062),
-        VR="CS",
-        value="YES",
+    ds[0x0012, 0x0062] = pydicom.DataElement(tag=(0x0012, 0x0062), VR="CS", value="YES")
+    ds[0x0012, 0x0063] = pydicom.DataElement(
+        tag=(0x0012, 0x0063), VR="LO", value="PS3.15 Annex E Basic Profile"
     )
-    ds[0x0012, 0x0062] = patient_identity_removed
-
-    deidentification_method = pydicom.DataElement(
-        tag=(0x0012, 0x0063),
-        VR="LO",
-        value="PS3.15 Annex E Basic Profile",
+    manifest.append(
+        {"tag": "(0012,0062)", "keyword": "PatientIdentityRemoved", "action": "set"}
     )
-    ds[0x0012, 0x0063] = deidentification_method
+    manifest.append(
+        {"tag": "(0012,0063)", "keyword": "DeidentificationMethod", "action": "set"}
+    )
 
     buf = io.BytesIO()
     pydicom.dcmwrite(buf, ds)
-    return buf.getvalue()
+    return buf.getvalue(), manifest

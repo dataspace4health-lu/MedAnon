@@ -8,7 +8,7 @@ from utils.json_fast import dumps as _json_dumps
 import logging
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from api.deps import MAX_BODY_BYTES, limiter
 from api.services.synthetic import SyntheticDataService
@@ -48,6 +48,13 @@ async def generate_synthetic(
         "ndjson",
         description="Output format: 'ndjson' (default), 'json' (Bundle), or 'xml'",
     ),
+    epsilon: float | None = Query(
+        None,
+        gt=0,
+        description="If set, generate differentially-private synthetic data at this "
+        "epsilon (stdlib marginal engine). The DP accounting is returned in the "
+        "X-Privacy-Accounting response header.",
+    ),
 ):
     """Generate synthetic FHIR Patient resources from a de-identified input dataset.
 
@@ -83,6 +90,7 @@ async def generate_synthetic(
             include_conditions=include_conditions,
             count_per_patient=count_per_patient,
             output_format=output_format,
+            dp_epsilon=epsilon,
         )
     except ValueError as exc:
         msg = str(exc)
@@ -120,6 +128,12 @@ async def generate_synthetic(
     all_resources = list(result.patients) + list(result.conditions)
     fmt = output_format.lower()
 
+    headers = {"X-Synthetic-Engine": result.engine_used}
+    if result.dp_accounting:
+        import json as _json
+
+        headers["X-Privacy-Accounting"] = _json.dumps(result.dp_accounting)
+
     if fmt == "json":
         bundle = {
             "resourceType": "Bundle",
@@ -129,25 +143,32 @@ async def generate_synthetic(
         return _Response(
             content=_json_dumps(bundle),
             media_type="application/json",
-            headers={"X-Synthetic-Engine": result.engine_used},
+            headers=headers,
         )
     elif fmt == "xml":
-        lines = ['<?xml version="1.0" encoding="UTF-8"?>',
-                 '<Bundle xmlns="http://hl7.org/fhir"><type><value value="collection"/></type>']
+        lines = [
+            '<?xml version="1.0" encoding="UTF-8"?>',
+            '<Bundle xmlns="http://hl7.org/fhir"><type><value value="collection"/></type>',
+        ]
         for r in all_resources:
             rt = r.get("resourceType", "Resource")
-            lines.append(f'<entry><resource><{rt}>')
+            lines.append(f"<entry><resource><{rt}>")
             for k, v in r.items():
                 if k == "resourceType":
                     continue
-                safe_v = str(v).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                safe_v = (
+                    str(v)
+                    .replace("&", "&amp;")
+                    .replace("<", "&lt;")
+                    .replace(">", "&gt;")
+                )
                 lines.append(f'<{k}><value value="{safe_v}"/></{k}>')
-            lines.append(f'</{rt}></resource></entry>')
-        lines.append('</Bundle>')
+            lines.append(f"</{rt}></resource></entry>")
+        lines.append("</Bundle>")
         return _Response(
             content="\n".join(lines),
             media_type="application/fhir+xml",
-            headers={"X-Synthetic-Engine": result.engine_used},
+            headers=headers,
         )
 
     async def _stream():
@@ -157,5 +178,46 @@ async def generate_synthetic(
     return StreamingResponse(
         _stream(),
         media_type="application/x-ndjson",
-        headers={"X-Synthetic-Engine": result.engine_used},
+        headers=headers,
     )
+
+
+@router.post("/synthetic/passport")
+@limiter.limit("30/minute")
+async def synthetic_passport(request: Request):
+    """Synthetic Data Passport (TEHDAS2 D7.2 §5.4/§5.5): fidelity + privacy
+    assessment with a graded release/review/reject verdict.
+
+    JSON body: ``{"real": [...], "synthetic": [...], "privacy_model": {...}?,
+    "dp_params": {...}?}``. Privacy is a hard gate (any exact real/synthetic
+    duplicate rejects); fidelity is graded A-F on per-column marginal
+    similarity.
+
+    When ``ANALYTICS_SERVICE_URL`` is set, proxies to the analytics microservice
+    (this was previously reachable only on that microservice directly — this
+    endpoint makes it a first-class part of the anonymizer's own API surface).
+    """
+    body = await request.body()
+    if len(body) > MAX_BODY_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Request body exceeds the {MAX_BODY_BYTES // (1024 * 1024)} MB limit",
+        )
+    content_type = request.headers.get("content-type", "")
+
+    try:
+        report = await _service.synthetic_passport(body, content_type)
+    except ValueError as exc:
+        msg = str(exc)
+        if "proxy" in msg.lower() or "service" in msg.lower():
+            raise HTTPException(status_code=502, detail=msg) from exc
+        raise HTTPException(status_code=422, detail=msg) from exc
+    except Exception as exc:
+        logger.error(
+            "synthetic_passport: unexpected error: %s",
+            type(exc).__name__,
+            exc_info=False,
+        )
+        raise HTTPException(status_code=500, detail="Synthetic passport error") from exc
+
+    return JSONResponse(content=report)

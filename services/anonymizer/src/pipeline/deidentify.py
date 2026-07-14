@@ -55,36 +55,50 @@ _nlp_adapter_initialised = False  # True once the lock section has run (even if 
 
 # NLP failure mode: "redact" (default, safe fallback) | "raise" (hard fail)
 # "skip" was removed — it silently passed unscrubbed PHI through when NLP was unavailable.
-_NLP_FAIL_MODE = os.environ.get("MEDANON_NLP_FAIL_MODE", "redact").strip().lower()
-if _NLP_FAIL_MODE not in ("redact", "raise"):
-    _log.error(
-        "Invalid MEDANON_NLP_FAIL_MODE=%r — only 'redact' and 'raise' are supported. "
-        "Falling back to 'redact' (safe default).",
-        _NLP_FAIL_MODE,
-    )
-    _NLP_FAIL_MODE = "redact"
+_VALID_FAIL_MODES = ("redact", "raise")
+
+
+def _nlp_fail_mode() -> str:
+    """Process-global NLP failure mode, read at call time.
+
+    Read at call time rather than frozen at import, matching the convention in
+    :mod:`utils.regulated`: operators and tests can toggle the env var without
+    re-importing the module. As a module constant this silently ignored any
+    later change to ``MEDANON_NLP_FAIL_MODE``.
+    """
+    mode = os.environ.get("MEDANON_NLP_FAIL_MODE", "redact").strip().lower()
+    if mode not in _VALID_FAIL_MODES:
+        _log.error(
+            "Invalid MEDANON_NLP_FAIL_MODE=%r — only 'redact' and 'raise' are "
+            "supported. Falling back to 'redact' (safe default).",
+            mode,
+        )
+        return "redact"
+    return mode
 
 
 def _resolve_fail_mode(params: dict) -> str:
     """Resolve the NLP failure mode for a single action invocation (E3.3).
 
     Precedence: a per-rule / per-profile ``fail_mode`` param (sourced from the
-    profile's ``nlp.fail_mode`` block) overrides the process-global
-    ``MEDANON_NLP_FAIL_MODE``.  Invalid values fall back to the global default
-    so a typo in a profile can never silently pass unscrubbed PHI through.
+    profile's ``nlp.fail_mode`` block, injected by ``rule_matcher._merge_profile_nlp``)
+    overrides the process-global ``MEDANON_NLP_FAIL_MODE``.  Invalid values fall
+    back to the global default so a typo in a profile can never silently pass
+    unscrubbed PHI through.
     """
+    global_mode = _nlp_fail_mode()
     override = params.get("fail_mode")
     if override is None:
-        return _NLP_FAIL_MODE
+        return global_mode
     mode = str(override).strip().lower()
-    if mode not in ("redact", "raise"):
+    if mode not in _VALID_FAIL_MODES:
         _log.warning(
             "Invalid nlp fail_mode=%r in config — only 'redact'/'raise' supported; "
             "using global default %r",
             override,
-            _NLP_FAIL_MODE,
+            global_mode,
         )
-        return _NLP_FAIL_MODE
+        return global_mode
     return mode
 
 

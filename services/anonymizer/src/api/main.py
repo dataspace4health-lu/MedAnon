@@ -43,19 +43,29 @@ from api.routers import (
     api_keys,
     audit,
     auth as auth_router,
+    catalog,
     cda,
     configs,
     dashboard,
+    connectors,
     dicom,
+    disclosure,
+    exposure,
     fhir_bulk,
     fhir_proxy,
     fhir_server,
+    minimise,
+    permits,
+    reports,
     hl7v2,
     jobs,
     process,
     processing_runs,
+    runtime,
     scoring,
+    settings,
     sql_source,
+    statistical,
     synthetic,
     tabular,
     trust_profiles,
@@ -365,6 +375,101 @@ async def _startup() -> None:
         except Exception as exc:
             logger.warning("sql_connection_store_start_failed: %s", exc)
 
+    # Dataspace connector stores — saved input sources + S3 output destinations
+    # (PostgreSQL only, encrypted secrets). Enables configuring where data comes
+    # from and the S3 location the de-identified file is delivered to.
+    if pg_pool:
+        try:
+            from integrations.postgres.connector_stores import (
+                PostgresDestinationStore,
+                PostgresSourceStore,
+            )
+            from pipeline.connectors import (
+                init_destination_store,
+                init_source_store,
+            )
+
+            init_source_store(PostgresSourceStore(pg_pool))
+            init_destination_store(PostgresDestinationStore(pg_pool))
+            logger.info("connector_stores=postgres")
+        except Exception as exc:
+            logger.warning("connector_stores_start_failed: %s", exc)
+
+    # Instance-settings store — deployment-wide admin-managed application defaults
+    # (which FHIR source/target the app is wired to, default rule profile,
+    # assessment defaults). PostgreSQL only; without it the API serves built-in
+    # defaults and rejects writes.
+    if pg_pool:
+        try:
+            from integrations.postgres.settings_store import PostgresSettingsStore
+            from pipeline.app_settings import init_settings_store
+
+            init_settings_store(PostgresSettingsStore(pg_pool))
+            logger.info("settings_store=postgres")
+        except Exception as exc:
+            logger.warning("settings_store_start_failed: %s", exc)
+
+    # Data-permit governance store (TEHDAS2 D7.2 §2, EHDS Art 79). Durable in
+    # Postgres so approved permits + their disclosure bindings survive a restart;
+    # falls back to the in-memory default (correct for single-container dev).
+    try:
+        from api.services.permits import init_permit_store
+
+        if pg_pool:
+            from integrations.postgres.permit_store import PostgresPermitStore
+
+            permit_store = PostgresPermitStore(pg_pool)
+            permit_store.ensure_schema()
+            init_permit_store(store=permit_store)
+            logger.info("permit_store=postgres")
+        else:
+            logger.info(
+                "permit_store=in-memory (set MEDANON_APP_DB_URL for durable permits)"
+            )
+    except Exception as exc:
+        logger.warning("permit_store_start_failed: %s", exc)
+
+    # Transformation-passport report store (D7.2 §5.5.1 / Art 79) — durable,
+    # queryable passports in Postgres. Anonymous by construction; no-op without
+    # a DB (passports still ride on the job checkpoint for the per-job view).
+    try:
+        from api.services.reports import init_passport_store
+
+        if pg_pool:
+            from integrations.postgres.passport_store import PostgresPassportStore
+
+            passport_store = PostgresPassportStore(pg_pool)
+            passport_store.ensure_schema()
+            init_passport_store(store=passport_store)
+            logger.info("passport_store=postgres")
+        else:
+            init_passport_store(store=None)
+            logger.info(
+                "passport_store=none (set MEDANON_APP_DB_URL for durable reports)"
+            )
+    except Exception as exc:
+        logger.warning("passport_store_start_failed: %s", exc)
+
+    # Release ledger for cumulative-exposure analysis (D7.2 §5.5.7) — Postgres
+    # only; without a DB there is no prior-release history to compare against.
+    try:
+        from api.services.exposure import init_release_ledger
+
+        if pg_pool:
+            from integrations.postgres.release_ledger import PostgresReleaseLedger
+
+            release_ledger = PostgresReleaseLedger(pg_pool)
+            release_ledger.ensure_schema()
+            init_release_ledger(store=release_ledger)
+            logger.info("release_ledger=postgres")
+        else:
+            init_release_ledger(store=None)
+            logger.info(
+                "release_ledger=none (set MEDANON_APP_DB_URL for cumulative exposure)"
+            )
+    except Exception as exc:
+        logger.warning("release_ledger_start_failed: %s", exc)
+
     # Workflow (DAG) engine — PostgreSQL only ("staging is the ledger"); the
     # engine schedules steps through the same job store the worker drains.
     workflows_enabled = os.environ.get(
@@ -588,25 +693,50 @@ async def audit_middleware(request: Request, call_next):
     return response
 
 
+# Endpoints that read the request body as a bounded stream and therefore opt out
+# of the global body-size guard (they never buffer the whole payload).
+_BODY_SIZE_EXEMPT_PATHS = frozenset({"/v1/process/stream"})
+
+
+class _BodyTooLarge(Exception):
+    """Signals an over-limit body from the streaming receive wrapper.
+
+    Raised inside ``_counting_receive`` and caught in the middleware so the client
+    gets a clean 413 JSON response — raising ``HTTPException`` from a middleware /
+    ASGI receive escapes the exception handlers and surfaces as a 500.
+    """
+
+
+def _body_too_large_response() -> JSONResponse:
+    return JSONResponse(
+        status_code=413,
+        content={
+            "detail": f"Request body exceeds the {MAX_BODY_BYTES // (1024 * 1024)} MB limit"
+        },
+    )
+
+
 @app.middleware("http")
 async def enforce_body_size(request: Request, call_next):
-    """Reject requests whose body exceeds MAX_BODY_BYTES.
+    """Reject requests whose body exceeds MAX_BODY_BYTES with a clean 413.
 
     Checks Content-Length when present (fast path) and also streams
     chunked/unknown-length bodies to enforce the limit before the full
-    payload is buffered into memory.
+    payload is buffered into memory. Streaming endpoints in
+    ``_BODY_SIZE_EXEMPT_PATHS`` are skipped — they self-limit via chunked reads.
     """
+    if request.url.path in _BODY_SIZE_EXEMPT_PATHS:
+        return await call_next(request)
     content_length = request.headers.get("content-length")
     if content_length:
         try:
             cl_int = int(content_length)
         except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid Content-Length header")
-        if cl_int > MAX_BODY_BYTES:
-            raise HTTPException(
-                status_code=413,
-                detail=f"Request body exceeds the {MAX_BODY_BYTES // (1024 * 1024)} MB limit",
+            return JSONResponse(
+                status_code=400, content={"detail": "Invalid Content-Length header"}
             )
+        if cl_int > MAX_BODY_BYTES:
+            return _body_too_large_response()
     elif request.method in ("POST", "PUT", "PATCH"):
         # No Content-Length header (chunked transfer) — wrap the receive
         # callable to count bytes as they flow through, without buffering
@@ -619,14 +749,14 @@ async def enforce_body_size(request: Request, call_next):
             chunk = message.get("body", b"")
             byte_counter[0] += len(chunk)
             if byte_counter[0] > MAX_BODY_BYTES:
-                raise HTTPException(
-                    status_code=413,
-                    detail=f"Request body exceeds the {MAX_BODY_BYTES // (1024 * 1024)} MB limit",
-                )
+                raise _BodyTooLarge()
             return message
 
         request._receive = _counting_receive
-    return await call_next(request)
+    try:
+        return await call_next(request)
+    except _BodyTooLarge:
+        return _body_too_large_response()
 
 
 @app.middleware("http")
@@ -691,18 +821,24 @@ def health():
 def readiness(request: Request):
     """Readiness probe — verifies that configured upstream services are reachable.
 
-    Checks /metadata on gPAS and FHIR servers (when their URLs are configured).
-    Returns 200 + {"ready": true} when all checks pass, 503 otherwise.
+    Probes every configured upstream (gPAS, FHIR source/target, Redis, NLP,
+    Postgres, analytics, scoring, Trust Gate, AI) and reports each in `checks`.
+    Only the critical ones gate the verdict: returns 200 + {"ready": true} when
+    all *critical* checks pass, 503 otherwise. Advisory microservices are
+    reported but never 503 this pod out of the load balancer.
     Timeout is controlled by MEDANON_READY_TIMEOUT (default 5 s).
 
     When an API key is configured, unauthenticated callers receive only
     {"ready": true/false} without upstream service details to avoid
     leaking internal network topology.
     """
-    from api.services.health import HealthCheckService
+    from api.services.health import CRITICAL_CHECKS, HealthCheckService
 
     checks = HealthCheckService().check_readiness()
-    ready = all(v == "ok" for v in checks.values())
+    # Only critical upstreams gate readiness. Advisory microservices (analytics,
+    # scoring, Trust Gate, AI) are reported in `checks` but must not 503 this
+    # pod out of the load balancer — they degrade gracefully by design.
+    ready = all(v == "ok" for k, v in checks.items() if k in CRITICAL_CHECKS)
 
     # /ready is in OPEN_PATHS so auth_middleware never sets request.state.auth.
     # Resolve auth explicitly here: in open mode (no API key) everyone is admin;
@@ -747,11 +883,19 @@ def metrics():
 # ---------------------------------------------------------------------------
 
 app.include_router(auth_router.router)
+app.include_router(runtime.router)
 app.include_router(process.router, prefix="/v1")
 app.include_router(fhir_server.router, prefix="/v1")
 app.include_router(fhir_proxy.router, prefix="/v1")
 app.include_router(analytics.router, prefix="/v1")
+app.include_router(minimise.router, prefix="/v1")
+app.include_router(disclosure.router, prefix="/v1")
+app.include_router(permits.router, prefix="/v1")
+app.include_router(reports.router, prefix="/v1")
 app.include_router(synthetic.router, prefix="/v1")
+app.include_router(statistical.router, prefix="/v1")
+app.include_router(exposure.router, prefix="/v1")
+app.include_router(catalog.router, prefix="/v1")
 app.include_router(jobs.router, prefix="/v1")
 app.include_router(workflows.router, prefix="/v1")
 app.include_router(configs.router, prefix="/v1")
@@ -769,6 +913,8 @@ app.include_router(hl7v2.router, prefix="/v1")
 app.include_router(cda.router, prefix="/v1")
 app.include_router(tabular.router, prefix="/v1")
 app.include_router(sql_source.router, prefix="/v1")
+app.include_router(connectors.router, prefix="/v1")
+app.include_router(settings.router, prefix="/v1")
 app.include_router(fhir_bulk.router, prefix="/fhir")
 app.include_router(fhir_subscriptions.router)
 app.include_router(smart.router)

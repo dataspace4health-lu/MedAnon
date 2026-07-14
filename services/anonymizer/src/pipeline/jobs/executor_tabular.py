@@ -25,7 +25,7 @@ import zipfile
 
 from domain.jobs import JobStatus
 from pipeline.jobs.checkpoint import save_checkpoint
-from integrations.storage import store_result
+from integrations.storage import publish_result
 
 _log = logging.getLogger("medanon.worker")
 
@@ -41,8 +41,14 @@ def execute_tabular_batch(job, store, staging=None) -> None:
     Synchronous (runs in a worker thread).  Sets ``job.result_path`` to the
     stored ZIP and a summary checkpoint with per-file outcomes.
     """
+    import json
+
     from pipeline.config.service import get_settings
-    from pipeline.sources import TabularAdapter, apply_column_rules
+    from pipeline.sources import (
+        TabularAdapter,
+        apply_column_rules,
+        resolve_column_manifest,
+    )
 
     params = job.params or {}
     staged_dir = params.get("staged_dir")
@@ -62,11 +68,17 @@ def execute_tabular_batch(job, store, staging=None) -> None:
     )
 
     output_path = os.path.join(_output_dir(), f"{job.id}.zip")
+    # The transformation manifest is released as a SEPARATE artifact (one line per
+    # file: which columns got which rule), never mixed into the de-identified zip.
+    manifest_path = f"{output_path}.manifest.ndjson"
     succeeded = 0
     failed = 0
     file_results: list[dict] = []
 
-    with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+    with (
+        zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED) as zf,
+        open(manifest_path, "w", encoding="utf-8") as mfh,
+    ):
         for idx, name in enumerate(file_names):
             # Cancellation check between files so a long batch stays responsive.
             fresh = store.get(job.id)
@@ -80,9 +92,22 @@ def execute_tabular_batch(job, store, staging=None) -> None:
                     raw = fh.read()
                 adapter = TabularAdapter(file_format)
                 rows = adapter.parse(raw)
+                columns = list(rows[0].keys()) if rows else []
                 apply_column_rules(rows, settings)
                 out_bytes = adapter.serialize(rows)
                 zf.writestr(_safe_member(name), out_bytes)
+                mfh.write(
+                    json.dumps(
+                        {
+                            "file": _safe_member(name),
+                            "format": "tabular",
+                            "transformations": resolve_column_manifest(
+                                settings, columns
+                            ),
+                        }
+                    )
+                    + "\n"
+                )
                 succeeded += 1
                 file_results.append({"file": name, "status": "ok"})
             except Exception as exc:
@@ -108,7 +133,15 @@ def execute_tabular_batch(job, store, staging=None) -> None:
                     },
                 )
 
-    job.result_path = store_result(job.id, output_path)
+    summary_dict = {
+        "total_files": len(file_names),
+        "succeeded": succeeded,
+        "failed": failed,
+        "files": file_results,
+    }
+    job.result_path = publish_result(
+        job, output_path, manifest_path=manifest_path, audit=summary_dict
+    )
 
     # Best-effort cleanup of the staged inputs (results are now in the ZIP).
     _cleanup_staged_dir(staged_dir)
@@ -120,12 +153,7 @@ def execute_tabular_batch(job, store, staging=None) -> None:
             "phase": "done",
             "staged_count": len(file_names),
             "processed": succeeded + failed,
-            "summary": {
-                "total_files": len(file_names),
-                "succeeded": succeeded,
-                "failed": failed,
-                "files": file_results,
-            },
+            "summary": summary_dict,
         },
     )
     _log.info(

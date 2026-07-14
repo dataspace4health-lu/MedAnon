@@ -10,11 +10,22 @@ import asyncio
 import logging
 
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import (
+    FileResponse,
+    JSONResponse,
+    RedirectResponse,
+    Response,
+    StreamingResponse,
+)
 from pydantic import BaseModel
 
 from api.schemas.jobs import UploadToTargetRequest
-from api.routers.jobs_common import _resolve_import_target_url, _service
+from api.routers.jobs_common import (
+    _resolve_import_target_url,
+    _resolve_target_url,
+    _service,
+    effective_target_id,
+)
 from api.services.jobs import (
     JobNotComplete,
     JobNotFound,
@@ -26,6 +37,15 @@ import os
 
 router = APIRouter()
 logger = logging.getLogger("medanon")
+
+# Serve S3-backed results by 307-redirecting to a presigned URL instead of
+# proxying the bytes. OFF by default: the presigned URL is signed for the
+# internal MINIO_ENDPOINT, which a browser cannot resolve, and is plain http://
+# (blocked as mixed content from an HTTPS page). Enable only when the object
+# store is directly reachable by the client over the same scheme.
+_S3_PRESIGNED_REDIRECT: bool = os.environ.get(
+    "MEDANON_S3_PRESIGNED_REDIRECT", "false"
+).strip().lower() in ("1", "true", "yes")
 
 
 @router.get("/jobs")
@@ -133,7 +153,10 @@ async def get_job_result(job_id: str):
     - 404 if the job does not exist.
     - 409 if the job is not yet ``done``.
     - 410 if the result file has been cleaned up.
-    - 307 redirect when result is stored in S3/MinIO (``MEDANON_RESULT_STORAGE=s3``).
+    - S3-backed results (``MEDANON_RESULT_STORAGE=s3``) are proxied through this
+      endpoint as a chunked stream. Set ``MEDANON_S3_PRESIGNED_REDIRECT=true`` to
+      307-redirect to a presigned URL instead — only valid when the object store
+      is reachable by the client.
     """
     try:
         result_path = await asyncio.to_thread(_service.get_result_path, job_id)
@@ -146,14 +169,6 @@ async def get_job_result(job_id: str):
     except JobResultMissing:
         raise HTTPException(status_code=410, detail="Result file not available")
 
-    # S3 result: redirect the client to a presigned MinIO URL (HTTP 307).
-    # The client downloads directly from MinIO, bypassing the anonymizer.
-    if result_path.startswith("s3://"):
-        from integrations.storage import get_result_storage
-
-        url = get_result_storage().get_download_url(result_path)
-        return RedirectResponse(url=url, status_code=307)
-
     # Derive media type + download filename from the stored result's extension.
     # Tabular-batch and sql-export jobs write a ZIP (one member per file);
     # everything else streams NDJSON. Sending the correct Content-Type avoids a
@@ -164,6 +179,29 @@ async def get_job_result(job_id: str):
     else:
         media_type = "application/x-ndjson"
         download_name = f"job_{job_id}.ndjson"
+
+    if result_path.startswith("s3://"):
+        from integrations.storage import get_result_storage
+
+        storage = get_result_storage()
+
+        # Presigned-redirect mode is OPT-IN. A presigned URL is signed for the
+        # *internal* MINIO_ENDPOINT (e.g. http://minio:9000), which a browser
+        # can neither resolve nor load from an HTTPS page (mixed content). Only
+        # enable this where the object store is reachable by the client.
+        if _S3_PRESIGNED_REDIRECT:
+            url = storage.get_download_url(result_path)
+            if url:
+                return RedirectResponse(url=url, status_code=307)
+
+        # Default: proxy the bytes through the API. Chunked, so a multi-GB
+        # result never lands in this process's memory, and MinIO credentials
+        # are never exposed to the client.
+        return StreamingResponse(
+            storage.iter_bytes(result_path),
+            media_type=media_type,
+            headers={"Content-Disposition": f'attachment; filename="{download_name}"'},
+        )
 
     return FileResponse(
         result_path,
@@ -229,13 +267,21 @@ async def upload_job_to_target(job_id: str, req: UploadToTargetRequest | None = 
     """
     if req is None:
         req = UploadToTargetRequest()
-    resolved_url = await _resolve_import_target_url(req.target_url)
+    target_id = effective_target_id(req.target_id, req.target_url)
+    if target_id:
+        # Saved target server: URL from the store, token resolved server-side.
+        from pipeline.jobs.source_resolver import resolve_target_token
+
+        resolved_url = await _resolve_target_url(target_id, req.target_url)
+        resolved_token = resolve_target_token({"target_id": target_id})
+    else:
+        resolved_url = await _resolve_import_target_url(req.target_url)
+        resolved_token = req.target_token or os.environ.get("FHIR_TARGET_TOKEN") or None
     if not resolved_url:
         raise HTTPException(
             status_code=400,
             detail="No target URL provided and FHIR_TARGET_URL env var is not set",
         )
-    resolved_token = req.target_token or os.environ.get("FHIR_TARGET_TOKEN") or None
     try:
         result = await asyncio.to_thread(
             _service.upload_job_to_target,

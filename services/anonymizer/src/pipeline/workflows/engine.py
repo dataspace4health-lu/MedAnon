@@ -50,7 +50,9 @@ class WorkflowEngine:
     # Submission
     # ------------------------------------------------------------------
 
-    def submit(self, name: str, steps: list[WorkflowStep], params: dict | None = None) -> Workflow:
+    def submit(
+        self, name: str, steps: list[WorkflowStep], params: dict | None = None
+    ) -> Workflow:
         """Validate, persist, and enqueue the dependency-free steps."""
         validate_dag(steps)
         workflow = Workflow(
@@ -181,9 +183,7 @@ class WorkflowEngine:
             step.job_type,
         )
 
-    def _collect_upstream_results(
-        self, workflow: Workflow, step: WorkflowStep
-    ) -> dict:
+    def _collect_upstream_results(self, workflow: Workflow, step: WorkflowStep) -> dict:
         """Map ``{dep_step_id: result_path}`` for each completed dependency."""
         results: dict[str, str] = {}
         for dep_id in step.depends_on:
@@ -265,7 +265,9 @@ class WorkflowEngine:
                     try:
                         self._jobs.cancel(step.job_id)
                     except Exception as exc:
-                        logger.debug("step_job_cancel_failed job=%s: %s", step.job_id, exc)
+                        logger.debug(
+                            "step_job_cancel_failed job=%s: %s", step.job_id, exc
+                        )
             for expected in (
                 StepStatus.PENDING,
                 StepStatus.READY,

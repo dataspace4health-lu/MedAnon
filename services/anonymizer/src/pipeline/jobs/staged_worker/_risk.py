@@ -37,7 +37,8 @@ from pathlib import Path
 
 from domain.jobs import JobStatus
 from pipeline.jobs.checkpoint import load_checkpoint, save_checkpoint
-from integrations.storage import store_result
+from integrations.storage import publish_result
+from pipeline.jobs.source_resolver import resolve_source_token
 
 _log = logging.getLogger("medanon.staged_worker")
 
@@ -49,6 +50,57 @@ _OUTPUT_DIR = os.environ.get("MEDANON_OUTPUT_DIR", "/output")
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+
+def assess_and_gate_disclosure(
+    deidentified_output: list[dict],
+    *,
+    privacy_model: dict,
+    permit_id: str | None,
+    recipient: str | None = None,
+    declared_paths: list[str] | None = None,
+    decided_by: str = "system",
+) -> tuple[dict, dict]:
+    """Run the WS1 privacy-risk assessment + Fig 6 disclosure decision on the
+    actual de-identified output of a risk-driven export.
+
+    Extracted as a standalone, dependency-light function (no staging/job-store
+    coupling) so it is unit-testable without driving the full staged job.
+    Resolves *permit_id* to a :class:`~pipeline.governance.permit.Permit` when
+    present. An unknown permit id degrades to ``permit=None`` rather than
+    raising — the submission endpoint already validated the permit exists via
+    ``api.deps.resolve_active_permit``, and permits are never deleted (only
+    revoked), so this only matters for a fabricated id bypassing submission
+    validation, which is not a silent-release risk: a permit revoked *after*
+    submission is still resolved here (permits aren't deleted) and correctly
+    surfaces as a ``permit_inactive`` REFUSE via
+    :func:`pipeline.disclosure.assess_export_decision`.
+
+    Returns ``(privacy_risk, disclosure)``.
+    """
+    from analytics.privacy_risk import assess_privacy_risk
+    from pipeline.disclosure import assess_export_decision
+
+    privacy_risk = assess_privacy_risk(deidentified_output, privacy_model=privacy_model)
+
+    permit_obj = None
+    if permit_id:
+        from api.services.permits import PermitNotFoundError, PermitService
+
+        try:
+            permit_obj = PermitService().get(permit_id)
+        except PermitNotFoundError:
+            permit_obj = None
+
+    disclosure = assess_export_decision(
+        deidentified_output,
+        privacy_risk=privacy_risk,
+        declared_paths=declared_paths,
+        permit=permit_obj,
+        recipient=recipient,
+        decided_by=decided_by,
+    )
+    return privacy_risk, disclosure
 
 
 def _refetch_all_staged(staging, job_id, fhir_base_url, token, timeout):
@@ -106,7 +158,7 @@ def execute_risk_driven_export_staged(job, store, staging) -> None:
 
     params = job.params
     server_url = params.get("server_url", "")
-    token = params.get("token") or os.environ.get("FHIR_SOURCE_TOKEN")
+    token = resolve_source_token(params)
     timeout = float(params.get("timeout", 30))
     profile = params.get("config_profile", "auto")
 
@@ -174,6 +226,20 @@ def execute_risk_driven_export_staged(job, store, staging) -> None:
     # re-run the (potentially expensive) lattice search.
     resources = _refetch_all_staged(staging, job.id, server_url, token, timeout)
 
+    # D7.2 §4.7 / Art 71 (Annex 6 data-preparation step): drop opted-out
+    # subjects from the cohort BEFORE the lattice solve / de-id pass, so their
+    # records never reach gPAS/NLP. Fails closed in regulated mode when a
+    # configured opt-out source is unreachable. No-op (zero cost) when no
+    # source is configured and no per-job opt-out list was supplied.
+    from pipeline.exclusion import apply_optout
+
+    resources, optout_excluded = apply_optout(
+        resources,
+        extra_ids=params.get("optout_ids"),
+        actor=f"job:{job.id}",
+        dataset_id=job.id,
+    )
+
     plan_dict = checkpoint.get("generalization_plan")
     if phase == "solving" and not plan_dict:
         if _cancelled(store, job):
@@ -195,6 +261,7 @@ def execute_risk_driven_export_staged(job, store, staging) -> None:
         plan_dict = {
             "achieved_k": plan.achieved_k,
             "achieved_l": plan.achieved_l,
+            "achieved_t": plan.achieved_t,
             "levels": dict(plan.levels),
             "node": list(plan.node),
             "suppressed_ids": sorted(plan.suppressed_ids),
@@ -220,6 +287,7 @@ def execute_risk_driven_export_staged(job, store, staging) -> None:
             suppressed_ids=set(plan_dict.get("suppressed_ids", [])),
             achieved_k=plan_dict.get("achieved_k", 0),
             achieved_l=plan_dict.get("achieved_l"),
+            achieved_t=plan_dict.get("achieved_t"),
             suppressed_count=plan_dict.get("suppressed_count", 0),
             suppression_rate=plan_dict.get("suppression_rate", 0.0),
             information_loss=plan_dict.get("information_loss", 0.0),
@@ -233,28 +301,87 @@ def execute_risk_driven_export_staged(job, store, staging) -> None:
     # reach gPAS/NLP — no wasted work and no risk of a suppressed value leaking.
     survivors = filter_and_apply(resources, plan, privacy_model)
 
+    from pipeline.permit_context import permit_scope
+
+    permit_id = params.get("permit_id")
+
     written = 0
+    # Retain the de-identified output for the post-hoc privacy-risk /
+    # disclosure-decision pass below — bounded by the same in-memory cohort
+    # this job already holds (the qi_index/lattice solve is global, so this
+    # job never streams; see the module docstring).
+    deidentified_output: list[dict] = []
     with open(output_path, "w", encoding="utf-8") as fh:
         from utils.json_fast import dumps as _json_dumps
 
         # De-identify in batches so a single large cohort does not balloon RAM.
         from pipeline.jobs.staged_worker._core import _BATCH_SIZE
 
-        for start in range(0, len(survivors), _BATCH_SIZE):
-            if _cancelled(store, job):
-                _log.info("risk_driven_cancelled job=%s phase=applying", job.id)
-                return
-            batch = survivors[start : start + _BATCH_SIZE]
-            processed = process_data_batch(
-                batch, settings, pseudonymizer, attach_manifest=True
-            )
-            for result in processed:
-                fh.write(_json_dumps(result) + "\n")
-                written += 1
-
-    job.result_path = store_result(job.id, output_path)
+        with permit_scope(permit_id):
+            for start in range(0, len(survivors), _BATCH_SIZE):
+                if _cancelled(store, job):
+                    _log.info("risk_driven_cancelled job=%s phase=applying", job.id)
+                    return
+                batch = survivors[start : start + _BATCH_SIZE]
+                processed = process_data_batch(
+                    batch, settings, pseudonymizer, attach_manifest=True
+                )
+                for result in processed:
+                    fh.write(_json_dumps(result) + "\n")
+                    written += 1
+                    if isinstance(result, dict):
+                        deidentified_output.append(result)
 
     final_plan = dict(plan_dict)
+
+    # D7.2 §5.4 Fig 6 / §5.5.7: close the assess-then-decide loop on the
+    # ACTUAL de-identified output before it is released — not just the
+    # lattice's k/l/t targets, which describe intent, not the realised
+    # output (residual direct identifiers, purpose-limitation gaps, etc. are
+    # only visible post-transform).
+    privacy_risk, disclosure = assess_and_gate_disclosure(
+        deidentified_output,
+        privacy_model=privacy_model,
+        permit_id=permit_id,
+        recipient=params.get("recipient"),
+        declared_paths=params.get("declared_paths"),
+        decided_by=f"job:{job.id}",
+    )
+
+    if disclosure["decision"] == "refuse":
+        # Never release the written file — this is the enforcement point Fig 6
+        # requires between "processing" and "approved anonymous data".
+        try:
+            os.remove(output_path)
+        except OSError:
+            pass
+        reasons = "; ".join(c["detail"] for c in disclosure["checks"])
+        raise RuntimeError(
+            f"risk-driven export refused by disclosure control: {reasons or 'see disclosure record'}"
+        )
+
+    job.result_path = publish_result(job, output_path)
+
+    # D7.2 §5.5.1: attach a dataset-level Transformation Passport documenting
+    # the privacy model (intent), the achieved k/l/t guarantee, tools/versions,
+    # the privacy-risk assessment, and the disclosure decision.
+    from pipeline.transformation_passport import build_transformation_passport
+
+    passport = build_transformation_passport(
+        job_id=job.id,
+        permit_id=permit_id,
+        config_profile=profile,
+        dataset_stats={
+            "total_resources": len(resources),
+            "released": written,
+            "optout_excluded": optout_excluded,
+        },
+        privacy_model=privacy_model,
+        generalization_plan=final_plan,
+        privacy_risk=privacy_risk,
+        disclosure=disclosure,
+    )
+
     save_checkpoint(
         store,
         job,
@@ -263,8 +390,17 @@ def execute_risk_driven_export_staged(job, store, staging) -> None:
             "staged_count": checkpoint.get("staged_count", len(resources)),
             "processed": written,
             "generalization_plan": final_plan,
+            "transformation_passport": passport,
         },
     )
+
+    # D7.2 §5.5.1 / Art 79: persist the passport as a durable report (anonymous
+    # by construction). No-op when no Postgres report store is configured; the
+    # passport still rides on the checkpoint above for the per-job view.
+    from api.services.reports import save_passport
+
+    save_passport(job.id, passport)
+
     _log.info(
         "risk_driven_done job=%s written=%d achieved_k=%s suppressed=%d rate=%.3f",
         job.id,

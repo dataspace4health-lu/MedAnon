@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from pydantic import BaseModel
 
 
 class ProcessingRunResponse(BaseModel):
     id: str
-    created_at: str
+    # TIMESTAMPTZ on PostgreSQL, ISO-8601 string on SQLite; pydantic accepts both
+    # and serialises to ISO-8601 either way.
+    created_at: datetime
     endpoint: str
     config_profile: str
     config_hash: str | None = None

@@ -1,4 +1,3 @@
-
 """RabbitMQ topology — exchanges, queues, dead-lettering, retry.
 
 Idempotently declared at startup. Layout (per stage in

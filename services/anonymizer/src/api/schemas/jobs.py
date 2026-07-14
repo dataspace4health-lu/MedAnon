@@ -7,6 +7,15 @@ from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
 
+# Shared description for the permit-scoping field on export jobs (D7.2 §4.4).
+_PERMIT_ID_DESC = (
+    "Active data-permit id (TEHDAS2 D7.2 §4.4) scoping pseudonymisation keys / "
+    "gPAS domains to this permit so the same subject cannot be linked across "
+    "permits. Must resolve to an APPROVED permit within its validity window. "
+    "Only supported with MEDANON_OUTPUT_MODE=stream (the default); shards mode "
+    "refuses permit-bound jobs to avoid silently unscoped pseudonyms."
+)
+
 
 class BulkExportJobRequest(BaseModel):
     """Request body for POST /v1/jobs/bulk-export."""
@@ -19,11 +28,20 @@ class BulkExportJobRequest(BaseModel):
     token: str | None = None
     timeout: float = Field(default=30.0, ge=1.0, le=300.0)
     config_profile: str = "auto"
+    permit_id: str | None = Field(default=None, description=_PERMIT_ID_DESC)
     target_url: str | None = Field(
         default=None,
         description="Target FHIR server URL. De-identified resources are PUT here after processing. Defaults to FHIR_TARGET_URL env var when set.",
     )
     target_token: str | None = None
+    source_id: str | None = Field(
+        default=None,
+        description="Saved input-source id. When set, the source server_url is used and its stored bearer token is resolved server-side (overrides server_url/token).",
+    )
+    destination_id: str | None = Field(
+        default=None,
+        description="Saved S3 output-destination id. The de-identified file is delivered there. Required when MEDANON_REQUIRE_S3_DELIVERY=true unless MEDANON_DEFAULT_DESTINATION_ID is set.",
+    )
 
 
 class CohortJobRequest(BaseModel):
@@ -36,11 +54,20 @@ class CohortJobRequest(BaseModel):
     token: str | None = None
     timeout: float = Field(default=30.0, ge=1.0, le=300.0)
     config_profile: str = "auto"
+    permit_id: str | None = Field(default=None, description=_PERMIT_ID_DESC)
     target_url: str | None = Field(
         default=None,
         description="Target FHIR server URL. De-identified resources are PUT here after processing. Defaults to FHIR_TARGET_URL env var when set.",
     )
     target_token: str | None = None
+    source_id: str | None = Field(
+        default=None,
+        description="Saved input-source id. When set, the source server_url is used and its stored bearer token is resolved server-side (overrides server_url/token).",
+    )
+    destination_id: str | None = Field(
+        default=None,
+        description="Saved S3 output-destination id. The de-identified file is delivered there. Required when MEDANON_REQUIRE_S3_DELIVERY=true unless MEDANON_DEFAULT_DESTINATION_ID is set.",
+    )
 
 
 class PatientExportJobRequest(BaseModel):
@@ -52,11 +79,20 @@ class PatientExportJobRequest(BaseModel):
     token: str | None = None
     timeout: float = Field(default=30.0, ge=1.0, le=300.0)
     config_profile: str = "auto"
+    permit_id: str | None = Field(default=None, description=_PERMIT_ID_DESC)
     target_url: str | None = Field(
         default=None,
         description="Target FHIR server URL. De-identified resources are PUT here after processing. Defaults to FHIR_TARGET_URL env var when set.",
     )
     target_token: str | None = None
+    source_id: str | None = Field(
+        default=None,
+        description="Saved input-source id. When set, the source server_url is used and its stored bearer token is resolved server-side (overrides server_url/token).",
+    )
+    destination_id: str | None = Field(
+        default=None,
+        description="Saved S3 output-destination id. The de-identified file is delivered there. Required when MEDANON_REQUIRE_S3_DELIVERY=true unless MEDANON_DEFAULT_DESTINATION_ID is set.",
+    )
 
 
 class BatchPatientExportRequest(BaseModel):
@@ -76,11 +112,20 @@ class BatchPatientExportRequest(BaseModel):
     token: str | None = None
     timeout: float = Field(default=30.0, ge=1.0, le=300.0)
     config_profile: str = "auto"
+    permit_id: str | None = Field(default=None, description=_PERMIT_ID_DESC)
     target_url: str | None = Field(
         default=None,
         description="Target FHIR server URL. De-identified resources are PUT here after processing.",
     )
     target_token: str | None = None
+    source_id: str | None = Field(
+        default=None,
+        description="Saved input-source id. When set, the source server_url is used and its stored bearer token is resolved server-side (overrides server_url/token).",
+    )
+    destination_id: str | None = Field(
+        default=None,
+        description="Saved S3 output-destination id. The de-identified file is delivered there. Required when MEDANON_REQUIRE_S3_DELIVERY=true unless MEDANON_DEFAULT_DESTINATION_ID is set.",
+    )
 
 
 class BulkImportJobRequest(BaseModel):
@@ -106,6 +151,11 @@ class BulkImportJobRequest(BaseModel):
         description="Target FHIR server URL. Falls back to FHIR_TARGET_URL env var when not provided.",
     )
     target_token: str | None = None
+    target_id: str | None = Field(
+        default=None,
+        description="Saved target FHIR-server id. When set, its URL is used and its "
+        "stored token is resolved server-side (overrides target_url/target_token).",
+    )
     timeout: float = Field(default=30.0, ge=1.0, le=300.0)
     parallel: int = Field(
         default=4,
@@ -180,6 +230,40 @@ class RiskDrivenExportJobRequest(BaseModel):
         "Useful for overriding target_k, max_suppression, or quasi_identifiers "
         "without creating a new profile.",
     )
+    permit_id: str | None = Field(
+        default=None,
+        description="Active data-permit id (TEHDAS2 D7.2 §4.4) scoping pseudonymisation "
+        "keys/gPAS domains to this permit. Must resolve to an APPROVED permit within "
+        "its validity window. Required in regulated mode for profiles using keyed "
+        "pseudonymisation actions.",
+    )
+    recipient: str | None = Field(
+        default=None,
+        description="Intended data-user recipient of the export. Checked against "
+        "permit_id's recipient (D7.2 §4.4/§4.8) in the post-export disclosure decision.",
+    )
+    declared_paths: list[str] | None = Field(
+        default=None,
+        description="FHIRPaths justified for the declared purpose (D7.2 §3.4 purpose "
+        "limitation). Variables outside this list are flagged in the disclosure decision.",
+    )
+    optout_ids: list[str] | None = Field(
+        default=None,
+        description="Subject identifiers (Patient ids / identifier values) that have "
+        "opted out (EHDS Art 71); their records are dropped from the cohort before "
+        "de-identification. Merged with any MEDANON_OPTOUT_FILE register.",
+    )
+    source_id: str | None = Field(
+        default=None,
+        description="Saved input-source id. When set, the source server_url is used "
+        "and its stored bearer token is resolved server-side (overrides server_url/token).",
+    )
+    destination_id: str | None = Field(
+        default=None,
+        description="Saved S3 output-destination id. The de-identified file is "
+        "delivered there. Required when MEDANON_REQUIRE_S3_DELIVERY=true unless "
+        "MEDANON_DEFAULT_DESTINATION_ID is set.",
+    )
 
 
 class UploadToTargetRequest(BaseModel):
@@ -196,6 +280,11 @@ class UploadToTargetRequest(BaseModel):
     target_token: str | None = Field(
         default=None,
         description="Bearer token for the target FHIR server. Falls back to FHIR_TARGET_TOKEN env var when not provided.",
+    )
+    target_id: str | None = Field(
+        default=None,
+        description="Saved target FHIR-server id. When set, its URL is used and its "
+        "stored token is resolved server-side (overrides target_url/target_token).",
     )
 
 
@@ -224,6 +313,12 @@ class SqlExportJobRequest(BaseModel):
         description="Inline column rules; take precedence over config_profile.",
     )
     chunk_size: int = Field(default=1000, ge=1, le=100000)
+    destination_id: str | None = Field(
+        default=None,
+        description="Saved S3 output-destination id. The de-identified result is "
+        "delivered there. Required when MEDANON_REQUIRE_S3_DELIVERY=true unless "
+        "MEDANON_DEFAULT_DESTINATION_ID is set.",
+    )
 
     model_config = {"populate_by_name": True}
 

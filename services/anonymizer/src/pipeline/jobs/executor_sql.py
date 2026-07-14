@@ -34,7 +34,7 @@ import os
 import zipfile
 
 from domain.jobs import JobStatus
-from integrations.storage import store_result
+from integrations.storage import publish_result
 from pipeline.jobs.checkpoint import save_checkpoint
 
 _log = logging.getLogger("medanon.worker")
@@ -91,7 +91,11 @@ def execute_sql_export(job, store, staging=None) -> None:
         open_readonly_connection,
         primary_key,
     )
-    from pipeline.sources import apply_column_rules, rules_for_table
+    from pipeline.sources import (
+        apply_column_rules,
+        resolve_column_manifest,
+        rules_for_table,
+    )
 
     params = job.params or {}
     connection_id = params.get("connection_id")
@@ -117,11 +121,16 @@ def execute_sql_export(job, store, staging=None) -> None:
     )
 
     output_path = os.path.join(_output_dir(), f"{job.id}.zip")
+    # Transformation manifest as a SEPARATE artifact (one line per table).
+    manifest_path = f"{output_path}.manifest.ndjson"
     succeeded = 0
     failed = 0
     table_results: list[dict] = []
 
-    with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+    with (
+        zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED) as zf,
+        open(manifest_path, "w", encoding="utf-8") as mfh,
+    ):
         for idx, table in enumerate(tables):
             fresh = store.get(job.id)
             if fresh and fresh.status == JobStatus.CANCELLED:
@@ -144,6 +153,18 @@ def execute_sql_export(job, store, staging=None) -> None:
                     closing,
                 )
                 zf.writestr(_member_name(table, output_format), rows_out)
+                mfh.write(
+                    json.dumps(
+                        {
+                            "table": table,
+                            "format": "sql",
+                            "transformations": resolve_column_manifest(
+                                rules=table_rules
+                            ),
+                        }
+                    )
+                    + "\n"
+                )
                 succeeded += 1
                 table_results.append({"table": table, "status": "ok", "rows": n_rows})
             except Exception as exc:
@@ -166,7 +187,15 @@ def execute_sql_export(job, store, staging=None) -> None:
                 },
             )
 
-    job.result_path = store_result(job.id, output_path)
+    summary_dict = {
+        "total_tables": len(tables),
+        "succeeded": succeeded,
+        "failed": failed,
+        "tables": table_results,
+    }
+    job.result_path = publish_result(
+        job, output_path, manifest_path=manifest_path, audit=summary_dict
+    )
     save_checkpoint(
         store,
         job,
@@ -174,12 +203,7 @@ def execute_sql_export(job, store, staging=None) -> None:
             "phase": "done",
             "table_count": len(tables),
             "processed": succeeded + failed,
-            "summary": {
-                "total_tables": len(tables),
-                "succeeded": succeeded,
-                "failed": failed,
-                "tables": table_results,
-            },
+            "summary": summary_dict,
         },
     )
     _log.info(
