@@ -141,7 +141,7 @@ SCORING_PAIRS=(
     "services/anonymizer/src/pipeline/scoring/privacy.py:services/scoring/src/privacy.py"
     "services/anonymizer/src/pipeline/scoring/utility.py:services/scoring/src/utility.py"
     "services/anonymizer/src/pipeline/scoring/quality.py:services/scoring/src/quality.py"
-    "services/anonymizer/src/pipeline/scoring/models.py:services/scoring/src/models.py"
+    "services/anonymizer/src/domain/scoring.py:services/scoring/src/models.py"
     "services/anonymizer/src/pipeline/scoring/constants.py:services/scoring/src/constants.py"
 )
 
@@ -240,7 +240,7 @@ if [[ "${1:-}" == "--fix" ]] || [[ ! -f "$HASH_FILE" ]]; then
             services/anonymizer/src/pipeline/scoring/utility.py \
             services/anonymizer/src/pipeline/scoring/quality.py \
             services/anonymizer/src/pipeline/scoring/risk.py \
-            services/anonymizer/src/pipeline/scoring/models.py \
+            services/anonymizer/src/domain/scoring.py \
             services/anonymizer/src/pipeline/scoring/constants.py \
             services/nlp/src/recognizers.py; do
             if [[ -f "$REPO_ROOT/$f" ]]; then

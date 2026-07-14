@@ -4,11 +4,11 @@
 # DOWNWARD only (interface -> application -> transforms -> adapters -> foundation).
 # An import that reaches UP a layer breaks the contract.
 #
-# The `ignore_imports` list below is a BASELINE RATCHET. Every entry is a known,
-# pre-existing upward import (22 of them, from the 2026-07 dependency audit). CI
-# is green today because they are ignored, but any NEW upward import fails the
-# build. As each violation is fixed in the coupling refactor, DELETE its line
-# here; the contract tightens automatically and can never regress.
+# There are NO ignore_imports: the coupling refactor cleared all 22 upward edges
+# from the 2026-07 dependency audit, so the contract is enforced at zero. Any new
+# upward import fails the build. Do not add ignore_imports back - fix the import
+# direction instead (move the shared type down into domain/utils, or invert with
+# a port injected at the composition root).
 #
 # Run:  make lint-imports   (from repo root)
 # Or:   cd services/anonymizer && PYTHONPATH=src lint-imports
@@ -33,6 +33,3 @@ layers =
     actions
     integrations
     analytics | utils | domain | formats
-ignore_imports =
-    integrations.postgres.trust_profile_store -> pipeline.trust_profile
-    integrations.scoring.client -> pipeline.scoring.models

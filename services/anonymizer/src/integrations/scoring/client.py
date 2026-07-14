@@ -15,7 +15,7 @@ from typing import Any
 
 import urllib3
 
-from pipeline.scoring.models import (
+from domain.scoring import (
     Evidence,
     ModuleScore,
     PrivacyDecision,

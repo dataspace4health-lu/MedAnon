@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 import psycopg2.extras
 from psycopg2.pool import ThreadedConnectionPool
 
-from pipeline.trust_profile import _SYSTEM_PROFILES
+from domain.trust import _SYSTEM_PROFILES
 
 logger = logging.getLogger("medanon.trust_profile_store.postgres")
 

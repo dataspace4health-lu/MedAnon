@@ -25,7 +25,7 @@ sys.path.insert(0, os.path.join(ROOT, "services", "trust-gate", "src"))
 
 def main() -> int:
     try:
-        from pipeline.trust_profile import PHASE_IDS, USE_CASE_IDS  # type: ignore
+        from domain.trust import PHASE_IDS, USE_CASE_IDS  # type: ignore
         import phases  # type: ignore
 
         profiles_path = os.path.join(
