@@ -175,9 +175,21 @@ OBSERVATION_VALUE_KEYS: frozenset[str] = frozenset(
 RECOMMENDED_ELEMENTS: dict[str, list[str]] = {
     "Patient": ["gender", "birthDate", "name", "identifier", "address"],
     "Observation": ["status", "code", "subject", "effectiveDateTime", "category"],
-    "Condition": ["code", "subject", "clinicalStatus", "verificationStatus", "category"],
+    "Condition": [
+        "code",
+        "subject",
+        "clinicalStatus",
+        "verificationStatus",
+        "category",
+    ],
     "Encounter": ["status", "class", "subject", "period", "type"],
-    "MedicationRequest": ["status", "intent", "subject", "medicationCodeableConcept", "authoredOn"],
+    "MedicationRequest": [
+        "status",
+        "intent",
+        "subject",
+        "medicationCodeableConcept",
+        "authoredOn",
+    ],
     "Procedure": ["status", "subject", "code", "performedDateTime"],
     "DiagnosticReport": ["status", "code", "subject", "effectiveDateTime", "category"],
     "AllergyIntolerance": ["patient", "code", "clinicalStatus", "verificationStatus"],
@@ -264,7 +276,9 @@ DRIFT_ZERO_MAD_REL_TOL: float = float(
     os.environ.get("TRUST_GATE_DRIFT_ZERO_MAD_REL_TOL", "0.05")
 )
 # Reservoir size per (code, unit) for the persisted cross-batch baseline.
-BASELINE_RESERVOIR_SIZE: int = int(os.environ.get("TRUST_GATE_BASELINE_RESERVOIR", "500"))
+BASELINE_RESERVOIR_SIZE: int = int(
+    os.environ.get("TRUST_GATE_BASELINE_RESERVOIR", "500")
+)
 # Seed for the reservoir sampler so cross-batch baselines (and therefore the
 # statistical outlier/drift signal) are reproducible across runs (Phase 1.5
 # determinism). The sampling is for an unbiased reservoir, not security.
@@ -349,6 +363,7 @@ def is_deterministic(check_id: str, rule_ids: frozenset = frozenset()) -> bool:
         return True
     return any(check_id.startswith(p) for p in DETERMINISTIC_PREFIXES)
 
+
 # ---------------------------------------------------------------------------
 # Definitional unit bounds (plausibility / atemporal / verification).
 #
@@ -376,10 +391,24 @@ def is_deterministic(check_id: str, rule_ids: frozenset = frozenset()) -> bool:
 NON_NEGATIVE_UNITS: frozenset[str] = frozenset(
     {
         # counts / count-concentrations (cardinality >= 0)
-        "/uL", "/mm3", "10*3/uL", "10*6/uL", "10*9/L", "10*12/L", "10*3/mL",
+        "/uL",
+        "/mm3",
+        "10*3/uL",
+        "10*6/uL",
+        "10*9/L",
+        "10*12/L",
+        "10*3/mL",
         # mass concentrations (mass / volume, mass >= 0)
-        "mg/dL", "g/dL", "g/L", "mg/L", "ug/dL", "ug/L", "ng/mL", "pg/mL",
-        "ug/mL", "ng/dL",
+        "mg/dL",
+        "g/dL",
+        "g/L",
+        "mg/L",
+        "ug/dL",
+        "ug/L",
+        "ng/mL",
+        "pg/mL",
+        "ug/mL",
+        "ng/dL",
         # absolute temperature (>= absolute zero)
         "K",
     }

@@ -61,14 +61,17 @@ def evaluate_patient_identity(
     )
 
     patients = [
-        r for r in resources
+        r
+        for r in resources
         if isinstance(r, dict) and r.get("resourceType") == "Patient"
     ]
 
     if len(patients) < 2:
         # Structural boundary: identity collision requires at least 2 patients.
         chk.skipped = True
-        chk.skip_reason = "fewer than 2 Patient resources in batch — n-ary check not applicable"
+        chk.skip_reason = (
+            "fewer than 2 Patient resources in batch — n-ary check not applicable"
+        )
         return chk
 
     # 1. Identifier collision: same (system, value) on two different patients.

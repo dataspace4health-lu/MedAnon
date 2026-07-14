@@ -1,13 +1,13 @@
 """Plausibility category (Kahn 2016): are data values believable?
 
-  - uniqueness (verification) — no duplicate ResourceType/id in the batch
-  - atemporal  (verification) — definitional unit bounds (e.g. % ∈ [0,100]):
-                                catches whole-batch unit corruption
-  - atemporal  (verification) — data-driven value-outlier detection (robust
-                                modified z-score / IQR over the per-(code,unit)
-                                distribution, optionally accumulated across batches)
-  - atemporal  (verification) — concordance: cross-field contradictions
-  - temporal / atemporal (verification) — the declarative clinical rule pack
+- uniqueness (verification) — no duplicate ResourceType/id in the batch
+- atemporal  (verification) — definitional unit bounds (e.g. % ∈ [0,100]):
+                              catches whole-batch unit corruption
+- atemporal  (verification) — data-driven value-outlier detection (robust
+                              modified z-score / IQR over the per-(code,unit)
+                              distribution, optionally accumulated across batches)
+- atemporal  (verification) — concordance: cross-field contradictions
+- temporal / atemporal (verification) — the declarative clinical rule pack
 """
 
 from __future__ import annotations

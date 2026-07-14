@@ -28,7 +28,13 @@ from phases import TEMPORAL_PLAUSIBILITY, VALUE_PLAUSIBILITY
 # Age bands (years). Pediatric vs adult reference ranges differ materially
 # (e.g. creatinine, hemoglobin, many vitals), so values are judged within a band.
 DEFAULT_AGE_BANDS: tuple[tuple[int, int], ...] = (
-    (0, 1), (1, 5), (5, 12), (12, 18), (18, 40), (40, 65), (65, 200),
+    (0, 1),
+    (1, 5),
+    (5, 12),
+    (12, 18),
+    (18, 40),
+    (40, 65),
+    (65, 200),
 )
 _SEX = {8507: "M", 8532: "F"}
 
@@ -75,14 +81,16 @@ def stratified_measurements(omop) -> list[tuple[str, str, str, float]]:
         if not isinstance(v, (int, float)):
             continue
         concept = (
-            m.get("measurement_concept_id")
-            or m.get("measurement_source_value")
-            or "?"
+            m.get("measurement_concept_id") or m.get("measurement_source_value") or "?"
         )
         unit = m.get("unit_source_value") or m.get("unit_concept_id") or ""
         yob, sex = persons.get(m.get("person_id"), (None, "U"))
         myear = _year(m.get("measurement_date"))
-        band = _age_band(myear - yob) if (yob is not None and myear is not None) else "unknown"
+        band = (
+            _age_band(myear - yob)
+            if (yob is not None and myear is not None)
+            else "unknown"
+        )
         out.append((str(concept), str(unit), f"{sex}|{band}", float(v)))
     return out
 
@@ -105,7 +113,11 @@ def _summ(vals: list[float], bins: int = 10) -> dict:
             idx = min(int((v - lo) / width), bins - 1)
             counts[idx] += 1
         hist = [
-            {"x0": round(lo + i * width, 4), "x1": round(lo + (i + 1) * width, 4), "n": c}
+            {
+                "x0": round(lo + i * width, 4),
+                "x1": round(lo + (i + 1) * width, 4),
+                "n": c,
+            }
             for i, c in enumerate(counts)
         ]
     else:
@@ -121,7 +133,9 @@ def _summ(vals: list[float], bins: int = 10) -> dict:
     }
 
 
-def value_distributions(omop, max_distinct: int | None = None) -> tuple[list[dict], list[dict]]:
+def value_distributions(
+    omop, max_distinct: int | None = None
+) -> tuple[list[dict], list[dict]]:
     """Per-(concept, unit) clinical-value distributions for the passport profile.
 
     Returns ``(observation_value_stats, observation_value_stats_stratified)``:
@@ -143,11 +157,15 @@ def value_distributions(omop, max_distinct: int | None = None) -> tuple[list[dic
     strat_lim = max_distinct * 4 if max_distinct is not None else None
     obs = [
         {"code": c, "unit": u, **_summ(v)}
-        for (c, u), v in sorted(flat.items(), key=lambda kv: len(kv[1]), reverse=True)[:flat_lim]
+        for (c, u), v in sorted(flat.items(), key=lambda kv: len(kv[1]), reverse=True)[
+            :flat_lim
+        ]
     ]
     obs_strat = [
         {"code": c, "unit": u, "stratum": s, **_summ(v)}
-        for (c, u, s), v in sorted(strat.items(), key=lambda kv: len(kv[1]), reverse=True)[:strat_lim]
+        for (c, u, s), v in sorted(
+            strat.items(), key=lambda kv: len(kv[1]), reverse=True
+        )[:strat_lim]
     ]
     return obs, obs_strat
 
@@ -194,7 +212,9 @@ def stratified_outlier_check(omop) -> CheckResult:
 def measurement_after_birth_check(omop) -> CheckResult:
     """Deterministic clinical-logic coherence (3B.3): a measurement cannot predate
     the person's birth year. Drives the verdict (not advisory)."""
-    persons = {r.get("person_id"): _year(r.get("year_of_birth")) for r in omop.rows("person")}
+    persons = {
+        r.get("person_id"): _year(r.get("year_of_birth")) for r in omop.rows("person")
+    }
     applicable = 0
     violations = 0
     details: list[dict] = []
@@ -206,13 +226,15 @@ def measurement_after_birth_check(omop) -> CheckResult:
         applicable += 1
         if myear < yob:
             violations += 1
-            details.append({
-                "resource_type": "measurement",
-                "resource_id": str(m.get("measurement_id", ""))[:64],
-                "path": "measurement_date",
-                "value": str(m.get("measurement_date", "")),
-                "detail": f"measured {myear} but person born {yob} (before birth)",
-            })
+            details.append(
+                {
+                    "resource_type": "measurement",
+                    "resource_id": str(m.get("measurement_id", ""))[:64],
+                    "path": "measurement_date",
+                    "value": str(m.get("measurement_date", "")),
+                    "detail": f"measured {myear} but person born {yob} (before birth)",
+                }
+            )
     c = CheckResult(
         check_id="clinical.measurement_after_birth",
         category="plausibility",
@@ -238,7 +260,9 @@ def load_clinical_rules() -> dict:
     path = env or os.path.normpath(
         os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "..", "config", "clinical_rules.yaml",
+            "..",
+            "config",
+            "clinical_rules.yaml",
         )
     )
     try:
@@ -274,13 +298,17 @@ def event_after_death_check(omop, rules: dict | None = None) -> CheckResult:
             applicable += 1
             if edate > dod:
                 violations += 1
-                details.append({
-                    "resource_type": table,
-                    "resource_id": str(row.get(f"{table}_id", row.get("person_id", "")))[:64],
-                    "path": date_col,
-                    "value": edate,
-                    "detail": f"{table}.{date_col}={edate} is after death on {dod}",
-                })
+                details.append(
+                    {
+                        "resource_type": table,
+                        "resource_id": str(
+                            row.get(f"{table}_id", row.get("person_id", ""))
+                        )[:64],
+                        "path": date_col,
+                        "value": edate,
+                        "detail": f"{table}.{date_col}={edate} is after death on {dod}",
+                    }
+                )
     c = CheckResult(
         check_id="clinical.event_after_death",
         category="plausibility",

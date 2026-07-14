@@ -54,6 +54,7 @@ class SqlConnectorError(ValueError):
 # Public API
 # ---------------------------------------------------------------------------
 
+
 def query_table(
     *,
     driver: str,
@@ -77,7 +78,9 @@ def query_table(
     limited_query = _inject_limit(query, _MAX_ROWS)
 
     if driver == "postgresql":
-        rows = _psycopg2(host, port or 5432, database, username, password, limited_query)
+        rows = _psycopg2(
+            host, port or 5432, database, username, password, limited_query
+        )
     elif driver == "mysql":
         rows = _pymysql(host, port or 3306, database, username, password, limited_query)
     elif driver == "sqlite":
@@ -106,7 +109,11 @@ def list_tables(
 
     if driver == "postgresql":
         rows = _psycopg2(
-            host, port or 5432, database, username, password,
+            host,
+            port or 5432,
+            database,
+            username,
+            password,
             "SELECT table_name FROM information_schema.tables "
             "WHERE table_schema = 'public' ORDER BY table_name LIMIT 200",
         )
@@ -114,7 +121,11 @@ def list_tables(
 
     if driver == "mysql":
         rows = _pymysql(
-            host, port or 3306, database, username, password,
+            host,
+            port or 3306,
+            database,
+            username,
+            password,
             "SELECT table_name FROM information_schema.tables "
             "WHERE table_schema = DATABASE() ORDER BY table_name LIMIT 200",
         )
@@ -133,6 +144,7 @@ def list_tables(
 # ---------------------------------------------------------------------------
 # Validation helpers
 # ---------------------------------------------------------------------------
+
 
 def _validate_host(host: str) -> None:
     if not _ALLOWED_HOSTS:
@@ -184,6 +196,7 @@ def _inject_limit(query: str, limit: int) -> str:
 # ---------------------------------------------------------------------------
 # Driver implementations
 # ---------------------------------------------------------------------------
+
 
 def _psycopg2(
     host: str, port: int, database: str, username: str, password: str, query: str

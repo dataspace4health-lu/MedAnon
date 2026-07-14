@@ -66,10 +66,18 @@ FRAMEWORK = (
 # Each CheckResult carries these as metadata for downstream analytics.
 HDQT_CATEGORIES = ("availability", "accuracy", "conformity", "plausibility")
 HDQT_DIMENSIONS = (
-    "missing", "unpopulated", "incomplete",           # availability
-    "invalid_format", "invalid_value", "invalid_grouping",  # accuracy
-    "invalid_member", "incompatible", "obsolete",      # conformity
-    "clinically_implausible", "temporally_implausible", "situationally_implausible",  # plausibility
+    "missing",
+    "unpopulated",
+    "incomplete",  # availability
+    "invalid_format",
+    "invalid_value",
+    "invalid_grouping",  # accuracy
+    "invalid_member",
+    "incompatible",
+    "obsolete",  # conformity
+    "clinically_implausible",
+    "temporally_implausible",
+    "situationally_implausible",  # plausibility
 )
 
 # Semantic version tracking for downstream consumers of the passport.
@@ -111,7 +119,9 @@ class CheckResult:
 
     check_id: str
     category: str  # conformance | completeness | plausibility (Kahn)
-    subcategory: str  # value | relational | uniqueness | atemporal | temporal | completeness
+    subcategory: (
+        str  # value | relational | uniqueness | atemporal | temporal | completeness
+    )
     context: str  # verification | validation
     applicable: int = 0  # rows/items the check applied to
     violations: int = 0  # rows/items violating the check
@@ -120,7 +130,7 @@ class CheckResult:
     description: str = ""
     recommendation: str = ""
     # PIQI HDQT v2.0 taxonomy (additive; does not affect Kahn scoring).
-    hdqt_category: str = ""   # availability | accuracy | conformity | plausibility
+    hdqt_category: str = ""  # availability | accuracy | conformity | plausibility
     hdqt_dimension: str = ""  # e.g. missing | invalid_format | temporally_implausible
     # Resource-type attribution for Phase 2A per-type calibration. "" means the
     # check is batch-wide / multi-type (it applies to every type in the batch);
@@ -237,7 +247,9 @@ class QualityPassport:
     dataset_id: str
     source_types: list[str]
     decision: str  # PASS | CONDITIONAL_PASS | BLOCK (policy layer)
-    overall_score: float  # % of all applicable checks passing (100.0 when none assessed)
+    overall_score: (
+        float  # % of all applicable checks passing (100.0 when none assessed)
+    )
     category_scores: dict[str, float | None]  # Kahn category → pass-rate
     checks: list[CheckResult]
     auditability: dict  # provenance/governance evidence (policy layer, not Kahn)
@@ -307,16 +319,14 @@ class QualityPassport:
 
     def to_dict(self) -> dict:
         # Aggregate violation_details from all checks into a flat violations list.
-        violations = [
-            detail
-            for c in self.checks
-            for detail in c.violation_details
-        ]
+        violations = [detail for c in self.checks for detail in c.violation_details]
         # Aggregate skipped checks by reason category.
         skipped: dict[str, dict] = {}
         for c in self.checks:
             if c.skipped and c.skip_reason:
-                entry = skipped.setdefault(c.check_id, {"skipped": 0, "reason": c.skip_reason})
+                entry = skipped.setdefault(
+                    c.check_id, {"skipped": 0, "reason": c.skip_reason}
+                )
                 entry["skipped"] += 1
         if self.skipped_checks:
             for k, v in self.skipped_checks.items():
@@ -325,7 +335,9 @@ class QualityPassport:
             "dataset_id": self.dataset_id,
             "source_types": self.source_types,
             "decision": self.decision,
-            "overall_score": round(self.overall_score, 1) if self.has_assessed else None,
+            "overall_score": round(self.overall_score, 1)
+            if self.has_assessed
+            else None,
             "has_assessed": self.has_assessed,
             "category_scores": {
                 k: (round(v, 1) if v is not None else None)
@@ -359,181 +371,12 @@ class QualityPassport:
         }
 
     def to_markdown(self) -> str:
-        lines: list[str] = [
-            f"# Quality Passport — {self.dataset_id}",
-            "",
-            f"- **Decision:** {self.decision}",
-            "- **Overall score:** "
-            + (f"{round(self.overall_score, 1)}% checks passing" if self.has_assessed else "not assessed")
-            + (f" (grade {self.overall_grade})" if self.overall_grade else ""),
-            *(
-                [f"- **Fitness:** {self.fitness.get('statement', '')}"]
-                if self.fitness and self.fitness.get("statement")
-                else []
-            ),
-            *(
-                [
-                    "- **Assessment coverage:** "
-                    f"{self.coverage.get('checks_assessed')}/"
-                    f"{self.coverage.get('checks_total')} checks assessed"
-                    f" ({self.coverage.get('validation_depth')})"
-                    + (
-                        "; not exercised: "
-                        + ", ".join(self.coverage.get("not_exercised", []))
-                        if self.coverage.get("not_exercised")
-                        else ""
-                    )
-                ]
-                if self.coverage and self.coverage.get("checks_total")
-                else []
-            ),
-            f"- **Privacy processing allowed:** "
-            f"{'yes' if self.privacy_processing_allowed else 'no'}",
-            f"- **Resources assessed:** {self.resource_count}",
-            f"- **Source types:** {', '.join(self.source_types) or 'unknown'}",
-            f"- **Framework:** {self.framework}",
-            f"- **Generated at:** {self.generated_at}",
-            *(
-                [
-                    "- **Reporting context:** "
-                    f"{self.evaluation.get('lifecycle_stage', 'operation')} stage, "
-                    f"{self.evaluation.get('org_role', 'data-receiving')} org"
-                ]
-                if self.evaluation
-                else []
-            ),
-            "",
-            "## Data-quality categories (Kahn 2016)",
-            "",
-            "| Category | Checks passed | Pass rate |",
-            "|---|---|---|",
-        ]
-        for name in CATEGORIES:
-            score = self.category_scores.get(name)
-            shown = f"{round(score, 1)}%" if score is not None else "not assessed"
-            assessed = sum(
-                1 for c in self.checks if c.category == name and c.result != RESULT_NA
-            )
-            passed = sum(
-                1 for c in self.checks if c.category == name and c.result == RESULT_PASS
-            )
-            lines.append(f"| {name} | {passed}/{assessed} | {shown} |")
-        lines.append("")
+        """Render this passport as Markdown. The renderer lives in the reporting
+        layer (`reporting.markdown`) so the domain model stays presentation-free;
+        imported lazily to keep the model→reporting dependency one-directional."""
+        from reporting.markdown import render_markdown
 
-        if self.scorecard:
-            lines.append("## Dimension scorecard (DAMA / ISO 25012)")
-            lines.append("")
-            lines.append("| Dimension | Grade | Checks passed | Score |")
-            lines.append("|---|---|---|---|")
-            for dim, rep in self.scorecard.items():
-                score = rep.get("score")
-                shown = f"{score}%" if score is not None else "not assessed"
-                lines.append(
-                    f"| {dim} | {rep.get('grade') or '-'} | "
-                    f"{rep.get('checks_passed', 0)}/{rep.get('checks_assessed', 0)} | {shown} |"
-                )
-            lines.append("")
-
-        if self.phases:
-            lines.append("## Audit phases (selected)")
-            lines.append("")
-            lines.append("| Phase | Decision | Checks passed | Score |")
-            lines.append("|---|---|---|---|")
-            for ph, rep in self.phases.items():
-                score = rep.get("score")
-                shown = f"{score}%" if score is not None else "not assessed"
-                lines.append(
-                    f"| {ph} | {rep.get('decision', '')} | "
-                    f"{rep.get('checks_passed', 0)}/{rep.get('checks_assessed', 0)} | {shown} |"
-                )
-            lines.append("")
-
-        if self.targets:
-            lines.append("## Sectors (per-target verdicts)")
-            lines.append("")
-            lines.append("| Sector | Decision | Resources | Checks passed | Score |")
-            lines.append("|---|---|---|---|---|")
-            for tid, rep in self.targets.items():
-                score = rep.get("score")
-                shown = f"{score}%" if score is not None else "not assessed"
-                lines.append(
-                    f"| {tid} | {rep.get('decision', '')} | "
-                    f"{rep.get('resource_count', 0)} | "
-                    f"{rep.get('checks_passed', 0)}/{rep.get('checks_assessed', 0)} | {shown} |"
-                )
-            lines.append("")
-
-        if self.blockers:
-            lines.append("## Blockers")
-            lines.append("")
-            lines.extend(f"- {b}" for b in self.blockers)
-            lines.append("")
-
-        failed = [c for c in self.checks if c.result == RESULT_FAIL]
-        if failed:
-            lines.append("## Failed checks")
-            lines.append("")
-            lines.append(
-                "| Check | Category | Subcat | Context | Violations | Threshold | Recommendation |"
-            )
-            lines.append("|---|---|---|---|---|---|---|")
-            for c in failed:
-                lines.append(
-                    f"| {c.check_id} | {c.category} | {c.subcategory} | {c.context} | "
-                    f"{c.violations}/{c.applicable} ({round(c.violation_fraction * 100, 1)}%) | "
-                    f"{c.threshold} | {c.recommendation} |"
-                )
-            lines.append("")
-
-        aud = self.auditability
-        if aud:
-            lines.append("## Auditability (fitness-for-use policy)")
-            lines.append("")
-            for k, v in aud.items():
-                lines.append(f"- {k}: {v}")
-            lines.append("")
-
-        if self.approved_for or self.not_approved_for:
-            lines.append("## Fitness for use")
-            lines.append("")
-            lines.extend(f"- approved: {u}" for u in self.approved_for)
-            lines.extend(f"- not approved: {u}" for u in self.not_approved_for)
-            lines.append("")
-
-        prof = self.profile or {}
-        if prof:
-            lines.append("## Data profile (descriptive — not scored)")
-            lines.append("")
-            counts = prof.get("resource_counts") or {}
-            if counts:
-                lines.append(
-                    "- Resource types: "
-                    + ", ".join(f"{k}×{v}" for k, v in counts.items())
-                )
-            systems = prof.get("code_system_distribution") or {}
-            if systems:
-                lines.append(
-                    "- Code systems: "
-                    + ", ".join(f"{k} ({v})" for k, v in systems.items())
-                )
-            if prof.get("patient_gender_distribution"):
-                lines.append(f"- Gender: {prof['patient_gender_distribution']}")
-            lines.append(f"- Reference density: {prof.get('reference_density', 0)}")
-            for s in prof.get("observation_value_stats") or []:
-                lines.append(
-                    f"- Obs {s['code']} ({s['unit']}): n={s['count']}, "
-                    f"min={s['min']}, max={s['max']}, mean={s['mean']}, sd={s['stddev']}"
-                )
-            lines.append("")
-
-        limitations = self._limitations()
-        if limitations:
-            lines.append("## Limitations")
-            lines.append("")
-            lines.extend(f"- {note}" for note in limitations)
-            lines.append("")
-
-        return "\n".join(lines)
+        return render_markdown(self)
 
     @staticmethod
     def now_iso() -> str:

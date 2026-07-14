@@ -51,12 +51,15 @@ def fhir_to_omop(resources: list[dict]) -> OmopData:
             bd = r.get("birthDate")
             if isinstance(bd, str) and len(bd) >= 4 and bd[:4].isdigit():
                 byear = int(bd[:4])
-            omop.add("person", {
-                "person_id": r.get("id"),
-                "gender_concept_id": _GENDER_CONCEPT.get(r.get("gender"), 0),
-                "year_of_birth": byear,
-                "birth_datetime": bd,
-            })
+            omop.add(
+                "person",
+                {
+                    "person_id": r.get("id"),
+                    "gender_concept_id": _GENDER_CONCEPT.get(r.get("gender"), 0),
+                    "year_of_birth": byear,
+                    "birth_datetime": bd,
+                },
+            )
         elif rtype == "Observation":
             vq = r.get("valueQuantity") or {}
             row = {
@@ -71,54 +74,71 @@ def fhir_to_omop(resources: list[dict]) -> OmopData:
                 row["measurement_id"] = r.get("id")
                 omop.add("measurement", row)
             else:
-                omop.add("observation", {
-                    "observation_id": r.get("id"),
-                    "person_id": row["person_id"],
-                    "observation_concept_id": 0,
-                    "observation_source_value": row["measurement_source_value"],
-                    "observation_date": row["measurement_date"],
-                })
+                omop.add(
+                    "observation",
+                    {
+                        "observation_id": r.get("id"),
+                        "person_id": row["person_id"],
+                        "observation_concept_id": 0,
+                        "observation_source_value": row["measurement_source_value"],
+                        "observation_date": row["measurement_date"],
+                    },
+                )
         elif rtype == "Condition":
-            omop.add("condition_occurrence", {
-                "condition_occurrence_id": r.get("id"),
-                "person_id": _subject_person_id(r),
-                "condition_concept_id": 0,
-                "condition_source_value": _first_code(r.get("code")),
-                "condition_start_date": _date(
-                    r.get("onsetDateTime") or r.get("recordedDate")
-                ),
-            })
+            omop.add(
+                "condition_occurrence",
+                {
+                    "condition_occurrence_id": r.get("id"),
+                    "person_id": _subject_person_id(r),
+                    "condition_concept_id": 0,
+                    "condition_source_value": _first_code(r.get("code")),
+                    "condition_start_date": _date(
+                        r.get("onsetDateTime") or r.get("recordedDate")
+                    ),
+                },
+            )
         elif rtype in ("MedicationRequest", "MedicationStatement"):
-            omop.add("drug_exposure", {
-                "drug_exposure_id": r.get("id"),
-                "person_id": _subject_person_id(r),
-                "drug_concept_id": 0,
-                "drug_source_value": _first_code(r.get("medicationCodeableConcept")),
-                "drug_exposure_start_date": _date(
-                    r.get("authoredOn")
-                    or (r.get("effectivePeriod") or {}).get("start")
-                ),
-            })
+            omop.add(
+                "drug_exposure",
+                {
+                    "drug_exposure_id": r.get("id"),
+                    "person_id": _subject_person_id(r),
+                    "drug_concept_id": 0,
+                    "drug_source_value": _first_code(
+                        r.get("medicationCodeableConcept")
+                    ),
+                    "drug_exposure_start_date": _date(
+                        r.get("authoredOn")
+                        or (r.get("effectivePeriod") or {}).get("start")
+                    ),
+                },
+            )
         elif rtype == "Encounter":
             period = r.get("period") or {}
-            omop.add("visit_occurrence", {
-                "visit_occurrence_id": r.get("id"),
-                "person_id": _subject_person_id(r),
-                "visit_concept_id": 0,
-                "visit_start_date": _date(period.get("start")),
-                "visit_end_date": _date(period.get("end")),
-            })
+            omop.add(
+                "visit_occurrence",
+                {
+                    "visit_occurrence_id": r.get("id"),
+                    "person_id": _subject_person_id(r),
+                    "visit_concept_id": 0,
+                    "visit_start_date": _date(period.get("start")),
+                    "visit_end_date": _date(period.get("end")),
+                },
+            )
         elif rtype == "Procedure":
-            omop.add("procedure_occurrence", {
-                "procedure_occurrence_id": r.get("id"),
-                "person_id": _subject_person_id(r),
-                "procedure_concept_id": 0,
-                "procedure_source_value": _first_code(r.get("code")),
-                "procedure_date": _date(
-                    r.get("performedDateTime")
-                    or (r.get("performedPeriod") or {}).get("start")
-                ),
-            })
+            omop.add(
+                "procedure_occurrence",
+                {
+                    "procedure_occurrence_id": r.get("id"),
+                    "person_id": _subject_person_id(r),
+                    "procedure_concept_id": 0,
+                    "procedure_source_value": _first_code(r.get("code")),
+                    "procedure_date": _date(
+                        r.get("performedDateTime")
+                        or (r.get("performedPeriod") or {}).get("start")
+                    ),
+                },
+            )
     return omop
 
 

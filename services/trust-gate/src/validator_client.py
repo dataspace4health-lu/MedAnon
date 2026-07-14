@@ -93,7 +93,9 @@ class ValidatorClient:
         )
         self._breaker = CircuitBreaker(
             name="trust_gate_validator",
-            failure_threshold=int(os.environ.get("TRUST_GATE_VALIDATOR_CB_THRESHOLD", "5")),
+            failure_threshold=int(
+                os.environ.get("TRUST_GATE_VALIDATOR_CB_THRESHOLD", "5")
+            ),
             recovery_timeout_sec=float(
                 os.environ.get("TRUST_GATE_VALIDATOR_CB_RECOVERY_SEC", "30")
             ),
@@ -272,9 +274,7 @@ def _error_issues(outcome: dict) -> list[dict]:
                     issues.append(i)
 
     return [
-        i
-        for i in issues
-        if not _is_terminology_issue(i) and not _is_transport_issue(i)
+        i for i in issues if not _is_terminology_issue(i) and not _is_transport_issue(i)
     ]
 
 

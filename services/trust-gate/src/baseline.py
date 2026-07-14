@@ -33,8 +33,9 @@ _log = logging.getLogger("trust_gate.baseline")
 _RNG = random.Random(SAMPLER_SEED)
 
 
-def _reservoir_merge(reservoir: list[float], n_seen: int, new: list[float],
-                     cap: int) -> tuple[list[float], int]:
+def _reservoir_merge(
+    reservoir: list[float], n_seen: int, new: list[float], cap: int
+) -> tuple[list[float], int]:
     """Add *new* values to a reservoir sample of size <= cap (Algorithm R)."""
     res = list(reservoir)
     n = n_seen

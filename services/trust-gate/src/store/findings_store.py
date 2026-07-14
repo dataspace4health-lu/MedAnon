@@ -26,8 +26,17 @@ STATUSES = ("open", "triaged", "resolved")
 ROOT_CAUSES = ("unknown", "source_error", "etl_error", "genuine_biology")
 
 _COLS = (
-    "id", "assessment_id", "dataset_id", "check_id", "severity", "status",
-    "root_cause", "owner", "note", "created_at", "updated_at",
+    "id",
+    "assessment_id",
+    "dataset_id",
+    "check_id",
+    "severity",
+    "status",
+    "root_cause",
+    "owner",
+    "note",
+    "created_at",
+    "updated_at",
 )
 
 
@@ -48,24 +57,31 @@ def derive_findings(passport: dict, assessment_id: str) -> list[dict]:
             continue
         if c.get("result") != "FAIL":
             continue
-        findings.append({
-            "assessment_id": assessment_id,
-            "dataset_id": dataset_id,
-            "check_id": c.get("check_id", ""),
-            "severity": "critical" if c.get("critical") else "major",
-            "status": "open",
-            "root_cause": "unknown",
-            "owner": None,
-            "note": c.get("recommendation", ""),
-        })
+        findings.append(
+            {
+                "assessment_id": assessment_id,
+                "dataset_id": dataset_id,
+                "check_id": c.get("check_id", ""),
+                "severity": "critical" if c.get("critical") else "major",
+                "status": "open",
+                "root_cause": "unknown",
+                "owner": None,
+                "note": c.get("recommendation", ""),
+            }
+        )
     return findings
 
 
 class FindingsStore(Protocol):
     def create(self, finding: dict) -> str: ...
     def get(self, finding_id: str) -> dict | None: ...
-    def list(self, *, dataset_id: str | None = None, status: str | None = None,
-             limit: int = 100) -> list[dict]: ...
+    def list(
+        self,
+        *,
+        dataset_id: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[dict]: ...
     def transition(self, finding_id: str, **fields) -> dict | None: ...
 
 
@@ -168,8 +184,14 @@ class SqliteFindingsStore:
             conn.execute(
                 "UPDATE findings SET status=?, root_cause=?, owner=?, note=?, "
                 "updated_at=? WHERE id=?",
-                (current["status"], current["root_cause"], current["owner"],
-                 current["note"], current["updated_at"], finding_id),
+                (
+                    current["status"],
+                    current["root_cause"],
+                    current["owner"],
+                    current["note"],
+                    current["updated_at"],
+                    finding_id,
+                ),
             )
         return current
 
@@ -259,8 +281,14 @@ class PostgresFindingsStore:
             cur.execute(
                 "UPDATE trust_gate.findings SET status=%s, root_cause=%s, owner=%s, "
                 "note=%s, updated_at=%s WHERE id=%s",
-                (current["status"], current["root_cause"], current["owner"],
-                 current["note"], current["updated_at"], finding_id),
+                (
+                    current["status"],
+                    current["root_cause"],
+                    current["owner"],
+                    current["note"],
+                    current["updated_at"],
+                    finding_id,
+                ),
             )
             conn.commit()
         return current

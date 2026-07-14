@@ -68,8 +68,13 @@ def _maturity(passport: dict) -> tuple[int, list[str]]:
 # EHDS data-quality characteristics (Reg. (EU) 2025/327 Art. 56 + Annex) mapped
 # from the DAMA/ISO scorecard dimensions the gate already computes.
 _EHDS_DQ_DIMENSIONS = (
-    "completeness", "accuracy", "consistency", "currency", "uniqueness",
-    "conformity", "integrity",
+    "completeness",
+    "accuracy",
+    "consistency",
+    "currency",
+    "uniqueness",
+    "conformity",
+    "integrity",
 )
 
 
@@ -91,8 +96,10 @@ def _ehds(passport: dict) -> dict:
     source_types = passport.get("source_types") or []
 
     dimensions = {
-        dim: {"grade": (scorecard.get(dim) or {}).get("grade"),
-              "score": (scorecard.get(dim) or {}).get("score")}
+        dim: {
+            "grade": (scorecard.get(dim) or {}).get("grade"),
+            "score": (scorecard.get(dim) or {}).get("score"),
+        }
         for dim in _EHDS_DQ_DIMENSIONS
         if dim in scorecard
     }
@@ -117,7 +124,8 @@ def _ehds(passport: dict) -> dict:
         },
         "technical_quality": {
             "format": "HL7 FHIR R4" if "omop" not in source_types else "OMOP CDM",
-            "interoperable": bool(evaluation.get("terminology_used")) or "omop" in source_types,
+            "interoperable": bool(evaluation.get("terminology_used"))
+            or "omop" in source_types,
             "reference_density": prof.get("reference_density"),
         },
         "provenance": {

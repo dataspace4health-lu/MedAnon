@@ -1,9 +1,9 @@
 """Completeness category (Kahn 2016): is a variable present / are values recorded?
 
-  - required_elements (verification) — minimal required elements per resource type
-  - value_or_absent  (verification)  — Observation has value[x] or dataAbsentReason
-  - element_density  (verification)  — *frequency* of recommended-element population
-                                       (Kahn completeness / OHDSI measureValueCompleteness)
+- required_elements (verification) — minimal required elements per resource type
+- value_or_absent  (verification)  — Observation has value[x] or dataAbsentReason
+- element_density  (verification)  — *frequency* of recommended-element population
+                                     (Kahn completeness / OHDSI measureValueCompleteness)
 """
 
 from __future__ import annotations
@@ -33,15 +33,22 @@ def _present(res: dict, field: str) -> bool:
         return True
     # Choice-type fallback: strip a trailing type suffix and match any sibling
     # that shares the base name (medicationCodeableConcept ↔ medicationReference).
-    for base in ("effective", "medication", "onset", "occurrence", "performed", "value"):
+    for base in (
+        "effective",
+        "medication",
+        "onset",
+        "occurrence",
+        "performed",
+        "value",
+    ):
         if field.startswith(base):
-            return any(
-                k.startswith(base) and not _empty(res.get(k)) for k in res
-            )
+            return any(k.startswith(base) and not _empty(res.get(k)) for k in res)
     return False
 
 
-def evaluate(resources: list[dict], thresholds: dict[str, float] | None = None) -> list[CheckResult]:
+def evaluate(
+    resources: list[dict], thresholds: dict[str, float] | None = None
+) -> list[CheckResult]:
     # PIQI HDQT mapping: missing → availability/missing; unpopulated → availability/unpopulated;
     # incomplete → availability/incomplete
     req = CheckResult(
@@ -111,7 +118,10 @@ def evaluate(resources: list[dict], thresholds: dict[str, float] | None = None) 
                 if isinstance(components, list):
                     has_value = any(
                         isinstance(c, dict)
-                        and (any(k in OBSERVATION_VALUE_KEYS for k in c) or "dataAbsentReason" in c)
+                        and (
+                            any(k in OBSERVATION_VALUE_KEYS for k in c)
+                            or "dataAbsentReason" in c
+                        )
                         for c in components
                     )
             if not has_value and "dataAbsentReason" not in res:

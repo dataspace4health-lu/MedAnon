@@ -182,11 +182,7 @@ class OmopData:
         spec = CORE_TABLES.get(table)
         if spec is None:
             return set()
-        return {
-            r.get(spec.pk)
-            for r in self.rows(table)
-            if r.get(spec.pk) is not None
-        }
+        return {r.get(spec.pk) for r in self.rows(table) if r.get(spec.pk) is not None}
 
     def total_rows(self) -> int:
         return sum(len(v) for v in self.tables.values())

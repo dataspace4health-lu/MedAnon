@@ -24,6 +24,7 @@ import json
 _OPENPYXL_AVAILABLE = False
 try:
     import openpyxl  # type: ignore[import-untyped]
+
     _OPENPYXL_AVAILABLE = True
 except ImportError:
     pass
@@ -91,6 +92,7 @@ def parse_file(
 # Format parsers
 # ---------------------------------------------------------------------------
 
+
 def _parse_json(content: bytes) -> tuple[str, list[dict] | dict[str, list[dict]]]:
     try:
         data = json.loads(content)
@@ -148,7 +150,9 @@ def _parse_ndjson(content: bytes) -> tuple[str, list[dict] | dict[str, list[dict
     return "tabular", {"records": records}
 
 
-def _parse_csv(content: bytes, table_name: str, sep: str) -> tuple[str, dict[str, list[dict]]]:
+def _parse_csv(
+    content: bytes, table_name: str, sep: str
+) -> tuple[str, dict[str, list[dict]]]:
     # Strip UTF-8 BOM if present
     text = content.decode("utf-8-sig", errors="replace")
     reader = csv.DictReader(io.StringIO(text), delimiter=sep)
@@ -167,9 +171,7 @@ def _parse_excel(
             "Install it or convert the file to CSV first."
         )
     try:
-        wb = openpyxl.load_workbook(
-            io.BytesIO(content), read_only=True, data_only=True
-        )
+        wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
     except Exception as exc:
         raise ConnectorError(f"Cannot open Excel file: {exc}") from exc
 
@@ -188,8 +190,7 @@ def _parse_excel(
         if not header_row:
             continue
         headers = [
-            str(c) if c is not None else f"col_{i}"
-            for i, c in enumerate(header_row)
+            str(c) if c is not None else f"col_{i}" for i, c in enumerate(header_row)
         ]
         rows = [
             {h: v for h, v in zip(headers, row)}
@@ -208,6 +209,7 @@ def _parse_excel(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _stem(filename: str) -> str:
     """Return filename without extension, safe for use as a table key."""

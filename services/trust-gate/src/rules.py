@@ -68,7 +68,9 @@ def validate_rules(raw_rules: list[dict]) -> list[str]:
     """Validate raw rule dicts; return a list of error strings (never raises)."""
     errors: list[str] = []
     for idx, rule in enumerate(raw_rules, start=1):
-        label = (rule.get("rule_id") if isinstance(rule, dict) else None) or f"rules[{idx}]"
+        label = (
+            rule.get("rule_id") if isinstance(rule, dict) else None
+        ) or f"rules[{idx}]"
         try:
             PlausibilityRule.model_validate(rule)
         except ValidationError as exc:
@@ -89,7 +91,9 @@ def _config_path() -> str:
     )
 
 
-def load_config(path: str | None = None) -> tuple[list[PlausibilityRule], dict[str, float]]:
+def load_config(
+    path: str | None = None,
+) -> tuple[list[PlausibilityRule], dict[str, float]]:
     """Load + validate the check config. Returns (rules, threshold_overrides)."""
     path = path or _config_path()
     try:
@@ -146,9 +150,17 @@ def load_policy(path: str | None = None) -> dict:
         with open(path, encoding="utf-8") as fh:
             doc = yaml.safe_load(fh) or {}
     except FileNotFoundError:
-        return {"concordance_rules": [], "definitional_bounds": {}, "resource_thresholds": {}}
+        return {
+            "concordance_rules": [],
+            "definitional_bounds": {},
+            "resource_thresholds": {},
+        }
     if not isinstance(doc, dict):
-        return {"concordance_rules": [], "definitional_bounds": {}, "resource_thresholds": {}}
+        return {
+            "concordance_rules": [],
+            "definitional_bounds": {},
+            "resource_thresholds": {},
+        }
     raw_bounds = doc.get("definitional_unit_bounds", {}) or {}
     bounds: dict[str, tuple[float, float]] = {}
     for unit, pair in raw_bounds.items():
@@ -167,6 +179,7 @@ def load_policy(path: str | None = None) -> dict:
     # Env override: TRUST_GATE_RESOURCE_THRESHOLDS_JSON (JSON map).
     import json as _json
     import os as _os
+
     env_rt = _os.environ.get("TRUST_GATE_RESOURCE_THRESHOLDS_JSON", "").strip()
     if env_rt:
         try:
@@ -176,7 +189,9 @@ def load_policy(path: str | None = None) -> dict:
                     {str(k): _normalize_rate(float(v)) for k, v in env_map.items()}
                 )
         except Exception:  # noqa: BLE001
-            _log.warning("TRUST_GATE_RESOURCE_THRESHOLDS_JSON is not valid JSON — ignored")
+            _log.warning(
+                "TRUST_GATE_RESOURCE_THRESHOLDS_JSON is not valid JSON — ignored"
+            )
     return {
         "concordance_rules": concordance if isinstance(concordance, list) else [],
         "definitional_bounds": bounds,
@@ -348,7 +363,8 @@ def evaluate(
     for rule in rules:
         subcat, context = _KIND_TAXONOMY.get(rule.kind, ("atemporal", "verification"))
         targets = [
-            r for r in resources
+            r
+            for r in resources
             if isinstance(r, dict) and r.get("resourceType") == rule.resource_type
         ]
         chk = CheckResult(
@@ -462,7 +478,10 @@ def _eval_one(
         codes = set(p.get("codes", []))
         node = _value_range_node(res, codes)
         if node is None:
-            return True, False  # rule's codes match neither the Observation nor a component
+            return (
+                True,
+                False,
+            )  # rule's codes match neither the Observation nor a component
         vq = node.get("valueQuantity")
         if not isinstance(vq, dict) or not isinstance(vq.get("value"), (int, float)):
             return True, False

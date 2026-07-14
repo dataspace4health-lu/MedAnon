@@ -35,11 +35,18 @@ def _derive_assessment_id(idempotency_key: str) -> str:
     """Deterministic assessment id for an idempotency key (uuid5, stable)."""
     return uuid.uuid5(_IDEMPOTENCY_NS, idempotency_key).hex
 
+
 # Append-only ALCOA++ audit columns (attributable / contemporaneous / traceable /
 # enduring): one immutable row per assessment, recorded at persistence time.
 _AUDIT_COLS = (
-    "id", "assessment_id", "dataset_id", "provider_id", "decision",
-    "generated_at", "recorded_at", "source_model",
+    "id",
+    "assessment_id",
+    "dataset_id",
+    "provider_id",
+    "decision",
+    "generated_at",
+    "recorded_at",
+    "source_model",
 )
 
 
@@ -185,7 +192,7 @@ class SqlitePassportStore:
             conn.execute(
                 f"""
                 CREATE TABLE IF NOT EXISTS audit_log (
-                    {', '.join(f'{c} TEXT' for c in _AUDIT_COLS)}
+                    {", ".join(f"{c} TEXT" for c in _AUDIT_COLS)}
                 )
                 """
             )
@@ -203,7 +210,11 @@ class SqlitePassportStore:
     ) -> str:
         # A supplied key derives a stable id; a retry/replica race then collapses
         # onto the same row via INSERT OR IGNORE (no duplicate child rows either).
-        aid = _derive_assessment_id(idempotency_key) if idempotency_key else uuid.uuid4().hex
+        aid = (
+            _derive_assessment_id(idempotency_key)
+            if idempotency_key
+            else uuid.uuid4().hex
+        )
         verb = "INSERT OR IGNORE INTO" if idempotency_key else "INSERT INTO"
         s = _summary_from_passport(passport)
         with self._lock, self._connect() as conn:
@@ -337,7 +348,7 @@ class PostgresPassportStore:
             cur.execute(
                 f"""
                 CREATE TABLE IF NOT EXISTS trust_gate.audit_log (
-                    {', '.join(f'{c} text' for c in _AUDIT_COLS)}
+                    {", ".join(f"{c} text" for c in _AUDIT_COLS)}
                 )
                 """
             )
@@ -357,7 +368,11 @@ class PostgresPassportStore:
         # ON CONFLICT (id) DO NOTHING makes a concurrent retry/replica race
         # idempotent at the database (the assessments PK is the dedup point); on a
         # conflict no child rows are written and the existing id is returned.
-        aid = _derive_assessment_id(idempotency_key) if idempotency_key else uuid.uuid4().hex
+        aid = (
+            _derive_assessment_id(idempotency_key)
+            if idempotency_key
+            else uuid.uuid4().hex
+        )
         conflict = " ON CONFLICT (id) DO NOTHING" if idempotency_key else ""
         s = _summary_from_passport(passport)
         with self._connect() as conn, conn.cursor() as cur:

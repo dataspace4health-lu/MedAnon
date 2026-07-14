@@ -109,7 +109,11 @@ def _patient_index(valid: list[dict]) -> dict[str, tuple[int | None, str]]:
         if r.get("resourceType") != "Patient" or not r.get("id"):
             continue
         bd = r.get("birthDate")
-        byear = int(bd[:4]) if isinstance(bd, str) and len(bd) >= 4 and bd[:4].isdigit() else None
+        byear = (
+            int(bd[:4])
+            if isinstance(bd, str) and len(bd) >= 4 and bd[:4].isdigit()
+            else None
+        )
         idx[str(r["id"])] = (byear, _GENDER.get(r.get("gender"), "U"))
     return idx
 
@@ -130,7 +134,7 @@ def _subject_id(res: dict) -> str | None:
     if "Patient/" in ref:
         return ref.split("Patient/", 1)[1].split("?")[0].split("/")[0]
     if ref.startswith("urn:uuid:"):
-        return ref[len("urn:uuid:"):]
+        return ref[len("urn:uuid:") :]
     return None
 
 
@@ -152,7 +156,11 @@ def _stratum(res: dict, patients: dict[str, tuple[int | None, str]]) -> str:
     """Demographic stratum "sex|age-band" for an Observation, "U|unknown" if unknown."""
     byear, sex = patients.get(_subject_id(res) or "", (None, "U"))
     oyear = _obs_year(res)
-    band = _age_band(oyear - byear) if (byear is not None and oyear is not None) else "unknown"
+    band = (
+        _age_band(oyear - byear)
+        if (byear is not None and oyear is not None)
+        else "unknown"
+    )
     return f"{sex}|{band}"
 
 
@@ -166,14 +174,22 @@ def _summ(values: list[float], bins: int = 10) -> dict:
         std = 0.0
     lo, hi = min(values), max(values)
     sorted_vals = sorted(values)
-    median = sorted_vals[n // 2] if n % 2 else (sorted_vals[n // 2 - 1] + sorted_vals[n // 2]) / 2
+    median = (
+        sorted_vals[n // 2]
+        if n % 2
+        else (sorted_vals[n // 2 - 1] + sorted_vals[n // 2]) / 2
+    )
     if hi > lo:
         width = (hi - lo) / bins
         counts = [0] * bins
         for v in values:
             counts[min(int((v - lo) / width), bins - 1)] += 1
         hist = [
-            {"x0": round(lo + i * width, 4), "x1": round(lo + (i + 1) * width, 4), "n": c}
+            {
+                "x0": round(lo + i * width, 4),
+                "x1": round(lo + (i + 1) * width, 4),
+                "n": c,
+            }
             for i, c in enumerate(counts)
         ]
     else:
@@ -226,7 +242,12 @@ def profile(resources: list[dict]) -> dict:
     # the analyst sees the patient's whole clinical panel. Ordered by frequency
     # (most-measured first) purely for display; the long tail is fully retained.
     observation_value_stats = [
-        {"code": code, "unit": unit, "display": display_by_code.get((code, unit)), **_summ(vals)}
+        {
+            "code": code,
+            "unit": unit,
+            "display": display_by_code.get((code, unit)),
+            **_summ(vals),
+        }
         for (code, unit), vals in sorted(
             by_code.items(), key=lambda kv: len(kv[1]), reverse=True
         )
@@ -234,8 +255,13 @@ def profile(resources: list[dict]) -> dict:
     # Same distributions conditioned on the demographic (sex x age-band) stratum, so
     # a pediatric value is not pooled against adults. Carries the source FHIR label.
     observation_value_stats_stratified = [
-        {"code": code, "unit": unit, "display": display_by_code.get((code, unit)),
-         "stratum": stratum, **_summ(vals)}
+        {
+            "code": code,
+            "unit": unit,
+            "display": display_by_code.get((code, unit)),
+            "stratum": stratum,
+            **_summ(vals),
+        }
         for (code, unit, stratum), vals in sorted(
             by_stratum.items(), key=lambda kv: len(kv[1]), reverse=True
         )

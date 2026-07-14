@@ -5,6 +5,7 @@ These connectors normalise external data sources into the same ``list[dict]``
 core assess engine, so the full check suite runs identically regardless of
 input origin.
 """
+
 from connectors.file_connector import ConnectorError, parse_file
 from connectors.sql_connector import SqlConnectorError, list_tables, query_table
 
