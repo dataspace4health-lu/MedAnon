@@ -326,7 +326,7 @@ up: _dirs preflight
 	@bash scripts/verify_deployment.sh || true
 
 down:
-	$(COMPOSE) --profile analytics --profile nlp --profile monitoring --profile ha --profile  down --remove-orphans
+	$(COMPOSE) --profile analytics --profile nlp --profile monitoring --profile ha down --remove-orphans
 
 # Wipes ALL volumes including HAPI source DB  only for a full reset.
 down-wipe:
