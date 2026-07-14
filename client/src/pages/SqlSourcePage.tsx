@@ -43,7 +43,7 @@ import {
   type SqlOutputFormat,
 } from '@/api/sqlSource';
 
-// Per-column action vocabulary — mirrors the tabular column-mapper so the SQL
+// Per-column action vocabulary, mirrors the tabular column-mapper so the SQL
 // schema explorer offers the same de-identification choices (incl. gPAS).
 const COLUMN_ACTIONS: {
   value: string;
@@ -290,7 +290,7 @@ export default function SqlSourcePage() {
         <ShieldCheck className="mt-0.5 size-4 shrink-0 text-primary" />
         <p className="text-sm text-muted-foreground">
           Connections are <strong>read-only</strong> and restricted to allow-listed hosts.
-          Output is returned as downloadable files — never written back to the source or
+          Output is returned as downloadable files, never written back to the source or
           uploaded to the FHIR target server.
         </p>
       </div>
@@ -416,7 +416,7 @@ export default function SqlSourcePage() {
             {preview.tables.length === 0 && (
               <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-300">
                 No tables found in schema <code className="font-mono">{preview.schema}</code>.
-                Check the <strong>Schema</strong> field above — your data may live in a
+                Check the <strong>Schema</strong> field above, your data may live in a
                 different schema (e.g. <code className="font-mono">clinic</code>), not{' '}
                 <code className="font-mono">public</code>.
               </div>
@@ -540,8 +540,8 @@ export default function SqlSourcePage() {
                 <div className="flex items-center gap-2">
                   <ShieldCheck className="size-4 text-primary" />
                   <p className="text-sm">
-                    Job <span className="font-mono">{submittedJobId.slice(0, 8)}</span> submitted —
-                    download the result ZIP on the Jobs page.
+                    Job <span className="font-mono">{submittedJobId.slice(0, 8)}</span> submitted.
+                    Download the result ZIP on the Jobs page.
                   </p>
                 </div>
                 <Link to="/jobs">

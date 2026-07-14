@@ -66,7 +66,7 @@ export default function ConfigBuilderPage() {
   const [configName, setConfigName] = useState(editName ?? '');
   const [configDescription, setConfigDescription] = useState('');
   const [rules, setRules] = useState<LocalRule[]>([]);
-  // Referential integrity — rewrite cross-resource references so a patient's
+  // Referential integrity, rewrite cross-resource references so a patient's
   // resources stay linked after IDs are pseudonymized/hashed. Default ON: this
   // is almost always what you want, and omitting it silently breaks references.
   const [rewriteReferences, setRewriteReferences] = useState(true);
@@ -99,7 +99,7 @@ export default function ConfigBuilderPage() {
         const configs = await listConfigs();
         const meta = configs.find((c) => c.name === sourceName);
         if (meta && !isEdit) {
-          // Duplicating — pre-fill description but clear name
+          // Duplicating, pre-fill description but clear name
           setConfigDescription(meta.description);
           setConfigName('');
         } else if (meta && isEdit) {
@@ -296,8 +296,8 @@ export default function ConfigBuilderPage() {
               <span className="font-mono">patient</span>, …) so the same patient's
               resources still point at each other. The engine rewrites the id
               after the <span className="font-mono">ResourceType/</span> prefix with
-              the same deterministic mapping as the <span className="font-mono">.id</span> rule —
-              don't add separate rules on <span className="font-mono">*.reference</span>.
+              the same deterministic mapping as the <span className="font-mono">.id</span> rule.
+              Don't add separate rules on <span className="font-mono">*.reference</span>.
               Leave on unless you specifically want references untouched.
             </span>
           </span>

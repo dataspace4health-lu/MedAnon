@@ -1,5 +1,5 @@
 /**
- * FHIR resource processing — raw, batch, $everything.
+ * FHIR resource processing, raw, batch, $everything.
  */
 
 import { getAuthHeaders } from "./client";
@@ -54,7 +54,7 @@ export async function processRaw(
       if (body?.detail?.code === "pii_leak_detected") {
         return { text: "", piiLeak: body.detail.pii_leak as PiiLeakInfo };
       }
-      // Other 422 (e.g. invalid input) — rethrow as normal error
+      // Other 422 (e.g. invalid input), rethrow as normal error
       throw new Error(`processRaw failed (422): ${body?.detail ?? response.statusText}`);
     } catch (e) {
       if (e instanceof Error && e.message.startsWith("processRaw")) throw e;

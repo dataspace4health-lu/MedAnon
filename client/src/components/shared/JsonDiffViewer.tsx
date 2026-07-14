@@ -19,7 +19,7 @@ type DiffRow = EqualRow | DelRow | AddRow | ReplaceRow | GapRow;
 const DEFAULT_CONTEXT = 4; // unchanged lines shown around each change
 
 // ---------------------------------------------------------------------------
-// JSON key-order normalizer — sorts all object keys alphabetically so that
+// JSON key-order normalizer, sorts all object keys alphabetically so that
 // backend key-reordering doesn't produce false-positive diff rows.
 // ---------------------------------------------------------------------------
 
@@ -294,7 +294,7 @@ export function JsonDiffViewer({
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/40 px-3 py-2">
         <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-          Diff — Original vs De-identified
+          Diff, Original vs De-identified
         </span>
         <div className="flex items-center gap-3 text-xs">
           <span className="flex items-center gap-1">
@@ -348,7 +348,7 @@ export function JsonDiffViewer({
         </div>
       </div>
 
-      {/* Rows — vertical scroll only; cells wrap so we never need horizontal scroll */}
+      {/* Rows, vertical scroll only; cells wrap so we never need horizontal scroll */}
       <div style={{
         overflowX: "hidden",
         overflowY: fullHeight ? "visible" : "auto",

@@ -1,5 +1,5 @@
 /**
- * ConnectorPanel — File upload and SQL database connectors for Trust Gate.
+ * ConnectorPanel, File upload and SQL database connectors for Trust Gate.
  * Renders as two sub-tabs inside the parent TrustGatePage Input card.
  */
 import { useRef, useState } from "react";
@@ -157,7 +157,7 @@ function FileConnector({ datasetId, busy, onAssess }: Props) {
               <Badge variant="secondary">{fmt}</Badge>
             </div>
             <span className="text-xs text-muted-foreground">
-              {(file.size / 1024).toFixed(1)} KB — click to change
+              {(file.size / 1024).toFixed(1)} KB, click to change
             </span>
           </div>
         ) : (
@@ -202,7 +202,7 @@ function FileConnector({ datasetId, busy, onAssess }: Props) {
       {file && (
         <div>
           <label className="mb-1 block text-xs font-medium text-muted-foreground">
-            Column mapping (optional) — JSON:
+            Column mapping (optional), JSON:
             {" "}<code className="text-[10px]">&#123;"table": &#123;"omop_col": "source_col"&#125;&#125;</code>
           </label>
           <Textarea
@@ -421,7 +421,7 @@ function SqlConnector({ datasetId, busy, onAssess }: Props) {
         {tables !== null && !connError && (
           <span className="flex items-center gap-1 text-xs text-emerald-600">
             <ShieldCheck className="size-3.5" />
-            Connected — {tables.length} table{tables.length !== 1 ? "s" : ""} visible
+            Connected, {tables.length} table{tables.length !== 1 ? "s" : ""} visible
           </span>
         )}
         {connError && (
@@ -434,7 +434,7 @@ function SqlConnector({ datasetId, busy, onAssess }: Props) {
         <div>
           <p className="mb-1.5 text-xs font-medium text-muted-foreground">
             <Table2 className="mr-1 inline size-3.5" />
-            Available tables — click to insert into query
+            Available tables, click to insert into query
           </p>
           <div className="flex flex-wrap gap-1.5">
             {tables.map((t) => (
@@ -481,7 +481,7 @@ function SqlConnector({ datasetId, busy, onAssess }: Props) {
 
       <div>
         <label className="mb-1 block text-xs font-medium text-muted-foreground">
-          Column mapping (optional) — JSON:
+          Column mapping (optional), JSON:
           {" "}<code className="text-[10px]">&#123;"query_result": &#123;"omop_col": "source_col"&#125;&#125;</code>
         </label>
         <Textarea

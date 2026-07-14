@@ -1,5 +1,5 @@
 /**
- * /auth/callback — PKCE code exchange handler.
+ * /auth/callback, PKCE code exchange handler.
  *
  * Keycloak redirects here with ?code=...&state=... after the user authenticates.
  * We hand off to oidc-client-ts which verifies the state, exchanges the code
@@ -27,7 +27,7 @@ export default function CallbackPage() {
           err instanceof Error ? err.message : 'Authentication failed.';
         setError(msg);
       });
-    // Run once — the URL params are consumed by the first call.
+    // Run once, the URL params are consumed by the first call.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

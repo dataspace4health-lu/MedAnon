@@ -12,6 +12,7 @@ import { PageHeader } from '@/components/layout/PageHeader';
 import { FileUploader } from '@/components/shared/FileUploader';
 import { FhirCodeViewer } from '@/components/shared/FhirCodeViewer';
 import { DownloadButton } from '@/components/shared/DownloadButton';
+import { SyntheticPassportPanel } from '@/components/shared/SyntheticPassportPanel';
 import { Button } from '@/components/ui/button';
 import {
   Card,
@@ -486,6 +487,13 @@ export default function SyntheticDataPage() {
                 )}
               </CardContent>
             </Card>
+          )}
+
+          {resultBlob && resultText && fileInfo && (
+            <SyntheticPassportPanel
+              realText={fileInfo.content}
+              syntheticText={resultText}
+            />
           )}
         </div>
       )}

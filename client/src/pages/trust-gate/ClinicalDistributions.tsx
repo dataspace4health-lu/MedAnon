@@ -149,7 +149,7 @@ export function ClinicalDistributions({
       <CardHeader>
         <CardTitle className="flex items-center gap-2"><Activity className="size-4" /> Clinical value distributions</CardTitle>
         <p className="text-sm text-muted-foreground">
-          One card per measured concept ({stats.length}) — distribution histogram, summary statistics, and an
+          One card per measured concept ({stats.length}), distribution histogram, summary statistics, and an
           age-band × sex breakdown. Each card is keyed by its LOINC code + unit, so distinct metrics that share a
           label stay separate.
         </p>

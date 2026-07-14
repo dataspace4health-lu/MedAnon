@@ -1,5 +1,5 @@
 /**
- * AI Agent API client — status, config generation, PII detection,
+ * AI Agent API client, status, config generation, PII detection,
  * rule explanation (SSE), and compliance analysis.
  */
 
@@ -88,11 +88,14 @@ export async function generateConfig(
 export async function detectPii(
   resources: Record<string, unknown>[],
   useAi: boolean = true,
+  /** Shortest string value to scan. Default 15 targets free-text; pass 1 to
+   * scan every string field (short SSN/phone/name in structured fields). */
+  minFieldLen: number = 15,
 ): Promise<PiiDetectionResponse> {
   return fetchApi<PiiDetectionResponse>("/v1/ai/detect-pii", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ resources, use_ai: useAi }),
+    body: JSON.stringify({ resources, use_ai: useAi, min_field_len: minFieldLen }),
   });
 }
 
@@ -154,8 +157,8 @@ export interface ChatTurn {
 /**
  * How structured (object) PII fields are treated when proposing rules.
  * - "values" (default): one rule per identifying leaf sub-field
- *   (Patient.name.family) — keeps the FHIR skeleton, blanks only the values.
- * - "whole": one rule on the parent path (Patient.name) — removes the element.
+ *   (Patient.name.family), keeps the FHIR skeleton, blanks only the values.
+ * - "whole": one rule on the parent path (Patient.name), removes the element.
  */
 export type FieldGranularity = "values" | "whole";
 
@@ -167,7 +170,7 @@ export interface ChatRequest {
   /** Field-path tree from uploaded examples or server samples. Paths + types
    * only by default; carries sample values (PHI) when `include_values` is set. */
   field_context?: string;
-  /** When true, `field_context` includes sample values — the backend then
+  /** When true, `field_context` includes sample values, the backend then
    * treats the call as a PHI payload and refuses any non-local AI endpoint. */
   include_values?: boolean;
   /** Leaf-vs-whole treatment of structured PII fields. */
@@ -267,6 +270,44 @@ export async function scanFieldsForPii(
     throw new Error(res.detail || "PII scan failed");
   }
   return res.results;
+}
+
+export interface FieldSketchResponse {
+  sketch: string;
+  types: string[];
+  leaf_count: number;
+  included_count: number;
+  truncated: boolean;
+  source: string; // "fhir" | "inline" | "error"
+  detail: string;
+}
+
+/**
+ * Build a compact, PHI-safe schema sketch of the selected resource types: one
+ * line per distinct leaf path with its type, presence frequency, cardinality,
+ * and a value digest (shape/enum in the default PHI-free mode; raw samples only
+ * when `includeValues` is set). The result is a richer `field_context` string
+ * to pass to {@link streamChat} / {@link scanFieldsForPii}.
+ *
+ * Supply `resources` to sketch uploaded examples, or `resourceTypes` to have the
+ * server sample the configured source FHIR server.
+ */
+export async function buildFieldSketch(opts: {
+  resourceTypes?: string[];
+  resources?: Record<string, unknown>[];
+  nPerType?: number;
+  includeValues?: boolean;
+}): Promise<FieldSketchResponse> {
+  return fetchApi<FieldSketchResponse>("/v1/ai/field-sketch", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      resource_types: opts.resourceTypes ?? [],
+      resources: opts.resources ?? [],
+      n_per_type: opts.nPerType ?? 25,
+      include_values: opts.includeValues ?? false,
+    }),
+  });
 }
 
 export async function analyseCompliance(

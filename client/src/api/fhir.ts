@@ -6,7 +6,12 @@
  * pagination and resource joining (e.g. Condition + included Patient).
  */
 
-import { fetchFhir, fetchFhirByUrl } from "./client";
+// Route through the active Source selection (Settings) instead of always hitting
+// the built-in nginx /fhir. Same signatures, so all call sites below are unchanged.
+import {
+  routedFetchFhir as fetchFhir,
+  routedFetchFhirByUrl as fetchFhirByUrl,
+} from "./fhirRoute";
 import type { ConditionRow, PatientSummary } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -81,7 +86,7 @@ const EXCLUDED_TYPES = new Set([
   "OperationOutcome", "Bundle",
 ]);
 
-// Clinically relevant types first — so a capped field-tree (top N) gets the
+// Clinically relevant types first, so a capped field-tree (top N) gets the
 // PII-heavy resources, and the explorer's type list reads naturally.
 const TYPE_PRIORITY = [
   "Patient", "Practitioner", "RelatedPerson", "Observation", "Condition",
@@ -115,7 +120,7 @@ async function discoverResourceTypes(): Promise<string[]> {
       .filter((t): t is string => typeof t === "string" && !EXCLUDED_TYPES.has(t));
     if (types && types.length > 0) return prioritySort(types);
   } catch {
-    // metadata unavailable — fall through to fallback
+    // metadata unavailable, fall through to fallback
   }
   return ["Patient", "Observation", "Condition", "Encounter", "Procedure"];
 }
@@ -137,7 +142,7 @@ let _typesCache: string[] | null = null;
 export async function listResourceTypes(): Promise<string[]> {
   if (_typesCache) return _typesCache;
   // fetchResourceTypeCounts probes every CapabilityStatement type and filters
-  // to count > 0 — exactly what we want for the field-tree and type picker.
+  // to count > 0, exactly what we want for the field-tree and type picker.
   const counts = await fetchResourceTypeCounts();
   const types = prioritySort(counts.map((c) => c.type));
   _typesCache = types;
@@ -146,7 +151,7 @@ export async function listResourceTypes(): Promise<string[]> {
 
 /**
  * Fetch a small sample of raw resources for a given type (default 5).
- * Returns the raw resource objects — callers are responsible for PHI handling.
+ * Returns the raw resource objects, callers are responsible for PHI handling.
  * Used by the AI assistant field-tree builder which extracts paths/types only.
  */
 export async function sampleResources(
@@ -166,11 +171,11 @@ export async function sampleResources(
 }
 
 // ---------------------------------------------------------------------------
-// Server field-tree (PHI-free) — sampled paths/types for AI grounding.
+// Server field-tree (PHI-free), sampled paths/types for AI grounding.
 //
 // Cached at module level so reopening the AI Assistant panel (or navigating
 // away and back) reuses the tree instead of re-sampling every resource type.
-// The cache stores ONLY the extracted summary — never raw resources.
+// The cache stores ONLY the extracted summary, never raw resources.
 // ---------------------------------------------------------------------------
 
 export interface ServerFieldTree {
@@ -183,7 +188,7 @@ const _FIELD_TREE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 let _fieldTreeCache: ServerFieldTree | null = null;
 let _fieldTreeCacheAt = 0;
 // Whether the cached tree carries sample values (PHI). A request for a different
-// mode must miss the cache — a values tree and a paths-only tree differ.
+// mode must miss the cache, a values tree and a paths-only tree differ.
 let _fieldTreeCacheValues = false;
 let _fieldTreeInflight: Promise<ServerFieldTree> | null = null;
 
@@ -203,7 +208,7 @@ export function clearServerFieldTreeCache(): void {
  * import cycle with the config-builder fieldTree util).
  *
  * By default the tree is PHI-free (paths + types). When `opts.includeValues` is
- * set, `extractFn` is expected to append sample values per leaf — the tree then
+ * set, `extractFn` is expected to append sample values per leaf, the tree then
  * carries PHI and must only be sent to a local model (the backend enforces this
  * via the AI local-guard when the request is flagged). The cache holds only one
  * mode at a time; switching modes misses the cache.
@@ -217,7 +222,7 @@ export async function buildServerFieldTree(
     onProgress?: (loaded: number, total: number) => void;
     force?: boolean;
     /** Only sample these resource types (default: all data-bearing types).
-     * Scoping to a few types keeps the prompt small and focused — a smaller
+     * Scoping to a few types keeps the prompt small and focused, a smaller
      * field tree means lower CPU on CPU-only LLMs and better answers (small
      * models lose focus in a 40-type wall of paths). */
     onlyTypes?: string[];
@@ -280,7 +285,7 @@ export async function buildServerFieldTree(
   }
 }
 
-// Module-level cache — survives SPA navigation, lives for the browser session.
+// Module-level cache, survives SPA navigation, lives for the browser session.
 // Re-fetches after TTL_MS so counts stay reasonably fresh without hammering HAPI.
 const _COUNTS_TTL_MS = 5 * 60 * 1000; // 5 minutes
 let _countsCache: ResourceTypeCount[] | null = null;
@@ -444,7 +449,7 @@ export interface PatientInfo {
   gender: string;
 }
 
-/** Cached patient data keyed by FHIR Patient id — accumulated across pages. */
+/** Cached patient data keyed by FHIR Patient id, accumulated across pages. */
 export type PatientMap = Record<string, PatientInfo>;
 
 export interface ConditionPageResult extends PagedResult<ConditionRow> {
@@ -453,7 +458,7 @@ export interface ConditionPageResult extends PagedResult<ConditionRow> {
    *  whose Patient resource was only included on an earlier page. */
   patientMap: PatientMap;
   /** The absolute HAPI URL for the next page, or null if this is the last page.
-   *  Use fetchConditionsNextPage() to follow it — do NOT reconstruct with offset. */
+   *  Use fetchConditionsNextPage() to follow it, do NOT reconstruct with offset. */
   nextLink: string | null;
 }
 
@@ -539,16 +544,16 @@ function parseBundleToConditionPage(
 }
 
 /**
- * GET /fhir/Condition — search conditions with _include:Condition:subject.
+ * GET /fhir/Condition, search conditions with _include:Condition:subject.
  *
  * Pass `category` to restrict the result set:
- *   "encounter-diagnosis,problem-list-item" (default) — clinical conditions only,
+ *   "encounter-diagnosis,problem-list-item" (default), clinical conditions only,
  *     excludes social determinants (employment, criminal record, etc.)
- *   "" — all conditions including social/contextual ones
- *   "social-history" — social determinants only
+ *   "", all conditions including social/contextual ones
+ *   "social-history", social determinants only
  *
  * Returns `nextLink` (absolute HAPI URL for the next page). Use
- * fetchConditionsNextPage() to paginate — do NOT reconstruct with _getpagesoffset,
+ * fetchConditionsNextPage() to paginate, do NOT reconstruct with _getpagesoffset,
  * as HAPI's cursor-based paging doesn't support arbitrary offset reconstruction.
  */
 export async function searchConditions(
@@ -611,7 +616,7 @@ export async function searchAllConditions(
   const seen = new Set<string>();
   const all: ConditionRow[] = [];
 
-  // First page — use a large count to minimise round-trips
+  // First page, use a large count to minimise round-trips
   let page = await searchConditions(query, clinicalStatus, 200, category, patientMap);
   let total = page.total;
 

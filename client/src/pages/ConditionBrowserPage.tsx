@@ -18,6 +18,7 @@ import { capabilityStatement, searchAllConditions } from '@/api/fhir';
 import { submitCohortJob } from '@/api/medanon';
 import { useConfig } from '@/context/ConfigContext';
 import { useBulkExport } from '@/context/BulkExportContext';
+import { useSettings } from '@/context/SettingsContext';
 import type { ConditionRow } from '@/api/types';
 
 const CLINICAL_STATUSES = [
@@ -27,7 +28,7 @@ const CLINICAL_STATUSES = [
   { value: 'inactive', label: 'Inactive' },
 ];
 
-// '__all__' is a sentinel that means "no category filter" — the empty string
+// '__all__' is a sentinel that means "no category filter", the empty string
 // that FHIR uses cannot be used as a SelectItem value in shadcn/ui.
 const CONDITION_CATEGORIES = [
   { value: 'encounter-diagnosis,problem-list-item', label: 'Clinical conditions' },
@@ -44,6 +45,7 @@ export default function ConditionBrowserPage() {
   const navigate = useNavigate();
   const { configProfile } = useConfig();
   const { submitExport } = useBulkExport();
+  const { sourceConnected } = useSettings();
 
   const [conditions, setConditions] = useState<ConditionRow[]>([]);
   const [total, setTotal] = useState<number | null>(null);
@@ -55,7 +57,7 @@ export default function ConditionBrowserPage() {
   const [clinicalStatus, setClinicalStatus] = useState('any');
   const [category, setCategory] = useState('encounter-diagnosis,problem-list-item');
 
-  // Committed filters — only change when Search is clicked
+  // Committed filters, only change when Search is clicked
   const [committedQuery, setCommittedQuery] = useState('');
   const [committedStatus, setCommittedStatus] = useState('any');
   const [committedCategory, setCommittedCategory] = useState('encounter-diagnosis,problem-list-item');
@@ -100,6 +102,10 @@ export default function ConditionBrowserPage() {
   useEffect(() => {
     let cancelled = false;
     const run = async () => {
+      if (!sourceConnected) {
+        setFhirConnected(false);
+        return;
+      }
       try {
         await capabilityStatement();
         if (cancelled) return;
@@ -121,7 +127,8 @@ export default function ConditionBrowserPage() {
     };
     run();
     return () => { cancelled = true; };
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sourceConnected]);
 
   const handleSearch = async () => {
     setSearching(true);
@@ -236,12 +243,21 @@ export default function ConditionBrowserPage() {
           Checking FHIR server connectivity…
         </div>
       )}
-      {fhirConnected === false && (
+      {fhirConnected === false && !sourceConnected && (
+        <div className="mb-6 flex items-start gap-2.5 rounded-lg border bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>
+            <span className="font-medium">No source server connected.</span>{' '}
+            Choose one under Settings → FHIR servers.
+          </span>
+        </div>
+      )}
+      {fhirConnected === false && sourceConnected && (
         <div className="mb-6 flex items-start gap-2.5 rounded-lg border border-destructive/40 bg-destructive/5 px-4 py-3 text-sm text-destructive">
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
           <span>
             <span className="font-medium">FHIR server unreachable.</span>{' '}
-            Verify that HAPI FHIR is running and accessible.
+            Verify the selected source server is running and accessible.
           </span>
         </div>
       )}

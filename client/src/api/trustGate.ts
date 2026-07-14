@@ -1,5 +1,5 @@
 /**
- * Trust Gate API — pre-privacy FHIR data-quality assessment.
+ * Trust Gate API, pre-privacy FHIR data-quality assessment.
  *
  * The Trust Gate is a standalone microservice (opt-in `--profile trust`). In
  * production nginx proxies `/trust/*` → trust-gate:8400; in Vite dev mode
@@ -261,7 +261,7 @@ export interface QualityPassport {
   label?: EhdsLabel;
   /** Determinism / reproducibility provenance. */
   evaluation?: Evaluation;
-  /** Reporting attribution (Wassell 2026) — also present under evaluation. */
+  /** Reporting attribution (Wassell 2026), also present under evaluation. */
   lifecycle_stage?: string;
   org_role?: string;
 }
@@ -338,7 +338,7 @@ async function postTrust<T>(path: string, body: unknown, timeout = 120_000): Pro
   }
 }
 
-/** GET /trust/health — service liveness probe. */
+/** GET /trust/health, service liveness probe. */
 export async function trustGateHealthy(): Promise<boolean> {
   try {
     const r = await fetch("/trust/health", { signal: AbortSignal.timeout(5_000) });
@@ -477,7 +477,7 @@ export function transitionFinding(
 //   - decision policy: a failed CRITICAL check → BLOCK; else overall < 90, any
 //     category < 80, or missing provenance → CONDITIONAL_PASS; else PASS.
 // Per-resource-type thresholds are not recomputed client-side (noted in the
-// aggregated auditability) — they need the server's per-type bookkeeping.
+// aggregated auditability), they need the server's per-type bookkeeping.
 // ---------------------------------------------------------------------------
 
 const PASS_MIN_RATE = 90;
@@ -494,7 +494,7 @@ function fitness(decision: Decision, provenancePresent: boolean): [string[], str
   return [[], ["any secondary use until blockers are resolved"]];
 }
 
-// DQ dimensions (DAMA/ISO 25012) — mirror services/trust-gate/src/dimensions.py.
+// DQ dimensions (DAMA/ISO 25012), mirror services/trust-gate/src/dimensions.py.
 const DIMENSIONS = [
   "completeness", "conformity", "consistency", "accuracy",
   "uniqueness", "integrity", "currency", "provenance",
@@ -529,7 +529,7 @@ function fitnessStatement(
   if (decision === "CONDITIONAL_PASS") {
     return {
       intended_use: use, overall_grade: grade, fit: true,
-      statement: `Conditionally fit for ${use}: grade ${g} (${pct}% checks passing) — remediate the flagged dimensions before high-stakes use.`,
+      statement: `Conditionally fit for ${use}: grade ${g} (${pct}% checks passing), remediate the flagged dimensions before high-stakes use.`,
     };
   }
   return {
@@ -552,7 +552,7 @@ export interface AggregateOpts {
   chunkCount: number;
   sourceTypes?: string[];
   /** Replace conformance.reference_integrity with a batch-wide computation
-   * (chunked summing is wrong — references resolve across the whole scan). */
+   * (chunked summing is wrong, references resolve across the whole scan). */
   referenceIntegrity?: CheckOverride;
   /** Declared downstream use → purpose-bound fitness statement. */
   intendedUse?: string;
@@ -709,7 +709,7 @@ export function aggregateChunks(chunks: QualityPassport[], opts: AggregateOpts):
     .map(
       (c) =>
         `${c.check_id}: ${c.violations}/${c.applicable} violating ` +
-        `(${(c.violation_fraction * 100).toFixed(1)}%) — ${c.recommendation}`.trim(),
+        `(${(c.violation_fraction * 100).toFixed(1)}%), ${c.recommendation}`.trim(),
     );
   const belowCategory = CATEGORIES.some(
     (cat) => categoryScores[cat] !== null && (categoryScores[cat] as number) < CATEGORY_MIN_RATE,

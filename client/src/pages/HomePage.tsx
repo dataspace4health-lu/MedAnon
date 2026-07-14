@@ -8,7 +8,7 @@ import { useAuth } from '@/context/AuthContext';
 import { NAV_SECTIONS, type NavItem } from '@/config/navigation';
 
 // ---------------------------------------------------------------------------
-// Tool card — palette-token styling only (no ad-hoc Tailwind colors)
+// Tool card, palette-token styling only (no ad-hoc Tailwind colors)
 // ---------------------------------------------------------------------------
 
 function ToolCard({ item }: { item: NavItem }) {
@@ -49,7 +49,7 @@ export default function HomePage() {
           Data Privacy Toolkit
         </h1>
         <p className="max-w-2xl text-sm text-muted-foreground sm:text-base">
-          De-identify and pseudonymize healthcare data across FHIR, HL7&nbsp;v2, CDA, and DICOM —
+          De-identify and pseudonymize healthcare data across FHIR, HL7&nbsp;v2, CDA, and DICOM,
           with measurable privacy, utility, and quality scoring.
         </p>
       </header>
@@ -66,7 +66,7 @@ export default function HomePage() {
         <div className="lg:col-span-2"><QuickActions /></div>
       </div>
 
-      {/* All tools — grouped by section, role-gated, driven by the nav config */}
+      {/* All tools, grouped by section, role-gated, driven by the nav config */}
       <section className="space-y-8">
         <div className="flex items-center gap-3">
           <h2 className="text-sm font-semibold uppercase tracking-[0.12em] text-muted-foreground">

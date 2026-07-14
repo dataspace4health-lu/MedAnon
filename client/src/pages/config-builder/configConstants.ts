@@ -33,6 +33,7 @@ export const GENERALIZE_STRATEGIES = [
   'number_round',
   'zip_prefix',
   'category',
+  'redact_if_rare',
 ] as const;
 
 // Keep in sync with backend MaskParams strategy enum.
@@ -50,7 +51,7 @@ export const NLP_MODES = ['tokenize', 'redact'] as const;
 
 // Actions that always produce the same output for the same input.
 // Non-deterministic actions (perturb, substitute, encrypt) break referential
-// integrity across FHIR resources — the same Patient.id would hash differently
+// integrity across FHIR resources - the same Patient.id would hash differently
 // each run, making cross-resource de-identification inconsistent.
 export const DETERMINISTIC_ACTIONS = new Set<Action>([
   'redact',
@@ -66,7 +67,7 @@ export const DETERMINISTIC_ACTIONS = new Set<Action>([
 ]);
 
 // Human-friendly action labels for dropdowns and summary badges. The YAML
-// action key (the Record key) is unchanged — only the display string differs —
+// action key (the Record key) is unchanged - only the display string differs -
 // so saved configs and the backend registry are untouched.
 export const ACTION_LABELS: Record<Action, string> = {
   redact: 'Redact value',
@@ -93,16 +94,16 @@ export function actionLabel(action: string): string {
 
 export const ACTION_DESCRIPTIONS: Record<Action, string> = {
   redact: 'Replace the matched value with a fixed placeholder (e.g. [REDACTED]).',
-  cryptohash: 'One-way HMAC-SHA3-256 hash — irreversible but deterministic for linkage.',
-  generalize: 'Reduce precision (e.g. date to year-only, zip to 3-digit prefix).',
-  mask: 'Partially obscure a value, keeping a configurable prefix/suffix/domain.',
-  date_shift: 'Shift a date by a deterministic per-subject offset (preserves age bracket).',
-  tokenize: 'Replace with a format-preserving token (optionally namespace-scoped).',
-  perturb: 'Shift numeric/date values by a random offset within a configurable range.',
-  substitute: 'Replace the value with a synthetic but structurally valid substitute.',
-  scrub_text: 'Regex-based text scrubbing for phones, emails, dates, and other patterns.',
-  nlp_scrub: 'NLP-based PHI scrubbing (Presidio) — replaces names, locations, etc. with tokens.',
-  nlp_detect_act: 'Entity-specific conditional NLP — detects PHI entities and applies targeted per-entity actions.',
+  cryptohash: 'One-way HMAC-SHA3-256 hash. Irreversible, but the same value always hashes the same way for linkage.',
+  generalize: 'Reduce precision, e.g. date to year, ZIP to its first 3 digits.',
+  mask: 'Partially obscure a value, keeping a configurable prefix, suffix, or domain.',
+  date_shift: 'Shift a date by a fixed per-subject offset. Keeps the age bracket.',
+  tokenize: 'Replace with a format-preserving token, optionally namespace-scoped.',
+  perturb: 'Shift a number or date by a random offset within a set range.',
+  substitute: 'Replace the value with a synthetic but structurally valid one.',
+  scrub_text: 'Regex text scrubbing for phones, emails, dates, and similar patterns.',
+  nlp_scrub: 'NLP scrubbing with Presidio. Replaces names, locations, and other entities with tokens.',
+  nlp_detect_act: 'Detects PHI entities and applies a targeted action per entity type.',
   encrypt: 'RSA-encrypt the value; reversible with the private key.',
   decrypt: 'RSA-decrypt a previously encrypted value.',
   gpas_pseudonymize: 'Replace the value with a gPAS-generated pseudonym (requires gPAS server).',
@@ -123,12 +124,12 @@ export interface LocalRule {
   enabled?: boolean;
 }
 
-/** Whether a rule is active (default true — undefined counts as enabled). */
+/** Whether a rule is active (default true - undefined counts as enabled). */
 export function isRuleEnabled(r: LocalRule): boolean {
   return r.enabled !== false;
 }
 
-// crypto.randomUUID() requires HTTPS or localhost — unavailable over plain HTTP.
+// crypto.randomUUID() requires HTTPS or localhost - unavailable over plain HTTP.
 export function uid(): string {
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
     const r = (Math.random() * 16) | 0;
@@ -138,7 +139,7 @@ export function uid(): string {
 
 // Default placeholder for the `substitute` action. Required by the schema, so a
 // sensible default keeps the rule valid out of the box and saves typing it on
-// every rule. Single source of truth — used by the UI seed, the export
+// every rule. Single source of truth - used by the UI seed, the export
 // fallback, and the explorer.
 export const SUBSTITUTE_DEFAULT = '[SUBSTITUTED]';
 
@@ -147,7 +148,7 @@ export const SUBSTITUTE_DEFAULT = '[SUBSTITUTED]';
 // to give other actions their own sensible defaults.
 export const ACTION_PARAM_DEFAULTS: Partial<Record<Action, Record<string, unknown>>> = {
   substitute: { substitute_with: SUBSTITUTE_DEFAULT },
-  // date_shift.max_days is required — seed a reasonable window so the rule is
+  // date_shift.max_days is required - seed a reasonable window so the rule is
   // valid out of the box; the user can tune it.
   date_shift: { max_days: 30, direction: 'both' },
   // mask needs a strategy + how many chars to keep; keep_prefix/4 suits most IDs.
@@ -166,7 +167,7 @@ export function newRule(): LocalRule {
 
 export function toApiRules(rules: LocalRule[]): ConfigRule[] {
   return rules.filter(isRuleEnabled).map(({ match, action, params, name }) => {
-    // Drop empty-string/null values — they add no information and can confuse
+    // Drop empty-string/null values - they add no information and can confuse
     // the backend validator. Keep explicit false / 0 / arrays.
     const resolvedParams = Object.fromEntries(
       Object.entries(params).filter(([, v]) => v !== '' && v !== null && v !== undefined),
@@ -223,8 +224,8 @@ function coerceScalar(raw: string): unknown {
 /**
  * Extract the `general:` block (appname, rewrite_references, domain_map, …) from
  * a config YAML so it survives a builder round-trip. The config builder only
- * parses `rules:`, so without this the `general:` block — crucially `domain_map`
- * and `rewrite_references` — is silently dropped when a profile is duplicated or
+ * parses `rules:`, so without this the `general:` block - crucially `domain_map`
+ * and `rewrite_references` - is silently dropped when a profile is duplicated or
  * edited, breaking cross-resource reference rewriting.
  *
  * Handles scalar keys and ONE level of nesting (e.g. `domain_map:` → Type:domain).
@@ -266,7 +267,7 @@ export function parseYamlIntoRules(yaml: string): { rules: LocalRule[]; error: s
   }
   const afterRules = yaml.slice(rulesStart + yaml.slice(rulesStart).indexOf('\n') + 1);
 
-  // Split on list-item openers — handles both 0-indent and 2-indent prefixes.
+  // Split on list-item openers - handles both 0-indent and 2-indent prefixes.
   const blocks = afterRules.split(/\n(?=\s*- )/).filter((b) => b.trim());
 
   const rules: LocalRule[] = blocks.map((block) => {
@@ -286,7 +287,7 @@ export function parseYamlIntoRules(yaml: string): { rules: LocalRule[]; error: s
       clean.match(/^\s*(?:-\s+)?name:\s*(.+?)\s*$/m)?.[1] ?? '',
     );
 
-    // Parse params block — supports scalar, quoted, and inline-list values.
+    // Parse params block - supports scalar, quoted, and inline-list values.
     const params: Record<string, unknown> = {};
     const paramsSection = clean.match(/^\s*params:\s*\n((?:[ \t]+\S[^\n]*\n?)*)/m)?.[1] ?? '';
     for (const line of paramsSection.split('\n')) {
@@ -298,7 +299,7 @@ export function parseYamlIntoRules(yaml: string): { rules: LocalRule[]; error: s
       const kv = line.match(/^\s+(\w+):\s*(.+?)\s*$/);
       if (kv) {
         const raw = unquote(kv[2]);
-        if (raw === '') continue; // bare `key:` (nested block) — skip, not a scalar
+        if (raw === '') continue; // bare `key:` (nested block) - skip, not a scalar
         // Coerce YAML scalars to their JS types: booleans (so base64_encoded /
         // preserve_length round-trip as real booleans, not the string "true"),
         // then numbers, else keep the string.
@@ -317,7 +318,7 @@ export function parseYamlIntoRules(yaml: string): { rules: LocalRule[]; error: s
 }
 
 // ---------------------------------------------------------------------------
-// Params validation — mirrors backend pipeline/config/rule_schema.py
+// Params validation - mirrors backend pipeline/config/rule_schema.py
 // ---------------------------------------------------------------------------
 
 interface ParamSpec {
@@ -434,7 +435,7 @@ export function validateParams(action: string, params: Record<string, unknown>):
 }
 
 // ---------------------------------------------------------------------------
-// Deduplication helper — used by all rule-import paths (AI approve, explorer
+// Deduplication helper - used by all rule-import paths (AI approve, explorer
 // Add, YAML import) to prevent the same match expression from being added twice.
 // ---------------------------------------------------------------------------
 
@@ -476,7 +477,7 @@ export const RESOURCE_TYPE_UNSET = '(unset)';
  * The resource type is the leading FHIRPath segment before the first dot:
  *   "Patient.name.family" → "Patient"
  *   "Observation"         → "Observation"   (whole-resource match)
- *   "*.id" / "*"          → "*"             (wildcard — applies to all types)
+ *   "*.id" / "*"          → "*"             (wildcard - applies to all types)
  *   ""                    → "(unset)"       (incomplete rule)
  */
 export function resourceTypeOf(match: string): string {
@@ -505,18 +506,18 @@ export function resourceTypesIn(rules: LocalRule[]): string[] {
 // Values-only granularity enforcement
 //
 // Small local models (e.g. Gemma 3 4B) don't reliably obey the "emit leaves,
-// not the parent" instruction — they propose BOTH a parent rule (Patient.name)
+// not the parent" instruction - they propose BOTH a parent rule (Patient.name)
 // AND its leaf rules (Patient.name.family). In values-only mode the parent is
 // redundant and defeats the point (it removes the whole element, including the
 // structure we wanted to keep). This deterministic filter drops any rule whose
 // `match` is a strict ANCESTOR of another proposed rule's `match`, so only the
-// leaves survive. A parent with no proposed leaves is kept untouched — nothing
+// leaves survive. A parent with no proposed leaves is kept untouched - nothing
 // is left untreated.
 // ---------------------------------------------------------------------------
 
 /** True when `ancestor` is a strict dot-path prefix of `descendant`
  * (Patient.name is an ancestor of Patient.name.family, but not of
- * Patient.namespace — the boundary must fall on a `.`). */
+ * Patient.namespace - the boundary must fall on a `.`). */
 export function isAncestorPath(ancestor: string, descendant: string): boolean {
   if (!ancestor || !descendant || ancestor === descendant) return false;
   return descendant.startsWith(ancestor + '.');
@@ -588,7 +589,7 @@ export function cleanupRules(rules: LocalRule[]): CleanupResult {
 }
 
 // ---------------------------------------------------------------------------
-// YAML serialiser (client-side preview — mirrors backend format)
+// YAML serialiser (client-side preview - mirrors backend format)
 // ---------------------------------------------------------------------------
 
 export function buildYamlPreview(
@@ -630,7 +631,7 @@ export function buildYamlPreview(
   for (const r of rules) {
     if (!r.match.trim() || !isRuleEnabled(r)) continue;
     // Always emit `- match:` (or `- name:`) as the first key so the block is
-    // unambiguous YAML — never a bare `  -`.
+    // unambiguous YAML - never a bare `  -`.
     if (r.name.trim()) {
       lines.push(`  - name: "${r.name.trim()}"`);
       lines.push(`    match: "${r.match}"`);
@@ -638,7 +639,7 @@ export function buildYamlPreview(
       lines.push(`  - match: "${r.match}"`);
     }
     lines.push(`    action: ${r.action}`);
-    // substitute requires substitute_with — fall back to the default so an
+    // substitute requires substitute_with - fall back to the default so an
     // imported/AI rule that omitted it still produces a valid config.
     const effectiveParams =
       r.action === 'substitute' && !r.params.substitute_with

@@ -218,7 +218,7 @@ export default function TrustHistoryPage() {
           {/* Findings triage */}
           <Card>
             <CardHeader>
-              <CardTitle className="flex items-center gap-2"><ClipboardList className="size-4" /> Findings — triage ({findings.length})</CardTitle>
+              <CardTitle className="flex items-center gap-2"><ClipboardList className="size-4" /> Findings, triage ({findings.length})</CardTitle>
               <p className="text-sm text-muted-foreground">Set status + root cause (source-error / ETL-error / genuine-biology) and save. PDSA study/act loop.</p>
             </CardHeader>
             <CardContent className="space-y-3">

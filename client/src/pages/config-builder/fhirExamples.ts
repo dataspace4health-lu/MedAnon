@@ -1,4 +1,4 @@
-// Bundled canonical FHIR R4 example resources — synthetic data only, no real PHI.
+// Bundled canonical FHIR R4 example resources. Synthetic data only, no real PHI.
 
 export interface FhirExample {
   resourceType: string;

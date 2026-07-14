@@ -135,7 +135,7 @@ export default function TrustGatePage() {
   }, [profiles, selectedProfile, providerId, useCase, lifecycleStage, orgRole]);
 
   // Provenance is derived automatically: the source system from the selected
-  // connection, the extraction time from "now" — no manual fields to fill.
+  // connection, the extraction time from "now", no manual fields to fill.
   const provenance = useCallback(
     () => {
       const src = conn?.label || conn?.baseUrl || "";
@@ -177,7 +177,7 @@ export default function TrustGatePage() {
         const result = await fn();
         setPassport(result);
         toast.success(`Quality Passport: ${result.decision.replace("_", " ")}`, {
-          description: `${what} — ${result.overall_score != null ? Math.round(result.overall_score) : "not assessed"}% checks passing`,
+          description: `${what}, ${result.overall_score != null ? Math.round(result.overall_score) : "not assessed"}% checks passing`,
         });
       } catch (err) {
         if (err instanceof DOMException && err.name === "AbortError") {
@@ -331,9 +331,9 @@ export default function TrustGatePage() {
               <div>
                 <p className="font-medium text-foreground">Ingestion modes</p>
                 <ul className="mt-1 list-inside list-disc space-y-1">
-                  <li><strong>Full-server scan</strong> — paginate ALL selected types, assess in chunks, aggregate one server-wide passport.</li>
-                  <li><strong>Patient $everything</strong> — a self-contained compartment where references resolve (cleanest relational signal).</li>
-                  <li><strong>Mixed sample / Paste</strong> — quick spot checks.</li>
+                  <li><strong>Full-server scan</strong>, paginate ALL selected types, assess in chunks, aggregate one server-wide passport.</li>
+                  <li><strong>Patient $everything</strong>, a self-contained compartment where references resolve (cleanest relational signal).</li>
+                  <li><strong>Mixed sample / Paste</strong>, quick spot checks.</li>
                 </ul>
               </div>
             </CardContent>
@@ -360,7 +360,7 @@ export default function TrustGatePage() {
                   {connections.map((c) => (
                     <SelectItem key={c.id} value={c.id}>
                       {c.label}
-                      {c.baseUrl ? ` — ${c.baseUrl}` : ""}
+                      {c.baseUrl ? `, ${c.baseUrl}` : ""}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -420,7 +420,7 @@ export default function TrustGatePage() {
           <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
             <CollapsibleTrigger className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground">
               <ChevronDown className={`size-4 transition-transform ${advancedOpen ? "rotate-180" : ""}`} />
-              Advanced — provider, reporting context &amp; profile
+              Advanced, provider, reporting context &amp; profile
             </CollapsibleTrigger>
             <CollapsibleContent className="grid gap-4 pt-4 sm:grid-cols-2">
               <div>
@@ -435,7 +435,7 @@ export default function TrustGatePage() {
                     <SelectItem value="__all__">All phases (default)</SelectItem>
                     {profiles.map((p) => (
                       <SelectItem key={p.name} value={p.name}>
-                        {p.name}{p.intended_use ? ` — ${p.intended_use}` : ""}
+                        {p.name}{p.intended_use ? `, ${p.intended_use}` : ""}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -548,7 +548,7 @@ export default function TrustGatePage() {
                   <div className="flex flex-col gap-2">
                     <p className="text-xs text-muted-foreground">
                       Ingests the <strong>whole</strong> {conn.label} server (no cap) and assesses each patient&apos;s
-                      complete record together — so referential integrity, the patient timeline, and clinical-logic
+                      complete record together, so referential integrity, the patient timeline, and clinical-logic
                       checks are scored against real context. Non-patient resources are swept after.
                     </p>
                     <div>
@@ -644,7 +644,7 @@ export default function TrustGatePage() {
                 </div>
                 <Textarea
                   className="h-[280px] resize-none font-mono text-xs"
-                  placeholder='{ "resourceType": "Patient", "id": "p1", ... }  — single resource, list, or Bundle'
+                  placeholder='{ "resourceType": "Patient", "id": "p1", ... } , single resource, list, or Bundle'
                   value={pasteText}
                   onChange={(e) => setPasteText(e.target.value)}
                   spellCheck={false}
@@ -663,7 +663,7 @@ export default function TrustGatePage() {
               <div className="flex flex-col gap-4">
                 <p className="text-xs text-muted-foreground">
                   Provider data arrives in many shapes. Submit <strong>OMOP CDM</strong> tables directly, or
-                  source/tabular tables with a column <strong>mapping</strong> — both are normalized onto OMOP and
+                  source/tabular tables with a column <strong>mapping</strong>, both are normalized onto OMOP and
                   assessed with OHDSI DQD-style checks plus demographically-stratified clinical evaluation.
                 </p>
                 <div className="flex flex-wrap items-center gap-2">
@@ -710,7 +710,7 @@ export default function TrustGatePage() {
               <Activity className="size-4" /> QC pipeline
             </CardTitle>
             <p className="text-sm text-muted-foreground">
-              Each stage maps to the checks that actually ran — revealed in sequence as the assessment completes.
+              Each stage maps to the checks that actually ran, revealed in sequence as the assessment completes.
             </p>
           </CardHeader>
           <CardContent>

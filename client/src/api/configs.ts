@@ -1,5 +1,5 @@
 /**
- * Config profile management — list, get, create, update, delete.
+ * Config profile management, list, get, create, update, delete.
  */
 
 import { fetchApi, getAuthHeaders } from "./client";
@@ -31,13 +31,13 @@ export interface ConfigUpdateBody {
   general?: Record<string, unknown>;
 }
 
-/** GET /api/v1/configs — list all config profiles. */
+/** GET /api/v1/configs, list all config profiles. */
 export async function listConfigs(): Promise<ConfigMeta[]> {
   const data = await fetchApi<{ configs: ConfigMeta[] }>("/v1/configs", { cache: "no-store" });
   return data.configs;
 }
 
-/** GET /api/v1/configs/:name — fetch raw YAML for a named config. */
+/** GET /api/v1/configs/:name, fetch raw YAML for a named config. */
 export async function getConfigYaml(name: string): Promise<string> {
   const response = await fetch(`/api/v1/configs/${encodeURIComponent(name)}`, {
     headers: getAuthHeaders(),
@@ -51,7 +51,7 @@ export async function getConfigYaml(name: string): Promise<string> {
   return response.text();
 }
 
-/** POST /api/v1/configs — create a new user-defined config. */
+/** POST /api/v1/configs, create a new user-defined config. */
 export async function createConfig(body: ConfigCreateBody): Promise<ConfigMeta> {
   const response = await fetch("/api/v1/configs", {
     method: "POST",
@@ -68,7 +68,7 @@ export async function createConfig(body: ConfigCreateBody): Promise<ConfigMeta> 
   return data.config;
 }
 
-/** PUT /api/v1/configs/:name — replace rules of a user-defined config. */
+/** PUT /api/v1/configs/:name, replace rules of a user-defined config. */
 export async function updateConfig(name: string, body: ConfigUpdateBody): Promise<ConfigMeta> {
   const response = await fetch(`/api/v1/configs/${encodeURIComponent(name)}`, {
     method: "PUT",
@@ -85,7 +85,7 @@ export async function updateConfig(name: string, body: ConfigUpdateBody): Promis
   return data.config;
 }
 
-/** DELETE /api/v1/configs/:name — delete a user-defined config. */
+/** DELETE /api/v1/configs/:name, delete a user-defined config. */
 export async function deleteConfig(name: string): Promise<void> {
   const response = await fetch(`/api/v1/configs/${encodeURIComponent(name)}`, {
     method: "DELETE",

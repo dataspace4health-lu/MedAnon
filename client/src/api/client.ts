@@ -222,7 +222,7 @@ export async function fetchFhirTargetByUrl<T>(hapiAbsoluteUrl: string): Promise<
     pathname = parsed.pathname === "/fhir" ? "/fhir/" : parsed.pathname;
     search = parsed.search;
   } catch {
-    /* not an absolute URL — use as-is */
+    /* not an absolute URL, use as-is */
   }
   const proxyUrl = pathname.replace(/^\/fhir/, "/fhir-target") + search;
 
@@ -253,6 +253,26 @@ export async function fetchFhirProxy<T>(absoluteUrl: string, token?: string): Pr
     timeout: 60_000,
     headers: token ? { "X-FHIR-Token": token } : undefined,
   });
+}
+
+/**
+ * Fetch from a backend *saved* source by id, the source's base URL and bearer
+ * token are resolved server-side (the token never reaches the browser).
+ *
+ * Pass a relative `pathOrUrl` (e.g. `/Patient?_count=50`) for a normal request,
+ * or an absolute `next`-link with `isAbsolute=true` for pagination (the backend
+ * verifies it shares the saved server's origin).
+ */
+export async function fetchFhirProxyById<T>(
+  sourceId: string,
+  pathOrUrl: string,
+  isAbsolute = false,
+): Promise<T> {
+  const key = isAbsolute ? "url" : "path";
+  return fetchApi<T>(
+    `/v1/fhir-proxy?source_id=${encodeURIComponent(sourceId)}&${key}=${encodeURIComponent(pathOrUrl)}`,
+    { timeout: 60_000 },
+  );
 }
 
 /**

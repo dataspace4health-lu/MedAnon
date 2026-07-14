@@ -52,8 +52,8 @@ type Format = 'hl7v2' | 'cda' | 'dicom' | 'tabular';
 const FORMAT_TABS: { value: Format; label: string; note: string }[] = [
   { value: 'hl7v2', label: 'HL7 v2', note: 'Pipe-delimited messages (PID, NK1, PV1…)' },
   { value: 'cda', label: 'CDA / CCDA', note: 'HL7 v3 clinical documents (recordTarget)' },
-  { value: 'dicom', label: 'DICOM', note: 'Imaging objects — patient/study tags' },
-  { value: 'tabular', label: 'Tabular', note: 'CSV / Excel / Parquet — by column rule' },
+  { value: 'dicom', label: 'DICOM', note: 'Imaging objects, patient/study tags' },
+  { value: 'tabular', label: 'Tabular', note: 'CSV / Excel / Parquet, by column rule' },
 ];
 
 const TABULAR_FORMATS: { value: TabularFormat; label: string; accept: string }[] = [
@@ -119,7 +119,7 @@ export default function FormatProcessPage() {
   const { configProfile } = useConfig();
   const [format, setFormat] = useState<Format>('hl7v2');
 
-  // Text-format state (shared by HL7 v2 and CDA — both are text → text)
+  // Text-format state (shared by HL7 v2 and CDA, both are text → text)
   const [textInput, setTextInput] = useState('');
   const [textOutput, setTextOutput] = useState('');
 
@@ -210,7 +210,7 @@ export default function FormatProcessPage() {
       const url = URL.createObjectURL(blob);
       setDicomResultUrl(url);
       setDicomResultName(filename);
-      toast.success('DICOM file de-identified — ready to download.');
+      toast.success('DICOM file de-identified, ready to download.');
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       setError(message);
@@ -237,7 +237,7 @@ export default function FormatProcessPage() {
     setError(null);
   }, [resetTabularResult]);
 
-  // Step 1 — inspect the chosen file to preview its columns.
+  // Step 1, inspect the chosen file to preview its columns.
   const handleTabularInspect = useCallback(async () => {
     if (!tabularFile) {
       toast.error('Please choose a file first.');
@@ -261,7 +261,7 @@ export default function FormatProcessPage() {
       ).length;
       toast.success(
         `Found ${preview.columns.length} columns, ${preview.row_count} rows` +
-          (recommended ? ` — ${recommended} pre-mapped (review below).` : '.'),
+          (recommended ? `, ${recommended} pre-mapped (review below).` : '.'),
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -315,7 +315,7 @@ export default function FormatProcessPage() {
     }
   }, [buildColumnRules]);
 
-  // Step 2 — build inline column rules from the picker and run de-identification.
+  // Step 2, build inline column rules from the picker and run de-identification.
   const handleTabularDeidentify = useCallback(async () => {
     if (!tabularFile) return;
     const columnRules = buildColumnRules();
@@ -331,7 +331,7 @@ export default function FormatProcessPage() {
       const url = URL.createObjectURL(blob);
       setTabularResultUrl(url);
       setTabularResultName(filename);
-      toast.success(`De-identified ${columnRules.length} column(s) — ready to download.`);
+      toast.success(`De-identified ${columnRules.length} column(s), ready to download.`);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       setError(message);
@@ -382,7 +382,7 @@ export default function FormatProcessPage() {
     <div>
       <PageHeader
         title="Multi-Format De-identification"
-        description="De-identify HL7 v2, CDA, DICOM, and tabular files (CSV / Excel / Parquet) through the same rule engine as FHIR. Output is returned to you — never uploaded to the FHIR target server."
+        description="De-identify HL7 v2, CDA, DICOM, and tabular files (CSV / Excel / Parquet) through the same rule engine as FHIR. Output is returned to you, never uploaded to the FHIR target server."
       />
 
       {/* Format selector */}
@@ -593,7 +593,7 @@ export default function FormatProcessPage() {
                 <div className="flex items-center gap-2">
                   <ShieldCheck className="size-4 text-primary" />
                   <p className="text-sm">
-                    De-identified DICOM ready — <span className="font-medium">{dicomResultName}</span>
+                    De-identified DICOM ready, <span className="font-medium">{dicomResultName}</span>
                   </p>
                 </div>
                 <a href={dicomResultUrl} download={dicomResultName}>
@@ -609,7 +609,7 @@ export default function FormatProcessPage() {
       )}
 
       {/* ------------------------------------------------------------------ */}
-      {/* Tabular panel (CSV / Excel / Parquet) — column-mapping workflow    */}
+      {/* Tabular panel (CSV / Excel / Parquet), column-mapping workflow    */}
       {/* ------------------------------------------------------------------ */}
       {format === 'tabular' && (
         <div className="space-y-5">
@@ -637,7 +637,7 @@ export default function FormatProcessPage() {
 
           {tabularMode === 'single' && (
           <div className="space-y-5">
-          {/* Step 1 — choose file + format, then inspect */}
+          {/* Step 1, choose file + format, then inspect */}
           <Card>
             <CardHeader className="pb-3">
               <CardTitle className="text-base">1. Choose a file</CardTitle>
@@ -714,7 +714,7 @@ export default function FormatProcessPage() {
             </CardContent>
           </Card>
 
-          {/* Step 2 — per-column action mapping */}
+          {/* Step 2, per-column action mapping */}
           {tabularPreview && (
             <Card>
               <CardHeader className="flex-row items-center justify-between pb-3">
@@ -839,7 +839,7 @@ export default function FormatProcessPage() {
                     <div className="flex items-center gap-2">
                       <ShieldCheck className="size-4 text-primary" />
                       <p className="text-sm">
-                        De-identified file ready — <span className="font-medium">{tabularResultName}</span>
+                        De-identified file ready, <span className="font-medium">{tabularResultName}</span>
                       </p>
                     </div>
                     <a href={tabularResultUrl} download={tabularResultName}>
@@ -924,7 +924,7 @@ export default function FormatProcessPage() {
                   </Select>
                   <p className="mt-1.5 text-xs text-muted-foreground">
                     Tip: build a mapping in <strong>Single file</strong> mode, then{' '}
-                    <strong>Save as profile</strong> — it appears here.
+                    <strong>Save as profile</strong>, it appears here.
                   </p>
                 </div>
 
@@ -953,8 +953,8 @@ export default function FormatProcessPage() {
                     <div className="flex items-center gap-2">
                       <ShieldCheck className="size-4 text-primary" />
                       <p className="text-sm">
-                        Job <span className="font-mono">{submittedJobId.slice(0, 8)}</span> submitted —
-                        track progress and download the result ZIP on the Jobs page.
+                        Job <span className="font-mono">{submittedJobId.slice(0, 8)}</span> submitted.
+                        Track progress and download the result ZIP on the Jobs page.
                       </p>
                     </div>
                     <Link to="/jobs">

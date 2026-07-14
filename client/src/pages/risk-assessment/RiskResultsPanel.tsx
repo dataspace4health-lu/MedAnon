@@ -60,6 +60,129 @@ function riskBannerIcon(level: RiskReport['summary']['risk_level']) {
 }
 
 // ---------------------------------------------------------------------------
+// Calculation breakdown, shows the actual formula for each metric with the
+// real values from THIS dataset plugged in, so nothing is a black box.
+// ---------------------------------------------------------------------------
+
+function CalcRow({
+  metric,
+  formula,
+  substitution,
+  result,
+}: {
+  metric: string;
+  formula: string;
+  substitution: string;
+  result: string;
+}) {
+  return (
+    <TableRow>
+      <TableCell className="font-medium">{metric}</TableCell>
+      <TableCell className="font-mono text-xs text-muted-foreground">
+        {formula}
+      </TableCell>
+      <TableCell className="font-mono text-xs tabular-nums">
+        {substitution}
+      </TableCell>
+      <TableCell className="text-right font-mono text-sm font-semibold tabular-nums">
+        {result}
+      </TableCell>
+    </TableRow>
+  );
+}
+
+function CalculationBreakdown({ report }: { report: RiskReport }) {
+  const s = report.summary;
+  const minK = s.min_k;
+  const total = s.total_records;
+  const groups = s.total_groups;
+  const qi = s.qi_fields?.join(', ') || 'gender, birth_year, zip_prefix';
+
+  const level =
+    minK >= 5 ? 'low' : minK >= 3 ? 'medium' : minK >= 2 ? 'high' : 'critical';
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Info className="h-4 w-4 text-muted-foreground" />
+          How these scores were calculated
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <p className="text-sm text-muted-foreground">
+          Every patient is grouped by its quasi-identifiers (
+          <span className="font-mono text-xs">{qi}</span>). Records sharing the
+          same values form one <em>equivalence class</em>; the metrics below are
+          derived directly from those class sizes, computed from your data, not
+          assumed.
+        </p>
+        <div className="overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Metric</TableHead>
+                <TableHead>Formula</TableHead>
+                <TableHead>With your data</TableHead>
+                <TableHead className="text-right">Result</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              <CalcRow
+                metric="Min k"
+                formula="min(class size)"
+                substitution={`smallest of ${groups} class(es)`}
+                result={String(minK)}
+              />
+              <CalcRow
+                metric="Prosecutor risk"
+                formula="1 / min_k"
+                substitution={`1 / ${minK}`}
+                result={minK > 0 ? pct(1 / minK) : '—'}
+              />
+              <CalcRow
+                metric="Journalist risk"
+                formula="max(1 / kᵢ) = 1 / min_k"
+                substitution={`1 / ${minK}`}
+                result={minK > 0 ? pct(1 / minK) : '—'}
+              />
+              <CalcRow
+                metric="Marketer risk"
+                formula="classes / records"
+                substitution={`${groups} / ${total}`}
+                result={total > 0 ? pct(groups / total) : '—'}
+              />
+              <CalcRow
+                metric="Risk level"
+                formula="k≥5 low · k≥3 med · k≥2 high · k=1 crit"
+                substitution={`k = ${minK}`}
+                result={level}
+              />
+            </TableBody>
+          </Table>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Prosecutor and journalist risk coincide here because the worst-case
+          target is always the smallest class (1/min_k). Marketer risk is the
+          average across all records, lower because most patients sit in larger,
+          safer classes.
+        </p>
+        <div className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
+          <span className="font-medium text-foreground">
+            Membership &amp; attribute-inference risk (DCR / NNDR / CAP)
+          </span>{' '}
+          compares a synthetic dataset against the real source, so they aren't
+          computed for a single dataset here. Generate synthetic data on the{' '}
+          <span className="font-medium">Synthetic Data</span> page and use its{' '}
+          <span className="font-medium">Privacy + Fidelity Passport</span> to see
+          those metrics.
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
@@ -157,7 +280,10 @@ export function RiskResultsPanel({ report }: RiskResultsPanelProps) {
         />
       </div>
 
-      {/* (d) Separator */}
+      {/* (d) How these scores are calculated, full transparency */}
+      <CalculationBreakdown report={report} />
+
+      {/* (d2) Separator */}
       <Separator />
 
       {/* (e) l-Diversity section */}

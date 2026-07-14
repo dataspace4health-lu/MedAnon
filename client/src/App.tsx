@@ -33,6 +33,8 @@ const AuditPage            = lazy(() => import('@/pages/AuditPage'));
 const TrustGatePage        = lazy(() => import('@/pages/TrustGatePage'));
 const TrustProfilesPage    = lazy(() => import('@/pages/TrustProfilesPage'));
 const TrustHistoryPage     = lazy(() => import('@/pages/TrustHistoryPage'));
+const PermitsPage          = lazy(() => import('@/pages/PermitsPage'));
+const ReportsPage          = lazy(() => import('@/pages/ReportsPage'));
 const SettingsPage         = lazy(() => import('@/pages/SettingsPage'));
 
 function PageLoader() {
@@ -52,9 +54,9 @@ export default function App() {
     <Suspense fallback={<PageLoader />}>
       <Routes>
         {/*
-         * Public / auth routes — rendered outside AuthGate and outside AppLayout.
-         * /login      — branded sign-in page (OIDC redirect button or API-key form)
-         * /auth/callback — PKCE code exchange after Keycloak redirects back
+         * Public / auth routes, rendered outside AuthGate and outside AppLayout.
+         * /login     , branded sign-in page (OIDC redirect button or API-key form)
+         * /auth/callback, PKCE code exchange after Keycloak redirects back
          */}
         <Route path="login" element={<LoginPage />} />
         <Route path="auth/callback" element={<CallbackPage />} />
@@ -86,10 +88,12 @@ export default function App() {
             <Route path="trust-gate"    element={<Guarded role="analyst"><TrustGatePage /></Guarded>} />
             <Route path="trust-profiles" element={<Guarded role="analyst"><TrustProfilesPage /></Guarded>} />
             <Route path="trust-history" element={<Guarded role="analyst"><TrustHistoryPage /></Guarded>} />
+            <Route path="reports"       element={<Guarded role="analyst"><ReportsPage /></Guarded>} />
             <Route path="history"       element={<Guarded role="analyst"><ProcessingHistoryPage /></Guarded>} />
             <Route path="audit"         element={<Guarded role="analyst"><AuditPage /></Guarded>} />
 
             {/* admin */}
+            <Route path="permits"            element={<Guarded role="admin"><PermitsPage /></Guarded>} />
             <Route path="configs/new"        element={<Guarded role="admin"><ConfigBuilderPage /></Guarded>} />
             <Route path="configs/:name/edit" element={<Guarded role="admin"><ConfigBuilderPage /></Guarded>} />
           </Route>

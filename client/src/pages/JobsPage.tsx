@@ -251,7 +251,7 @@ export default function JobsPage() {
     <div className="space-y-5">
       <PageHeader
         title="Jobs Monitor"
-        description="Live server-side job queue — running, queued, failed and dead-letter."
+        description="Live server-side job queue, running, queued, failed and dead-letter."
         actions={
           <Button size="sm" variant="outline" className="gap-1.5" onClick={() => refetch()}>
             <RefreshCw className="size-3.5" /> Refresh

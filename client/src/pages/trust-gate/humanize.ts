@@ -3,7 +3,7 @@
  *
  * The Quality Passport is PHI-safe by design: a violation detail carries the
  * resource (type + id), the offending field/path, and a short technical reason,
- * but never the raw field value (a value can itself be PHI — a name, a date).
+ * but never the raw field value (a value can itself be PHI, a name, a date).
  * This module turns those technical signals into plain language and pinpoints
  * *where* each error is, without surfacing any raw value.
  */
@@ -11,7 +11,7 @@
 import type { TrustCheck } from "@/api/trustGate";
 
 export interface LocatedProblem {
-  /** "Patient/p1" or "Observation[3]" — the affected record. */
+  /** "Patient/p1" or "Observation[3]", the affected record. */
   resource: string;
   /** The exact field/path the problem is at. */
   field: string;
@@ -53,7 +53,7 @@ export function prettyCheck(checkId: string): string {
   return leaf.charAt(0).toUpperCase() + leaf.slice(1);
 }
 
-/** One-line "what this check verifies" — prefers the backend description. */
+/** One-line "what this check verifies", prefers the backend description. */
 export function whatItChecks(c: TrustCheck): string {
   return c.description || CHECK_PLAIN[c.check_id] || prettyCheck(c.check_id);
 }

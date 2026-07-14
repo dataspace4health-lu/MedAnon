@@ -19,7 +19,7 @@ export function TopBar({ sidebarOpen, onToggleSidebar }: TopBarProps) {
 
   return (
     <header className="flex h-16 shrink-0 items-center gap-4 border-b border-border bg-background/95 px-4 backdrop-blur-sm sm:px-6 z-40">
-      {/* Hamburger — mobile only */}
+      {/* Hamburger, mobile only */}
       <button
         onClick={onToggleSidebar}
         className="flex size-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground md:hidden"
@@ -28,7 +28,7 @@ export function TopBar({ sidebarOpen, onToggleSidebar }: TopBarProps) {
         {sidebarOpen ? <X className="size-5" /> : <Menu className="size-5" />}
       </button>
 
-      {/* Brand — links home */}
+      {/* Brand, links home */}
       <Link to="/" className="flex shrink-0 items-center gap-2.5">
         <span className="flex size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground font-bold text-sm">
           DP

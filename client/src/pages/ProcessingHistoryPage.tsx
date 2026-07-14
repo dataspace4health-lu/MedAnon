@@ -162,7 +162,7 @@ function RunDetailPanel({ run }: { run: ProcessingRun }) {
     <div className="bg-muted/10 border-t px-4 py-4">
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
 
-        {/* 1 — Score breakdown */}
+        {/* 1, Score breakdown */}
         {score?.computed && (
           <div className="space-y-2">
             <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Score Breakdown</p>
@@ -181,11 +181,11 @@ function RunDetailPanel({ run }: { run: ProcessingRun }) {
           </div>
         )}
 
-        {/* 2 — De-identification actions */}
+        {/* 2, De-identification actions */}
         <div className="space-y-1">
           <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-2">De-identification Actions</p>
 
-          {/* Pseudonymization — 0 risk hits = successfully protected */}
+          {/* Pseudonymization, 0 risk hits = successfully protected */}
           <div className={cn(
             'flex items-center justify-between rounded-lg border px-3 py-2 text-xs',
             identifierHits === 0
@@ -198,7 +198,7 @@ function RunDetailPanel({ run }: { run: ProcessingRun }) {
             </span>
           </div>
 
-          {/* NLP text scrub — 0 hits = no PHI text found */}
+          {/* NLP text scrub, 0 hits = no PHI text found */}
           <div className={cn(
             'flex items-center justify-between rounded-lg border px-3 py-2 text-xs',
             textHits === 0
@@ -235,7 +235,7 @@ function RunDetailPanel({ run }: { run: ProcessingRun }) {
           ))}
         </div>
 
-        {/* 3 — Run details */}
+        {/* 3, Run details */}
         <div className="space-y-1">
           <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-2">Run Details</p>
           <KV label="Resources" value={run.resource_count.toLocaleString()} />
@@ -251,7 +251,7 @@ function RunDetailPanel({ run }: { run: ProcessingRun }) {
           } />
         </div>
 
-        {/* 4 — Privacy gate */}
+        {/* 4, Privacy gate */}
         <div className="space-y-3">
           {privacy != null && (
             <div>

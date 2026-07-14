@@ -3,7 +3,7 @@
  *
  * The SPA uses Authorization Code Flow + PKCE via oidc-client-ts.
  * The backend exposes GET /v1/auth/config (open path) so the OIDC client can
- * be bootstrapped at runtime without a rebuild — swap Keycloak → Azure AD by
+ * be bootstrapped at runtime without a rebuild, swap Keycloak → Azure AD by
  * changing env vars and restarting the anonymizer.
  *
  * All token acquisition and renewal is handled by UserManager in AuthContext.

@@ -19,7 +19,7 @@ interface RoleGateProps {
 export function RoleGate({ minRole, children }: RoleGateProps) {
   const { mode, hasRole } = useAuth();
 
-  // Non-OIDC modes grant admin to all callers — gate is always open.
+  // Non-OIDC modes grant admin to all callers, gate is always open.
   if (mode !== 'oidc') return <>{children}</>;
 
   if (hasRole(minRole)) return <>{children}</>;

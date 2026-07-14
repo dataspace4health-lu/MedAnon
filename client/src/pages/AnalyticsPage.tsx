@@ -44,10 +44,14 @@ export default function AnalyticsPage() {
     limit: 500,
   });
   const { data: stats } = useProcessingRunStats({ config_profile: profileParam });
+  // The filtered stats only ever report the selected profile, so the dropdown
+  // has to source its options from an unfiltered query, otherwise picking a
+  // profile collapses the list to that one profile and you cannot switch away.
+  const { data: allStats } = useProcessingRunStats();
 
   const runs = runsData?.runs ?? [];
 
-  const profiles = Object.keys(stats?.runs_by_profile ?? {}).sort();
+  const profiles = Object.keys(allStats?.runs_by_profile ?? {}).sort();
   const avgComposite = stats?.avg_composite;
 
   const compositeClass =
@@ -98,6 +102,7 @@ export default function AnalyticsPage() {
         />
         <KpiCard
           label="Avg Privacy"
+          sub="residual privacy (1 - risk)"
           value={stats?.avg_privacy != null ? `${Math.round(stats.avg_privacy)}%` : '—'}
           valueClass={stats?.avg_privacy != null
             ? stats.avg_privacy >= 80 ? 'text-emerald-600 dark:text-emerald-400'

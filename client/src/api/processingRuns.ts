@@ -1,5 +1,5 @@
 /**
- * Processing runs — history of de-identification operations with scoring.
+ * Processing runs, history of de-identification operations with scoring.
  */
 
 import { fetchApi } from "./client";
@@ -24,7 +24,7 @@ export interface TrustCheck {
   critical: boolean;
   description: string;
   recommendation: string;
-  // PIQI HDQT v2.0 (ASTP/ONC 2024) — additive metadata, present on tagged checks.
+  // PIQI HDQT v2.0 (ASTP/ONC 2024), additive metadata, present on tagged checks.
   hdqt_category?: string;
   hdqt_dimension?: string;
   // Honesty mechanism: check could not run (service timeout, n-ary boundary, etc.)
@@ -61,7 +61,7 @@ export interface TrustFrameworkVersions {
   evaluation_profile: string;
 }
 
-/** Descriptive data profile (analysis support — NOT scored). */
+/** Descriptive data profile (analysis support, NOT scored). */
 export interface TrustProfile {
   total_resources: number;
   distinct_resource_types: number;
@@ -155,7 +155,7 @@ export interface ProcessingRunStats {
   runs_by_profile: Record<string, number>;
 }
 
-/** GET /v1/processing-runs — paginated list with optional filters. */
+/** GET /v1/processing-runs, paginated list with optional filters. */
 export async function listProcessingRuns(params?: {
   endpoint?: string;
   config_profile?: string;
@@ -173,7 +173,7 @@ export async function listProcessingRuns(params?: {
   );
 }
 
-/** GET /v1/processing-runs/stats — aggregate statistics, optionally filtered by profile. */
+/** GET /v1/processing-runs/stats, aggregate statistics, optionally filtered by profile. */
 export async function getProcessingRunStats(params?: {
   config_profile?: string;
 }): Promise<ProcessingRunStats> {
@@ -183,7 +183,7 @@ export async function getProcessingRunStats(params?: {
   return fetchApi<ProcessingRunStats>(`/v1/processing-runs/stats${query ? `?${query}` : ""}`);
 }
 
-/** GET /v1/processing-runs/:id — single run detail. */
+/** GET /v1/processing-runs/:id, single run detail. */
 export async function getProcessingRun(id: string): Promise<ProcessingRun> {
   return fetchApi<ProcessingRun>(
     `/v1/processing-runs/${encodeURIComponent(id)}`,
@@ -191,7 +191,7 @@ export async function getProcessingRun(id: string): Promise<ProcessingRun> {
 }
 
 
-/** DELETE /v1/processing-runs?days=N — purge runs older than N days. */
+/** DELETE /v1/processing-runs?days=N, purge runs older than N days. */
 export async function purgeProcessingRuns(days: number = 30): Promise<{ deleted: number }> {
   return fetchApi<{ deleted: number }>(
     `/v1/processing-runs?days=${days}`,

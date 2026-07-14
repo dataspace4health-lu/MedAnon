@@ -58,7 +58,7 @@ export function FhirCodeViewer({
     );
   }
 
-  // XML — keep Prism (less common, usually smaller payloads)
+  // XML, keep Prism (less common, usually smaller payloads)
   return (
     <div className={containerClass} style={containerStyle}>
       {copyOverlay}

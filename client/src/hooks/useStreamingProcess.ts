@@ -56,7 +56,7 @@ export function useStreamingProcess() {
         for await (const item of generator) {
           if (signal.aborted) break;
 
-          // Detect the stream completion trailer — extract pii_leak, skip the
+          // Detect the stream completion trailer, extract pii_leak, skip the
           // trailer itself so it doesn't appear as a resource in the output.
           if (item.__stream_complete) {
             const trailerLeak = item.pii_leak as PiiLeakInfo | undefined;
@@ -76,7 +76,7 @@ export function useStreamingProcess() {
             counts[resourceType] = (counts[resourceType] ?? 0) + 1;
           }
 
-          // Throttle state updates — flush at most every UPDATE_INTERVAL_MS
+          // Throttle state updates, flush at most every UPDATE_INTERVAL_MS
           const now = Date.now();
           if (now - lastUpdate >= UPDATE_INTERVAL_MS) {
             flush();

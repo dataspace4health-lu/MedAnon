@@ -1,4 +1,5 @@
-import { useState, useCallback, useRef, useMemo } from "react";
+import { useState, useCallback, useRef, useMemo, useEffect } from "react";
+import { toast } from "sonner";
 import { Play, Square, AlertCircle, GitCompare, FileJson, TableProperties, Maximize2, Minimize2, Upload, CheckCircle2, Loader2, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -16,6 +17,8 @@ import { buildPiiFromDeidentifiedOnly, buildFieldSummary, stripManifestTag } fro
 import { extractFieldsDeep } from "@/lib/fhirFields";
 import { getAuthHeaders } from "@/api/client";
 import { uploadToTarget } from "@/api/medanon";
+import { listDestinations, type OutputDestination } from "@/api/connectors";
+import { getJobStatus, submitPatientExportJob } from "@/api/jobs";
 import type { BatchPrivacy } from "@/api/jobs";
 import { getGradeStyle } from "@/lib/qualityScore";
 import type { LetterGrade } from "@/lib/qualityScore";
@@ -27,6 +30,36 @@ interface DeidentifyPanelProps {
   patientId: string;
   patientName: string;
   configProfile: string;
+}
+
+/**
+ * Max resources the inline preview sends to /process/batch.
+ *
+ * $everything is fetched with _count=5000; a dense patient can serialize to far
+ * more than the server's 10 MB body cap (MEDANON_MAX_BODY_BYTES), which rejects
+ * on Content-Length and drops the connection. The preview is a preview, the
+ * full record is released through the async export job.
+ */
+const PREVIEW_RESOURCE_LIMIT = 500;
+
+/**
+ * PHI-safe download base name. The source `patientId` is a real identifier and
+ * must never appear in a filename, even on de-identified content. Prefer the
+ * de-identified output Patient's (pseudonymized) id when the profile changed it;
+ * otherwise fall back to a generic timestamped name.
+ */
+function safeDownloadBase(
+  resources: Record<string, unknown>[],
+  sourceId: string,
+): string {
+  const patient = resources.find((r) => r?.resourceType === "Patient");
+  const outId = typeof patient?.id === "string" ? patient.id : "";
+  if (outId && outId !== sourceId) return `deidentified-${outId}`;
+  const ts = new Date()
+    .toISOString()
+    .replace(/[-:]/g, "")
+    .replace(/\.\d+Z$/, "Z");
+  return `deidentified-patient-${ts}`;
 }
 
 interface StreamState {
@@ -115,7 +148,24 @@ export function DeidentifyPanel({
   });
   const [activeTab, setActiveTab] = useState<"output" | "diff" | "table">("output");
   const [fullView, setFullView] = useState(false);
+  // > 0 when the preview was capped: holds the TRUE resource count so the UI can
+  // say how much of the record it is not showing.
+  const [previewTruncated, setPreviewTruncated] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
+
+  // Saved S3 destinations for the optional "send to S3" delivery (admin only;
+  // a 403/empty for non-admins is non-fatal, the control just stays hidden).
+  const [destinations, setDestinations] = useState<OutputDestination[]>([]);
+  const [selectedDest, setSelectedDest] = useState<string>("");
+  const [delivering, setDelivering] = useState(false);
+  useEffect(() => {
+    listDestinations()
+      .then((d) => {
+        setDestinations(d);
+        if (d.length > 0) setSelectedDest(d[0].id);
+      })
+      .catch(() => setDestinations([]));
+  }, []);
 
   const handleRun = useCallback(async () => {
     abortRef.current = new AbortController();
@@ -130,6 +180,7 @@ export function DeidentifyPanel({
       error: null,
       score: null,
     });
+    setPreviewTruncated(0);
     setActiveTab("output");
 
     try {
@@ -150,14 +201,25 @@ export function DeidentifyPanel({
 
       const bundle = await fhirRes.json();
 
-      // Extract original resources for the diff view.
-      const originalResources: Record<string, unknown>[] = (
+      const allResources: Record<string, unknown>[] = (
         (bundle.entry as Array<{ resource?: Record<string, unknown> }>) ?? []
       )
         .map((e) => e.resource)
         .filter((r): r is Record<string, unknown> => !!r);
 
+      // This panel is a PREVIEW. Posting an unbounded $everything bundle (up to
+      // _count=5000 resources) routinely exceeds the server's 10 MB body cap
+      // (MEDANON_MAX_BODY_BYTES), which rejects on Content-Length and closes the
+      // connection, surfacing in the browser as "Failed to fetch" rather than a
+      // readable 413. Cap what we send; the full dataset is released through the
+      // async export job (Deliver to S3), which never round-trips the browser.
+      const truncated = allResources.length > PREVIEW_RESOURCE_LIMIT;
+      const originalResources = truncated
+        ? allResources.slice(0, PREVIEW_RESOURCE_LIMIT)
+        : allResources;
+
       setState((prev) => ({ ...prev, originalResources }));
+      setPreviewTruncated(truncated ? allResources.length : 0);
 
       // Step 2: Stream the bundle through /process/batch for de-identification.
       const params = new URLSearchParams({ config_profile: configProfile });
@@ -167,17 +229,26 @@ export function DeidentifyPanel({
           "Content-Type": "application/json",
           ...getAuthHeaders(),
         },
-        body: JSON.stringify(bundle),
+        body: JSON.stringify({
+          resourceType: "Bundle",
+          type: "collection",
+          entry: originalResources.map((resource) => ({ resource })),
+        }),
         signal,
       });
 
       if (!response.ok) {
         let detail = `Processing failed (${response.status})`;
-        try {
-          const body = await response.json();
-          if (body?.detail) detail = String(body.detail);
-        } catch {
-          // ignore
+        if (response.status === 413) {
+          detail =
+            "This patient's record is too large to preview inline. Use \"Deliver to S3\" to run it as an export job.";
+        } else {
+          try {
+            const body = await response.json();
+            if (body?.detail) detail = String(body.detail);
+          } catch {
+            // ignore
+          }
         }
         throw new Error(detail);
       }
@@ -212,7 +283,7 @@ export function DeidentifyPanel({
           try {
             const parsed = JSON.parse(trimmed) as Record<string, unknown>;
 
-            // Trailer line — capture score and skip as resource
+            // Trailer line, capture score and skip as resource
             if ("__stream_complete" in parsed) {
               if (parsed.score && typeof parsed.score === "object") {
                 streamScore = parsed.score as Record<string, unknown>;
@@ -228,7 +299,7 @@ export function DeidentifyPanel({
             if ("error" in parsed && !("data" in parsed)) {
               errors++;
               if (parsed.fatal) {
-                fatalError = String(parsed.error ?? "Fatal processing error — stream halted");
+                fatalError = String(parsed.error ?? "Fatal processing error, stream halted");
               }
               continue;
             }
@@ -307,6 +378,12 @@ export function DeidentifyPanel({
     [state.resources],
   );
 
+  // PHI-safe download filename base, never the real source patient id.
+  const downloadBase = useMemo(
+    () => safeDownloadBase(cleanResources, patientId),
+    [cleanResources, patientId],
+  );
+
   const handleXmlDownload = useCallback(async () => {
     try {
       // Use already-processed resources instead of re-processing originals
@@ -334,7 +411,7 @@ export function DeidentifyPanel({
 
       const anchor = document.createElement("a");
       anchor.href = url;
-      anchor.download = `deidentified-${patientId}.xml`;
+      anchor.download = `${downloadBase}.xml`;
       document.body.appendChild(anchor);
       anchor.click();
 
@@ -344,7 +421,53 @@ export function DeidentifyPanel({
       console.error("Failed to download XML:", error);
       alert("Failed to generate XML download. Please try again or use a different format.");
     }
-  }, [patientId, configProfile, cleanResources]);
+  }, [downloadBase, configProfile, cleanResources]);
+
+  // Deliver to S3 by queueing a patient-export JOB, not by POSTing the resources.
+  //
+  // The panel used to serialize every original resource into one Bundle and POST
+  // it to /process/batch. That shipped raw PHI back through the browser and blew
+  // past MEDANON_MAX_BODY_BYTES (10 MB) on any sizeable patient, the server
+  // rejected on Content-Length and closed the connection mid-upload, which the
+  // browser surfaces as "TypeError: Failed to fetch", not a readable 413.
+  //
+  // The job carries only the patient id: the worker re-fetches $everything
+  // server-side, so raw PHI never leaves the server, the body is a few hundred
+  // bytes, and the release runs through the score gate before it is delivered.
+  const handleDeliverToS3 = useCallback(async () => {
+    if (!selectedDest) return;
+    setDelivering(true);
+    const dest = destinations.find((d) => d.id === selectedDest);
+    const destLabel = dest?.name ?? selectedDest;
+    try {
+      const job = await submitPatientExportJob({
+        patient_id: patientId,
+        config_profile: configProfile,
+        destination_id: selectedDest,
+      });
+      const jobId = job.job_id;
+      if (!jobId) throw new Error("Export job did not return a job id");
+      toast.info(`Export queued for ${destLabel}…`);
+
+      // Poll to completion so the button reflects the real outcome, a job can
+      // still be withheld by the score gate after it is accepted.
+      for (;;) {
+        await new Promise((r) => setTimeout(r, 2000));
+        const status = await getJobStatus(jobId);
+        if (status.status === "done") {
+          toast.success(`Delivered to S3 (${destLabel})`);
+          return;
+        }
+        if (status.status === "error") {
+          throw new Error(status.error ?? "Export job failed");
+        }
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "S3 delivery failed");
+    } finally {
+      setDelivering(false);
+    }
+  }, [selectedDest, configProfile, patientId, destinations]);
 
   // Limit resources for diff/table views to prevent browser freeze
   const DIFF_LIMIT = 200;
@@ -515,6 +638,13 @@ export function DeidentifyPanel({
             </Button>
           </div>
 
+          {previewTruncated > 0 && (
+            <p className="rounded-md border bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              Preview limited to the first {PREVIEW_RESOURCE_LIMIT} of {previewTruncated} resources.
+              Use &quot;Deliver to S3&quot; to de-identify and release the complete record as an export job.
+            </p>
+          )}
+
           {/* Output tab */}
           {activeTab === "output" && (
             <>
@@ -534,10 +664,41 @@ export function DeidentifyPanel({
               </Collapsible>
               <MultiFormatDownload
                 resources={cleanResources}
-                baseFilename={`deidentified-${patientId}`}
+                baseFilename={downloadBase}
                 defaultFormat="ndjson"
                 onXmlDownload={handleXmlDownload}
               />
+              {destinations.length > 0 && (
+                <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-dashed p-3">
+                  <span className="text-xs text-muted-foreground">
+                    Send de-identified data + audit to S3:
+                  </span>
+                  <select
+                    className="h-8 rounded-md border bg-background px-2 text-xs"
+                    value={selectedDest}
+                    onChange={(e) => setSelectedDest(e.target.value)}
+                  >
+                    {destinations.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.name} ({d.bucket})
+                      </option>
+                    ))}
+                  </select>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={handleDeliverToS3}
+                    disabled={delivering || cleanResources.length === 0}
+                  >
+                    {delivering ? (
+                      <Loader2 className="size-3.5 animate-spin" />
+                    ) : (
+                      <Upload className="size-3.5" />
+                    )}
+                    Send to S3
+                  </Button>
+                </div>
+              )}
               <div className="flex flex-col gap-2">
                 <div className="flex items-center gap-2">
                   <Button
@@ -564,7 +725,7 @@ export function DeidentifyPanel({
                   </span>
                 )}
                 {uploadResult && uploadResult.errors === -1 && (
-                  <span className="text-xs text-destructive">Upload failed — check that the target FHIR server URL is correct or that FHIR_TARGET_URL is set</span>
+                  <span className="text-xs text-destructive">Upload failed, check that the target FHIR server URL is correct or that FHIR_TARGET_URL is set</span>
                 )}
               </div>
             </>

@@ -1,5 +1,5 @@
 /**
- * MarkdownReport — renders a Markdown report (Trust Gate Quality Passport,
+ * MarkdownReport, renders a Markdown report (Trust Gate Quality Passport,
  * scoring / audit report) as a styled document that fits the app UI, instead of
  * dumping the raw `#`/`|` source in a <pre>. GFM tables, lists, and code blocks
  * are mapped to themed elements.

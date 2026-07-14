@@ -44,6 +44,7 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import {
   streamChat,
+  buildFieldSketch,
   type ChatTurn,
   type FieldGranularity,
 } from "@/api/agents";
@@ -79,7 +80,7 @@ const MODELS: ModelDef[] = [
     label: "Gemma 3 · 1B",
     tag: "Fast",
     icon: <Zap className="size-3.5" />,
-    description: "Fastest — good for simple rules",
+    description: "Fastest, good for simple rules",
   },
   {
     value: "ollama/gemma3:4b",
@@ -184,7 +185,7 @@ function filterTreeByTypes(summary: string, types: Set<string>): string {
 function capFieldContext(summary: string): string {
   if (summary.length <= FIELD_CONTEXT_MAX_CHARS) return summary;
   const marker =
-    "\n… (field list truncated — select fewer resource types for full coverage)";
+    "\n… (field list truncated, select fewer resource types for full coverage)";
   const budget = FIELD_CONTEXT_MAX_CHARS - marker.length;
   const kept: string[] = [];
   let used = 0;
@@ -406,8 +407,8 @@ export function AiAssistantPanel({
   const [model, setModel] = useState(MODELS[1].value);
   // Field granularity, toggled BEFORE the AI runs so it knows how to shape
   // rules. "values" (default): one rule per identifying leaf sub-field
-  // (Patient.name.family) — keeps the FHIR skeleton. "whole": one rule on the
-  // parent path (Patient.name) — removes the entire element.
+  // (Patient.name.family), keeps the FHIR skeleton. "whole": one rule on the
+  // parent path (Patient.name), removes the entire element.
   const [granularity, setGranularity] = useState<FieldGranularity>("values");
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
@@ -428,9 +429,21 @@ export function AiAssistantPanel({
   const [sideTab, setSideTab] = useState<"settings" | "tree">("settings");
   /** When true the field tree sent to the AI includes real sample values so a
    * LOCAL model can judge PII more accurately. The values never leave a local
-   * model — the backend marks the request as a PHI payload and refuses any
+   * model, the backend marks the request as a PHI payload and refuses any
    * non-local AI endpoint (fail-closed). */
   const [includeValues, setIncludeValues] = useState(false);
+  /** Opt-in: send the compact, PHI-safe SCHEMA SKETCH (one line per distinct
+   * leaf: type, presence frequency, cardinality, shape/enum digest) instead of
+   * the flat first-value field tree. Built server-side (/v1/ai/field-sketch),
+   * budget-ranked so identifiers survive truncation. Default off until it is
+   * validated in real use; the flat tree remains the default path. */
+  const [useSketch, setUseSketch] = useState(false);
+  const [sketch, setSketch] = useState<{
+    status: "idle" | "loading" | "done" | "error";
+    text: string;
+    truncated: boolean;
+    error?: string;
+  }>({ status: "idle", text: "", truncated: false });
 
   const [fieldTree, setFieldTree] = useState<FieldTreeState>({
     status: "idle",
@@ -458,7 +471,7 @@ export function AiAssistantPanel({
 
   // Loads the FULL field tree for every data-bearing type (used to populate the
   // scope picker and the Field Tree tab). The tree actually SENT to the AI is
-  // narrowed to the user's selected types in `activeFieldContext` — both to
+  // narrowed to the user's selected types in `activeFieldContext`, both to
   // focus the model and to stay under the server's field_context size cap.
   const loadTree = async (force = false) => {
     if (loadingRef.current) return;
@@ -505,7 +518,7 @@ export function AiAssistantPanel({
   };
 
   // Rebuild the tree when the values toggle flips (the cached paths-only and
-  // values trees are not interchangeable). Skip the initial mount — the
+  // values trees are not interchangeable). Skip the initial mount, the
   // open-effect already performs the first load.
   const didMountValues = useRef(false);
   useEffect(() => {
@@ -517,6 +530,60 @@ export function AiAssistantPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [includeValues]);
 
+  // Fetch the compact sketch when the user opts in. Auto-picks the source:
+  // uploaded example resources when the panel has them, else samples the source
+  // server by type (the server does the sampling + PHI-safe compaction). Refires
+  // when the type scope or the values toggle changes.
+  const selectedTypesKey = useMemo(
+    () => [...selectedTypes].sort().join(","),
+    [selectedTypes],
+  );
+  useEffect(() => {
+    if (!open || !useSketch) return;
+    const types = selectedTypes.size
+      ? [...selectedTypes]
+      : allResourceTypes.length
+        ? allResourceTypes
+        : fieldTree.resourceTypes;
+    if (types.length === 0) return;
+    let cancelled = false;
+    setSketch((s) => ({ ...s, status: "loading", error: undefined }));
+    buildFieldSketch({ resourceTypes: types, includeValues })
+      .then((res) => {
+        if (cancelled) return;
+        if (res.source === "error" || !res.sketch) {
+          setSketch({
+            status: "error",
+            text: "",
+            truncated: false,
+            error: res.detail || "sketch unavailable",
+          });
+          return;
+        }
+        setSketch({ status: "done", text: res.sketch, truncated: res.truncated });
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        setSketch({
+          status: "error",
+          text: "",
+          truncated: false,
+          error: e instanceof Error ? e.message : String(e),
+        });
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    open,
+    useSketch,
+    selectedTypesKey,
+    includeValues,
+    allResourceTypes.length,
+    fieldTree.resourceTypes.length,
+  ]);
+
   const scrollToBottom = () => {
     requestAnimationFrame(() => {
       scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
@@ -524,13 +591,21 @@ export function AiAssistantPanel({
   };
 
   // The grounding field tree sent to the AI. When the user has selected
-  // resource types in the scope picker, narrow the tree to ONLY those types —
-  // this focuses the model on what the user cares about AND keeps the payload
+  // resource types in the scope picker, narrow the tree to ONLY those types.
+  // This focuses the model on what the user cares about AND keeps the payload
   // under the server's 20000-char `field_context` cap (the full multi-resource
   // tree easily exceeds it). With no selection, send the whole tree. A final
   // whole-line truncation guarantees the request can never be rejected with
   // `string_too_long`; the backend truncates again at its own limit.
   const activeFieldContext = useMemo(() => {
+    // Opt-in compact sketch: already server-scoped to the selected types and
+    // budget-ranked, so it is used verbatim (the flat-tree filter/cap assume the
+    // `Type.path : type` line format and would strip the sketch's headers). A
+    // sketch error falls through to the flat tree so grounding never silently
+    // disappears.
+    if (useSketch && sketch.status === "done" && sketch.text) {
+      return sketch.text;
+    }
     const base =
       fieldTree.status === "done" && fieldTree.summary
         ? fieldTree.summary
@@ -539,7 +614,15 @@ export function AiAssistantPanel({
     const scoped =
       selectedTypes.size > 0 ? filterTreeByTypes(base, selectedTypes) : base;
     return capFieldContext(scoped);
-  }, [fieldTree.status, fieldTree.summary, uploadedFieldContext, selectedTypes]);
+  }, [
+    useSketch,
+    sketch.status,
+    sketch.text,
+    fieldTree.status,
+    fieldTree.summary,
+    uploadedFieldContext,
+    selectedTypes,
+  ]);
 
   // Number of field lines actually sent to the AI (excludes the truncation
   // marker line). Reflects the scope filter so the footer is honest.
@@ -548,7 +631,8 @@ export function AiAssistantPanel({
       activeFieldContext
         ? activeFieldContext
             .split("\n")
-            .filter((l) => l.trim() && !l.startsWith("…")).length
+            .filter((l) => l.trim() && !l.startsWith("…") && !l.startsWith("#"))
+            .length
         : 0,
     [activeFieldContext],
   );
@@ -650,7 +734,7 @@ export function AiAssistantPanel({
     }
     const { added, skipped } = deduplicateIncoming(incoming, existingRules);
     if (added.length === 0) {
-      toast.warning("All proposed rules already exist — nothing added.");
+      toast.warning("All proposed rules already exist, nothing added.");
       setProposal(null);
       return;
     }
@@ -704,7 +788,7 @@ export function AiAssistantPanel({
           </div>
           <DialogDescription className="mt-0.5 text-xs text-muted-foreground">
             Pick resource types to focus on, then ask a question or describe the
-            config you want — approve the proposed YAML into your builder.
+            config you want, approve the proposed YAML into your builder.
           </DialogDescription>
         </DialogHeader>
 
@@ -848,7 +932,7 @@ export function AiAssistantPanel({
                         </div>
                         <p className="text-[10px] leading-snug text-muted-foreground">
                           {selectedTypes.size === 0
-                            ? "No filter — the AI considers every resource type."
+                            ? "No filter, the AI considers every resource type."
                             : "The AI focuses on the selected types."}
                         </p>
                       </>
@@ -921,7 +1005,7 @@ export function AiAssistantPanel({
                       values never leave a self-hosted model. */}
                   <label
                     className="flex cursor-pointer items-start gap-2 rounded-md border bg-muted/20 p-2"
-                    title="Send a truncated sample value per field. Only ever reaches a local model — the server refuses non-local AI endpoints for value-bearing requests."
+                    title="Send a truncated sample value per field. Only ever reaches a local model, the server refuses non-local AI endpoints for value-bearing requests."
                   >
                     <input
                       type="checkbox"
@@ -935,10 +1019,56 @@ export function AiAssistantPanel({
                       </span>
                       <span className="block text-muted-foreground">
                         More accurate PII calls. Values reach a local model only
-                        — non-local endpoints are refused.
+                       , non-local endpoints are refused.
                       </span>
                     </span>
                   </label>
+
+                  {/* Opt-in compact schema sketch. Collapses many instances into
+                      one line per distinct leaf (type, frequency, cardinality,
+                      shape/enum digest) so ALL fields of the selected types fit
+                      the context with example shapes. Built + PHI-masked
+                      server-side; identifiers survive budget truncation. */}
+                  <label
+                    className="flex cursor-pointer items-start gap-2 rounded-md border bg-muted/20 p-2"
+                    title="Send a compact per-type schema (all fields + example shapes) instead of the flat field list. Smaller context, full field coverage."
+                  >
+                    <input
+                      type="checkbox"
+                      checked={useSketch}
+                      onChange={(e) => setUseSketch(e.target.checked)}
+                      className="mt-0.5 size-3.5 shrink-0 accent-[#0072bc]"
+                    />
+                    <span className="text-[11px] leading-snug">
+                      <span className="font-medium text-foreground">
+                        Compact schema context
+                      </span>
+                      <span className="block text-muted-foreground">
+                        All fields of the selected types with example shapes, in a
+                        smaller context. Falls back to the field list on error.
+                      </span>
+                    </span>
+                  </label>
+
+                  {useSketch && sketch.status === "loading" && (
+                    <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                      <Loader2 className="size-3 animate-spin" />
+                      Building schema sketch…
+                    </div>
+                  )}
+                  {useSketch && sketch.status === "done" && (
+                    <p className="text-[11px] text-muted-foreground">
+                      Schema sketch active · {activeFieldCount} fields
+                      {sketch.truncated
+                        ? " · scope trimmed to fit, select fewer types for full coverage"
+                        : ""}
+                    </p>
+                  )}
+                  {useSketch && sketch.status === "error" && (
+                    <p className="text-[11px] text-amber-600 dark:text-amber-500">
+                      Sketch unavailable ({sketch.error}); using the field list.
+                    </p>
+                  )}
 
                   {fieldTree.status === "loading" && (
                     <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
@@ -1128,7 +1258,7 @@ export function AiAssistantPanel({
                         <div className="mr-8 overflow-hidden rounded-xl border border-[#0072bc]/30 bg-[#0072bc]/[0.03] shadow-sm">
                           <div className="flex items-center gap-1.5 border-b border-[#0072bc]/15 bg-[#0072bc]/[0.06] px-3 py-2 text-[11px] font-semibold text-[#0072bc]">
                             <FileCode2 className="size-3.5" />
-                            Proposed rules — review &amp; edit before approving
+                            Proposed rules, review &amp; edit before approving
                           </div>
                           <div className="space-y-3 p-3">
                             <Textarea
@@ -1207,7 +1337,7 @@ export function AiAssistantPanel({
             }}
             placeholder={
               fieldTree.status === "loading"
-                ? "Field tree loading — you can type now…"
+                ? "Field tree loading, you can type now…"
                 : selectedTypes.size > 0
                   ? `Ask about ${scopeText}…`
                   : "Ask a question or describe the config you want…"

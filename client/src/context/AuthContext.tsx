@@ -1,5 +1,5 @@
 /**
- * AuthContext — Authorization Code Flow + PKCE via oidc-client-ts.
+ * AuthContext, Authorization Code Flow + PKCE via oidc-client-ts.
  *
  * Flow:
  *   1. On mount: fetch /v1/auth/config → build UserManager → restore session
@@ -12,8 +12,8 @@
  *      back to /login.
  *
  * Non-OIDC modes (auto / none / apikey) keep the existing behaviour:
- *   auto/none  — all callers get admin (local dev).
- *   apikey     — caller supplies X-API-Key; no redirect login.
+ *   auto/none , all callers get admin (local dev).
+ *   apikey    , caller supplies X-API-Key; no redirect login.
  */
 
 import {
@@ -122,7 +122,7 @@ function userFromOidc(oidcUser: OidcUser): User {
  * (e.g. http:// while the page is https://), using it verbatim triggers a
  * mixed-content / CORS failure on the discovery fetch. So for a proxied
  * Keycloak realm issuer (path contains `/realms/`) we rebuild it against
- * window.location.origin. External IdPs (Azure/Auth0 — no `/realms/`) are
+ * window.location.origin. External IdPs (Azure/Auth0, no `/realms/`) are
  * used verbatim.
  */
 function resolveAuthority(issuer: string): string {
@@ -140,7 +140,7 @@ function resolveAuthority(issuer: string): string {
       return sameOrigin;
     }
   } catch {
-    /* malformed issuer — fall through to verbatim */
+    /* malformed issuer, fall through to verbatim */
   }
   return issuer;
 }
@@ -247,11 +247,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             // pick it up on the next page interaction. We don't eagerly renew
             // here to keep the boot path fast.
           } catch {
-            // Storage read failure — start unauthenticated.
+            // Storage read failure, start unauthenticated.
           }
         }
       } catch {
-        // Backend unreachable — fall back to open/auto mode.
+        // Backend unreachable, fall back to open/auto mode.
         if (!cancelled) {
           setAuthConfig({ provider: 'auto', oidc_enabled: false });
         }
@@ -262,7 +262,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     return () => {
       cancelled = true;
-      // Do NOT destroy the manager on cleanup — StrictMode double-fires this
+      // Do NOT destroy the manager on cleanup, StrictMode double-fires this
       // effect; destroying would break the already-established subscriptions.
     };
   }, []);
@@ -299,7 +299,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         });
       }
     } else {
-      // apikey / auto / none — just clear the stored key.
+      // apikey / auto / none, just clear the stored key.
       setApiKeyState('');
       localStorage.removeItem(STORAGE_KEYS.API_KEY);
     }

@@ -7,7 +7,9 @@
  * de-identified resources have been stored correctly.
  */
 
-import { fetchFhirTarget } from "./client";
+// Route through the active Target selection (Settings) instead of always hitting
+// the built-in nginx /fhir-target. Same signature, so call sites are unchanged.
+import { routedFetchFhirTarget as fetchFhirTarget } from "./fhirRoute";
 
 // ---------------------------------------------------------------------------
 // FHIR Bundle types (minimal)
@@ -27,7 +29,7 @@ interface FhirBundle {
 // Capability statement
 // ---------------------------------------------------------------------------
 
-/** GET /fhir-target/metadata — returns the FHIR CapabilityStatement. */
+/** GET /fhir-target/metadata, returns the FHIR CapabilityStatement. */
 export function capabilityStatementTarget(): Promise<Record<string, unknown>> {
   return fetchFhirTarget<Record<string, unknown>>("/metadata");
 }
@@ -53,7 +55,7 @@ async function discoverResourceTypesTarget(): Promise<string[]> {
       .filter((t): t is string => typeof t === "string" && !EXCLUDED_TYPES.has(t));
     if (types && types.length > 0) return types;
   } catch {
-    // metadata unavailable — fall through to fallback
+    // metadata unavailable, fall through to fallback
   }
   return ["Patient", "Observation", "Condition", "Encounter", "Procedure"];
 }

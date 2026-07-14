@@ -63,7 +63,7 @@ export function JobDetailPanel({ job }: { job: ExportJob }) {
     if (importPollRef.current !== null) clearInterval(importPollRef.current);
   }, []);
 
-  // Fetch and parse result when job is done — tries backend cache first.
+  // Fetch and parse result when job is done, tries backend cache first.
   // Resource counts are shown immediately from job.summary (already fetched).
   useEffect(() => {
     // Import jobs have no NDJSON result to parse
@@ -72,7 +72,7 @@ export function JobDetailPanel({ job }: { job: ExportJob }) {
     if (!job.jobId || job.status !== "done" || parsing) return;
     if (parsedJobIdRef.current === job.jobId) return;
 
-    // Show resource counts immediately from the API summary — no download needed
+    // Show resource counts immediately from the API summary, no download needed
     if (job.summary?.resource_type_counts) {
       const counts = job.summary.resource_type_counts;
       const total = job.summary.total_resources ?? Object.values(counts).reduce((a, b) => a + b, 0);
@@ -85,7 +85,7 @@ export function JobDetailPanel({ job }: { job: ExportJob }) {
     setFetchError(null);
     (async () => {
       try {
-        // Try backend cache first — avoids downloading the NDJSON entirely
+        // Try backend cache first, avoids downloading the NDJSON entirely
         try {
           const cached = await getJobDetail(job.jobId!);
           if (cancelled) return;
@@ -103,7 +103,7 @@ export function JobDetailPanel({ job }: { job: ExportJob }) {
           } catch { /* non-fatal */ }
           return; // skip NDJSON download
         } catch {
-          // cache miss (404) or store unavailable (503) — fall through to NDJSON parse
+          // cache miss (404) or store unavailable (503), fall through to NDJSON parse
         }
 
         // Cache miss: download and parse NDJSON
@@ -159,7 +159,7 @@ export function JobDetailPanel({ job }: { job: ExportJob }) {
     const base = job.filename.replace(/\.ndjson$/, "");
     try {
       if (selectedFormat === "ndjson") {
-        // Fastest path: download the blob directly — zero client-side parsing
+        // Fastest path: download the blob directly, zero client-side parsing
         const blob = await getJobResult(job.jobId);
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
@@ -476,7 +476,7 @@ export function JobDetailPanel({ job }: { job: ExportJob }) {
         </div>
       )}
 
-      {/* Empty result — only show after parsing completes with 0 results */}
+      {/* Empty result, only show after parsing completes with 0 results */}
       {isDone && parsed && totalResources === 0 && job.processed === 0 && (
         <div className="mb-4 flex flex-col items-center justify-center rounded-lg border border-dashed py-12 text-center text-muted-foreground">
           <Inbox className="mb-3 size-10" />
@@ -601,7 +601,7 @@ export function JobDetailPanel({ job }: { job: ExportJob }) {
                     {" "}of <span className="tabular-nums">{total.toLocaleString()}</span> resources
                     {failCount > 0 && (
                       <span className="text-amber-600 ml-1">
-                        — {failCount.toLocaleString()} rejected by target server
+                       , {failCount.toLocaleString()} rejected by target server
                       </span>
                     )}
                   </span>
@@ -637,13 +637,13 @@ export function JobDetailPanel({ job }: { job: ExportJob }) {
           {importJob?.status === "error" && (
             <div className="flex items-center gap-2 text-sm text-destructive">
               <AlertCircle className="size-4 shrink-0" />
-              {importJob.error ?? "Upload failed — check server logs for details"}
+              {importJob.error ?? "Upload failed, check server logs for details"}
             </div>
           )}
         </div>
       )}
 
-      {/* Import result summary — shown for recovered/completed bulk-import jobs */}
+      {/* Import result summary, shown for recovered/completed bulk-import jobs */}
       {isDone && isImport && (() => {
         const total = job.stagedCount ?? job.processed;
         const failCount = job.uploadErrors ?? 0;
@@ -667,7 +667,7 @@ export function JobDetailPanel({ job }: { job: ExportJob }) {
                 {' '}of <span className="tabular-nums">{total.toLocaleString()}</span> resources
                 {failCount > 0 && (
                   <span className="text-amber-600 ml-1">
-                    — {failCount.toLocaleString()} rejected by target server
+                   , {failCount.toLocaleString()} rejected by target server
                   </span>
                 )}
               </span>
@@ -692,7 +692,7 @@ export function JobDetailPanel({ job }: { job: ExportJob }) {
         );
       })()}
 
-      {/* Reprocess — only available when staging is configured (stagedCount present) */}
+      {/* Reprocess, only available when staging is configured (stagedCount present) */}
       {isTerminal && job.stagedCount != null && job.jobId && !isImport && (
         <div className="mt-4 flex items-center gap-2 border-t pt-4">
           <Button
@@ -710,7 +710,7 @@ export function JobDetailPanel({ job }: { job: ExportJob }) {
             Re-process with same profile
           </Button>
           <span className="text-xs text-muted-foreground">
-            Replays staged rows — no new FHIR fetch required
+            Replays staged rows, no new FHIR fetch required
           </span>
         </div>
       )}

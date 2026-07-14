@@ -11,7 +11,7 @@ function parse(r: ProcessingRun): RunScore | null {
   return r.score as RunScore | null;
 }
 
-/* NTT DATA blue palette — no purple */
+/* NTT DATA blue palette, no purple */
 const GAUGES = [
   {
     key: 'composite',
@@ -96,7 +96,7 @@ export function ScoreBreakdownCards({ runs }: { runs: ProcessingRun[] }) {
     const avg = (arr: number[]) => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null;
     const composites = scored.map((s) => s.avg_composite).filter((v): v is number => v != null);
     // Backend contract: avg_composite is already 0–100 (pre-scaled), but
-    // avg_utility / avg_quality are 0–1 module scores — multiply by 100 for
+    // avg_utility / avg_quality are 0–1 module scores, multiply by 100 for
     // the percentage gauges (matching AuditReport's *100).  This is the fix for
     // utility/quality always rendering as "1%".
     const utilities  = scored.map((s) => s.avg_utility).filter((v): v is number => v != null);
@@ -131,7 +131,7 @@ export function ScoreBreakdownCards({ runs }: { runs: ProcessingRun[] }) {
       </div>
       {hasLowScore && (
         <p className="text-xs text-muted-foreground bg-muted/50 rounded-lg px-3 py-2">
-          <strong>Low utility/quality scores are expected</strong> when aggressive redaction profiles (e.g. value-masking) are used — they remove many fields by design. Hover each gauge for details.
+          <strong>Low utility/quality scores are expected</strong> when aggressive redaction profiles (e.g. value-masking) are used, they remove many fields by design. Hover each gauge for details.
         </p>
       )}
     </div>

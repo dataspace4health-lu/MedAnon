@@ -1,5 +1,5 @@
 /**
- * SQL source de-identification API — saved connections, schema inspection, and
+ * SQL source de-identification API, saved connections, schema inspection, and
  * async table export.  Mirrors the backend endpoints under /v1:
  *
  *   GET    /v1/sql-connections
@@ -44,7 +44,7 @@ export interface SqlConnectionCreate {
   sslmode?: string;
 }
 
-/** A column within a reflected table — same explorer vocabulary as TabularColumn. */
+/** A column within a reflected table, same explorer vocabulary as TabularColumn. */
 export interface SqlColumn {
   name: string;
   data_type: string;

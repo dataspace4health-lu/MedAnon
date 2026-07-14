@@ -31,9 +31,9 @@ export interface FhirConnection {
   id: string;
   label: string;
   kind: ConnKind;
-  /** Absolute FHIR base URL — custom connections only. */
+  /** Absolute FHIR base URL, custom connections only. */
   baseUrl?: string;
-  /** Optional bearer token — custom connections only. */
+  /** Optional bearer token, custom connections only. */
   token?: string;
 }
 
@@ -62,7 +62,7 @@ export function saveCustomConnections(conns: FhirConnection[]): void {
   try {
     localStorage.setItem(CUSTOM_STORAGE_KEY, JSON.stringify(conns));
   } catch {
-    /* localStorage unavailable — non-fatal */
+    /* localStorage unavailable, non-fatal */
   }
 }
 
@@ -113,7 +113,7 @@ function entriesOf(bundle: FhirBundle): Record<string, unknown>[] {
 
 // ---------------------------------------------------------------------------
 // Global reference-integrity tracking (mirrors the engine, but across the WHOLE
-// scan — chunked summing would count every cross-chunk reference as dangling).
+// scan, chunked summing would count every cross-chunk reference as dangling).
 // ---------------------------------------------------------------------------
 
 /** Reduce a literal reference to its exact "ResourceType/id" key (mirrors engine). */
@@ -267,7 +267,7 @@ export interface ScanProgress {
   patientsTotal?: number;
 }
 
-// FHIR patient-compartment resource types — assessed together per patient so
+// FHIR patient-compartment resource types, assessed together per patient so
 // references resolve and the patient timeline is coherent. Everything else
 // (Organization, Practitioner, Location, …) is swept separately and deduped.
 const PATIENT_COMPARTMENT_TYPES = new Set([
@@ -285,7 +285,7 @@ const PATIENT_COMPARTMENT_TYPES = new Set([
  * as one batch so referential integrity, the patient timeline, and cross-field
  * clinical-logic checks are scored against real context (not arbitrary type-batches).
  * Per-resource conformance is unaffected; value distributions + reference integrity
- * are pooled globally. No resource cap — the whole server is ingested, streamed
+ * are pooled globally. No resource cap, the whole server is ingested, streamed
  * patient-by-patient (bounded memory). Non-compartment resources are swept after.
  */
 export async function scanByPatient(
@@ -335,7 +335,7 @@ export async function scanByPatient(
     collectReferences(r, allRefs);
   };
 
-  // 1. Patient compartments — each patient's whole record, kept intact in a batch.
+  // 1. Patient compartments, each patient's whole record, kept intact in a batch.
   let pbundle: FhirBundle | null = await firstPage(conn, "Patient", pageSize);
   while (pbundle) {
     abort();

@@ -63,7 +63,7 @@ export default function DeidentifyPage() {
         </div>
       </div>
 
-      {/* De-identification panel — full width, no sticky constraints */}
+      {/* De-identification panel, full width, no sticky constraints */}
       <DeidentifyPanel
         patientId={patientId}
         patientName={patientName}

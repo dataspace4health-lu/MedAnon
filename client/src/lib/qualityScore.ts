@@ -3,7 +3,7 @@
 // ---------------------------------------------------------------------------
 //
 // Computes a letter grade (A–F) and percentage for how effectively PII was
-// removed from a de-identified FHIR dataset.  Purely client-side — consumes
+// removed from a de-identified FHIR dataset.  Purely client-side, consumes
 // the PiiDetectionMap and FieldSummaryMap already produced by piiDetection.ts.
 // ---------------------------------------------------------------------------
 
@@ -91,7 +91,7 @@ const KNOWN_SENSITIVE: Record<string, string[]> = {
 };
 
 /**
- * Action strength weights — derived from (1 − INFO_LOSS_WEIGHTS) in the backend
+ * Action strength weights, derived from (1 − INFO_LOSS_WEIGHTS) in the backend
  * scoring engine (services/anonymizer/src/pipeline/scoring/constants.py).
  * Higher value = stronger de-identification for the quality score.
  */
@@ -106,7 +106,7 @@ const ACTION_STRENGTH: Record<string, number> = {
   scrub_text: 0.4,
   nlp_scrub: 0.4,
   nlp_detect: 0.4,           // backward-compat alias for old manifests
-  nlp_detect_act: 0.7,       // conditional — only fires when PHI is found
+  nlp_detect_act: 0.7,       // conditional, only fires when PHI is found
   "nlp_detect_act/redact": 0.4,
   "nlp_detect_act/generalize": 0.65,
   "nlp_detect_act/tokenize": 0.5,

@@ -25,16 +25,16 @@ export async function parseNdjsonBlob(blob: Blob): Promise<NdjsonSummary> {
   const counts: Record<string, number> = {};
   const allFieldCounts: Record<string, Record<string, number>> = {};
   const piiSample: Record<string, unknown>[] = [];
-  // Per-type PII sample cap — ensures uniform coverage across all resource types
+  // Per-type PII sample cap, ensures uniform coverage across all resource types
   const PII_SAMPLE_PER_TYPE = 50;
   const piiSampleCount: Record<string, number> = {};
-  // Cap expensive deep-field walk per type — schema is consistent after ~200 resources
+  // Cap expensive deep-field walk per type, schema is consistent after ~200 resources
   const FIELD_SAMPLE_LIMIT = 200;
   const fieldSampleCount: Record<string, number> = {};
   let totalResources = 0;
   let errorCount = 0;
 
-  // Stream the blob in chunks — never materialise the full text
+  // Stream the blob in chunks, never materialise the full text
   const reader = blob.stream().getReader();
   const decoder = new TextDecoder();
   let buffer = "";
@@ -62,7 +62,7 @@ export async function parseNdjsonBlob(blob: Blob): Promise<NdjsonSummary> {
           continue;
         }
 
-        // Per-type PII sample — keep originals (with manifest tags)
+        // Per-type PII sample, keep originals (with manifest tags)
         piiSampleCount[type] = (piiSampleCount[type] ?? 0) + 1;
         if (piiSampleCount[type] <= PII_SAMPLE_PER_TYPE) piiSample.push(resource);
 

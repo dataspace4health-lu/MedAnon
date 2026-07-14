@@ -9,6 +9,7 @@ import {
   type ResourceTypeCount,
   type ResourcePage,
 } from '@/api/fhirTarget';
+import { useSettings } from '@/context/SettingsContext';
 
 // ---------------------------------------------------------------------------
 // Resource type color legend (matches ResourceTypeSummary)
@@ -112,6 +113,7 @@ function ResourceRow({
 // ---------------------------------------------------------------------------
 
 export default function TargetBrowserPage() {
+  const { targetConnected } = useSettings();
   const [connected, setConnected] = useState<boolean | null>(null);
   const [loadingCounts, setLoadingCounts] = useState(false);
   const [typeCounts, setTypeCounts] = useState<ResourceTypeCount[]>([]);
@@ -133,6 +135,11 @@ export default function TargetBrowserPage() {
     setTypeCounts([]);
     setSelectedType(null);
     setPage(null);
+    if (!targetConnected) {
+      setConnected(false);
+      setLoadingCounts(false);
+      return;
+    }
     try {
       await capabilityStatementTarget();
       setConnected(true);
@@ -143,7 +150,7 @@ export default function TargetBrowserPage() {
     } finally {
       setLoadingCounts(false);
     }
-  }, []);
+  }, [targetConnected]);
 
   useEffect(() => {
     loadCounts();
@@ -204,13 +211,21 @@ export default function TargetBrowserPage() {
           Checking target FHIR server connectivity…
         </div>
       )}
-      {connected === false && (
+      {connected === false && !targetConnected && (
+        <div className="mb-6 flex items-start gap-2.5 rounded-lg border bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>
+            <span className="font-medium">No target server connected.</span>{' '}
+            Choose one under Settings → FHIR servers.
+          </span>
+        </div>
+      )}
+      {connected === false && targetConnected && (
         <div className="mb-6 flex items-start gap-2.5 rounded-lg border border-destructive/40 bg-destructive/5 px-4 py-3 text-sm text-destructive">
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
           <span>
             <span className="font-medium">Target FHIR server unreachable.</span>{' '}
-            Verify that the target HAPI FHIR service is running and accessible at{' '}
-            <span className="font-mono">/fhir-target</span>.
+            Verify the selected target server is running and accessible.
           </span>
         </div>
       )}
@@ -250,7 +265,7 @@ export default function TargetBrowserPage() {
           ) : (
             <div className="mb-6">
               <p className="mb-2 text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-                Resource types — click to browse
+                Resource types, click to browse
               </p>
               <div className="flex flex-wrap gap-2">
                 {typeCounts.map((tc, idx) => (

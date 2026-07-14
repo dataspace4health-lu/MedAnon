@@ -5,6 +5,10 @@
 import { extractFieldsDeep } from "./fhirFields";
 
 const MANIFEST_SYSTEM = "https://medanon.local/transformation-manifest";
+// Full manifest payload lives in a tag-level extension when the JSON exceeds
+// HAPI's 200-char display cap (mirrors the backend manifest.py).
+const MANIFEST_FULL_EXT_URL =
+  "https://medanon.local/transformation-manifest-full";
 
 interface PiiFieldEntry {
   fieldPath: string;
@@ -21,7 +25,11 @@ interface ManifestEntry {
   path: string;
 }
 
-/** Extract the transformation manifest from a de-identified resource's meta.tag. */
+/** Extract the transformation manifest from a de-identified resource's meta.tag.
+ *
+ * Prefers the full payload in the tag-level extension (uncapped) and falls back
+ * to the ``display`` JSON, mirroring the backend ``extract_manifest_entries``.
+ */
 function parseManifestEntries(
   resource: Record<string, unknown>,
 ): ManifestEntry[] {
@@ -31,15 +39,53 @@ function parseManifestEntries(
   if (!Array.isArray(tags)) return [];
 
   for (const tag of tags) {
-    if (tag.system === MANIFEST_SYSTEM && typeof tag.display === "string") {
+    if (tag.system !== MANIFEST_SYSTEM) continue;
+    // 1) Full payload in the extension (used when JSON exceeds HAPI's 200-char cap).
+    const exts = tag.extension as Array<Record<string, unknown>> | undefined;
+    if (Array.isArray(exts)) {
+      for (const ext of exts) {
+        if (ext.url === MANIFEST_FULL_EXT_URL && typeof ext.valueString === "string") {
+          try {
+            const parsed = JSON.parse(ext.valueString);
+            if (Array.isArray(parsed)) return parsed as ManifestEntry[];
+          } catch {
+            /* fall through to display */
+          }
+        }
+      }
+    }
+    // 2) Fall back to the (short) display JSON.
+    if (typeof tag.display === "string") {
       try {
-        return JSON.parse(tag.display) as ManifestEntry[];
+        const parsed = JSON.parse(tag.display);
+        if (Array.isArray(parsed)) return parsed as ManifestEntry[];
       } catch {
         return [];
       }
     }
   }
   return [];
+}
+
+/** One resource's transformation manifest, for the separated Manifest view. */
+export interface ResourceManifest {
+  resourceType: string;
+  id?: string;
+  entries: ManifestEntry[];
+}
+
+/**
+ * Extract the transformation manifest for each de-identified resource, so the
+ * UI can present it as a SEPARATE artifact from the clinical data (never inline).
+ */
+export function extractManifest(
+  resources: Record<string, unknown>[],
+): ResourceManifest[] {
+  return resources.map((r) => ({
+    resourceType: typeof r.resourceType === "string" ? r.resourceType : "Unknown",
+    id: typeof r.id === "string" ? r.id : undefined,
+    entries: parseManifestEntries(r),
+  }));
 }
 
 /**
@@ -135,7 +181,7 @@ export function buildPiiDetectionMap(
 
     for (const field of changedFields) {
       // The manifest is the ONLY authoritative source of a named action. We do
-      // NOT guess actions from the output value's shape — a coding.display that
+      // NOT guess actions from the output value's shape, a coding.display that
       // happens to be 64-hex, or a code that looks like a year, must never be
       // mislabelled "cryptohash"/"generalize" when no rule touched it. A field
       // that genuinely changed but has no manifest entry is labelled the neutral
@@ -170,7 +216,7 @@ export function buildPiiDetectionMap(
  *
  * Used by the Bulk De-identify page where original resources are not available.
  * Strategy:
- * 1. Parse the manifest from meta.tag — authoritative when present.
+ * 1. Parse the manifest from meta.tag, authoritative when present.
  * 2. Also scan deep-extracted field values for PII signatures to catch
  *    post-processing changes not tracked in the manifest.
  * 3. Aggregate by (resourceType, fieldPath, action).
@@ -188,7 +234,7 @@ export function buildPiiFromDeidentifiedOnly(
     // Manifest-only: with no original resources to diff against, the
     // transformation manifest (meta.tag) is the SOLE authoritative record of
     // what was de-identified. We intentionally do NOT scan output values for
-    // "PII-looking" patterns — that mislabelled untouched fields (a 64-hex
+    // "PII-looking" patterns, that mislabelled untouched fields (a 64-hex
     // coding.display as "cryptohash", a year-like code as "generalize"). When
     // the manifest is disabled (MEDANON_MANIFEST_ENABLED=false) this yields an
     // empty map, which is correct: we cannot truthfully claim any action.

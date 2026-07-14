@@ -33,7 +33,7 @@ import {
 } from "@/api/trustProfiles";
 import type { TrustProfileMeta, SectorTarget } from "@/api/trustProfiles";
 
-/** A sector-target row in the editor — array fields held as CSV for easy input. */
+/** A sector-target row in the editor, array fields held as CSV for easy input. */
 interface TargetRow {
   id: string;
   resourceTypes: string;

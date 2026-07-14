@@ -85,7 +85,7 @@ function loadDismissedIds(): Set<string> {
 function saveDismissedIds(ids: Set<string>): void {
   try {
     localStorage.setItem(DISMISSED_JOBS_KEY, JSON.stringify([...ids]));
-  } catch { /* quota exceeded — best effort */ }
+  } catch { /* quota exceeded, best effort */ }
 }
 
 const TYPE_LABELS: Record<string, string> = {
@@ -213,7 +213,7 @@ export function BulkExportProvider({ children }: { children: ReactNode }) {
                 phase: job.phase as ExportJobPhase,
                 stagedCount: job.staged_count,
               });
-              // Still running — schedule next poll with backoff
+              // Still running, schedule next poll with backoff
               if (pollRefs.current.has(id)) {
                 scheduleNext(_nextPollDelay(elapsed));
               }
@@ -252,7 +252,7 @@ export function BulkExportProvider({ children }: { children: ReactNode }) {
         // backendJobs arrives DESC (newest first). Reverse to ASC so recovered
         // jobs match the normal append-based state order: the grid does
         // [...jobs].reverse() for display, and auto-select uses
-        // jobs[jobs.length-1] — both expect oldest-first state.
+        // jobs[jobs.length-1], both expect oldest-first state.
         const sortedAsc = [...backendJobs].reverse();
 
         // Build candidates outside the updater to avoid StrictMode double-run.

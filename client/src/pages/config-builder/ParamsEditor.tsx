@@ -52,22 +52,41 @@ export function ParamsEditor({
   }
 
   if (action === 'generalize') {
+    const strategy = String(params.strategy ?? 'date_year');
+    const rareValues = Array.isArray(params.rare_values)
+      ? (params.rare_values as string[]).join(', ')
+      : '';
     return (
-      <Select
-        value={String(params.strategy ?? 'date_year')}
-        onValueChange={(v) => set('strategy', v)}
-      >
-        <SelectTrigger className="h-7 text-xs">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {GENERALIZE_STRATEGIES.map((s) => (
-            <SelectItem key={s} value={s} className="text-xs">
-              {s}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+      <div className="flex items-center gap-1.5">
+        <Select value={strategy} onValueChange={(v) => set('strategy', v)}>
+          <SelectTrigger className="h-7 w-40 text-xs">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {GENERALIZE_STRATEGIES.map((s) => (
+              <SelectItem key={s} value={s} className="text-xs">
+                {s}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {strategy === 'redact_if_rare' && (
+          <Input
+            placeholder="rare values (comma-separated)"
+            title="rare_values, values redacted as too-rare quasi-identifiers"
+            className="h-7 flex-1 text-xs"
+            value={rareValues}
+            onChange={(e) => {
+              const list = e.target.value
+                .split(',')
+                .map((s) => s.trim())
+                .filter(Boolean);
+              if (list.length) set('rare_values', list);
+              else unset('rare_values');
+            }}
+          />
+        )}
+      </div>
     );
   }
 
@@ -149,7 +168,7 @@ export function ParamsEditor({
         <Input
           placeholder="format (opt)"
           className="h-7 w-28 text-xs font-mono"
-          title="Format pattern — e.g. PAT-######"
+          title="Format pattern, e.g. PAT-######"
           value={String(params.format ?? '')}
           onChange={(e) =>
             e.target.value ? set('format', e.target.value) : unset('format')
@@ -292,6 +311,6 @@ export function ParamsEditor({
     );
   }
 
-  // cryptohash, gpas_pseudonymize — no UI-configurable params
+  // cryptohash, gpas_pseudonymize, no UI-configurable params
   return <span className="text-xs text-muted-foreground">—</span>;
 }

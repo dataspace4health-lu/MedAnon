@@ -33,6 +33,10 @@ import {
   Cpu,
   AlertTriangle,
   CheckCircle2,
+  FileCheck2,
+  Gauge,
+  Sparkles,
+  EyeOff,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -83,6 +87,8 @@ interface ServiceDef {
   detail: string | null;
   version?: string;
   error?: string | null;
+  /** Reported but does not gate /ready, see CRITICAL_CHECKS in api/services/health.py. */
+  optional?: boolean;
 }
 
 interface PageState {
@@ -178,7 +184,17 @@ function ServiceCard({ svc }: { svc: ServiceDef }) {
               {svc.icon}
             </span>
             <div>
-              <p className="text-sm font-semibold leading-none">{svc.name}</p>
+              <div className="flex items-center gap-1.5">
+                <p className="text-sm font-semibold leading-none">{svc.name}</p>
+                {svc.optional && (
+                  <span
+                    className="rounded border border-muted bg-muted/40 px-1 py-px text-[9px] font-medium uppercase tracking-wide text-muted-foreground"
+                    title="Advisory: reported but does not gate readiness"
+                  >
+                    Advisory
+                  </span>
+                )}
+              </div>
               <p className="mt-0.5 text-[11px] text-muted-foreground">{svc.description}</p>
             </div>
           </div>
@@ -268,7 +284,7 @@ function AiSafetySection({
   ai, error, loading,
 }: { ai: AgentStatus | null; error: string | null; loading: boolean }) {
   // Hide the section entirely when the API call failed (older backend, or
-  // AI router unavailable) — nothing useful to show.
+  // AI router unavailable), nothing useful to show.
   if (error) return null;
 
   const enabled = ai?.enabled ?? false;
@@ -359,7 +375,7 @@ function AiSafetySection({
                     : <Lock className="size-4" />}
                 </span>
                 <div>
-                  <p className="text-sm font-semibold leading-none">PII Model — Local-only</p>
+                  <p className="text-sm font-semibold leading-none">PII Model, Local-only</p>
                   <p className="mt-0.5 text-[11px] text-muted-foreground">
                     De-identified text never leaves a local model
                   </p>
@@ -524,13 +540,22 @@ export default function StatusPage() {
   const checks = useMemo(() => state.ready.data?.checks ?? {}, [state.ready.data]);
 
   const services: ServiceDef[] = useMemo(() => {
-    const CHECK_META: Record<string, { name: string; description: string; icon: React.ReactNode }> = {
-      gpas:      { name: 'gPAS',      description: 'Pseudonymization service', icon: <Cpu       className="size-4" /> },
-      gPAS:      { name: 'gPAS',      description: 'Pseudonymization service', icon: <Cpu       className="size-4" /> },
-      redis:     { name: 'Redis',     description: 'Shared cache & job queue',  icon: <Server    className="size-4" /> },
-      nlp:       { name: 'NLP',       description: 'Presidio NLP microservice', icon: <Brain     className="size-4" /> },
-      analytics: { name: 'Analytics', description: 'Risk & synthetic data',     icon: <BarChart3 className="size-4" /> },
+    type CheckMeta = { name: string; description: string; icon: React.ReactNode; optional?: boolean };
+    const CHECK_META: Record<string, CheckMeta> = {
+      gpas:        { name: 'gPAS',        description: 'Pseudonymization service',   icon: <Cpu        className="size-4" /> },
+      gPAS:        { name: 'gPAS',        description: 'Pseudonymization service',   icon: <Cpu        className="size-4" /> },
+      redis:       { name: 'Redis',       description: 'Shared cache & job queue',   icon: <Server     className="size-4" /> },
+      nlp:         { name: 'NLP',         description: 'Presidio NLP microservice',  icon: <Brain      className="size-4" /> },
+      postgres:    { name: 'App DB',      description: 'PostgreSQL application DB',  icon: <Database   className="size-4" /> },
+      fhir_target: { name: 'FHIR Target', description: 'HAPI FHIR R4 target server', icon: <Database   className="size-4" /> },
+      analytics:   { name: 'Analytics',   description: 'Risk & synthetic data',      icon: <BarChart3  className="size-4" />, optional: true },
+      scoring:     { name: 'Scoring',     description: 'Privacy x utility x quality', icon: <Gauge     className="size-4" />, optional: true },
+      trust_gate:  { name: 'Trust Gate',  description: 'Pre-privacy quality barrier', icon: <FileCheck2 className="size-4" />, optional: true },
+      ai:          { name: 'AI Service',  description: 'LLM-assisted agents',        icon: <Sparkles   className="size-4" />, optional: true },
     };
+
+    // Rendered explicitly below from /metadata, so skip the /ready duplicate.
+    const HARDCODED_KEYS = new Set(['fhir']);
 
     const defs: ServiceDef[] = [
       {
@@ -561,8 +586,16 @@ export default function StatusPage() {
 
     const seen = new Set<string>();
     for (const [k, status] of Object.entries(checks)) {
-      const meta = CHECK_META[k];
-      if (!meta || seen.has(meta.name)) continue;
+      if (HARDCODED_KEYS.has(k)) continue;
+      // Unknown keys get a generated card rather than being dropped: a probe
+      // the backend reports but the UI has no metadata for is still a service
+      // the operator needs to see.
+      const meta: CheckMeta = CHECK_META[k] ?? {
+        name: k.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+        description: 'Upstream dependency',
+        icon: <Server className="size-4" />,
+      };
+      if (seen.has(meta.name)) continue;
       seen.add(meta.name);
       const isOk  = ['ok', 'healthy', 'available'].includes(status);
       const isOff = ['not configured', 'disabled'].includes(status);
@@ -571,6 +604,7 @@ export default function StatusPage() {
         name: meta.name,
         description: meta.description,
         icon: meta.icon,
+        optional: meta.optional,
         ok:      isOk,
         loading: state.loading,
         detail:  isOff ? 'Not configured' : isOk ? null : status,
@@ -580,6 +614,11 @@ export default function StatusPage() {
 
     return defs;
   }, [state.loading, state.medanon, state.fhir, checks]);
+
+  // The backend omits `checks` for unauthenticated callers (it would leak
+  // internal network topology). Without it we can only see the two services we
+  // probe directly, so the page must not imply it has surveyed everything.
+  const checksHidden = state.ready.data != null && state.ready.data.checks === undefined;
 
   const servicesOnline = services.filter((s) => !s.loading && s.ok).length;
   const servicesTotal  = services.filter((s) => !s.loading).length;
@@ -628,14 +667,18 @@ export default function StatusPage() {
           'flex items-center gap-2 rounded-full border px-3 py-1 text-sm font-medium',
           state.loading
             ? 'border-muted bg-muted/30 text-muted-foreground'
-            : allOk
-              ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-              : someDown
-                ? 'border-amber-200  bg-amber-50  text-amber-700'
-                : 'border-muted bg-muted/30 text-muted-foreground',
+            : checksHidden
+              ? 'border-muted bg-muted/30 text-muted-foreground'
+              : allOk
+                ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                : someDown
+                  ? 'border-amber-200  bg-amber-50  text-amber-700'
+                  : 'border-muted bg-muted/30 text-muted-foreground',
         )}>
           {state.loading ? (
             <Loader2       className="size-3.5 animate-spin" />
+          ) : checksHidden ? (
+            <EyeOff        className="size-3.5" />
           ) : allOk ? (
             <CheckCircle2  className="size-3.5" />
           ) : (
@@ -643,9 +686,11 @@ export default function StatusPage() {
           )}
           {state.loading
             ? 'Checking services…'
-            : allOk
-              ? `All ${servicesTotal} services operational`
-              : `${servicesOnline} / ${servicesTotal} services online`}
+            : checksHidden
+              ? `${servicesOnline} / ${servicesTotal} directly probed, sign in for dependency health`
+              : allOk
+                ? `All ${servicesTotal} services operational`
+                : `${servicesOnline} / ${servicesTotal} services online`}
         </div>
 
         <div className="ml-auto flex items-center gap-3">
@@ -694,7 +739,7 @@ export default function StatusPage() {
       <section>
         <div className="mb-3 flex items-center justify-between">
           <h2 className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
-            FHIR Source — Resource Inventory
+            FHIR Source, Resource Inventory
           </h2>
           {totalResources > 0 && (
             <span className="text-sm font-semibold tabular-nums">
@@ -777,7 +822,7 @@ export default function StatusPage() {
             {activeJobs.length > 0 && (
               <div className="mb-3 rounded-xl border overflow-hidden">
                 <div className="border-b bg-blue-50/60 px-4 py-2 text-[11px] font-semibold uppercase tracking-wide text-blue-700">
-                  Active — {activeJobs.length} job{activeJobs.length !== 1 ? 's' : ''}
+                  Active, {activeJobs.length} job{activeJobs.length !== 1 ? 's' : ''}
                 </div>
                 <div className="divide-y">
                   {activeJobs.map((j) => <JobRow key={j.job_id} job={j} />)}
@@ -788,7 +833,7 @@ export default function StatusPage() {
             {recentJobs.length > 0 && (
               <div className="rounded-xl border overflow-hidden">
                 <div className="border-b bg-muted/30 px-4 py-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                  Recent — {recentJobs.length} job{recentJobs.length !== 1 ? 's' : ''}
+                  Recent, {recentJobs.length} job{recentJobs.length !== 1 ? 's' : ''}
                 </div>
                 <div className="divide-y">
                   {recentJobs.map((j) => <JobRow key={j.job_id} job={j} />)}
@@ -804,6 +849,21 @@ export default function StatusPage() {
       </section>
 
       {/* ── Dependency Check Pills ── */}
+      {checksHidden && (
+        <section>
+          <h2 className="mb-3 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
+            Dependency Checks
+          </h2>
+          <div className="flex items-center gap-2 rounded-xl border border-dashed px-4 py-3 text-sm text-muted-foreground">
+            <EyeOff className="size-4 shrink-0" />
+            <span>
+              Upstream dependency health is hidden for unauthenticated callers to avoid
+              exposing internal network topology. Sign in to see per-service status.
+            </span>
+          </div>
+        </section>
+      )}
+
       {Object.keys(checks).length > 0 && (
         <section>
           <h2 className="mb-3 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">

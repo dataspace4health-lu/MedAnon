@@ -3,6 +3,7 @@ import { useJobDetail } from '@/hooks/useJobs';
 import { useJobMutations } from '@/hooks/useJobs';
 import { getJobResult } from '@/api/jobs';
 import { PipelineDag } from './PipelineDag';
+import { TransformationPassportPanel } from '@/components/shared/TransformationPassportPanel';
 import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -153,7 +154,7 @@ export function JobDetailDrawer({ jobId, onClose }: Props) {
           </div>
         )}
 
-        {/* Privacy-gate block report — structured "what leaked / what to fix".
+        {/* Privacy-gate block report, structured "what leaked / what to fix".
             Shown instead of the raw error text when the job was blocked by the
             score gate (output deleted, download blocked). */}
         {job.block_report ? (
@@ -161,8 +162,8 @@ export function JobDetailDrawer({ jobId, onClose }: Props) {
             <div className="flex items-center justify-between">
               <p className="text-xs font-semibold text-destructive">
                 {job.block_report.critical_pii
-                  ? 'Output blocked — PII leak detected'
-                  : 'Output blocked — quality gate failed'}
+                  ? 'Output blocked, PII leak detected'
+                  : 'Output blocked, quality gate failed'}
               </p>
               <span className="text-[10px] font-mono text-destructive/70">
                 {job.block_report.score}% · Grade {job.block_report.grade}
@@ -214,6 +215,11 @@ export function JobDetailDrawer({ jobId, onClose }: Props) {
             <p className="text-xs text-destructive/80 font-mono break-all">{job.error}</p>
           </div>
         ) : null}
+
+        {/* Transformation Passport, the treated-data result (risk-driven export) */}
+        {job.transformation_passport && (
+          <TransformationPassportPanel passport={job.transformation_passport} />
+        )}
 
         {/* IDs */}
         <div className="text-xs text-muted-foreground space-y-0.5">

@@ -20,6 +20,7 @@ import type { ResourceTypeCount } from '@/api/fhir';
 import { submitBulkExportJob, submitBatchPatientExportJob } from '@/api/medanon';
 import { useConfig } from '@/context/ConfigContext';
 import { useBulkExport } from '@/context/BulkExportContext';
+import { useSettings } from '@/context/SettingsContext';
 import type { PatientSummary } from '@/api/types';
 
 const PAGE_SIZE = 20;
@@ -28,6 +29,7 @@ export default function PatientBrowserPage() {
   const navigate = useNavigate();
   const { configProfile } = useConfig();
   const { submitExport } = useBulkExport();
+  const { sourceConnected } = useSettings();
 
   const [patients, setPatients] = useState<PatientSummary[]>([]);
   const [total, setTotal] = useState<number | null>(null);
@@ -101,6 +103,11 @@ export default function PatientBrowserPage() {
   useEffect(() => {
     let cancelled = false;
     const run = async () => {
+      // No source server selected → don't probe; show the "no server" message.
+      if (!sourceConnected) {
+        setFhirConnected(false);
+        return;
+      }
       try {
         await capabilityStatement();
         if (cancelled) return;
@@ -120,7 +127,8 @@ export default function PatientBrowserPage() {
     };
     run();
     return () => { cancelled = true; };
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sourceConnected]);
 
   // Fetch resource type counts when FHIR is connected
   useEffect(() => {
@@ -241,12 +249,21 @@ export default function PatientBrowserPage() {
           Checking FHIR server connectivity…
         </div>
       )}
-      {fhirConnected === false && (
+      {fhirConnected === false && !sourceConnected && (
+        <div className="mb-6 flex items-start gap-2.5 rounded-lg border bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>
+            <span className="font-medium">No source server connected.</span>{' '}
+            Choose one under Settings → FHIR servers.
+          </span>
+        </div>
+      )}
+      {fhirConnected === false && sourceConnected && (
         <div className="mb-6 flex items-start gap-2.5 rounded-lg border border-destructive/40 bg-destructive/5 px-4 py-3 text-sm text-destructive">
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
           <span>
             <span className="font-medium">FHIR server unreachable.</span>{' '}
-            Verify that HAPI FHIR is running and accessible.
+            Verify the selected source server is running and accessible.
           </span>
         </div>
       )}
@@ -490,7 +507,7 @@ export default function PatientBrowserPage() {
         <DialogContent className="sm:max-w-4xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>
-              Preview De-identification — {previewPatient?.name || 'Patient'}
+              Preview De-identification, {previewPatient?.name || 'Patient'}
             </DialogTitle>
             <DialogDescription>
               Preview how this patient's data will be de-identified with the current config profile.

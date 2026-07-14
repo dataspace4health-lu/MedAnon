@@ -42,17 +42,17 @@ function JobStatusLine({ job }: { job: ExportJob }) {
 
   if (job.error) return <span className="text-xs text-destructive truncate">{job.error}</span>;
   if (job.status === "submitting") return <span className="text-xs text-muted-foreground">Submitting…</span>;
-  if (job.status === "pending") return <span className="text-xs text-muted-foreground">Queued — {formatElapsed(elapsed)}</span>;
+  if (job.status === "pending") return <span className="text-xs text-muted-foreground">Queued, {formatElapsed(elapsed)}</span>;
   return (
     <span className="text-xs text-muted-foreground">
-      {job.processed.toLocaleString()} resources processed — {formatElapsed(elapsed)}
+      {job.processed.toLocaleString()} resources processed, {formatElapsed(elapsed)}
     </span>
   );
 }
 
 export function BulkExportTracker() {
   const { jobs, downloadResult, dismissJob, clearCompleted } = useBulkExport();
-  // Start collapsed — expand when a new active job arrives
+  // Start collapsed, expand when a new active job arrives
   const [collapsed, setCollapsed] = useState(true);
 
   const activeJobs = jobs.filter(

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { toast } from 'sonner';
-import { Play, ChevronDown, X, FileText, Loader2, Server, Upload, CheckCircle2, ShieldAlert } from 'lucide-react';
+import { Play, ChevronDown, X, FileText, Loader2, Server, Upload, CheckCircle2, ShieldAlert, ShieldCheck } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { FileUploader } from '@/components/shared/FileUploader';
 import { StreamProgress } from '@/components/shared/StreamProgress';
@@ -32,6 +32,7 @@ import {
 } from '@/api/medanon';
 import type { PiiLeakInfo } from '@/api/processing';
 import { AsyncExportPanel } from './batch/AsyncExportPanel.tsx';
+import { RiskDrivenExportPanel } from './batch/RiskDrivenExportPanel.tsx';
 import {
   MAX_SIZE,
   ACCEPTED_EXTENSIONS,
@@ -46,7 +47,7 @@ import {
 import type { FileInfo } from './batch/batchHelpers.ts';
 
 // ---------------------------------------------------------------------------
-// PII leak banner — mirrors ProcessResourcePage's blocked-output panel but
+// PII leak banner, mirrors ProcessResourcePage's blocked-output panel but
 // note that streaming output has already been sent; this is a warning only.
 // ---------------------------------------------------------------------------
 
@@ -62,7 +63,7 @@ function PiiLeakBanner({ piiLeak }: { piiLeak: PiiLeakInfo }) {
             PII Leak Detected in Output
           </p>
           <p className="text-sm text-destructive/80 mt-0.5">
-            Output was already streamed. <strong>Do not use this data</strong> — re-run after fixing the config.
+            Output was already streamed. <strong>Do not use this data</strong>, re-run after fixing the config.
           </p>
         </div>
       </div>
@@ -277,6 +278,10 @@ export default function BatchPage() {
             <Server className="mr-1.5 h-4 w-4" />
             Server Export
           </TabsTrigger>
+          <TabsTrigger value="risk-driven">
+            <ShieldCheck className="mr-1.5 h-4 w-4" />
+            Risk-Driven
+          </TabsTrigger>
         </TabsList>
 
         {/* ── Tab 1: file upload ── */}
@@ -405,7 +410,7 @@ export default function BatchPage() {
                     </CardContent>
                   </Card>
 
-                  {/* PII leak banner — shown when the stream trailer signals a leak */}
+                  {/* PII leak banner, shown when the stream trailer signals a leak */}
                   {!isStreaming && piiLeak?.leaked && (
                     <PiiLeakBanner piiLeak={piiLeak} />
                   )}
@@ -469,7 +474,7 @@ export default function BatchPage() {
                         </div>
                         <div className="flex items-center gap-2">
                           <Input
-                            placeholder="Target FHIR server URL (optional — uses FHIR_TARGET_URL if empty)"
+                            placeholder="Target FHIR server URL (optional, uses FHIR_TARGET_URL if empty)"
                             value={targetUrl}
                             onChange={(e) => setTargetUrl(e.target.value)}
                             className="max-w-sm text-xs"
@@ -511,6 +516,11 @@ export default function BatchPage() {
         {/* ── Tab 2: async server export ── */}
         <TabsContent value="server" className="mt-6">
           <AsyncExportPanel configProfile={configProfile} />
+        </TabsContent>
+
+        {/* ── Tab 3: risk-driven (k-anonymity) export ── */}
+        <TabsContent value="risk-driven" className="mt-6">
+          <RiskDrivenExportPanel configProfile={configProfile} />
         </TabsContent>
       </Tabs>
     </div>

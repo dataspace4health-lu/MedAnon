@@ -16,7 +16,7 @@ const queryClient = new QueryClient({
     queries: {
       staleTime: 10_000,
       // Retry transient failures with exponential backoff (capped at 30s).
-      // Do not retry 4xx client errors — they will not succeed on retry.
+      // Do not retry 4xx client errors, they will not succeed on retry.
       retry: (failureCount, error) => {
         const status = (error as { status?: number } | undefined)?.status;
         if (typeof status === 'number' && status >= 400 && status < 500) {

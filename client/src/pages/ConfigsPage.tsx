@@ -133,7 +133,7 @@ function ConfigCard({
       </CardContent>
 
       <CardFooter className="flex flex-wrap gap-2 pt-2">
-        {/* Preview already handled above — actions below */}
+        {/* Preview already handled above, actions below */}
         {hasRole('admin') && !config.is_system && (
           <Button
             variant="outline"

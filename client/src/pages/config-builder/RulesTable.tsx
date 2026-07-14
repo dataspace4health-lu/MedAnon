@@ -292,8 +292,8 @@ export function RulesTable({
           <span className="flex items-center gap-2">
             <AlertTriangle className="size-3.5 shrink-0" />
             {conflictMatches.size === 1
-              ? '1 match expression has conflicting actions — only the first rule fires.'
-              : `${conflictMatches.size} match expressions have conflicting actions — only the first rule fires each.`}
+              ? '1 match expression has conflicting actions, only the first rule fires.'
+              : `${conflictMatches.size} match expressions have conflicting actions, only the first rule fires each.`}
           </span>
           <button onClick={handleCleanup} className="shrink-0 underline font-medium">
             Fix now
@@ -305,8 +305,8 @@ export function RulesTable({
           <span className="flex items-center gap-2">
             <AlertTriangle className="size-3.5 shrink-0" />
             {duplicateMatches.size === 1
-              ? '1 duplicate match expression — only the first matching rule fires at runtime.'
-              : `${duplicateMatches.size} duplicate match expressions — only the first matching rule fires at runtime.`}
+              ? '1 duplicate match expression, only the first matching rule fires at runtime.'
+              : `${duplicateMatches.size} duplicate match expressions, only the first matching rule fires at runtime.`}
           </span>
           <button onClick={handleCleanup} className="shrink-0 underline font-medium">
             Remove duplicates
@@ -317,8 +317,8 @@ export function RulesTable({
         <div className="flex items-center gap-2 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-800 dark:border-red-700 dark:bg-red-950/40 dark:text-red-300">
           <AlertTriangle className="size-3.5 shrink-0" />
           {paramErrors.size === 1
-            ? '1 rule has invalid params — hover the warning icon in the Params column for details.'
-            : `${paramErrors.size} rules have invalid params — hover the warning icons for details.`}
+            ? '1 rule has invalid params, hover the warning icon in the Params column for details.'
+            : `${paramErrors.size} rules have invalid params, hover the warning icons for details.`}
         </div>
       )}
 
@@ -384,12 +384,12 @@ export function RulesTable({
                           )}
                         />
                         {isConflict && (
-                          <span title="Conflicting actions for same match — only the first rule fires" className="shrink-0 inline-flex">
+                          <span title="Conflicting actions for same match, only the first rule fires" className="shrink-0 inline-flex">
                             <AlertTriangle className="size-3.5 text-orange-500" />
                           </span>
                         )}
                         {!isConflict && isDup && (
-                          <span title="Duplicate match — this rule may be shadowed" className="shrink-0 inline-flex">
+                          <span title="Duplicate match, this rule may be shadowed" className="shrink-0 inline-flex">
                             <AlertTriangle className="size-3.5 text-amber-500" />
                           </span>
                         )}
@@ -437,7 +437,7 @@ export function RulesTable({
                         </Select>
                         {!DETERMINISTIC_ACTIONS.has(rule.action) && (
                           <span
-                            title={`"${rule.action}" produces different output each run — referential integrity across resources may be broken`}
+                            title={`"${rule.action}" produces different output each run, referential integrity across resources may be broken`}
                             className="shrink-0 flex items-center gap-0.5 rounded border border-amber-300 bg-amber-50 dark:bg-amber-900/20 dark:border-amber-700 px-1 py-px text-[10px] font-medium text-amber-700 dark:text-amber-400"
                           >
                             <Shuffle className="size-2.5" />
@@ -512,7 +512,7 @@ export function RulesTable({
                               : 'text-muted-foreground hover:text-foreground',
                           )}
                           aria-label={enabled ? 'Disable rule' : 'Enable rule'}
-                          title={enabled ? 'Rule active — click to disable (kept but excluded from the saved config)' : 'Rule disabled — click to enable'}
+                          title={enabled ? 'Rule active, click to disable (kept but excluded from the saved config)' : 'Rule disabled, click to enable'}
                         >
                           {enabled ? <Eye className="size-3.5" /> : <EyeOff className="size-3.5" />}
                         </button>

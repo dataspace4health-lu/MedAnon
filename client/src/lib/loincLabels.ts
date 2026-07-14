@@ -25,7 +25,7 @@ export const LOINC_LABELS: Record<string, string> = {
   "1742-6":  "ALT",
   "1920-8":  "AST",
   "17861-6": "Calcium",
-  // Haematology — CBC
+  // Haematology, CBC
   "718-7":   "Hemoglobin",
   "4544-3":  "Hematocrit",
   "6690-2":  "WBC count",

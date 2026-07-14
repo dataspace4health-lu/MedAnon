@@ -1,7 +1,7 @@
 /**
  * Single source of truth for the app's navigation.
  *
- * Previously the nav structure was duplicated across three files — Sidebar
+ * Previously the nav structure was duplicated across three files, Sidebar
  * (NAV_SECTIONS), TopBar (EXACT/PREFIX crumb maps), and HomePage (SECTIONS).
  * They drifted (e.g. "Multi-Format" was added to the sidebar but not the
  * breadcrumb map).  This module is now the one place that defines every
@@ -16,6 +16,7 @@ import {
   FlaskConical, BarChart3, SlidersHorizontal, PackageOpen,
   ShieldCheck, History, MonitorDot, ServerCog, TrendingUp,
   FileBarChart, FileStack, Database, BadgeCheck, Settings,
+  ScrollText,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { Role } from '@/config/constants';
@@ -30,7 +31,7 @@ export interface NavLeaf {
 }
 
 export interface NavItem extends NavLeaf {
-  /** Optional child items — renders as a collapsible group in the sidebar. */
+  /** Optional child items, renders as a collapsible group in the sidebar. */
   children?: NavLeaf[];
 }
 
@@ -40,7 +41,7 @@ export interface NavSection {
   items: NavItem[];
 }
 
-/** The Home/Dashboard entry — rendered above the grouped sections. */
+/** The Home/Dashboard entry, rendered above the grouped sections. */
 export const NAV_HOME: NavItem = {
   to: '/',
   label: 'Dashboard',
@@ -67,7 +68,7 @@ export const NAV_SECTIONS: NavSection[] = [
       {
         to: '/bulk-deidentify',
         label: 'Async Jobs',
-        description: 'Batch and bulk async processing — submit, monitor, and manage server-side jobs.',
+        description: 'Batch and bulk async processing, submit, monitor, and manage server-side jobs.',
         icon: PackageOpen,
         minRole: 'analyst',
         children: [
@@ -96,6 +97,13 @@ export const NAV_SECTIONS: NavSection[] = [
           { to: '/trust-profiles', label: 'Trust Profiles', description: 'Build and manage reusable audit profiles (phases, sectors, thresholds).',   icon: SlidersHorizontal, minRole: 'analyst' },
         ],
       },
+    ],
+  },
+  {
+    label: 'Govern',
+    items: [
+      { to: '/permits', label: 'Data Permits', description: 'Create and approve data permits (EHDS/D7.2) that scope pseudonymisation to an authorised use.', icon: ScrollText, minRole: 'admin' },
+      { to: '/reports', label: 'Passports', description: 'Durable transformation passports (privacy model, risk, disclosure) for every risk-driven export.', icon: FileBarChart, minRole: 'analyst' },
     ],
   },
   {

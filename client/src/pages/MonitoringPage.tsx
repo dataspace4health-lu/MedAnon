@@ -252,7 +252,7 @@ function MetricsPanel() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          Live snapshot — instant queries
+          Live snapshot, instant queries
         </p>
         <Button variant="outline" size="sm" onClick={fetch} className="h-7 text-xs gap-1">
           <RefreshCw className="size-3" />
@@ -394,7 +394,7 @@ function GrafanaPanel() {
     <div className="space-y-3">
       <div className="flex items-center justify-between">
         <p className="text-xs text-muted-foreground">
-          Grafana dashboards — log in with admin credentials to create and save views.
+          Grafana dashboards, log in with admin credentials to create and save views.
         </p>
         {openLink}
       </div>
@@ -419,7 +419,7 @@ function GrafanaPanel() {
 }
 
 // ---------------------------------------------------------------------------
-// Setup instructions — shown when monitoring is not enabled
+// Setup instructions, shown when monitoring is not enabled
 // ---------------------------------------------------------------------------
 
 function SetupCard() {

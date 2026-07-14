@@ -135,7 +135,7 @@ function ResultBadge({ result }: { result: CheckResultValue }) {
 }
 
 // ---------------------------------------------------------------------------
-// Pillar card — one per Kahn category
+// Pillar card, one per Kahn category
 // ---------------------------------------------------------------------------
 
 interface PillarCardProps {
@@ -328,7 +328,7 @@ function FindingGroup({
         <p className="mt-2 flex items-start gap-1.5 text-xs text-amber-600 dark:text-amber-400">
           <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
           {check.check_id === "conformance.reference_integrity"
-            ? "Every reference in this batch points outside the batch. This is expected when you submit a slice of a larger server — the referenced resources exist on the server but were not included in this scan. Run a full-server scan or Patient/$everything to assess reference integrity correctly."
+            ? "Every reference in this batch points outside the batch. This is expected when you submit a slice of a larger server, the referenced resources exist on the server but were not included in this scan. Run a full-server scan or Patient/$everything to assess reference integrity correctly."
             : "Every applicable resource is affected. A 100% rate typically indicates a systematic scope or encoding issue (e.g. a referenced resource type was excluded from the scan) rather than isolated bad records. Verify the check logic and input coverage before treating these as individual data errors."}
         </p>
       )}
@@ -361,7 +361,7 @@ function FindingGroup({
                         <TableCell className="font-mono text-xs">{loc.resource}</TableCell>
                         <TableCell className="font-mono text-xs text-muted-foreground">{loc.field}</TableCell>
                         <TableCell className="font-mono text-xs">
-                          {loc.value ?? <span className="text-muted-foreground/60" title="Withheld — a field value can be PHI">—</span>}
+                          {loc.value ?? <span className="text-muted-foreground/60" title="Withheld, a field value can be PHI">—</span>}
                         </TableCell>
                         <TableCell className="text-xs">{loc.problem}</TableCell>
                       </TableRow>
@@ -390,7 +390,7 @@ function FindingsCard({ checks }: { checks: TrustCheck[] }) {
         <CardContent className="text-sm text-muted-foreground">
           {anyFail
             ? "Checks failed on aggregate counts but produced no per-resource detail in this view."
-            : "No violations — every applicable check passed."}
+            : "No violations, every applicable check passed."}
         </CardContent>
       </Card>
     );
@@ -399,7 +399,7 @@ function FindingsCard({ checks }: { checks: TrustCheck[] }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Findings — what is wrong and where</CardTitle>
+        <CardTitle>Findings, what is wrong and where</CardTitle>
         <p className="text-sm text-muted-foreground">
           {groups.length} check{groups.length === 1 ? "" : "s"} failed with per-resource detail.
           Each shows the share of records affected and how to remediate.
@@ -466,7 +466,7 @@ function Scorecard({ scorecard }: { scorecard?: Record<string, DimensionScore> }
   if (!entries.length) return null;
   return (
     <Card>
-      <CardHeader><CardTitle>Dimension scorecard — DAMA / ISO 25012</CardTitle></CardHeader>
+      <CardHeader><CardTitle>Dimension scorecard, DAMA / ISO 25012</CardTitle></CardHeader>
       <CardContent className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         {entries.map(([dim, s]) => (
           <div key={dim} className="flex items-center gap-2 rounded-lg border p-3">
@@ -514,7 +514,7 @@ function SectorsCard({ targets }: { targets?: Record<string, SectorVerdict> }) {
   if (!entries.length) return null;
   return (
     <Card>
-      <CardHeader><CardTitle>Sectors — per-target verdicts</CardTitle></CardHeader>
+      <CardHeader><CardTitle>Sectors, per-target verdicts</CardTitle></CardHeader>
       <CardContent className="space-y-2">
         {entries.map(([id, t]) => (
           <div key={id} className="flex items-center justify-between gap-3 text-sm">
@@ -579,7 +579,7 @@ function EhdsLabelCard({ label }: { label: EhdsLabel }) {
 }
 
 // ---------------------------------------------------------------------------
-// Remediation findings — interactive triage (PDSA study/act loop)
+// Remediation findings, interactive triage (PDSA study/act loop)
 // ---------------------------------------------------------------------------
 
 const SEV_BADGE: Record<string, "destructive" | "secondary" | "outline"> = {
@@ -661,7 +661,7 @@ function TriageRow({
                   <TableRow key={i}>
                     <TableCell className="font-mono text-xs">{loc.resource}</TableCell>
                     <TableCell className="font-mono text-xs text-muted-foreground">{loc.field}</TableCell>
-                    <TableCell className="font-mono text-xs">{loc.value ?? <span className="text-muted-foreground/60" title="Withheld — a field value can be PHI">—</span>}</TableCell>
+                    <TableCell className="font-mono text-xs">{loc.value ?? <span className="text-muted-foreground/60" title="Withheld, a field value can be PHI">—</span>}</TableCell>
                     <TableCell className="text-xs">{loc.problem}</TableCell>
                   </TableRow>
                 );
@@ -710,7 +710,7 @@ function RemediationTriage({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Remediation findings — triage (PDSA)</CardTitle>
+        <CardTitle>Remediation findings, triage (PDSA)</CardTitle>
         <p className="text-sm text-muted-foreground">
           {open} open of {findings.length}. Set status + root cause (source-error / ETL-error / genuine-biology),
           expand to see exactly which record and field failed, then save.
@@ -771,7 +771,7 @@ function AuditReport({ passport, audit }: { passport: QualityPassport; audit: Au
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2"><ScrollText className="size-4" /> Quality Control Audit Report</CardTitle>
-        <p className="text-sm text-muted-foreground">ALCOA++ / 21 CFR Part 11-aligned — attributable, contemporaneous, traceable.</p>
+        <p className="text-sm text-muted-foreground">ALCOA++ / 21 CFR Part 11-aligned, attributable, contemporaneous, traceable.</p>
       </CardHeader>
       <CardContent className="space-y-6">
         <div>
@@ -832,7 +832,7 @@ function humanizeFinding(id: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Assessment-coverage honesty badge — a grade over a thin subset of checks must
+// Assessment-coverage honesty badge, a grade over a thin subset of checks must
 // not read like a full assessment, so the validation depth + what did not run
 // travel next to the verdict.
 // ---------------------------------------------------------------------------
@@ -1030,10 +1030,10 @@ export function TrustGateResultPanel({ passport }: { passport: QualityPassport }
         </CardContent>
       </Card>
 
-      {/* Findings — where/what (per-record) */}
+      {/* Findings, where/what (per-record) */}
       <FindingsCard checks={passport.checks} />
 
-      {/* Remediation findings — interactive triage (server-derived) */}
+      {/* Remediation findings, interactive triage (server-derived) */}
       {findings.length > 0 ? (
         <RemediationTriage findings={findings} checks={passport.checks} onChange={onFindingSaved} />
       ) : passport.checks.some((c) => c.result === "FAIL") && (
@@ -1078,13 +1078,13 @@ export function TrustGateResultPanel({ passport }: { passport: QualityPassport }
         </Card>
       </div>
 
-      {/* Data profile (descriptive — value distributions live in their own card) */}
+      {/* Data profile (descriptive, value distributions live in their own card) */}
       {Object.keys(prof.resource_counts ?? {}).length > 0 && (
         <Card>
           <CardHeader>
             <CardTitle>
               Data profile{" "}
-              <span className="text-sm font-normal text-muted-foreground">(descriptive — not scored)</span>
+              <span className="text-sm font-normal text-muted-foreground">(descriptive, not scored)</span>
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-5">
@@ -1163,7 +1163,7 @@ export function TrustGateResultPanel({ passport }: { passport: QualityPassport }
               </div>
             )}
             {/* Clinical value distributions are rendered by ClinicalDistributions
-                above (histogram + age x sex stratification) — not duplicated here. */}
+                above (histogram + age x sex stratification), not duplicated here. */}
           </CardContent>
         </Card>
       )}

@@ -10,7 +10,7 @@ interface FieldRow {
   value: string;
 }
 
-// `text` (Narrative.div) and `extension` are intentionally NOT skipped — they
+// `text` (Narrative.div) and `extension` are intentionally NOT skipped, they
 // carry identifying content (the rendered narrative, US-Core race/ethnicity,
 // patient-mothersMaidenName, birthPlace, geolocation lat/long), so their leaves
 // must be visible in the table. Only provenance/version (`meta`), contained
@@ -57,10 +57,10 @@ function walkValue(
       typeof first === "number" ||
       typeof first === "boolean"
     ) {
-      // Scalar array (e.g. name.given: ["John", "A"]) — join values
+      // Scalar array (e.g. name.given: ["John", "A"]), join values
       rows.push({ field: key, value: value.map(String).join(", ") });
     } else {
-      // Object array — walk EVERY element so heterogeneous siblings all
+      // Object array, walk EVERY element so heterogeneous siblings all
       // surface their leaves (e.g. identifier[0] has no `type`, but
       // identifier[1].type.coding.code does). Paths stay index-free so they
       // still match the de-identified resource and the transformation
@@ -81,7 +81,7 @@ function walkValue(
 }
 
 /**
- * Deep field extraction — produces dotted sub-paths such as
+ * Deep field extraction, produces dotted sub-paths such as
  * "name.family", "address.city", "code.coding.display", "subject.reference".
  * Array fields walk the first element only; duplicate paths are deduplicated.
  */

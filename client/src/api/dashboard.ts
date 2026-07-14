@@ -3,7 +3,7 @@
  *
  * Wraps ``GET /v1/dashboard/summary``, which aggregates four upstream calls
  * (health, readiness, recent jobs, processing-run stats) into a single
- * round-trip — eliminating the request waterfall the SPA used to incur on
+ * round-trip, eliminating the request waterfall the SPA used to incur on
  * dashboard mount.
  */
 

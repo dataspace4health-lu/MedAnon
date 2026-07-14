@@ -12,7 +12,7 @@ export function AppLayout() {
 
   return (
     <div className="flex flex-col h-screen overflow-hidden">
-      {/* Fixed top bar — full width, always visible */}
+      {/* Fixed top bar, full width, always visible */}
       <TopBar
         sidebarOpen={sidebarOpen}
         onToggleSidebar={() => setSidebarOpen((v) => !v)}

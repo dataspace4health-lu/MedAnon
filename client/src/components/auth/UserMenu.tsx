@@ -22,7 +22,7 @@ export function UserMenu() {
     return () => document.removeEventListener('mousedown', handle);
   }, []);
 
-  // Don't render anything in open/none mode — no auth concept to surface
+  // Don't render anything in open/none mode, no auth concept to surface
   if (mode === 'none' || mode === 'auto' || !isAuthenticated) return null;
 
   const topRole = user.roles[0] ?? 'viewer';

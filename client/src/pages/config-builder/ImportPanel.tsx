@@ -36,7 +36,7 @@ export function ImportPanel({
       }
       const { added, skipped } = deduplicateIncoming(parsed, existingRules);
       if (added.length === 0) {
-        setErr('All pasted rules duplicate existing match expressions — nothing imported.');
+        setErr('All pasted rules duplicate existing match expressions. Nothing imported.');
         return;
       }
       onImport(added);
@@ -62,7 +62,7 @@ export function ImportPanel({
       <CollapsibleContent className="mt-2">
         <div className="rounded-lg border bg-muted/30 p-3 space-y-2">
           <p className="text-xs text-muted-foreground">
-            Paste an existing config YAML. The rules will be imported into the table — params require manual review.
+            Paste an existing config YAML. The rules will be imported into the table. Params require manual review.
           </p>
           <Textarea
             value={text}

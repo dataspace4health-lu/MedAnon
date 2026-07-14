@@ -164,7 +164,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
         })}
       </nav>
 
-      {/* Config profile selector — pinned to the bottom */}
+      {/* Config profile selector, pinned to the bottom */}
       <div className="border-t border-sidebar-border px-4 py-4">
         <label className="mb-2 block text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground/60">
           Active Profile

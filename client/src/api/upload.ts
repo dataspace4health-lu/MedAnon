@@ -17,7 +17,7 @@ export interface UploadToTargetResult {
   }>;
 }
 
-/** POST /api/v1/jobs/:jobId/upload-to-target — upload completed job results to target FHIR server. */
+/** POST /api/v1/jobs/:jobId/upload-to-target, upload completed job results to target FHIR server. */
 export async function uploadJobToTarget(
   jobId: string,
   targetUrl?: string,
@@ -40,7 +40,7 @@ export async function uploadJobToTarget(
   return response.json() as Promise<UploadToTargetResult>;
 }
 
-/** POST /api/v1/upload-to-target — upload already-de-identified resources to target FHIR server. */
+/** POST /api/v1/upload-to-target, upload already-de-identified resources to target FHIR server. */
 export async function uploadToTarget(
   resources: Record<string, unknown>[],
   targetServerUrl?: string,

@@ -1,5 +1,5 @@
 /**
- * Trust Gate audit-profile management — list, get, create, update, delete.
+ * Trust Gate audit-profile management, list, get, create, update, delete.
  *
  * A trust profile is a reusable selection of audit phases (+ sector targets,
  * thresholds, and a declared intended use) that tunes what the pre-privacy Trust
@@ -46,7 +46,7 @@ export interface TrustProfileUpdateBody {
   intended_use?: string;
 }
 
-/** GET /api/v1/trust-profiles/_phases — the catalog of selectable phases. */
+/** GET /api/v1/trust-profiles/_phases, the catalog of selectable phases. */
 export async function listPhases(): Promise<string[]> {
   const data = await fetchApi<{ phases: string[] }>("/v1/trust-profiles/_phases", {
     cache: "no-store",
@@ -54,7 +54,7 @@ export async function listPhases(): Promise<string[]> {
   return data.phases;
 }
 
-/** GET /api/v1/trust-profiles — list all profiles (system + user-defined). */
+/** GET /api/v1/trust-profiles, list all profiles (system + user-defined). */
 export async function listTrustProfiles(): Promise<TrustProfileMeta[]> {
   const data = await fetchApi<{ profiles: TrustProfileMeta[] }>("/v1/trust-profiles", {
     cache: "no-store",
@@ -62,7 +62,7 @@ export async function listTrustProfiles(): Promise<TrustProfileMeta[]> {
   return data.profiles;
 }
 
-/** POST /api/v1/trust-profiles — create a user-defined profile. */
+/** POST /api/v1/trust-profiles, create a user-defined profile. */
 export async function createTrustProfile(
   body: TrustProfileCreateBody,
 ): Promise<TrustProfileMeta> {
@@ -80,7 +80,7 @@ export async function createTrustProfile(
   return (await response.json() as { profile: TrustProfileMeta }).profile;
 }
 
-/** PUT /api/v1/trust-profiles/:name — update a user-defined profile. */
+/** PUT /api/v1/trust-profiles/:name, update a user-defined profile. */
 export async function updateTrustProfile(
   name: string,
   body: TrustProfileUpdateBody,
@@ -99,7 +99,7 @@ export async function updateTrustProfile(
   return (await response.json() as { profile: TrustProfileMeta }).profile;
 }
 
-/** DELETE /api/v1/trust-profiles/:name — delete a user-defined profile. */
+/** DELETE /api/v1/trust-profiles/:name, delete a user-defined profile. */
 export async function deleteTrustProfile(name: string): Promise<void> {
   const response = await fetch(`/api/v1/trust-profiles/${encodeURIComponent(name)}`, {
     method: "DELETE",

@@ -2,7 +2,7 @@
 // Field-path extraction from FHIR resources (uploaded examples or server samples).
 //
 // PHI BOUNDARY (default): extractFieldPaths returns ONLY structural information
-// — FHIRPath-style paths and their JSON value *type* (<string>, <number>,
+//, FHIRPath-style paths and their JSON value *type* (<string>, <number>,
 // <boolean>, <object>, <array>). In this default mode no patient values leave
 // the module, so the result is safe to send to ANY LLM as grounding context
 // (mirrors the backend source-context PHI rule: paths/counts only).
@@ -12,7 +12,7 @@
 // PII more accurately (a "code" field holding a free-text name, a numeric field
 // that is actually an MRN, etc.). Because the summary then carries PHI, the
 // backend treats it as a PHI payload and the AI local-guard HARD-REFUSES any
-// non-local endpoint — values only ever reach a self-hosted model. Callers must
+// non-local endpoint, values only ever reach a self-hosted model. Callers must
 // flag the request `include_values: true` so that enforcement engages.
 // ---------------------------------------------------------------------------
 
@@ -68,7 +68,7 @@ function isResource(x: unknown): x is Record<string, unknown> {
 
 const MAX_DEPTH = 8;
 // FHIR bookkeeping keys not worth proposing rules against. NOTE: `text`
-// (Narrative.text.div) is intentionally NOT skipped — it is human-readable
+// (Narrative.text.div) is intentionally NOT skipped, it is human-readable
 // rendered content that carries PHI, so the AI/Explorer must see the leaf to
 // recommend scrubbing it. `meta` stays skipped (provenance/versioning only).
 const SKIP_KEYS = new Set(['resourceType', 'meta']);
@@ -98,7 +98,7 @@ function sampleValue(v: unknown): string {
 // Walk one resource, collecting `Type.path.to.field : <jsontype>` into `acc`.
 // Array indices are collapsed (Patient.name.family, not name[0].family) to
 // match FHIRPath semantics. When `values` is provided (opt-in values mode), a
-// truncated SAMPLE of each leaf value is recorded into it — first value seen
+// truncated SAMPLE of each leaf value is recorded into it, first value seen
 // per path wins; otherwise only the type label is recorded.
 function walk(
   node: unknown,
@@ -115,7 +115,7 @@ function walk(
       return;
     }
     // Walk EVERY element, not just node[0], so heterogeneous siblings all
-    // contribute their leaf paths to the AI's field context — FHIR extension
+    // contribute their leaf paths to the AI's field context, FHIR extension
     // arrays are keyed by `url` (mothersMaidenName, birthsex, birthPlace,
     // race vs ethnicity each carry a different value[x]), and identifier/
     // telecom arrays differ element-to-element. Indices stay collapsed
@@ -150,7 +150,7 @@ export interface FieldContextResult {
 
 /** Extract a field-path summary from parsed resources.
  *
- * By default the `summary` contains ONLY paths and JSON value types — safe to
+ * By default the `summary` contains ONLY paths and JSON value types, safe to
  * send to ANY model. With `{ includeValues: true }` a truncated sample value is
  * appended per leaf (`path : <type> = value`); the result then carries PHI and
  * must only be sent to a local model (the backend enforces this via the AI

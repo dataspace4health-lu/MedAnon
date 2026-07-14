@@ -11,6 +11,10 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { PermitPicker } from '@/components/shared/PermitPicker';
+import { SourcePicker, DestinationPicker } from '@/components/shared/ConnectorPickers';
+import { useSettings } from '@/context/SettingsContext';
+import { activeSourceJobParams, activeTargetJobParams } from '@/api/fhirRoute';
 import {
   submitBulkExportJob,
   submitBulkImport,
@@ -27,6 +31,19 @@ import { JOB_POLL_INTERVAL } from './batchHelpers.ts';
 export function AsyncExportPanel({ configProfile }: { configProfile: string }) {
   const [serverUrl, setServerUrl] = useState('');
   const [resourceType, setResourceType] = useState('');
+  const [permitId, setPermitId] = useState<string | null>(null);
+  const [sourceId, setSourceId] = useState<string | null>(null);
+  const [destinationId, setDestinationId] = useState<string | null>(null);
+
+  // Prefill the source from the app-wide Active Source (Settings). A saved
+  // backend source -> source_id; a custom/override server -> server_url.
+  const { activeSourceId, activeTargetId, connections } = useSettings();
+  useEffect(() => {
+    const src = activeSourceJobParams(activeSourceId, connections);
+    if (src.source_id) setSourceId(src.source_id);
+    else if (src.server_url) setServerUrl(src.server_url);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSourceId]);
   const [job, setJob] = useState<JobResponse | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -77,7 +94,7 @@ export function AsyncExportPanel({ configProfile }: { configProfile: string }) {
           if (updated.status === 'done' || updated.status === 'error') {
             stopPolling();
             if (updated.status === 'done') {
-              toast.success('Export job complete — ready to download.');
+              toast.success('Export job complete, ready to download.');
             } else {
               toast.error('Export job failed.', {
                 description: updated.error ?? undefined,
@@ -99,6 +116,9 @@ export function AsyncExportPanel({ configProfile }: { configProfile: string }) {
         server_url: serverUrl.trim() || undefined,
         resource_type: resourceType.trim() || undefined,
         config_profile: configProfile,
+        permit_id: permitId,
+        source_id: sourceId,
+        destination_id: destinationId,
       });
       setJob(submitted);
       sessionStorage.setItem("asyncExportJobId", submitted.job_id);
@@ -111,7 +131,7 @@ export function AsyncExportPanel({ configProfile }: { configProfile: string }) {
     } finally {
       setSubmitting(false);
     }
-  }, [serverUrl, resourceType, configProfile, startPolling]);
+  }, [serverUrl, resourceType, configProfile, permitId, sourceId, destinationId, startPolling]);
 
   const handleDownload = useCallback(async () => {
     if (!job) return;
@@ -135,7 +155,8 @@ export function AsyncExportPanel({ configProfile }: { configProfile: string }) {
     setUploadError(null);
     setImportJob(null);
     try {
-      const imp = await submitBulkImport({ job_id: job.job_id });
+      const tgt = activeTargetJobParams(activeTargetId, connections);
+      const imp = await submitBulkImport({ job_id: job.job_id, ...tgt });
       setImportJob(imp);
       if (importPollRef.current !== null) clearInterval(importPollRef.current);
       importPollRef.current = setInterval(async () => {
@@ -146,7 +167,7 @@ export function AsyncExportPanel({ configProfile }: { configProfile: string }) {
             clearInterval(importPollRef.current!);
             importPollRef.current = null;
             if (updated.status === 'done') {
-              toast.success('Upload complete — resources sent to target server.');
+              toast.success('Upload complete, resources sent to target server.');
             } else if (updated.status === 'error') {
               toast.error('Upload failed.', { description: updated.error ?? undefined });
             }
@@ -159,7 +180,7 @@ export function AsyncExportPanel({ configProfile }: { configProfile: string }) {
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : 'Failed to start upload');
     }
-  }, [job, importJob]);
+  }, [job, importJob, activeTargetId, connections]);
 
   const statusColor: Record<string, string> = {
     pending: 'secondary',
@@ -188,7 +209,7 @@ export function AsyncExportPanel({ configProfile }: { configProfile: string }) {
               <label className="mb-1 block text-sm font-medium">
                 FHIR Server URL{' '}
                 <span className="font-normal text-muted-foreground">
-                  (optional — uses server default if blank)
+                  (optional, uses server default if blank)
                 </span>
               </label>
               <Input
@@ -202,7 +223,7 @@ export function AsyncExportPanel({ configProfile }: { configProfile: string }) {
               <label className="mb-1 block text-sm font-medium">
                 Resource Type{' '}
                 <span className="font-normal text-muted-foreground">
-                  (optional — leave blank for system-level export)
+                  (optional, leave blank for system-level export)
                 </span>
               </label>
               <Input
@@ -212,6 +233,21 @@ export function AsyncExportPanel({ configProfile }: { configProfile: string }) {
                 disabled={submitting || job?.status === 'running' || job?.status === 'pending'}
               />
             </div>
+            <SourcePicker
+              value={sourceId}
+              onChange={setSourceId}
+              disabled={submitting || job?.status === 'running' || job?.status === 'pending'}
+            />
+            <DestinationPicker
+              value={destinationId}
+              onChange={setDestinationId}
+              disabled={submitting || job?.status === 'running' || job?.status === 'pending'}
+            />
+            <PermitPicker
+              value={permitId}
+              onChange={setPermitId}
+              disabled={submitting || job?.status === 'running' || job?.status === 'pending'}
+            />
           </div>
           <Button
             onClick={handleSubmit}

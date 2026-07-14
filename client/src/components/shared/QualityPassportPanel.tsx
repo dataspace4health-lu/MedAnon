@@ -1,5 +1,5 @@
 /**
- * Quality Passport panel — compact sidebar view of the Trust Gate assessment.
+ * Quality Passport panel, compact sidebar view of the Trust Gate assessment.
  *
  * Scoring: Kahn et al. (2016) (conformance/completeness/plausibility ×
  * verification/validation) + OHDSI DQD (violation-rate vs threshold → % checks
@@ -109,7 +109,7 @@ function HdqtBadge({ category, dimension }: { category?: string; dimension?: str
 }
 
 // ---------------------------------------------------------------------------
-// Pillar bar — includes description and pass/fail count
+// Pillar bar, includes description and pass/fail count
 // ---------------------------------------------------------------------------
 
 function PillarBar({ name, score, checks }: {
@@ -370,7 +370,7 @@ export function QualityPassportPanel({ passport }: { passport: TrustPassport }) 
       <div className="flex items-center gap-2">
         <ShieldCheck className="size-4 text-primary" />
         <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-          Trust Gate — Quality Passport
+          Trust Gate, Quality Passport
         </p>
       </div>
 
@@ -507,7 +507,7 @@ export function QualityPassportPanel({ passport }: { passport: TrustPassport }) 
           {passport.profile.observation_value_stats.length > 0 && (
             <div className="space-y-2">
               <p className="text-[10px] text-muted-foreground/70">
-                Clinical value distributions — box = IQR, line = mean
+                Clinical value distributions, box = IQR, line = mean
               </p>
               {passport.profile.observation_value_stats.map((s) => (
                 <MiniBoxPlot

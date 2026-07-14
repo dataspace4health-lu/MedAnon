@@ -54,7 +54,7 @@ function actionBadgeClass(action: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Field grouping — collapse dotted sub-paths under their parent key
+// Field grouping, collapse dotted sub-paths under their parent key
 // ---------------------------------------------------------------------------
 
 type AnyEntry = { fieldPath: string; count: number; action?: string };

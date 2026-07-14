@@ -1,5 +1,5 @@
 /**
- * Non-FHIR format de-identification — HL7 v2, CDA, and DICOM.
+ * Non-FHIR format de-identification, HL7 v2, CDA, and DICOM.
  *
  * Mirrors the backend format endpoints:
  *   POST /api/v1/process/hl7v2        text/plain  → text/plain
@@ -10,7 +10,7 @@
  * rule engine (the same one FHIR uses) via the format adapter; without it,
  * HL7 v2 / DICOM fall back to the legacy fixed-field scrubber.  CDA always uses
  * the engine path.  Per the FHIR-only-to-target invariant, these outputs are
- * returned to the caller — never uploaded to the FHIR target server.
+ * returned to the caller, never uploaded to the FHIR target server.
  */
 
 import { getAuthHeaders } from "./client";
@@ -35,7 +35,7 @@ async function _readError(response: Response): Promise<string> {
 }
 
 /**
- * POST /api/v1/process/hl7v2 — de-identify a single HL7 v2 message.
+ * POST /api/v1/process/hl7v2, de-identify a single HL7 v2 message.
  *
  * With *configProfile* the message runs through the full rule engine
  * (Hl7v2Adapter); without it, the legacy fixed-field scrubber is used.
@@ -58,7 +58,7 @@ export async function processHl7v2(
 }
 
 /**
- * POST /api/v1/process/cda — de-identify a single CDA / CCDA document through
+ * POST /api/v1/process/cda, de-identify a single CDA / CCDA document through
  * the rule engine (CdaAdapter).  *configProfile* defaults to ``auto`` server-side.
  */
 export async function processCda(
@@ -85,7 +85,7 @@ export interface DicomResult {
 }
 
 /**
- * POST /api/v1/process/dicom — de-identify a single DICOM file.
+ * POST /api/v1/process/dicom, de-identify a single DICOM file.
  *
  * DICOM is binary, so the result is returned as a Blob for download rather
  * than rendered inline.  The de-identification markers (PS3.15 §E.3.1) are
@@ -151,7 +151,7 @@ const _TABULAR_CONTENT_TYPE: Record<TabularFormat, string> = {
 };
 
 /**
- * POST /api/v1/process/tabular/inspect — preview a file's columns + samples.
+ * POST /api/v1/process/tabular/inspect, preview a file's columns + samples.
  *
  * Read-only; no de-identification.  Powers the UI column-mapper so the user can
  * see each column and a few example values before assigning actions.
@@ -180,7 +180,7 @@ export async function inspectTabular(
 }
 
 /**
- * POST /api/v1/process/tabular — de-identify a CSV / Excel / Parquet file.
+ * POST /api/v1/process/tabular, de-identify a CSV / Excel / Parquet file.
  *
  * Tabular de-identification is by *column rule*.  Pass either *columnRules*
  * (authored in the UI column-mapper) OR a saved *configProfile* that contains
@@ -225,7 +225,7 @@ export interface TabularBatchJob {
 }
 
 /**
- * POST /api/v1/jobs/tabular-batch — queue an async job that de-identifies many
+ * POST /api/v1/jobs/tabular-batch, queue an async job that de-identifies many
  * tabular files of one format with a single saved profile.  Returns the job id
  * (track progress + download the result ZIP on the Jobs page).
  */
@@ -239,7 +239,7 @@ export async function submitTabularBatch(
   form.set("config_profile", configProfile);
   for (const f of files) form.append("files", f, f.name);
 
-  // Note: do NOT set Content-Type — the browser sets the multipart boundary.
+  // Note: do NOT set Content-Type, the browser sets the multipart boundary.
   const response = await fetch(`/api/v1/jobs/tabular-batch`, {
     method: "POST",
     headers: { ...getAuthHeaders() },

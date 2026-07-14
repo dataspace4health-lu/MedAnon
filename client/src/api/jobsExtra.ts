@@ -31,7 +31,7 @@ export function getStagedStats(jobId: string): Promise<StagedStats> {
   return apiCall(`/api/v1/jobs/${encodeURIComponent(jobId)}/staged-stats`);
 }
 
-/** @deprecated use getRunScoreReport — this calls the jobs endpoint which requires a job-store ID */
+/** @deprecated use getRunScoreReport, this calls the jobs endpoint which requires a job-store ID */
 export function getJobScoreReport(jobId: string): Promise<{ report: string }> {
   return apiCall(`/api/v1/jobs/${encodeURIComponent(jobId)}/score/report`);
 }

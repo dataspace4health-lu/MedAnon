@@ -1,5 +1,5 @@
 /**
- * Login page — Authorization Code Flow + PKCE.
+ * Login page, Authorization Code Flow + PKCE.
  *
  * In OIDC mode: clicking "Sign in" calls UserManager.signinRedirect() which
  * sends the user to Keycloak's login page.  Keycloak handles credentials,
@@ -36,14 +36,14 @@ function Brand() {
   );
 }
 
-// ── OIDC panel — single "Sign in" button ─────────────────────────────────
+// ── OIDC panel, single "Sign in" button ─────────────────────────────────
 
 function OidcPanel({ onLogin }: { onLogin: () => void }) {
   const [busy, setBusy] = useState(false);
 
   function handleClick() {
     setBusy(true);
-    // signinRedirect() navigates away — no need to reset busy.
+    // signinRedirect() navigates away, no need to reset busy.
     onLogin();
   }
 
@@ -135,7 +135,7 @@ export default function LoginPage() {
 
   const from = (location.state as LocationState | null)?.from?.pathname ?? '/';
 
-  // Already authenticated or no auth required — bounce home.
+  // Already authenticated or no auth required, bounce home.
   useEffect(() => {
     if (!loading && isAuthenticated) {
       navigate(from, { replace: true });
