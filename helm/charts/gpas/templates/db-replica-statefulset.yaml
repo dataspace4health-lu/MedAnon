@@ -1,6 +1,6 @@
 {{- if .Values.db.replica.enabled -}}
 {{- $dbRegistry := coalesce .Values.db.registry .Values.global.registry "" -}}
-# PostgreSQL streaming replica for gPAS — enabled with db.replica.enabled=true.
+# PostgreSQL streaming replica for gPAS  enabled with db.replica.enabled=true.
 #
 # Bootstrap (run once after both pods are healthy):
 #   1. On the primary, create a replication role:
@@ -9,7 +9,7 @@
 #        "CREATE ROLE replicator REPLICATION LOGIN PASSWORD '${REPL_PASSWORD}';"
 #
 #   2. The replica init container automatically runs pg_basebackup using the
-#      REPL_PASSWORD secret — no manual kubectl exec is needed after step 1.
+#      REPL_PASSWORD secret  no manual kubectl exec is needed after step 1.
 #
 # gPAS always connects to the primary.  The replica is read-only (analytics/backups).
 # For production-grade HA consider the CloudNativePG or Crunchy Data PGO operator.
@@ -51,7 +51,7 @@ spec:
             - -c
             - |
               if [ -f /var/lib/postgresql/data/PG_VERSION ]; then
-                echo "Data directory already initialized — skipping pg_basebackup."
+                echo "Data directory already initialized  skipping pg_basebackup."
                 exit 0
               fi
               echo "Cloning primary at {{ include "gpas.dbHost" . }}:{{ .Values.db.port }} ..."

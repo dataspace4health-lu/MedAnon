@@ -1,5 +1,5 @@
 -- =========================================================================
--- gPAS Notification Service schema — PostgreSQL 16
+-- gPAS Notification Service schema  PostgreSQL 16
 --
 -- Translated from MySQL 8.0 original (services/gpas/sqls/01_create_database_noti.sql).
 -- Lives in the "notification_service" schema within the gpas database.
@@ -84,7 +84,7 @@ CREATE TABLE IF NOT EXISTS notifications (
     error_message TEXT
 );
 
--- "sequence" is a PostgreSQL reserved word — must be quoted
+-- "sequence" is a PostgreSQL reserved word  must be quoted
 CREATE TABLE IF NOT EXISTS "sequence" (
     "SEQ_NAME"   VARCHAR(50) NOT NULL PRIMARY KEY,
     "SEQ_COUNT"  NUMERIC(38,0) DEFAULT NULL

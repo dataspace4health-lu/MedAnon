@@ -1,6 +1,6 @@
 apiVersion: v2
 name: ui
-description: "MedAnon React UI — nginx-served SPA with reverse proxy to backend services."
+description: "MedAnon React UI  nginx-served SPA with reverse proxy to backend services."
 type: application
 version: 0.1.0
 appVersion: "2025.2.0"

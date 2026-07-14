@@ -1,10 +1,10 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# MedAnon Analytics sub-chart — default values
+# MedAnon Analytics sub-chart  default values
 #
 # Enable from the umbrella chart: --set analytics.enabled=true
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Master switch — must be true for this chart to be deployed.
+# Master switch  must be true for this chart to be deployed.
 enabled: false
 
 global:

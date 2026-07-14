@@ -1,6 +1,6 @@
 """Scoring: turn deterministic check results into category/overall pass-rates, the
 per-dimension scorecard, letter grades, threshold suggestions, and the statistical
-advisory block. Pure functions of the check list — no I/O, no policy decisions.
+advisory block. Pure functions of the check list  no I/O, no policy decisions.
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ def grade_with_floor(score: float | None, checks: list[CheckResult]) -> str | No
     """Letter grade that is non-compensatory w.r.t. critical failures.
 
     A failed *critical* check (one that forces a BLOCK) must not be averaged away
-    by unrelated passing checks — DAMA DMBOK and ISO/IEC 25012 treat an
+    by unrelated passing checks  DAMA DMBOK and ISO/IEC 25012 treat an
     inherent-characteristic failure as non-compensable. When any critical check in
     *checks* FAILed, the grade floors to "F" regardless of the pass-rate; otherwise
     it follows the conventional band in ``grade_for``. This is what stops a
@@ -81,7 +81,7 @@ def suggest_thresholds(det_checks: list[CheckResult]) -> dict[str, float]:
 
     For each assessed deterministic check that is currently failing (observed
     violation fraction above its threshold), suggest the smallest tolerance that
-    would admit this batch: the observed fraction, rounded up. ADVISORY ONLY — the
+    would admit this batch: the observed fraction, rounded up. ADVISORY ONLY  the
     verdict and scoring still use the configured thresholds; this is a tuning hint
     a reviewer can adopt deliberately. Deterministic (no randomness), so it does
     not affect reproducibility.

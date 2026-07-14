@@ -89,13 +89,13 @@ pip-delete-this-directory.txt
 .copilotignore
 
 # ── Secrets & environment ─────────────────────────────────────────────────────
-# Never commit real env — only .env.example is tracked
+# Never commit real env  only .env.example is tracked
 .env
 *.env
-# Env backups (e.g. `.env.bak.<timestamp>`) — never tracked
+# Env backups (e.g. `.env.bak.<timestamp>`)  never tracked
 .env.bak*
 
-# RSA private keys — never commit production keys
+# RSA private keys  never commit production keys
 services/anonymizer/keys/id_rsa
 services/anonymizer/keys/*.pem
 services/anonymizer/keys/*.key
@@ -146,7 +146,7 @@ services/fhir-server/healthcheck/*.class
 *.tgz
 
 # ── spaCy models ─────────────────────────────────────────────────────────────
-# Large downloaded models — not source-controlled
+# Large downloaded models  not source-controlled
 services/anonymizer/src/**/*.whl
 services/nlp/models/
 
@@ -158,7 +158,7 @@ services/gpas/deployments/
 CLAUDE.md
 .claude/
 
-# ── GitHub Agents (AI workflow definitions — local only) ──────────────────────
+# ── GitHub Agents (AI workflow definitions  local only) ──────────────────────
 .github/agents/
 
 # ── SQL schema migration files ────────────────────────────────────────────────
@@ -202,5 +202,5 @@ services/anonymizer/MagicMock
 # Local safety-net snapshots of the local-only dirs (tests, docs/internal, scripts).
 .local-backups/
 
-# Quarantined incomplete UI auth/AI WIP (does not compile yet — kept for later).
+# Quarantined incomplete UI auth/AI WIP (does not compile yet  kept for later).
 client/.wip-auth/

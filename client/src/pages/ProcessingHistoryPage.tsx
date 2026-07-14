@@ -63,7 +63,7 @@ function fmtDate(iso: string): string {
 }
 
 function ScoreBadge({ score }: { score: Record<string, unknown> | null }) {
-  if (!score) return <span className="text-xs text-muted-foreground">—</span>;
+  if (!score) return <span className="text-xs text-muted-foreground"></span>;
   const avgComposite = typeof score.avg_composite === 'number' ? score.avg_composite : null;
   if (avgComposite === null) return <span className="text-xs text-muted-foreground">N/A</span>;
   const pct = Math.round(avgComposite);

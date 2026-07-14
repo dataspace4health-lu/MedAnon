@@ -1,5 +1,5 @@
 """Fitness-for-use: quality is fitness for a *declared* use (Juran; Wang & Strong
-1996; Kahn 2012 — a dataset fit for cohort discovery may be unfit for outcomes
+1996; Kahn 2012  a dataset fit for cohort discovery may be unfit for outcomes
 research). ``compute_fitness`` produces the approved / not-approved lists gated on
 the declared use's requirement profile; ``fitness_statement`` produces the graded,
 purpose-bound prose verdict with a coverage caveat.
@@ -13,7 +13,7 @@ from passport import BLOCK, CONDITIONAL_PASS
 from verdict.coverage import coverage_caveat
 
 # Use-case → quality requirements. Each use names the Kahn category floors it needs
-# (at CATEGORY_MIN_RATE — not a separate magic number) plus whether it requires
+# (at CATEGORY_MIN_RATE  not a separate magic number) plus whether it requires
 # dataset provenance and external validation. The caller's free-text ``intended_use``
 # is keyword-matched to a profile. Ordered loosest → strictest; ``general`` is the
 # fallback.
@@ -158,7 +158,7 @@ def compute_fitness(
         external_validation_performed,
     )
     if declared_unmet:
-        not_ok.append(f"{declared_label} — requires: {'; '.join(declared_unmet)}")
+        not_ok.append(f"{declared_label}  requires: {'; '.join(declared_unmet)}")
     else:
         approved.append(declared_label)
 
@@ -172,7 +172,7 @@ def compute_fitness(
             reasons = _unmet_requirements(
                 prof, category_scores, provenance_present, external_validation_performed
             )
-            not_ok.append(f"{label} — requires: {'; '.join(reasons)}")
+            not_ok.append(f"{label}  requires: {'; '.join(reasons)}")
 
     # De-duplicate while preserving order.
     approved = list(dict.fromkeys(approved))
@@ -187,7 +187,7 @@ def fitness_statement(
     intended_use: str | None,
     coverage: dict | None = None,
 ) -> dict:
-    """Purpose-bound fitness verdict — quality is fitness for a *declared* use
+    """Purpose-bound fitness verdict  quality is fitness for a *declared* use
     (Juran; Wang & Strong 1996), so the statement always names the use. A coverage
     caveat is appended so the verdict cannot over-claim relative to how much of the
     suite actually ran."""
@@ -208,7 +208,7 @@ def fitness_statement(
     elif decision == CONDITIONAL_PASS:
         fit = True
         statement = (
-            f"Conditionally fit for {use}: {grade_str} ({pct_str}) — "
+            f"Conditionally fit for {use}: {grade_str} ({pct_str})  "
             f"remediate the flagged dimensions before high-stakes use."
         )
     else:

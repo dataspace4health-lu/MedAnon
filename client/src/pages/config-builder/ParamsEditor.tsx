@@ -312,5 +312,5 @@ export function ParamsEditor({
   }
 
   // cryptohash, gpas_pseudonymize, no UI-configurable params
-  return <span className="text-xs text-muted-foreground">—</span>;
+  return <span className="text-xs text-muted-foreground"></span>;
 }

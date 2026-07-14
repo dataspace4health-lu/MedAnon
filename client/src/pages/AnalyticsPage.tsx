@@ -92,18 +92,18 @@ export default function AnalyticsPage() {
         />
         <KpiCard
           label="Resources"
-          value={stats?.total_resources != null ? fmt(stats.total_resources) : '—'}
+          value={stats?.total_resources != null ? fmt(stats.total_resources) : ''}
         />
         <KpiCard
           label="Avg Composite"
-          value={avgComposite != null ? `${Math.round(avgComposite)}%` : '—'}
+          value={avgComposite != null ? `${Math.round(avgComposite)}%` : ''}
           valueClass={compositeClass}
           sub="overall score"
         />
         <KpiCard
           label="Avg Privacy"
           sub="residual privacy (1 - risk)"
-          value={stats?.avg_privacy != null ? `${Math.round(stats.avg_privacy)}%` : '—'}
+          value={stats?.avg_privacy != null ? `${Math.round(stats.avg_privacy)}%` : ''}
           valueClass={stats?.avg_privacy != null
             ? stats.avg_privacy >= 80 ? 'text-emerald-600 dark:text-emerald-400'
               : stats.avg_privacy >= 60 ? 'text-amber-600 dark:text-amber-400'
@@ -112,7 +112,7 @@ export default function AnalyticsPage() {
         />
         <KpiCard
           label="Avg Utility"
-          value={stats?.avg_utility != null ? `${Math.round(stats.avg_utility)}%` : '—'}
+          value={stats?.avg_utility != null ? `${Math.round(stats.avg_utility)}%` : ''}
           valueClass={stats?.avg_utility != null
             ? stats.avg_utility >= 80 ? 'text-emerald-600 dark:text-emerald-400'
               : stats.avg_utility >= 60 ? 'text-amber-600 dark:text-amber-400'

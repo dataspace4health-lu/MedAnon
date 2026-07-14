@@ -1,6 +1,6 @@
 """Optional Redis L2 cache for NLP entity-detection results.
 
-The in-process LRU (``functools.lru_cache``) in tokenizer.py is the L1 cache —
+The in-process LRU (``functools.lru_cache``) in tokenizer.py is the L1 cache
 fast, but wiped on every restart. This module adds an optional shared Redis
 cache so detection results survive restarts and are visible across replicas.
 
@@ -27,7 +27,7 @@ logger = logging.getLogger("nlp.cache")
 _DEFAULT_TTL_SEC = int(os.environ.get("NLP_REDIS_TTL_SEC", "604800"))
 _KEY_PREFIX = os.environ.get("NLP_REDIS_KEY_PREFIX", "medanon:nlp:detect:")
 
-# Prometheus L2 cache effectiveness counters (E5.6) — optional, degrade to no-op
+# Prometheus L2 cache effectiveness counters (E5.6)  optional, degrade to no-op
 # when prometheus_client is absent.  Exposed via the NLP service /metrics route.
 try:
     from prometheus_client import Counter as _Counter
@@ -71,7 +71,7 @@ class RedisDetectionCache:
             health_check_interval=30,
         )
         self._ttl = ttl_sec
-        # Fail fast if Redis is unreachable — caller catches and disables L2.
+        # Fail fast if Redis is unreachable  caller catches and disables L2.
         self._client.ping()
 
     @staticmethod
@@ -86,7 +86,7 @@ class RedisDetectionCache:
     ) -> Optional[tuple]:
         try:
             raw = self._client.get(self._make_key(text, entities, threshold, language))
-        except Exception as exc:  # network / timeout — degrade to L1-only path
+        except Exception as exc:  # network / timeout  degrade to L1-only path
             logger.warning("nlp_l2_get_error: %s", type(exc).__name__)
             return None
         if raw is None:
@@ -123,7 +123,7 @@ class RedisDetectionCache:
 def init_l2_cache() -> Optional[RedisDetectionCache]:
     """Create the L2 cache if NLP_REDIS_URL / MEDANON_REDIS_URL is set.
 
-    Returns ``None`` when L2 is disabled or unreachable — callers must handle
+    Returns ``None`` when L2 is disabled or unreachable  callers must handle
     the ``None`` case (run with L1 only).
     """
     url = os.environ.get("NLP_REDIS_URL") or os.environ.get("MEDANON_REDIS_URL")
@@ -138,7 +138,7 @@ def init_l2_cache() -> Optional[RedisDetectionCache]:
         return cache
     except Exception as exc:
         logger.warning(
-            "nlp_l2_cache_init_failed: %s — running with L1 only", type(exc).__name__
+            "nlp_l2_cache_init_failed: %s  running with L1 only", type(exc).__name__
         )
         return None
 

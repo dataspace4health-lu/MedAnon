@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# backup_gpas.sh — encrypted backup of the gPAS PostgreSQL pseudonym database.
+# backup_gpas.sh  encrypted backup of the gPAS PostgreSQL pseudonym database.
 #
 # USAGE
 #   ./scripts/backup_gpas.sh [--restore <backup-file>]
@@ -23,13 +23,13 @@
 #   WARNING: this replaces ALL existing pseudonym mappings. Ensure gPAS (WildFly) is
 #   stopped before restoring to avoid in-flight pseudonymization conflicts.
 #
-# SCHEDULING (cron example — daily at 02:00)
+# SCHEDULING (cron example  daily at 02:00)
 #   0 2 * * * cd /opt/privacy-toolkit && BACKUP_PASSPHRASE="$(cat /run/secrets/gpas_backup_pass)" ./scripts/backup_gpas.sh >> /var/log/gpas_backup.log 2>&1
 #
 # SECURITY NOTES
 #   - BACKUP_PASSPHRASE must never be stored in .env or committed to source control.
 #     Use a secrets manager (Docker secrets, HashiCorp Vault, AWS Secrets Manager).
-#   - Backup files contain all pseudonym mappings — treat them as sensitive data.
+#   - Backup files contain all pseudonym mappings  treat them as sensitive data.
 #   - Transfer backups to off-site encrypted storage (S3 SSE, Azure Blob, etc.).
 #   - Test restores regularly in a staging environment.
 

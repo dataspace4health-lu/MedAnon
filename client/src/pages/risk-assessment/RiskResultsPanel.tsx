@@ -138,19 +138,19 @@ function CalculationBreakdown({ report }: { report: RiskReport }) {
                 metric="Prosecutor risk"
                 formula="1 / min_k"
                 substitution={`1 / ${minK}`}
-                result={minK > 0 ? pct(1 / minK) : '—'}
+                result={minK > 0 ? pct(1 / minK) : ''}
               />
               <CalcRow
                 metric="Journalist risk"
                 formula="max(1 / kᵢ) = 1 / min_k"
                 substitution={`1 / ${minK}`}
-                result={minK > 0 ? pct(1 / minK) : '—'}
+                result={minK > 0 ? pct(1 / minK) : ''}
               />
               <CalcRow
                 metric="Marketer risk"
                 formula="classes / records"
                 substitution={`${groups} / ${total}`}
-                result={total > 0 ? pct(groups / total) : '—'}
+                result={total > 0 ? pct(groups / total) : ''}
               />
               <CalcRow
                 metric="Risk level"

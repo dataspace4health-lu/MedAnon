@@ -1,4 +1,4 @@
-# MedAnon — Deployment Guide
+# MedAnon  Deployment Guide
 
 ## Prerequisites
 
@@ -12,7 +12,7 @@
 
 ---
 
-## Docker Compose — Initial Setup
+## Docker Compose  Initial Setup
 
 ### 1. Configure environment
 
@@ -31,7 +31,7 @@ openssl rand -base64 24     # → GPAS_BASIC_PASS, GPAS_DB_PASSWORD, HAPI_DB_PAS
 
 | Variable | Why it matters |
 |---|---|
-| `MEDANON_HASH_KEY` | Without this, cryptohash uses plain SHA3-256 — reversible via rainbow tables. Never skip in production. |
+| `MEDANON_HASH_KEY` | Without this, cryptohash uses plain SHA3-256  reversible via rainbow tables. Never skip in production. |
 | `GPAS_BASIC_PASS` | Default password in gPAS SQL seed file. Must be changed. |
 | `GPAS_DB_PASSWORD` | PostgreSQL password for gPAS database. |
 | `MEDANON_REDIS_PASSWORD` | Redis authentication password. Required in production. |
@@ -52,10 +52,10 @@ make build
 Builds `medanon:latest` (FastAPI anonymizer) and `medanon-ui:latest` (React/nginx). gPAS and HAPI FHIR use upstream images pulled automatically.
 
 The anonymizer Dockerfile uses `services/anonymizer/` as build context. Four build stages:
-- `base` — Python 3.12 + deps (no spaCy; NLP runs as the NLP microservice)
-- `prod` — production target (used by default)
-- `dev` — adds uvicorn `--reload`
-- `sdv` — adds SDV synthetic data engine (~2 GB)
+- `base`  Python 3.12 + deps (no spaCy; NLP runs as the NLP microservice)
+- `prod`  production target (used by default)
+- `dev`  adds uvicorn `--reload`
+- `sdv`  adds SDV synthetic data engine (~2 GB)
 
 ### 3. Start the stack
 
@@ -63,7 +63,7 @@ The anonymizer Dockerfile uses `services/anonymizer/` as build context. Four bui
 make up
 ```
 
-Starts all 14 always-on services in dependency order. **gPAS (WildFly) takes ~90 seconds on first boot** — it deploys the TTP-FHIR WAR file and initializes the PostgreSQL schema.
+Starts all 14 always-on services in dependency order. **gPAS (WildFly) takes ~90 seconds on first boot**  it deploys the TTP-FHIR WAR file and initializes the PostgreSQL schema.
 
 ```bash
 docker compose ps    # wait until all show "healthy"
@@ -92,7 +92,7 @@ curl http://localhost:8082/fhir/metadata | head -3   # target server (de-identif
 open http://localhost:8501
 ```
 
-`/health` is a fast liveness check. `/ready` probes FHIR and gPAS connectivity — if it returns `false`, check `docker compose logs` for the failing service. Note: source FHIR server has no host port published (security isolation) — access it only through the anonymizer proxy endpoints.
+`/health` is a fast liveness check. `/ready` probes FHIR and gPAS connectivity  if it returns `false`, check `docker compose logs` for the failing service. Note: source FHIR server has no host port published (security isolation)  access it only through the anonymizer proxy endpoints.
 
 ---
 
@@ -118,7 +118,7 @@ Staging uses the production image with real persistent volumes, but on an isolat
 # 1. Use production image (not dev target)
 make build
 
-# 2. Configure environment — use generated secrets, not placeholders
+# 2. Configure environment  use generated secrets, not placeholders
 cp .env.example .env
 # Edit .env: set MEDANON_API_KEY, MEDANON_HASH_KEY, all DB passwords
 
@@ -229,7 +229,7 @@ docker compose --profile s3 up    # MinIO S3 object storage for job results
 docker compose --profile ai up    # Ollama local LLM for AI agent endpoints
 ```
 
-The NLP and analytics microservices are now always-on — they start with the main `make up` command. `NLP_SERVICE_URL` is hardcoded to `http://nlp-lb:8200` in docker-compose.yml (the `nlp-lb` host name is a Traefik gateway alias). Override only to point at an external NLP deployment.
+The NLP and analytics microservices are now always-on  they start with the main `make up` command. `NLP_SERVICE_URL` is hardcoded to `http://nlp-lb:8200` in docker-compose.yml (the `nlp-lb` host name is a Traefik gateway alias). Override only to point at an external NLP deployment.
 
 When `ANALYTICS_SERVICE_URL` is set, `/analyse/risk` and `/generate/synthetic` proxy to the analytics service (default: `http://analytics:8100`).
 
@@ -239,7 +239,7 @@ The NLP service maintains an in-process LRU cache (L1, ~20k entries) plus an **o
 
 | Variable | Default (compose) | Purpose |
 |----------|-------------------|---------|
-| `NLP_REDIS_URL` | `redis://:${MEDANON_REDIS_PASSWORD}@redis:6379/2` | Connection URL — DB 2 isolates NLP from anonymizer L2 (DB 0). |
+| `NLP_REDIS_URL` | `redis://:${MEDANON_REDIS_PASSWORD}@redis:6379/2` | Connection URL  DB 2 isolates NLP from anonymizer L2 (DB 0). |
 | `NLP_REDIS_TTL_SEC` | `604800` (7 days) | Entry TTL. |
 | `NLP_REDIS_KEY_PREFIX` | `medanon:nlp:detect:` | Key namespace override. |
 
@@ -253,10 +253,10 @@ Leave `NLP_REDIS_URL` empty to disable L2 and run NLP with L1 only. Redis errors
 
 | Secret | How to rotate | Impact |
 |---|---|---|
-| `MEDANON_HASH_KEY` | Update `.env`, restart anonymizer | All existing cryptohash pseudonyms change — old de-identified data cannot be re-linked to new output |
+| `MEDANON_HASH_KEY` | Update `.env`, restart anonymizer | All existing cryptohash pseudonyms change  old de-identified data cannot be re-linked to new output |
 | RSA private key | Generate new keypair, update `.env` paths | Old encrypted values become unreadable; keep the old key to decrypt historical data |
 | `GPAS_BASIC_PASS` | Update `.env` + run SQL `CALL changePassword('user@ths','new-pass');` in gRAS, restart anonymizer | Existing gPAS sessions invalidated |
-| `GPAS_DB_PASSWORD` | Requires `docker compose down -v` to recreate PostgreSQL volume | **Destroys all pseudonym mappings** — back up first |
+| `GPAS_DB_PASSWORD` | Requires `docker compose down -v` to recreate PostgreSQL volume | **Destroys all pseudonym mappings**  back up first |
 | `MEDANON_API_KEY` | Update `.env`, restart anonymizer | All API clients must update their key |
 
 ### Files never to commit
@@ -288,7 +288,7 @@ Tuned based on observed peak usage during bulk export (~20,000 resources):
 | Service | RAM limit | CPU limit | Notes |
 |---|---|---|---|
 | `anonymizer` | 3 GB | 2.0 | Reduced from 6 GB; NLP no longer runs in-process |
-| `worker` | 2 GB | 1.0 | Dedicated job worker — one job at a time |
+| `worker` | 2 GB | 1.0 | Dedicated job worker  one job at a time |
 | `fhir-server` | 3 GB | 2.0 | JVM heap |
 | `gpas` | 2.5 GB | 1.0 | WildFly JVM: Xms128M Xmx1536M, G1GC |
 | `gpas-db` | 2 GB | 1.0 | PostgreSQL shared_buffers 512 MB |
@@ -325,7 +325,7 @@ Never expose port 8080 (gPAS web UI) externally.
 
 ### HAPI FHIR persistence
 
-Default H2 database loses all data on container restart. Switch to PostgreSQL (already wired in via `hapi-postgres` and `hapi-target-postgres` containers) — set `HAPI_SERVER_ADDRESS` correctly and configure `helm/charts/fhir-server/files/application.yaml` if needed.
+Default H2 database loses all data on container restart. Switch to PostgreSQL (already wired in via `hapi-postgres` and `hapi-target-postgres` containers)  set `HAPI_SERVER_ADDRESS` correctly and configure `helm/charts/fhir-server/files/application.yaml` if needed.
 
 ### Audit and compliance
 
@@ -382,7 +382,7 @@ helm/
 
 ### K3s (single-node / edge)
 
-Use `helm/k3s-values.yaml` — configures Traefik ingress and `local-path` storage class. K3s has its own containerd image store separate from Docker:
+Use `helm/k3s-values.yaml`  configures Traefik ingress and `local-path` storage class. K3s has its own containerd image store separate from Docker:
 
 ```bash
 docker save medanon:latest | sudo k3s ctr images import -

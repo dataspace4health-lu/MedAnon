@@ -18,7 +18,7 @@ When `MEDANON_API_KEY` is set, every request to a protected endpoint must carry 
 X-API-Key: <key>
 ```
 
-The check uses `hmac.compare_digest()` (constant-time comparison — immune to timing attacks). A missing or mismatched key returns `HTTP 401`.
+The check uses `hmac.compare_digest()` (constant-time comparison  immune to timing attacks). A missing or mismatched key returns `HTTP 401`.
 
 **Open endpoints** (no key required regardless of configuration):
 
@@ -42,7 +42,7 @@ user/*.read      → analyst
 system/*.write   → admin
 ```
 
-If the introspection endpoint is unreachable, the call fails with `HTTP 503` (not 401) — MedAnon never grants access on introspection failure.
+If the introspection endpoint is unreachable, the call fails with `HTTP 503` (not 401)  MedAnon never grants access on introspection failure.
 
 Fallback: when `SMART_INTROSPECTION_URL` is not set, MedAnon accepts the configured API key as a bearer token (allows clients that send the key in the Authorization header).
 
@@ -66,7 +66,7 @@ Key enforcement points:
 | `POST /v1/process/round-trip` | admin | Source read + target write |
 | `POST /v1/jobs/bulk-export` | admin | Bulk export to filesystem/S3 |
 | `POST /v1/ai/generate-config` | admin | AI writes config profile |
-| `DELETE /v1/processing-runs` | analyst | Known issue: should require admin — pending fix |
+| `DELETE /v1/processing-runs` | analyst | Known issue: should require admin  pending fix |
 | `POST /v1/configs` | admin | Enforced in the router even though prefix returns viewer |
 
 ---
@@ -88,7 +88,7 @@ Docker Compose uses two isolated bridge networks:
 └──────────────────────────────────────────────────────────────┘
 
 ┌──────────────────────────────────────────────────────────────┐
-│  source-net  (isolated — NEVER reachable from the internet)  │
+│  source-net  (isolated  NEVER reachable from the internet)  │
 │                                                              │
 │  fhir-server ── hapi-db ── anonymizer ── worker             │
 │                                                              │
@@ -130,14 +130,14 @@ rules:
     action: "cryptohash"
 ```
 
-Without the key, the pseudonym cannot be reversed — it is a one-way commitment. The key **must** be set in production:
+Without the key, the pseudonym cannot be reversed  it is a one-way commitment. The key **must** be set in production:
 
 ```bash
 # Generate a cryptographically secure key (32 bytes → 64 hex chars)
 python3 -c "import secrets; print(secrets.token_hex(32))"
 ```
 
-`MEDANON_HASH_ALLOW_PLAIN=true` bypasses the HMAC requirement (plain SHA3-256). This is **only safe for local development and tests** — never set in production.
+`MEDANON_HASH_ALLOW_PLAIN=true` bypasses the HMAC requirement (plain SHA3-256). This is **only safe for local development and tests**  never set in production.
 
 ### 3.2 RSA Field Encryption
 
@@ -146,7 +146,7 @@ The `encrypt` action applies RSA-OAEP (SHA-256 padding) with a 2048-bit minimum 
 Key path validation prevents path-traversal attacks:
 - `MEDANON_KEY_ALLOWED_DIRS` constrains which directories may be read for key material
 - `os.path.realpath()` resolves symlinks before checking the allowlist
-- The RSA key is loaded once and cached keyed on `(path, mtime)` — re-read on rotation
+- The RSA key is loaded once and cached keyed on `(path, mtime)`  re-read on rotation
 
 Key paths: `MEDANON_RSA_PUBLIC_KEY` / `MEDANON_RSA_PRIVATE_KEY` (inside the container). Private keys are in `.gitignore` (`services/anonymizer/keys/id_rsa`, `*.pem`, `*.key`) and must never be committed to source control.
 
@@ -158,13 +158,13 @@ gPAS stores pseudonym mappings in its PostgreSQL database. The mapping is:
 original value  →  gPAS pseudonym (e.g. psn-R7K2M9P4)
 ```
 
-gPAS pseudonyms are reversible **only by a TTP admin** with access to the gPAS server. The Python client never holds the mapping table — it calls gPAS via HTTP to resolve values in both directions.
+gPAS pseudonyms are reversible **only by a TTP admin** with access to the gPAS server. The Python client never holds the mapping table  it calls gPAS via HTTP to resolve values in both directions.
 
 gPAS PostgreSQL volumes (`gpas-postgres`) are backed by a Docker named volume. For production: encrypt the host filesystem or use cloud-managed encrypted storage (e.g. AWS EBS with KMS).
 
 ### 3.4 PostgreSQL Application Database
 
-`app-db` stores jobs, configs, FHIR subscriptions, and staging data — **no PHI**. Job results (NDJSON) are stored in a Docker volume mounted at `/output` (or S3 when `MEDANON_RESULT_STORAGE=s3`). These results are de-identified outputs; they should not contain original PHI if the pipeline ran correctly.
+`app-db` stores jobs, configs, FHIR subscriptions, and staging data  **no PHI**. Job results (NDJSON) are stored in a Docker volume mounted at `/output` (or S3 when `MEDANON_RESULT_STORAGE=s3`). These results are de-identified outputs; they should not contain original PHI if the pipeline ran correctly.
 
 Result files are auto-deleted after `MEDANON_RESULT_TTL_SEC` seconds (default: no TTL, disabled by default). Enable in production:
 
@@ -229,11 +229,11 @@ All Docker Compose services use defense-in-depth hardening:
 | `cap_drop: ALL` | anonymizer, worker, redis, app-db, nlp, analytics, ollama |
 | `security_opt: no-new-privileges: true` | anonymizer, worker, redis, nlp, analytics, ollama, app-db |
 | Non-root user | All Python services (UID 1000) |
-| No host port for source FHIR | `fhir-server` — only reachable from `source-net` |
+| No host port for source FHIR | `fhir-server`  only reachable from `source-net` |
 
 **Exception notes:**
-- `app-db` (PostgreSQL): `cap_drop: ALL` omitted — PostgreSQL requires `CAP_CHOWN` and `CAP_SETUID` during startup. `no-new-privileges` is applied.
-- `ollama`: `read_only` omitted — Ollama writes model files to its volume at runtime.
+- `app-db` (PostgreSQL): `cap_drop: ALL` omitted  PostgreSQL requires `CAP_CHOWN` and `CAP_SETUID` during startup. `no-new-privileges` is applied.
+- `ollama`: `read_only` omitted  Ollama writes model files to its volume at runtime.
 
 Memory limits (prevents OOM from impacting other containers):
 
@@ -309,13 +309,13 @@ This enables GDPR Art. 30 (Records of Processing Activities) compliance at the r
 
 SPE FHIR BlackBox processes **special category personal data** under GDPR Art. 9: health data in the form of FHIR R4 resources (Patient, Observation, Condition, MedicationRequest, etc.).
 
-The system never creates derived profiles, enriches records, or retains identified data after processing. It is a **pass-through transformation engine** — data enters, is transformed, and exits.
+The system never creates derived profiles, enriches records, or retains identified data after processing. It is a **pass-through transformation engine**  data enters, is transformed, and exits.
 
 ### 7.2 Legitimate Processing Basis
 
 | Use case | Legal basis |
 |---|---|
-| GDPR pseudonymization for secondary use | Art. 89(1) — research with appropriate safeguards |
+| GDPR pseudonymization for secondary use | Art. 89(1)  research with appropriate safeguards |
 | HIPAA Safe Harbor de-identification | 45 CFR §164.514(b) |
 | IRB-approved research | Consent + Art. 9(2)(j) research purpose |
 | Reversible pseudonymization (gPAS) | Consent or contractual necessity; TTP access controls ensure only authorized re-linkage |
@@ -397,15 +397,15 @@ The following issues are tracked in the review ledger ([docs/internal/REVIEW_STA
 |---|---|---|
 | PHI to external LLM | Critical | `pii_detector.py` has no code-level enforcement that `MEDANON_AI_PII_PROVIDER` is a local model. PHI could reach an external API if misconfigured. |
 | Prompt injection in config generator | Critical | User-supplied config descriptions are interpolated directly into LLM messages in `config_generator.py`. |
-| AI response cache unbounded | High | `LLMProvider._cache` has no eviction policy — memory grows without limit in long-running instances. |
+| AI response cache unbounded | High | `LLMProvider._cache` has no eviction policy  memory grows without limit in long-running instances. |
 | SSRF in AI proxy methods | High | `explain_config` and `advise_compliance` use `urllib.request` without the private-network guard applied to user-facing endpoints. |
 | SSE streaming bypasses proxy | High | SSE path in `agents.py` router bypasses `AgentService` proxy logic and `AI_SERVICE_URL`. |
 | FHIRPath eval errors swallowed | Medium | Errors in `rule_matcher.py` are caught silently even in `processing_errors: raise` mode. |
-| Job poison retry loop | Medium | Failed jobs retry forever on crash recovery — no per-job retry limit. |
-| `DELETE /v1/processing-runs` under-privileged | Low | Requires only `analyst` — should require `admin`. |
+| Job poison retry loop | Medium | Failed jobs retry forever on crash recovery  no per-job retry limit. |
+| `DELETE /v1/processing-runs` under-privileged | Low | Requires only `analyst`  should require `admin`. |
 
 **Immediate mitigations while fixes are in progress:**
 
 1. If using AI features (`MEDANON_AI_ENABLED=true`): ensure `MEDANON_AI_PII_PROVIDER` always points to the local Ollama instance. Never set it to an external API endpoint.
-2. Do not expose the AI config-generation endpoint to untrusted users — it is `admin`-only by design.
+2. Do not expose the AI config-generation endpoint to untrusted users  it is `admin`-only by design.
 3. Monitor `LLMProvider` memory usage in long-running containers; restart weekly if AI features are heavily used.

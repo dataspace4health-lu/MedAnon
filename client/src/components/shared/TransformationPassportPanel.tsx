@@ -82,12 +82,12 @@ export function TransformationPassportPanel({
         {/* Privacy model: intent vs achieved */}
         <Section title="Privacy model">
           <div className="grid grid-cols-2 gap-x-6 gap-y-1">
-            <Row label="Target k" value={pm?.target_k != null ? String(pm.target_k) : "—"} />
-            <Row label="Achieved k" value={gen?.achieved_k != null ? String(gen.achieved_k) : "—"} />
+            <Row label="Target k" value={pm?.target_k != null ? String(pm.target_k) : ""} />
+            <Row label="Achieved k" value={gen?.achieved_k != null ? String(gen.achieved_k) : ""} />
             {(pm?.target_l != null || gen?.achieved_l != null) && (
               <>
-                <Row label="Target l" value={pm?.target_l != null ? String(pm.target_l) : "—"} />
-                <Row label="Achieved l" value={gen?.achieved_l != null ? String(gen.achieved_l) : "—"} />
+                <Row label="Target l" value={pm?.target_l != null ? String(pm.target_l) : ""} />
+                <Row label="Achieved l" value={gen?.achieved_l != null ? String(gen.achieved_l) : ""} />
               </>
             )}
             {gen?.suppressed_count != null && (
@@ -102,7 +102,7 @@ export function TransformationPassportPanel({
         {/* Privacy-risk assessment */}
         {reid?.summary && (
           <Section title="Privacy-risk assessment">
-            <Row label="Min k (output)" value={String(reid.summary.min_k ?? "—")} />
+            <Row label="Min k (output)" value={String(reid.summary.min_k ?? "")} />
             {reid.summary.risk_level && (
               <Row
                 label="Re-identification risk"

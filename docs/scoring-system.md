@@ -2,11 +2,11 @@
 
 ## What it is
 
-The scoring system evaluates the *output* of a de-identification run — not the input config, but the actual transformed FHIR resources. It answers three questions:
+The scoring system evaluates the *output* of a de-identification run  not the input config, but the actual transformed FHIR resources. It answers three questions:
 
-1. **Privacy** — Could a motivated attacker re-identify this patient? (hard gate: PASS/FAIL)
-2. **Utility** — How much analytical value survived the de-identification?
-3. **Quality** — Did the pipeline execute correctly and completely?
+1. **Privacy**  Could a motivated attacker re-identify this patient? (hard gate: PASS/FAIL)
+2. **Utility**  How much analytical value survived the de-identification?
+3. **Quality**  Did the pipeline execute correctly and completely?
 
 These three dimensions combine into a single composite score (0–100). The score is computed on demand via `POST /v1/jobs/{job_id}/score` after a bulk export job completes, or ad-hoc on a single resource via `POST /v1/score`.
 
@@ -30,25 +30,25 @@ The multiplicative formula means **no dimension can compensate for weakness in a
 
 ### Why multiplicative and not additive?
 
-The additive model (`0.4×privacy + 0.3×utility + 0.3×quality`) is the natural first choice because it produces smooth scores. It is also a mistake for compliance contexts. Domingo-Ferrer and Torra (2001) demonstrated that additive aggregation of information-loss metrics allows a high-utility dataset to compensate for unacceptably high disclosure risk — precisely what regulatory frameworks prohibit. El Emam et al.'s review of re-identification attacks (2011) showed that many published de-identified datasets that scored well on aggregate utility metrics still allowed full re-identification of specific individuals.
+The additive model (`0.4×privacy + 0.3×utility + 0.3×quality`) is the natural first choice because it produces smooth scores. It is also a mistake for compliance contexts. Domingo-Ferrer and Torra (2001) demonstrated that additive aggregation of information-loss metrics allows a high-utility dataset to compensate for unacceptably high disclosure risk  precisely what regulatory frameworks prohibit. El Emam et al.'s review of re-identification attacks (2011) showed that many published de-identified datasets that scored well on aggregate utility metrics still allowed full re-identification of specific individuals.
 
 The multiplicative model with a hard privacy gate mirrors how real compliance decisions work: a dataset either meets the privacy threshold or it does not, and passing that threshold is a prerequisite for asking about utility at all.
 
 ---
 
-## Module 1 — Privacy Risk (Hard Gate)
+## Module 1  Privacy Risk (Hard Gate)
 
 **File:** `pipeline/scoring/privacy.py`  
 **Threshold:** `MEDANON_SCORE_RISK_THRESHOLD` (default 0.3)  
 **Formula:** `risk_score = max(attacker_risk, identifier_risk, text_risk)`
 
-The risk score is the *maximum* of three orthogonal sub-evaluators — the worst dimension determines the outcome. This prevents a low text risk from hiding a critical unmasked identifier.
+The risk score is the *maximum* of three orthogonal sub-evaluators  the worst dimension determines the outcome. This prevents a low text risk from hiding a critical unmasked identifier.
 
 ### 1a. Attacker Model
 
 Per-resource path (without a full batch of Patient records):
 
-Extracts the three HIPAA Safe Harbor quasi-identifiers (QIs) — gender, birth year, zip prefix — and counts how many are suppressed/redacted. Applies a calibrated risk table:
+Extracts the three HIPAA Safe Harbor quasi-identifiers (QIs)  gender, birth year, zip prefix  and counts how many are suppressed/redacted. Applies a calibrated risk table:
 
 | QIs suppressed | Risk |
 |---|---|
@@ -61,9 +61,9 @@ Batch path (when scoring a full job with multiple Patient resources):
 
 Runs full **k-anonymity** over the entire Patient cohort using three attacker models derived from the literature:
 
-- **Prosecutor model** — worst-case: attacker has a specific target and checks if they are in the dataset. Risk = 1/k where k is the minimum equivalence class size.
-- **Journalist model** — random-target: attacker picks a random record and tries to link it. Risk ≈ proportion of records in small equivalence classes.
-- **Marketer model** — population-level: attacker aims to correctly re-identify a fraction of the dataset. Risk ≈ average 1/k across all classes.
+- **Prosecutor model**  worst-case: attacker has a specific target and checks if they are in the dataset. Risk = 1/k where k is the minimum equivalence class size.
+- **Journalist model**  random-target: attacker picks a random record and tries to link it. Risk ≈ proportion of records in small equivalence classes.
+- **Marketer model**  population-level: attacker aims to correctly re-identify a fraction of the dataset. Risk ≈ average 1/k across all classes.
 
 The batch attacker risk is `max(prosecutor, journalist, marketer)`.
 
@@ -79,7 +79,7 @@ Maps HIPAA Safe Harbor's 18 identifier categories to FHIR resource paths (`const
 - For each HIPAA-sensitive path present in the resource, checks whether a manifest entry covers it (exact match or prefix match)
 - `risk = uncovered_sensitive_paths / total_sensitive_paths`
 
-A PHI-bearing resource type (Patient, Practitioner, etc.) with **zero manifest entries** scores `identifier_risk = 1.0` immediately — this catches resources that passed through the pipeline without any transformations firing (missing rules, wrong FHIRPath, misconfigured profile).
+A PHI-bearing resource type (Patient, Practitioner, etc.) with **zero manifest entries** scores `identifier_risk = 1.0` immediately  this catches resources that passed through the pipeline without any transformations firing (missing rules, wrong FHIRPath, misconfigured profile).
 
 **Why HIPAA Safe Harbor as the identifier baseline?** 45 CFR §164.514(b) provides an explicit enumeration of 18 identifier categories that, when removed or transformed, are deemed sufficient to remove PHI under the Expert Determination and Safe Harbor methods. This is the only regulatory framework that gives a complete, auditable checklist rather than a principles-based risk assessment. Using it as the identifier coverage baseline means our scoring output can be cited directly in compliance documentation.
 
@@ -89,15 +89,15 @@ Scans all string fields longer than 20 characters for residual PII patterns:
 
 **Regex patterns:** SSN (`\d{3}-\d{2}-\d{4}`), phone numbers, email addresses, ISO dates, IP addresses, MRN patterns (`MRN:\d{4+}`).
 
-**NER scan (optional, `MEDANON_SCORE_NER_ENABLED`):** Delegates to the NLP microservice (`nlp-lb:8200`) via `RemoteNlpAdapter.detect()`. Only runs if the NLP adapter is already initialized and the microservice is reachable — scoring never blocks on a cold NLP start. If NLP is unavailable, only the regex scan is performed.
+**NER scan (optional, `MEDANON_SCORE_NER_ENABLED`):** Delegates to the NLP microservice (`nlp-lb:8200`) via `RemoteNlpAdapter.detect()`. Only runs if the NLP adapter is already initialized and the microservice is reachable  scoring never blocks on a cold NLP start. If NLP is unavailable, only the regex scan is performed.
 
 `text_risk = min(1.0, entity_count × 0.15)`
 
-**Why the 0.15-per-entity calibration?** A single date in a Condition narrative is not a re-identification risk on its own (it is a clinical date, not a birth date). A resource with 7+ entities — a name, a date, an MRN, and a phone number appearing together in a clinical note — almost certainly contains residual PHI. The 0.15 slope places the risk threshold crossing at ~2 entities (0.30 = threshold), which is conservative enough to flag clusters of co-occurring PII while not penalising resources with a single non-sensitive date string.
+**Why the 0.15-per-entity calibration?** A single date in a Condition narrative is not a re-identification risk on its own (it is a clinical date, not a birth date). A resource with 7+ entities  a name, a date, an MRN, and a phone number appearing together in a clinical note  almost certainly contains residual PHI. The 0.15 slope places the risk threshold crossing at ~2 entities (0.30 = threshold), which is conservative enough to flag clusters of co-occurring PII while not penalising resources with a single non-sensitive date string.
 
 ---
 
-## Module 2 — Utility (Continuous 0–1)
+## Module 2  Utility (Continuous 0–1)
 
 **File:** `pipeline/scoring/utility.py`  
 **Formula:** `0.25×retention + 0.30×semantic + 0.15×temporal + 0.30×info_loss`
@@ -106,18 +106,18 @@ Scans all string fields longer than 20 characters for residual PII patterns:
 
 When the original resource is available: `retained_top_level_keys / original_top_level_keys` (excluding `meta` and `resourceType`).
 
-When only the de-identified resource is available (on-demand job scoring, no originals stored): estimated from the manifest — fraction of actions that are *not* `redact`. This is a pessimistic estimate.
+When only the de-identified resource is available (on-demand job scoring, no originals stored): estimated from the manifest  fraction of actions that are *not* `redact`. This is a pessimistic estimate.
 
 ### 2b. Semantic Preservation (weight 0.30)
 
 Checks that the de-identified resource still makes sense as a FHIR resource:
 
 - Every `coding` element still has a `system` and `code` value
-- Bonus credit for known clinical code systems (LOINC, SNOMED CT, ICD-10, RxNorm, UCUM — `constants.py:CLINICAL_CODE_SYSTEMS`)
+- Bonus credit for known clinical code systems (LOINC, SNOMED CT, ICD-10, RxNorm, UCUM  `constants.py:CLINICAL_CODE_SYSTEMS`)
 - Every `reference` string is well-formed (`ResourceType/id` format)
 - `resourceType` is present
 
-**Why semantic preservation carries the highest weight?** Field retention only measures whether a top-level key was removed. A Patient record with `name` redacted to `[REDACTED]` still has the `name` field — retention is 1.0. But the resource is useless for any join, cohort selection, or clinical summary. Semantic preservation checks whether the retained fields are still *interpretable* by a downstream FHIR consumer. A Condition with its SNOMED code replaced by a blank string fails semantic preservation even if every field exists.
+**Why semantic preservation carries the highest weight?** Field retention only measures whether a top-level key was removed. A Patient record with `name` redacted to `[REDACTED]` still has the `name` field  retention is 1.0. But the resource is useless for any join, cohort selection, or clinical summary. Semantic preservation checks whether the retained fields are still *interpretable* by a downstream FHIR consumer. A Condition with its SNOMED code replaced by a blank string fails semantic preservation even if every field exists.
 
 ### 2c. Temporal Consistency (weight 0.15)
 
@@ -134,13 +134,13 @@ Aggregates information loss across all fired actions using calibrated weights fr
 
 | Action | Loss weight | Rationale |
 |---|---|---|
-| `redact` | 1.0 | Complete removal — maximum loss |
+| `redact` | 1.0 | Complete removal  maximum loss |
 | `scrub_text` / `nlp_detect` | 0.6 | Tokenization replaces actual content |
 | `generalize` | 0.5 | Reduces precision (dates → year) |
 | `substitute` | 0.4 | Value replaced with a non-reversible surrogate |
-| `perturb` | 0.3 | Value shifted within a range — partially recoverable at population level |
-| `cryptohash` | 0.1 | Deterministic transform — same input always produces same output, enabling longitudinal linkage |
-| `gpas_pseudonymize` | 0.1 | Reversible pseudonymization — operator can recover original with gPAS |
+| `perturb` | 0.3 | Value shifted within a range  partially recoverable at population level |
+| `cryptohash` | 0.1 | Deterministic transform  same input always produces same output, enabling longitudinal linkage |
+| `gpas_pseudonymize` | 0.1 | Reversible pseudonymization  operator can recover original with gPAS |
 | `encrypt` | 0.0 | Fully reversible by authorized parties |
 
 `score = 1 − avg_loss_across_all_manifest_entries`
@@ -149,7 +149,7 @@ Aggregates information loss across all fired actions using calibrated weights fr
 
 ---
 
-## Module 3 — Quality (Continuous 0–1)
+## Module 3  Quality (Continuous 0–1)
 
 **File:** `pipeline/scoring/quality.py`  
 **Formula:** `0.40×success_rate + 0.30×rule_coverage + 0.15×schema_validation + 0.15×reference_integrity`  
@@ -168,7 +168,7 @@ For each rule in the active config profile, checks whether it fired on this reso
 - Checks which applicable rules appear in the manifest's `rule` field
 - `coverage = fired_applicable / total_applicable`
 
-If no rules are applicable to the resource type, coverage is 1.0 (correct — a Medication resource does not need Patient-specific rules to fire). If settings are unavailable, coverage is 0.5 (indeterminate — cannot penalise without knowing what rules exist, but cannot reward either).
+If no rules are applicable to the resource type, coverage is 1.0 (correct  a Medication resource does not need Patient-specific rules to fire). If settings are unavailable, coverage is 0.5 (indeterminate  cannot penalise without knowing what rules exist, but cannot reward either).
 
 This check catches silent rule misses: a rule targeting `Patient.birthDate` with a misspelled FHIRPath expression will never fire, but the Patient will still process without error. Without rule coverage, the quality score would be 1.0 on a Patient with an untouched birthDate.
 
@@ -177,7 +177,7 @@ This check catches silent rule misses: a rule targeting `Patient.birthDate` with
 Lightweight structural checks without a full FHIR validator:
 - `resourceType` is present
 - `id` is present (even if pseudonymized)
-- No empty arrays for fields FHIR requires to be non-empty (`name`, `identifier`, `telecom`, `address`) — empty arrays are a common artefact of a `redact` action that removes all elements but leaves the container
+- No empty arrays for fields FHIR requires to be non-empty (`name`, `identifier`, `telecom`, `address`)  empty arrays are a common artefact of a `redact` action that removes all elements but leaves the container
 - `meta.tag` is well-formed (array of objects with string keys)
 
 ### 3d. Reference Integrity (weight 0.15)
@@ -200,9 +200,9 @@ Where `privacy_norm = 1 − (risk_score / risk_threshold)`. If `privacy.passed =
 |---|---|
 | 90–100 | Strong de-identification, high utility, clean pipeline execution |
 | 70–89 | Acceptable; check which utility sub-dimension is pulling the score down |
-| 50–69 | Moderate issues — likely rule coverage gaps or significant information loss |
-| < 50 | Significant problems — review the audit report for actionable recommendations |
-| 0 | Privacy gate failed — PHI likely present; do not release |
+| 50–69 | Moderate issues  likely rule coverage gaps or significant information loss |
+| < 50 | Significant problems  review the audit report for actionable recommendations |
+| 0 | Privacy gate failed  PHI likely present; do not release |
 
 ---
 
@@ -212,18 +212,18 @@ After scoring a job, `POST /v1/jobs/{job_id}/score` writes a Markdown audit repo
 
 The report (`pipeline/scoring/audit.py`) contains:
 
-- **Executive summary** — composite, pass/fail breakdown, config profile
-- **Privacy findings** — worst attacker risk, k-anonymity stats (if batch), uncovered HIPAA paths, text risk patterns with value previews
-- **Utility breakdown** — per sub-dimension averages, action distribution table, information loss analysis
-- **Quality breakdown** — rule coverage gap list, schema failures, reference integrity issues
-- **Per-resource-type table** — pass/fail rate and average composite by resource type
-- **Recommendations** — priority-ordered list with YAML config snippets that can be pasted directly into a config profile to address the top issues
+- **Executive summary**  composite, pass/fail breakdown, config profile
+- **Privacy findings**  worst attacker risk, k-anonymity stats (if batch), uncovered HIPAA paths, text risk patterns with value previews
+- **Utility breakdown**  per sub-dimension averages, action distribution table, information loss analysis
+- **Quality breakdown**  rule coverage gap list, schema failures, reference integrity issues
+- **Per-resource-type table**  pass/fail rate and average composite by resource type
+- **Recommendations**  priority-ordered list with YAML config snippets that can be pasted directly into a config profile to address the top issues
 
 ---
 
 ## Scoring Without Original Resources
 
-The job scoring path (`score_job`) operates on the NDJSON result file only — original resources are not available. The scoring engine handles this gracefully:
+The job scoring path (`score_job`) operates on the NDJSON result file only  original resources are not available. The scoring engine handles this gracefully:
 
 - **Privacy:** attacker model and text risk do not need originals. Identifier coverage uses only the manifest.
 - **Utility field retention:** estimated from manifest (fraction of non-redact actions) instead of exact key comparison.
@@ -238,11 +238,11 @@ This design was a deliberate constraint. Storing both original and de-identified
 
 When `MEDANON_SCORING_ENABLED=true`, every de-identification call automatically scores its output and writes the result to the `medanon.processing_runs` PostgreSQL table (`app-db`). This enables:
 
-- Processing history via `GET /v1/processing-runs` — paginated log of all runs with scores
-- Aggregate statistics via `GET /v1/processing-runs/stats` — averages by endpoint and profile
+- Processing history via `GET /v1/processing-runs`  paginated log of all runs with scores
+- Aggregate statistics via `GET /v1/processing-runs/stats`  averages by endpoint and profile
 - Trend analysis: composite score drift over time as config profiles or source data evolve
 
-The `processing_runs` table stores: endpoint path, config profile name, resource count, composite score, and per-dimension scores. PHI is never stored — only aggregate statistics.
+The `processing_runs` table stores: endpoint path, config profile name, resource count, composite score, and per-dimension scores. PHI is never stored  only aggregate statistics.
 
 If `MEDANON_SCORING_ENABLED=false` (default), the scoring engine is still available via the explicit endpoints (`POST /v1/score`, `POST /v1/jobs/{id}/score`) but results are not automatically persisted.
 

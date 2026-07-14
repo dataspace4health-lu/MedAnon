@@ -47,7 +47,7 @@ def _now() -> str:
 def derive_findings(passport: dict, assessment_id: str) -> list[dict]:
     """Open findings from a passport's failing, verdict-driving checks.
 
-    Advisory (statistical) checks do not raise findings — they are not defects,
+    Advisory (statistical) checks do not raise findings  they are not defects,
     just signals. Critical failures are severity ``critical``; others ``major``.
     """
     dataset_id = str(passport.get("dataset_id", "dataset"))
@@ -313,7 +313,7 @@ def get_findings_store() -> FindingsStore | None:
         else:
             _STORE = None
     except Exception as exc:  # noqa: BLE001
-        _log.warning("findings store init failed (%s) — disabled", exc)
+        _log.warning("findings store init failed (%s)  disabled", exc)
         _STORE = None
     return _STORE
 

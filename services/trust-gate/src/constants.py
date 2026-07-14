@@ -2,7 +2,7 @@
 
 The scoring is grounded in Kahn et al. (2016) + the OHDSI Data Quality Dashboard
 methodology (violation-rate vs per-check threshold). There are **no arbitrary
-domain weights** — the headline metric is % of checks passing per Kahn category.
+domain weights**  the headline metric is % of checks passing per Kahn category.
 
 Per-check thresholds and the decision-policy cut-offs are config-driven
 (``config/checks.yaml`` + env) so they are tunable and auditable rather than
@@ -33,11 +33,11 @@ CATEGORY_MIN_RATE: float = float(os.environ.get("TRUST_GATE_CATEGORY_MIN_RATE", 
 # ---------------------------------------------------------------------------
 
 DEFAULT_THRESHOLDS: dict[str, float] = {
-    # Conformance — SAM prerequisite block checks (always zero-tolerance, critical).
+    # Conformance  SAM prerequisite block checks (always zero-tolerance, critical).
     "conformance.resource_type_present": 0.0,
     "conformance.resource_id_present": 0.0,
     "conformance.status_not_entered_in_error": 0.0,
-    # Conformance — structural validity is zero-tolerance and critical.
+    # Conformance  structural validity is zero-tolerance and critical.
     "conformance.structural": 0.0,
     "conformance.profile": 0.0,
     # Implementation-Guide (US Core etc.) conformance: opt-in, non-critical, so it
@@ -51,17 +51,17 @@ DEFAULT_THRESHOLDS: dict[str, float] = {
     "conformance.code_wellformed": 0.0,
     "conformance.terminology": 0.0,
     "conformance.reference_integrity": 0.0,
-    # Completeness — small tolerance is acceptable for non-required richness.
+    # Completeness  small tolerance is acceptable for non-required richness.
     "completeness.required_elements": 0.0,
     "completeness.value_or_absent": 0.0,
     # Element density is a *frequency* metric (Kahn completeness / OHDSI
     # measureValueCompleteness): recommended-but-optional richness. A non-zero
-    # tolerance is correct — optional fields are not expected to be 100% present.
+    # tolerance is correct  optional fields are not expected to be 100% present.
     "completeness.element_density": 0.5,
-    # Plausibility — uniqueness is zero-tolerance; temporal/atemporal configurable.
+    # Plausibility  uniqueness is zero-tolerance; temporal/atemporal configurable.
     "plausibility.uniqueness": 0.0,
     # Value-outlier tolerance: flag a (code,unit) group only when >1% of its values
-    # are extreme outliers — a systemic error signal, not a few genuine extremes.
+    # are extreme outliers  a systemic error signal, not a few genuine extremes.
     "plausibility.value_outlier": 0.01,
     # Definitional bounds are zero-tolerance: a value outside its unit's
     # mathematical definition (e.g. >100%) is always an error.
@@ -70,7 +70,7 @@ DEFAULT_THRESHOLDS: dict[str, float] = {
     "plausibility.concordance": 0.0,
     # Cross-batch distribution drift (consistency): any drifted (code,unit) group.
     "plausibility.distribution_drift": 0.0,
-    # Timeliness (currency): record lag / freshness — opt-in via env thresholds.
+    # Timeliness (currency): record lag / freshness  opt-in via env thresholds.
     "plausibility.record_lag": 0.0,
     "plausibility.currency": 0.0,
     # Accuracy vs a supplied source-of-truth reference.
@@ -90,7 +90,7 @@ def threshold_for(check_id: str, overrides: dict[str, float] | None = None) -> f
 
 # Resource types where status=entered-in-error must block de-identification.
 # Per FHIR Safety Checklist §4: these resources carry clinical data that must
-# be filtered before privacy transformation — passing them through would produce
+# be filtered before privacy transformation  passing them through would produce
 # false pseudonymized records that appear valid.
 ENTERED_IN_ERROR_RESOURCE_TYPES: frozenset[str] = frozenset(
     {
@@ -165,7 +165,7 @@ OBSERVATION_VALUE_KEYS: frozenset[str] = frozenset(
 )
 
 # ---------------------------------------------------------------------------
-# Recommended (not required) elements per resource type — the "richness" set for
+# Recommended (not required) elements per resource type  the "richness" set for
 # the completeness *frequency* metric (Kahn completeness / OHDSI
 # measureValueCompleteness). Unlike REQUIRED_ELEMENTS (binary present/absent),
 # element_density reports the *fraction* of these that are populated; missing
@@ -197,7 +197,7 @@ RECOMMENDED_ELEMENTS: dict[str, list[str]] = {
 }
 
 # ---------------------------------------------------------------------------
-# FHIR primitive format conformance (value/verification) — checked WITHOUT an
+# FHIR primitive format conformance (value/verification)  checked WITHOUT an
 # external validator so conformance is never fully "not assessed". Regexes are
 # the official FHIR R4 primitive patterns.
 # ---------------------------------------------------------------------------
@@ -234,7 +234,7 @@ TEMPORAL_FIELD_NAMES: frozenset[str] = frozenset(
 REQUIRED_PROVENANCE_KEYS: tuple[str, ...] = ("source_system", "extraction_time")
 
 # ---------------------------------------------------------------------------
-# Descriptive profiling (data-analysis support — NOT scored). Numeric value
+# Descriptive profiling (data-analysis support  NOT scored). Numeric value
 # stats are computed for Observations carrying these LOINC codes (extensible).
 # ---------------------------------------------------------------------------
 
@@ -252,7 +252,7 @@ PROFILE_MAX_DISTINCT: int = 15  # cap distinct values shown in categorical distr
 # universal bounds caused false failures, and no authoritative machine-readable
 # LOINC→range table exists. So instead of inventing per-code limits we flag
 # values that are extreme *relative to the dataset's own distribution* for the
-# same (code, unit) — the lab2clean / Tukey-fence approach. These are statistical
+# same (code, unit)  the lab2clean / Tukey-fence approach. These are statistical
 # METHOD parameters (citable), not invented clinical thresholds, and are all
 # env-overridable.
 #   fence = [Q1 - K*IQR, Q3 + K*IQR];  K=3.0 is Tukey's "far out" (extreme) fence.
@@ -266,7 +266,7 @@ OUTLIER_MIN_SAMPLE: int = int(os.environ.get("TRUST_GATE_OUTLIER_MIN_SAMPLE", "2
 # Modified z-score cut-off (Iglewicz & Hoaglin): |0.6745·(x−median)/MAD| > 3.5.
 OUTLIER_MODZ_CUTOFF: float = float(os.environ.get("TRUST_GATE_OUTLIER_MODZ", "3.5"))
 # Cross-batch drift: flag a (code,unit) when its batch median sits more than this
-# modified-z (vs the accumulated baseline median/MAD) away — a distribution shift.
+# modified-z (vs the accumulated baseline median/MAD) away  a distribution shift.
 DRIFT_MODZ_CUTOFF: float = float(os.environ.get("TRUST_GATE_DRIFT_MODZ", "3.5"))
 # When the baseline MAD is 0 (a degenerate, all-identical baseline) the modified-z
 # is undefined; fall back to a RELATIVE shift tolerance instead of exact float
@@ -286,7 +286,7 @@ SAMPLER_SEED: int = int(os.environ.get("TRUST_GATE_SAMPLER_SEED", "1337"))
 
 # Statistical / batch-relative checks. These are non-deterministic by nature
 # (random reservoir + batch-relative distribution) and so are REPORTED as an
-# advisory but never drive the BLOCK/PASS/CONDITIONAL verdict — which must be
+# advisory but never drive the BLOCK/PASS/CONDITIONAL verdict  which must be
 # reproducible and defensible. The deterministic check set (structural, format,
 # code, completeness, referential, temporal, concordance, definitional bounds,
 # uniqueness) is the sole basis of the decision.
@@ -301,7 +301,7 @@ ADVISORY_CHECK_IDS: frozenset = frozenset(
 # Determinism classification (Phase 1.5, fail-safe variant). The advisory/verdict
 # split must default the *safe* way: a check that nobody has classified yet stays
 # advisory and so can never silently move the gate. Classification is therefore
-# an explicit allow-list of deterministic ids — anything not on it (a new
+# an explicit allow-list of deterministic ids  anything not on it (a new
 # statistical check, a typo, a future addition) is treated as advisory by
 # ``is_deterministic`` below. ``DETERMINISTIC_CHECK_IDS`` enumerates the fixed
 # built-in checks; ``DETERMINISTIC_PREFIXES`` covers ids generated dynamically
@@ -368,7 +368,7 @@ def is_deterministic(check_id: str, rule_ids: frozenset = frozenset()) -> bool:
 # Definitional unit bounds (plausibility / atemporal / verification).
 #
 # These follow from the UNIT'S OWN DEFINITION, not from clinical knowledge, so
-# they are universally true and citable — unlike invented per-measurement
+# they are universally true and citable  unlike invented per-measurement
 # "normal" ranges. A percentage cannot mathematically exceed 100 or be negative.
 # This catches whole-batch corruption (e.g. an SpO2 feed in the wrong unit, or a
 # sign-flipped lab value) that the distribution-relative outlier check (advisory,
@@ -386,7 +386,7 @@ def is_deterministic(check_id: str, rule_ids: frozenset = frozenset()) -> bool:
 # Deliberately EXCLUDES absolute mass / length / volume units (kg, g, cm, m, mL,
 # L): legitimate delta / balance observations (weight change, net fluid balance)
 # are signed in those units, so a blanket non-negativity rule would false-flag
-# them. Non-negativity is a property of the concept, not those units — so those
+# them. Non-negativity is a property of the concept, not those units  so those
 # stay config-driven, not bundled.
 NON_NEGATIVE_UNITS: frozenset[str] = frozenset(
     {

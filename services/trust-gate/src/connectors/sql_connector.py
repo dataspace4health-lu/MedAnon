@@ -13,9 +13,9 @@ Security model
 
 Supported drivers
 -----------------
-  "postgresql"  — psycopg2-binary (bundled in requirements.txt)
-  "mysql"       — pymysql (optional; add to requirements.txt to enable)
-  "sqlite"      — stdlib sqlite3
+  "postgresql"   psycopg2-binary (bundled in requirements.txt)
+  "mysql"        pymysql (optional; add to requirements.txt to enable)
+  "sqlite"       stdlib sqlite3
 """
 
 from __future__ import annotations
@@ -173,7 +173,7 @@ def _validate_host(host: str) -> None:
     except SqlConnectorError:
         raise
     except OSError:
-        # DNS failure — not an SSRF concern; let the DB driver surface the error.
+        # DNS failure  not an SSRF concern; let the DB driver surface the error.
         pass
 
 

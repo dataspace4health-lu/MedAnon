@@ -1,20 +1,20 @@
-"""Quality Passport data models — grounded in the Kahn et al. (2016) framework.
+"""Quality Passport data models  grounded in the Kahn et al. (2016) framework.
 
 Reference: Kahn MG, Callahan TJ, Barnard J, et al. "A Harmonized Data Quality
 Assessment Terminology and Framework for the Secondary Use of Electronic Health
-Record Data." eGEMs 2016;4(1):18. doi:10.13063/2327-9214.1244 — the field
+Record Data." eGEMs 2016;4(1):18. doi:10.13063/2327-9214.1244  the field
 standard used by OHDSI (Data Quality Dashboard) and PCORnet.
 
 Measurement layer (Kahn):
   - Three categories: ``conformance``, ``completeness``, ``plausibility``.
   - Two contexts: ``verification`` (internal constraints, no external reference)
-    and ``validation`` (against an external benchmark — e.g. a profile/IG or a
+    and ``validation`` (against an external benchmark  e.g. a profile/IG or a
     terminology server).
   - Each check is scored OHDSI-DQD style: a *violation fraction*
     (violations / applicable rows) compared to a per-check *threshold*. A check
     FAILs when the fraction exceeds its threshold, PASSes otherwise, and is NA
     when no rows were applicable. The headline metric is **% of checks passing**
-    per category — NOT a weighted average of arbitrary domain weights.
+    per category  NOT a weighted average of arbitrary domain weights.
 
 Policy layer (product, NOT Kahn):
   - ``decision`` (PASS / CONDITIONAL_PASS / BLOCK) and the auditability evidence
@@ -37,7 +37,7 @@ BLOCK = "BLOCK"
 # Per-check outcome constants.
 RESULT_PASS = "PASS"
 RESULT_FAIL = "FAIL"
-RESULT_NA = "NA"  # not applicable — no rows to assess (Kahn "could not assess")
+RESULT_NA = "NA"  # not applicable  no rows to assess (Kahn "could not assess")
 
 # Kahn categories + contexts.
 CATEGORIES = ("conformance", "completeness", "plausibility")
@@ -62,7 +62,7 @@ FRAMEWORK = (
     "OHDSI DQD violation-rate-vs-threshold scoring"
 )
 
-# PIQI HDQT v2.0 (ASTP/ONC 2024) taxonomy — 4 categories × 3 dimensions.
+# PIQI HDQT v2.0 (ASTP/ONC 2024) taxonomy  4 categories × 3 dimensions.
 # Each CheckResult carries these as metadata for downstream analytics.
 HDQT_CATEGORIES = ("availability", "accuracy", "conformity", "plausibility")
 HDQT_DIMENSIONS = (
@@ -87,7 +87,7 @@ FRAMEWORK_VERSIONS = {"kahn": "2016", "hdqt": "2.0", "evaluation_profile": "fhir
 # persisted (medanon.processing_runs.trust_passport) and served over the API.
 # Any PHI-bearing value (a Patient.identifier value such as an MRN/SSN) that a
 # check wants to surface in the audit must be reduced to a stable, non-reversible
-# token first — never the raw value. The optional salt frustrates dictionary
+# token first  never the raw value. The optional salt frustrates dictionary
 # attacks on small-domain identifiers; tokens stay stable within a deployment so
 # auditors can still correlate repeats.
 _AUDIT_SALT = os.environ.get("TRUST_GATE_AUDIT_SALT", "")
@@ -106,7 +106,7 @@ class CheckResult:
     """One data-quality check, scored as a violation fraction vs a threshold.
 
     HDQT fields (``hdqt_category`` / ``hdqt_dimension``) map this check to the
-    PIQI Healthcare Data Quality Taxonomy v2.0 (ASTP/ONC 2024) — additive
+    PIQI Healthcare Data Quality Taxonomy v2.0 (ASTP/ONC 2024)  additive
     metadata that does not affect Kahn scoring or the PASS/FAIL decision.
 
     ``skipped`` is True when the check could not run (prerequisite unavailable,
@@ -260,13 +260,13 @@ class QualityPassport:
     generated_at: str
     privacy_processing_allowed: bool
     # True when at least one check was assessed (applicable > 0). False means no
-    # check ran at all — overall_score of 100.0 in that case is vacuously true and
+    # check ran at all  overall_score of 100.0 in that case is vacuously true and
     # should be displayed as "not assessed" rather than a real 100%.
     has_assessed: bool = True
     resource_count: int = 0
     config_profile: str = "auto"
     framework: str = FRAMEWORK
-    # Descriptive profiling (analysis support, NOT scored) — see profiling.py.
+    # Descriptive profiling (analysis support, NOT scored)  see profiling.py.
     profile: dict = None  # type: ignore[assignment]
     # PIQI HDQT v2.0 / Verily honesty mechanism: checks that were not run.
     # Keys are reason categories; each value is {skipped: int, reason: str}.

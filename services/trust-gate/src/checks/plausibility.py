@@ -1,13 +1,13 @@
 """Plausibility category (Kahn 2016): are data values believable?
 
-- uniqueness (verification) — no duplicate ResourceType/id in the batch
-- atemporal  (verification) — definitional unit bounds (e.g. % ∈ [0,100]):
+- uniqueness (verification)  no duplicate ResourceType/id in the batch
+- atemporal  (verification)  definitional unit bounds (e.g. % ∈ [0,100]):
                               catches whole-batch unit corruption
-- atemporal  (verification) — data-driven value-outlier detection (robust
+- atemporal  (verification)  data-driven value-outlier detection (robust
                               modified z-score / IQR over the per-(code,unit)
                               distribution, optionally accumulated across batches)
-- atemporal  (verification) — concordance: cross-field contradictions
-- temporal / atemporal (verification) — the declarative clinical rule pack
+- atemporal  (verification)  concordance: cross-field contradictions
+- temporal / atemporal (verification)  the declarative clinical rule pack
 """
 
 from __future__ import annotations
@@ -125,7 +125,7 @@ def _definitional_bounds(resources, thresholds, bounds: dict | None):
 
 def _value_outliers(resources, thresholds, baseline_store=None):
     """Flag numeric values that are extreme vs the distribution for their
-    (code, unit) — no hardcoded clinical ranges.
+    (code, unit)  no hardcoded clinical ranges.
 
     Robust method: modified z-score ``0.6745·(x−median)/MAD`` with cut-off 3.5
     (Iglewicz & Hoaglin), computed in LOG space for strictly-positive references
@@ -135,7 +135,7 @@ def _value_outliers(resources, thresholds, baseline_store=None):
     mixed-unit corruption, which is left to definitional bounds + unit conformance.
 
     When a ``baseline_store`` is provided, the reference distribution is the
-    *accumulated* reservoir for that (code, unit) merged with the current batch —
+    *accumulated* reservoir for that (code, unit) merged with the current batch
     so small batches gain power and whole-feed drift is caught. The store is then
     updated with the batch's values. With no store the reference is batch-only.
     """
@@ -193,7 +193,7 @@ def _outlier_predicate(reference: list[float]):
     normal distribution, which the log transform restores.
 
     This is a single-distribution check: it cannot catch a bimodal mixed-unit
-    population (two unit scales merged into one (code,unit)) — a legitimately large
+    population (two unit scales merged into one (code,unit))  a legitimately large
     spread, not an outlier. That corruption is the job of ``definitional_bounds``
     and unit conformance, not a per-(code,unit) outlier fence.
     """
@@ -235,7 +235,7 @@ def _outlier_predicate(reference: list[float]):
 def _distribution_drift(resources, thresholds, baseline_store=None):
     """Cross-batch / cross-time consistency: each (code, unit) group's batch
     median is compared to the accumulated baseline. A shift beyond a robust
-    modified-z cut-off (vs the baseline median/MAD) flags a distribution drift —
+    modified-z cut-off (vs the baseline median/MAD) flags a distribution drift
     a unit change, recalibration, or feed switch the internal outlier check (which
     only sees the current batch) cannot detect.
 
@@ -253,14 +253,14 @@ def _distribution_drift(resources, thresholds, baseline_store=None):
             "cross-batch baseline (no median drift)."
         ),
         recommendation=(
-            "Investigate a sudden distribution shift — unit change, device "
+            "Investigate a sudden distribution shift  unit change, device "
             "recalibration, or a switched source feed."
         ),
         hdqt_category="plausibility",
         hdqt_dimension="situationally_implausible",
     )
     if baseline_store is None:
-        return chk  # NA — drift requires an accumulated cross-batch baseline
+        return chk  # NA  drift requires an accumulated cross-batch baseline
 
     for (code, unit), pairs in _numeric_groups(resources).items():
         baseline = baseline_store.get(code, unit)
@@ -298,7 +298,7 @@ def _concordance(resources, thresholds, rules: list[dict]):
 
     Each rule forbids a set of codes for a given Patient.gender, e.g. pregnancy
     codes on a male patient. Rules are config-driven and ship as illustrative
-    examples only — production deployments should bind these to terminology
+    examples only  production deployments should bind these to terminology
     value sets (FHIRPath ``memberOf``) rather than literal code lists.
     """
     chk = CheckResult(

@@ -41,12 +41,12 @@ All error responses use RFC 7807 Problem Details:
 
 | Status | Meaning |
 |---|---|
-| 400 | Bad request — malformed JSON or FHIR |
+| 400 | Bad request  malformed JSON or FHIR |
 | 401 | Missing or invalid API key / token |
 | 403 | Insufficient role |
 | 404 | Resource or job not found |
 | 413 | Request body exceeds `MEDANON_MAX_BODY_BYTES` (default 10 MB) |
-| 422 | Validation error — invalid parameter, unsupported setting, SSRF block |
+| 422 | Validation error  invalid parameter, unsupported setting, SSRF block |
 | 429 | Rate limit exceeded |
 | 500 | Processing error (check service logs) |
 | 503 | Upstream unavailable (gPAS, NLP, token introspection) |
@@ -79,13 +79,13 @@ All processing endpoints accept an optional query parameter:
 | Value | Profile used |
 |---|---|
 | `auto` (default) | `config_gpas.yaml` if `GPAS_URL` is set, else `config.yaml` |
-| `minimal` | `config.yaml` — HMAC hash + regex scrubbing |
-| `gpas` | `config_gpas.yaml` — gPAS pseudonymization |
-| `gdpr` | `config_gdpr_eu.yaml` — GDPR Art. 4(5) |
-| `hipaa` | `config_hipaa_safe_harbor.yaml` — HIPAA Safe Harbor |
-| `research` | `config_research_pseudonymous.yaml` — IRB research |
-| `structural` | `config_structure_preserving.yaml` — Full FHIR structure |
-| `value-masking` | `config_value_masking.yaml` — Fine-grained NLP masking |
+| `minimal` | `config.yaml`  HMAC hash + regex scrubbing |
+| `gpas` | `config_gpas.yaml`  gPAS pseudonymization |
+| `gdpr` | `config_gdpr_eu.yaml`  GDPR Art. 4(5) |
+| `hipaa` | `config_hipaa_safe_harbor.yaml`  HIPAA Safe Harbor |
+| `research` | `config_research_pseudonymous.yaml`  IRB research |
+| `structural` | `config_structure_preserving.yaml`  Full FHIR structure |
+| `value-masking` | `config_value_masking.yaml`  Fine-grained NLP masking |
 
 ---
 
@@ -786,7 +786,7 @@ Get a single processing run by ID.
 
 ### `DELETE /v1/processing-runs`
 
-**Role:** `analyst` *(known issue: should require `admin` — pending fix)*
+**Role:** `analyst` *(known issue: should require `admin`  pending fix)*
 
 Purge all processing run records.
 
@@ -912,7 +912,7 @@ Analyze a config profile against regulatory frameworks and return compliance gap
     {
       "framework": "HIPAA",
       "article": "45 CFR §164.514(b)(2)(i)",
-      "description": "Dates not generalized to year-only — GDPR profile retains month and day.",
+      "description": "Dates not generalized to year-only  GDPR profile retains month and day.",
       "severity": "medium"
     }
   ],
@@ -1111,8 +1111,8 @@ curl -s -X POST http://localhost:8000/v1/ai/generate-config \
 
 The full OpenAPI 3.1 schema is available at:
 
-- `/openapi.json` — machine-readable schema
-- `/docs` — interactive Swagger UI
-- `/redoc` — ReDoc documentation viewer
+- `/openapi.json`  machine-readable schema
+- `/docs`  interactive Swagger UI
+- `/redoc`  ReDoc documentation viewer
 
 These endpoints do not require authentication.

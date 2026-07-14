@@ -85,7 +85,7 @@ function finalSteps(p: QualityPassport, sourceModel: string): Step[] {
   const l = p.label;
   steps.push({
     id: "label", name: "EHDS label", kind: "label", status: "done",
-    meta: l ? `${l.quality?.decision ?? l.quality?.grade ?? "—"} · ${l.utility?.tier ?? "—"} · L${l.maturity?.level ?? "—"}` : "issued",
+    meta: l ? `${l.quality?.decision ?? l.quality?.grade ?? ""} · ${l.utility?.tier ?? ""} · L${l.maturity?.level ?? ""}` : "issued",
   });
   return steps;
 }

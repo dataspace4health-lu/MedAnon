@@ -62,7 +62,7 @@ SELECT
 FROM generate_series(1, 500) AS n;
 
 -- ---------------------------------------------------------------------
--- providers — clinical staff with their own PII (NPI, DEA, email, phone)
+-- providers  clinical staff with their own PII (NPI, DEA, email, phone)
 -- ---------------------------------------------------------------------
 CREATE TABLE providers (
     provider_id  SERIAL PRIMARY KEY,
@@ -133,7 +133,7 @@ CROSS JOIN generate_series(1, 2) AS v
 WHERE p.mrn LIKE 'MRN-2%';
 
 -- ---------------------------------------------------------------------
--- insurance — one policy per patient (member id, group, subscriber SSN)
+-- insurance  one policy per patient (member id, group, subscriber SSN)
 -- ---------------------------------------------------------------------
 CREATE TABLE insurance (
     policy_id     SERIAL PRIMARY KEY,
@@ -159,7 +159,7 @@ SELECT
 FROM patients p;
 
 -- ---------------------------------------------------------------------
--- appointments — scheduling + direct contact (~2 per patient)
+-- appointments  scheduling + direct contact (~2 per patient)
 -- ---------------------------------------------------------------------
 CREATE TABLE appointments (
     appt_id      SERIAL PRIMARY KEY,
@@ -186,7 +186,7 @@ FROM patients p
 CROSS JOIN generate_series(1, 2) AS v;
 
 -- ---------------------------------------------------------------------
--- prescriptions — drug + prescriber DEA (~2 per patient)
+-- prescriptions  drug + prescriber DEA (~2 per patient)
 -- ---------------------------------------------------------------------
 CREATE TABLE prescriptions (
     rx_id        SERIAL PRIMARY KEY,
@@ -213,7 +213,7 @@ FROM patients p
 CROSS JOIN generate_series(1, 2) AS v;
 
 -- ---------------------------------------------------------------------
--- next_of_kin — third-party PII (name, relationship, phone)
+-- next_of_kin  third-party PII (name, relationship, phone)
 -- ---------------------------------------------------------------------
 CREATE TABLE next_of_kin (
     nok_id       SERIAL PRIMARY KEY,
@@ -236,7 +236,7 @@ SELECT
 FROM patients p;
 
 -- ---------------------------------------------------------------------
--- billing — financial identifiers (card last4, synthetic IBAN-ish)
+-- billing  financial identifiers (card last4, synthetic IBAN-ish)
 -- ---------------------------------------------------------------------
 CREATE TABLE billing (
     invoice_id   SERIAL PRIMARY KEY,
@@ -260,7 +260,7 @@ SELECT
 FROM patients p;
 
 -- ---------------------------------------------------------------------
--- audit_access_log — IPs, user agents, actor identities (~4 per patient)
+-- audit_access_log  IPs, user agents, actor identities (~4 per patient)
 -- ---------------------------------------------------------------------
 CREATE TABLE audit_access_log (
     log_id       SERIAL PRIMARY KEY,
@@ -292,7 +292,7 @@ FROM patients p
 CROSS JOIN generate_series(1, 4) AS v;
 
 -- ---------------------------------------------------------------------
--- lab_notes — free-text PHI ONLY, no single-column PK (OFFSET/LIMIT path)
+-- lab_notes  free-text PHI ONLY, no single-column PK (OFFSET/LIMIT path)
 -- ---------------------------------------------------------------------
 CREATE TABLE lab_notes (
     patient_mrn  TEXT NOT NULL,

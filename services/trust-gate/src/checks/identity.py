@@ -2,11 +2,11 @@
 
 PATIENT_IDENTITY_STABLE checks two things within the batch:
   1. Patient.link is absent or uses a known reconciliation type (not a conflict).
-  2. No two Patient resources share the same identifier system+value — which
+  2. No two Patient resources share the same identifier system+value  which
      would indicate a merge collision or a linking error.
 
 This is a plausibility / situationally_implausible check (HDQT), but severity
-is WARNING (CONDITIONAL_PASS) — merged patients still need de-identification,
+is WARNING (CONDITIONAL_PASS)  merged patients still need de-identification,
 so a BLOCK would be too disruptive. The check is only active when there are two
 or more Patient resources in the batch.
 
@@ -70,7 +70,7 @@ def evaluate_patient_identity(
         # Structural boundary: identity collision requires at least 2 patients.
         chk.skipped = True
         chk.skip_reason = (
-            "fewer than 2 Patient resources in batch — n-ary check not applicable"
+            "fewer than 2 Patient resources in batch  n-ary check not applicable"
         )
         return chk
 
@@ -89,7 +89,7 @@ def evaluate_patient_identity(
             chk.applicable += 1
             if key in seen_identifiers and seen_identifiers[key] != pid:
                 chk.violations += 1
-                # `val` is a raw Patient identifier (MRN/SSN) — never persist it
+                # `val` is a raw Patient identifier (MRN/SSN)  never persist it
                 # raw in the passport; surface a stable non-reversible token.
                 chk.add_detail(
                     resource_type="Patient",

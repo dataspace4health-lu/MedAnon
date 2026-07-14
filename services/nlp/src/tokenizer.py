@@ -49,7 +49,7 @@ _DATE_FP_RE = re.compile(
 )
 
 # ---------------------------------------------------------------------------
-# L2 cache (Redis) — optional, set by main.py at startup via set_l2_cache().
+# L2 cache (Redis)  optional, set by main.py at startup via set_l2_cache().
 # ``None`` disables L2 (L1 lru_cache still applies). All access is best-effort:
 # Redis errors are logged inside cache.py and degrade silently to L1-only.
 # ---------------------------------------------------------------------------
@@ -95,9 +95,9 @@ def _detect_entities_cached(
     """L1+L2 cached entity detection.
 
     Lookup order:
-      1. functools.lru_cache (this decorator)              — RAM, ~µs
-      2. Redis L2 cache (optional, set via set_l2_cache)   — network, ~ms
-      3. Presidio + spaCy compute path                     — CPU, ~10-100 ms
+      1. functools.lru_cache (this decorator)               RAM, ~µs
+      2. Redis L2 cache (optional, set via set_l2_cache)    network, ~ms
+      3. Presidio + spaCy compute path                      CPU, ~10-100 ms
 
     On L2 hit we still populate L1 implicitly via the lru_cache return path.
     On compute, both layers are written.
@@ -121,7 +121,7 @@ def _detect_entities_cached(
 def reset_detection_cache() -> None:
     """Clear the L1 detection cache. Useful between test runs.
 
-    Does NOT clear the Redis L2 cache — call ``redis-cli FLUSHDB`` or wait
+    Does NOT clear the Redis L2 cache  call ``redis-cli FLUSHDB`` or wait
     for TTL expiry if a full reset is required.
     """
     _detect_entities_cached.cache_clear()
@@ -163,7 +163,7 @@ def reset_global_token_state() -> None:
 def _evict_if_needed(token_state: dict, limit: int = _TOKEN_STATE_MAX_ENTRIES) -> None:
     """Log a one-time warning when the token map exceeds *limit*; never evict.
 
-    Evicting mid-job corrupts the reverse mapping for evicted values —
+    Evicting mid-job corrupts the reverse mapping for evicted values
     de-tokenization breaks and re-encountered values get new token numbers,
     violating surrogate consistency.  Callers should reset token state
     between jobs with reset_global_token_state() instead.
@@ -176,7 +176,7 @@ def _evict_if_needed(token_state: dict, limit: int = _TOKEN_STATE_MAX_ENTRIES) -
         import logging as _logging
 
         _logging.getLogger("nlp.tokenizer").warning(
-            "token_state map exceeded limit=%d entries — no mid-run eviction "
+            "token_state map exceeded limit=%d entries  no mid-run eviction "
             "to preserve surrogate consistency. Call reset_global_token_state() "
             "between jobs to reclaim memory.",
             limit,
@@ -192,7 +192,7 @@ def _tokenize(value: str, entity_type: str, token_state: dict, lock=None) -> str
 
 
 def _tokenize_unlocked(value: str, entity_type: str, token_state: dict) -> str:
-    """Assign or retrieve the surrogate token — assumes lock already held if needed."""
+    """Assign or retrieve the surrogate token  assumes lock already held if needed."""
     key = (entity_type, value)
     if key in token_state["map"]:
         return token_state["map"][key]
@@ -231,7 +231,7 @@ def _analyze_and_replace(
     if not hits:
         return text
 
-    # Build replacement segments right-to-left, then reverse+join once — O(L+H).
+    # Build replacement segments right-to-left, then reverse+join once  O(L+H).
     parts: list[str] = []
     cursor = len(text)
     for start, end, entity_type in hits:

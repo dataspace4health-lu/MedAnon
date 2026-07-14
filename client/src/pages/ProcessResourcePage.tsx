@@ -176,7 +176,7 @@ function ManifestTable({ manifest }: { manifest: ResourceManifest[] }) {
     m.entries.map((e) => ({
       resource: m.id ? `${m.resourceType}/${m.id}` : m.resourceType,
       path: (e as { path?: string; match?: string }).path ??
-        (e as { match?: string }).match ?? '—',
+        (e as { match?: string }).match ?? '',
       action: e.action,
       rule: e.rule,
     })),

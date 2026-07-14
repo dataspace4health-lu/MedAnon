@@ -364,7 +364,7 @@ Authentication mode is selected at startup via `MEDANON_AUTH_PROVIDER`. The sele
 | `auto` (default) | `ApiKeyProvider` or `OpenProvider` | API-key mode if `MEDANON_API_KEY` is set, else open |
 | `apikey` | `ApiKeyProvider` | Require `X-API-Key` header on all protected endpoints |
 | `oidc` | `OidcProvider` | Validate OIDC/JWT bearer tokens; optionally also accept `X-API-Key` when `MEDANON_AUTH_ALLOW_API_KEY=true` |
-| `none` | `OpenProvider` | Fully open — local dev only |
+| `none` | `OpenProvider` | Fully open  local dev only |
 
 **Open paths** (never require auth regardless of mode): `/health`, `/ready`, `/metrics`, `/docs`, `/openapi.json`, `/redoc`, `/.well-known/smart-configuration`, `/v1/auth/config`.
 
@@ -374,9 +374,9 @@ Authentication mode is selected at startup via `MEDANON_AUTH_PROVIDER`. The sele
 
 When `MEDANON_AUTH_PROVIDER=oidc`, the backend (`OidcProvider` + `integrations/oidc/validator.py`) validates JWTs against the issuer's JWKS keys. The SPA adapts its login flow at runtime by calling `GET /v1/auth/config`.
 
-The bundled identity provider is Keycloak (realm `medanon`, client `medanon-ui`), started with `--profile auth`. The UI nginx proxies `/auth/` → `medanon-keycloak:8080`, so Keycloak is browser-reachable on the same origin as the SPA — the OIDC issuer is therefore a `/auth`-prefixed URL (e.g. `http://localhost:8501/auth/realms/medanon`), not the internal container address.
+The bundled identity provider is Keycloak (realm `medanon`, client `medanon-ui`), started with `--profile auth`. The UI nginx proxies `/auth/` → `medanon-keycloak:8080`, so Keycloak is browser-reachable on the same origin as the SPA  the OIDC issuer is therefore a `/auth`-prefixed URL (e.g. `http://localhost:8501/auth/realms/medanon`), not the internal container address.
 
-The `/v1/auth/config` response carries **no token URL** — the SPA derives Keycloak's `/protocol/openid-connect/{token,logout}` endpoints from `oidc_issuer` itself (`api/auth.ts → endpoints()`):
+The `/v1/auth/config` response carries **no token URL**  the SPA derives Keycloak's `/protocol/openid-connect/{token,logout}` endpoints from `oidc_issuer` itself (`api/auth.ts → endpoints()`):
 
 ```
 Browser / SPA (AuthContext.tsx)
@@ -423,12 +423,12 @@ The SPA renders its own `LoginPage` and posts credentials directly to Keycloak's
 | `components/auth/UserMenu.tsx` | Top-bar dropdown showing username, role, and logout button |
 | `pages/LoginPage.tsx` | Username/password form; calls `AuthContext.loginWithCredentials()` |
 | `pages/ResetPasswordPage.tsx` | Redirects to Keycloak's `reset-credentials` flow (`api/auth.ts → resetPasswordUrl()`) |
-| `api/auth.ts` | `fetchAuthConfig()`, `passwordLogin()`, `refreshLogin()`, `serverLogout()`, `resetPasswordUrl()`, `decodeJwt()` (client-side display only — backend re-verifies) |
-| `api/authToken.ts` | In-memory access-token bridge — `getAccessToken()` read by `api/client.ts`, `setAccessToken()` written by `AuthContext` |
+| `api/auth.ts` | `fetchAuthConfig()`, `passwordLogin()`, `refreshLogin()`, `serverLogout()`, `resetPasswordUrl()`, `decodeJwt()` (client-side display only  backend re-verifies) |
+| `api/authToken.ts` | In-memory access-token bridge  `getAccessToken()` read by `api/client.ts`, `setAccessToken()` written by `AuthContext` |
 
 **Role mapping (`integrations/oidc/validator.py`):** the JWT's role list is read from the dotted `OIDC_ROLE_CLAIM_PATH` (default `realm_access.roles`) and translated by `OIDC_ROLE_MAP`. An authenticated token with no *recognized* role defaults to `viewer` rather than being rejected. The SPA separately strips the `medanon-` prefix from realm roles for display.
 
-**Downgrade guard:** if a Bearer token's unverified `iss` matches `OIDC_ISSUER`, it is validated strictly — a failure returns 401 and never falls through to the API-key path. A Bearer from a *different* issuer (e.g. a SMART launch token) is routed to SMART introspection instead.
+**Downgrade guard:** if a Bearer token's unverified `iss` matches `OIDC_ISSUER`, it is validated strictly  a failure returns 401 and never falls through to the API-key path. A Bearer from a *different* issuer (e.g. a SMART launch token) is routed to SMART introspection instead.
 
 **Azure AD swap:** point `OIDC_ISSUER`/`OIDC_AUDIENCE` at the tenant and set `OIDC_ROLE_CLAIM_PATH=roles`. No code changes.
 

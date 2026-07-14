@@ -5,7 +5,7 @@
   that the API (which reads YAML from MEDANON_USER_CONFIG_DIR) can serve them
   alongside the system bundled profiles.
 
-  Note: profiles uploaded later via the API are NOT durable in this chart —
+  Note: profiles uploaded later via the API are NOT durable in this chart 
   they must be added to files/user-configs/ and re-released. For full
   persistence, replace this ConfigMap with a PVC.
 */ -}}

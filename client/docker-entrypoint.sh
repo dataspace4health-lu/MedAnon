@@ -9,7 +9,7 @@
 #   1. If a real cert is mounted at /etc/nginx/certs/tls.{crt,key}, use it.
 #   2. Otherwise generate a self-signed cert covering TLS_SAN (first boot only;
 #      persisted in the ui-certs volume so the fingerprint stays stable across
-#      restarts — users only accept the browser warning once).
+#      restarts  users only accept the browser warning once).
 #
 # For production, mount a CA-signed cert into /etc/nginx/certs to replace the
 # self-signed one (no rebuild needed).
@@ -25,7 +25,7 @@ KEY="$CERT_DIR/tls.key"
 TLS_SAN="${TLS_SAN:-localhost 127.0.0.1}"
 
 if [ ! -f "$CRT" ] || [ ! -f "$KEY" ]; then
-    echo "[entrypoint] No TLS cert found — generating self-signed cert for: $TLS_SAN"
+    echo "[entrypoint] No TLS cert found  generating self-signed cert for: $TLS_SAN"
 
     # Build subjectAltName: DNS entries for names, IP entries for dotted quads.
     san=""

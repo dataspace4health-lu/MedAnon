@@ -1,5 +1,5 @@
 -- =========================================================================
--- gPAS core schema — PostgreSQL 16
+-- gPAS core schema  PostgreSQL 16
 --
 -- Translated from MySQL 8.0 original (services/gpas/sqls/01_create_database_gpas.sql).
 -- All three databases (gpas, gras, notification_service) live in the same
@@ -75,7 +75,7 @@ CREATE TABLE IF NOT EXISTS stat_value (
 );
 CREATE INDEX IF NOT EXISTS idx_stat_value_id ON stat_value (stat_value_id);
 
--- "sequence" is a PostgreSQL reserved word — table name must be quoted.
+-- "sequence" is a PostgreSQL reserved word  table name must be quoted.
 -- Column names are unquoted (lowercase) to match Hibernate-generated SQL.
 CREATE TABLE IF NOT EXISTS "sequence" (
     seq_name   VARCHAR(50) NOT NULL PRIMARY KEY,

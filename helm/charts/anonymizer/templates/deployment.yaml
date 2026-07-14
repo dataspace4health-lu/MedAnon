@@ -76,24 +76,24 @@ spec:
             - name: http
               containerPort: {{ .Values.port }}
               protocol: TCP
-          # ── Environment — non-secret config ──────────────────────────────────
+          # ── Environment  non-secret config ──────────────────────────────────
           env:
             {{- range $k, $v := .Values.env }}
             - name: {{ $k }}
               value: {{ $v | quote }}
             {{- end }}
-            # RSA key file paths (absolute — WORKDIR is /code/src, keys are at /code/keys)
+            # RSA key file paths (absolute  WORKDIR is /code/src, keys are at /code/keys)
             - name: MEDANON_RSA_PUBLIC_KEY
               value: "/code/keys/id_rsa.pub"
             - name: MEDANON_RSA_PRIVATE_KEY
               value: "/code/keys/id_rsa"
-          # ── Environment — secrets ─────────────────────────────────────────────
+          # ── Environment  secrets ─────────────────────────────────────────────
           envFrom:
             - secretRef:
                 name: {{ include "anonymizer.fullname" . }}-secret
           # ── Volume mounts ─────────────────────────────────────────────────────
           volumeMounts:
-            # Config profiles mounted at /code/config — override the image-baked copies
+            # Config profiles mounted at /code/config  override the image-baked copies
             - name: config
               mountPath: /code/config/config.yaml
               subPath: config.yaml

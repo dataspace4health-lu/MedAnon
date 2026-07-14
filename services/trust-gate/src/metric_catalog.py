@@ -1,13 +1,13 @@
 """Metric catalog + use-case selector (Phase 2).
 
 Two declarative config files under ``config/``:
-  - ``metric_catalog.yaml``     — a documented "metric card" per check (Metric Hub).
-  - ``use_case_profiles.yaml``  — the decision-tree mapping a declared use case to
+  - ``metric_catalog.yaml``      a documented "metric card" per check (Metric Hub).
+  - ``use_case_profiles.yaml``   the decision-tree mapping a declared use case to
                                   the metric subset (phases) + threshold tweaks.
 
 Selection is governed and transparent: an ``intended_use`` resolves to the phases
 that matter for it (quality is fitness for a declared purpose; Kahn 2016). Unknown
-use cases fall back to all phases — backward compatible with ``phases=None``.
+use cases fall back to all phases  backward compatible with ``phases=None``.
 """
 
 from __future__ import annotations
@@ -51,7 +51,7 @@ def load_use_case_profiles() -> dict[str, dict]:
     return _load_yaml("use_case_profiles.yaml", "use_cases")
 
 
-# Loaded once at import — small, static config (mirrors rules.load_config).
+# Loaded once at import  small, static config (mirrors rules.load_config).
 _CATALOG: dict[str, dict] = load_metric_catalog()
 _USE_CASES: dict[str, dict] = load_use_case_profiles()
 
@@ -74,13 +74,13 @@ def resolve_use_case(
     """Resolve a declared use case to (phases, threshold_overrides).
 
     Returns ``(None, {})`` for an unknown/empty use case so the caller runs all
-    phases with no overrides — a typo can never silently narrow the audit.
+    phases with no overrides  a typo can never silently narrow the audit.
     """
     if not use_case:
         return None, {}
     profile = _USE_CASES.get(use_case.strip())
     if not profile:
-        _log.info("unknown use_case %r — falling back to all phases", use_case)
+        _log.info("unknown use_case %r  falling back to all phases", use_case)
         return None, {}
     phases = profile.get("phases") or None
     thresholds = profile.get("thresholds") or {}

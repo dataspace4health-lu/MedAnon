@@ -740,7 +740,7 @@ export default function FormatProcessPage() {
                           <td className="px-4 py-2.5">
                             <div className="flex flex-wrap gap-1">
                               {col.samples.length === 0 ? (
-                                <span className="text-xs text-muted-foreground/60">—</span>
+                                <span className="text-xs text-muted-foreground/60"></span>
                               ) : (
                                 col.samples.slice(0, 3).map((s, i) => (
                                   <span

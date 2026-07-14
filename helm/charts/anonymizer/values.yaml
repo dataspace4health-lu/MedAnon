@@ -1,18 +1,18 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# MedAnon Anonymizer Helm Chart — default values
+# MedAnon Anonymizer Helm Chart  default values
 #
 # Customise with --set / -f my-values.yaml.
 # When deployed via the fhir-diet umbrella chart, prefix keys with "anonymizer."
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Helm global values — automatically populated by a parent (umbrella) chart.
+# Helm global values  automatically populated by a parent (umbrella) chart.
 # These defaults are only active when the chart is installed standalone.
 global:
   registry: ""
   imagePullPolicy: ""
   imagePullSecrets: []
 
-# Container registry prefix — prepended to the image name.
+# Container registry prefix  prepended to the image name.
 # Leave empty to pull by image name directly.
 # Sub-chart: overridden by global.registry from the parent if set.
 registry: ""
@@ -39,15 +39,15 @@ configProfile: config_gpas.yaml
 
 # ─── gPAS dependency ──────────────────────────────────────────────────────────
 # When non-empty, an initContainer waits for gPAS TCP before the anonymizer
-# starts — mirroring docker-compose depends_on: gpas: condition: service_started.
+# starts  mirroring docker-compose depends_on: gpas: condition: service_started.
 # Set to the gPAS Kubernetes Service name, e.g. "<release>-gpas".
 # Leave empty when deploying standalone against an external gPAS (no wait).
 gpasServiceName: ""
 gpasPort: 8080
 
-# ─── Environment — non-secret config ─────────────────────────────────────────
+# ─── Environment  non-secret config ─────────────────────────────────────────
 env:
-  # gPAS TTP-FHIR gateway URL — required when using config_gpas.yaml.
+  # gPAS TTP-FHIR gateway URL  required when using config_gpas.yaml.
   # Use the in-cluster Service name, e.g.: http://<release>-gpas:8080/ttp-fhir/fhir/gpas
   GPAS_URL: ""
   GPAS_DOMAIN: "TESTING"
@@ -74,7 +74,7 @@ env:
   # from the shared BLPOP queue. Raise for compute-heavy deployments.
   MEDANON_JOB_WORKERS: "3"
 
-  # Include transformation manifest in meta.tag (default off — opt-in).
+  # Include transformation manifest in meta.tag (default off  opt-in).
   # Set to "true" to embed a per-resource transformation log for audit/UI use.
   MEDANON_MANIFEST_ENABLED: "false"
 
@@ -85,7 +85,7 @@ secrets:
   MEDANON_HASH_KEY: ""
 
   # gPAS credentials (only needed if gPAS FHIR API has auth enabled).
-  # REQUIRED for non-local deployments — set via --set or a sealed secret.
+  # REQUIRED for non-local deployments  set via --set or a sealed secret.
   # Must match the password seeded in services/gpas/sqls/02_init_database_gras_for_gpas.sql.
   GPAS_BASIC_USER: ""
   GPAS_BASIC_PASS: ""
@@ -135,13 +135,13 @@ monitoring:
       p95LatencySeconds: "2"        # request p95 ceiling
       gpasCacheHitRate: "0.5"       # below this triggers info alert
 
-# ─── Redis sidecar (opt-in — shared cache + job queue) ────────────────────────
+# ─── Redis sidecar (opt-in  shared cache + job queue) ────────────────────────
 # When enabled, a Redis sidecar is added to the anonymizer Pod and
 # MEDANON_REDIS_URL is injected pointing to localhost:6379. This activates:
 #   1. L2 gPAS pseudonym cache shared across all replicas.
 #   2. Scalable job queue (BLPOP event-driven worker replaces SQLite polling).
 #
-# The Redis sidecar is NOT a persistent store — data loss on Pod restart is expected.
+# The Redis sidecar is NOT a persistent store  data loss on Pod restart is expected.
 # For production HA deployments consider a standalone Redis cluster instead.
 redis:
   enabled: false
@@ -159,7 +159,7 @@ redis:
 # Name of an existing PVC to mount at /output (shared with worker pod).
 # Both anonymizer and worker must reference the same PVC so results written
 # by the worker are readable by the API. Leave empty to use emptyDir (not
-# suitable for multi-pod deployments — worker results won't be visible to API).
+# suitable for multi-pod deployments  worker results won't be visible to API).
 sharedOutputPVC: ""
 
 # Network policy configuration

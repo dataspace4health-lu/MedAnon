@@ -69,8 +69,8 @@
           "refId": "D"
         }
       ],
-      "title": "Stage Duration — p50 (time-series)",
-      "description": "phi_detection and pseudonymization run concurrently — their lines overlap when both are active. Sustained gap between them reveals which is the bottleneck.",
+      "title": "Stage Duration  p50 (time-series)",
+      "description": "phi_detection and pseudonymization run concurrently  their lines overlap when both are active. Sustained gap between them reveals which is the bottleneck.",
       "type": "timeseries"
     },
 
@@ -128,7 +128,7 @@
           "refId": "D"
         }
       ],
-      "title": "Stage Duration — p95 (current)",
+      "title": "Stage Duration  p95 (current)",
       "type": "stat"
     },
 
@@ -230,13 +230,13 @@
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "expr": "sum(rate(medanon_gpas_calls_total{status=\"ok\"}[2m])) by (operation)",
-          "legendFormat": "ok — {{operation}}",
+          "legendFormat": "ok  {{operation}}",
           "refId": "A"
         },
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "expr": "sum(rate(medanon_gpas_calls_total{status=\"error\"}[2m])) by (operation)",
-          "legendFormat": "error — {{operation}}",
+          "legendFormat": "error  {{operation}}",
           "refId": "B"
         }
       ],
@@ -359,7 +359,7 @@
           "refId": "B"
         }
       ],
-      "title": "Worker — Active Jobs and Completion Rate",
+      "title": "Worker  Active Jobs and Completion Rate",
       "type": "timeseries"
     },
 
@@ -382,7 +382,7 @@
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "expr": "sum(rate(medanon_proxy_retries_total[2m])) by (upstream, reason)",
-          "legendFormat": "{{upstream}} — {{reason}}",
+          "legendFormat": "{{upstream}}  {{reason}}",
           "refId": "A"
         }
       ],
@@ -395,7 +395,7 @@
       "collapsed": false,
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 29 },
       "id": 104,
-      "title": "Reliability — Circuit Breakers and Bulkheads",
+      "title": "Reliability  Circuit Breakers and Bulkheads",
       "type": "row"
     },
 
@@ -456,17 +456,17 @@
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "expr": "sum(rate(medanon_bulkhead_rejected_total[2m])) by (upstream)",
-          "legendFormat": "rejected — {{upstream}}",
+          "legendFormat": "rejected  {{upstream}}",
           "refId": "A"
         },
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "expr": "sum(rate(medanon_bulkhead_acquired_total[2m])) by (upstream)",
-          "legendFormat": "acquired — {{upstream}}",
+          "legendFormat": "acquired  {{upstream}}",
           "refId": "B"
         }
       ],
-      "title": "Bulkhead Pressure — Acquired vs Rejected per Upstream",
+      "title": "Bulkhead Pressure  Acquired vs Rejected per Upstream",
       "description": "Sustained rejections mean the upstream is saturated. Raise BULKHEAD_<NAME>_MAX_CONCURRENT or scale the upstream service.",
       "type": "timeseries"
     }
@@ -493,7 +493,7 @@
   "time": { "from": "now-30m", "to": "now" },
   "timepicker": {},
   "timezone": "browser",
-  "title": "MedAnon — De-identification Pipeline",
+  "title": "MedAnon  De-identification Pipeline",
   "uid": "medanon-pipeline-perf",
   "version": 1
 }

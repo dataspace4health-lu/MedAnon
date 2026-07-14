@@ -3,12 +3,12 @@
 Goes beyond structural conformance to evaluate whether the clinical data is
 *logical* and *distributionally plausible*:
 
-  - 3B.1 demographic stratification — age band x sex (clinical reference ranges
+  - 3B.1 demographic stratification  age band x sex (clinical reference ranges
     are demographic-dependent: a normal pediatric value must not be judged against
     an adult pool).
-  - 3B.2 stratified outlier signal — robust, reproducible, ADVISORY (statistical /
+  - 3B.2 stratified outlier signal  robust, reproducible, ADVISORY (statistical /
     batch-relative, so it never moves the verdict; Phase 1.5).
-  - 3B.3 clinical-logic coherence — deterministic cross-field rule (a measurement
+  - 3B.3 clinical-logic coherence  deterministic cross-field rule (a measurement
     cannot predate the person's birth); this one DOES drive the verdict.
 
 No universal clinical ranges are hardcoded; plausibility is distribution-driven
@@ -141,7 +141,7 @@ def value_distributions(
     Returns ``(observation_value_stats, observation_value_stats_stratified)``:
     a flat distribution per measurement concept (for the analyst-facing
     box-plot/histogram) and the same conditioned on the age-band x sex stratum
-    (the demographically-honest view — a normal pediatric value is not pooled
+    (the demographically-honest view  a normal pediatric value is not pooled
     against adults). Built from the same numeric measurements the outlier check
     uses, so the graphs match the verdict.
     """
@@ -151,7 +151,7 @@ def value_distributions(
         flat.setdefault((concept, unit), []).append(v)
         strat.setdefault((concept, unit, stratum), []).append(v)
 
-    # max_distinct=None (default) keeps every concept — the analyst sees the whole
+    # max_distinct=None (default) keeps every concept  the analyst sees the whole
     # clinical panel. A positive limit is honoured for callers that want the top-N.
     flat_lim = max_distinct
     strat_lim = max_distinct * 4 if max_distinct is not None else None

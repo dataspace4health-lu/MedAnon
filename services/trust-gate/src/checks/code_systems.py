@@ -1,4 +1,4 @@
-"""Offline code well-formedness validation (verification — no external server).
+"""Offline code well-formedness validation (verification  no external server).
 
 Validates a (system, code) pair's *format* and *check digit* for the major
 clinical code systems, catching malformed or mistyped codes without a terminology
@@ -28,7 +28,7 @@ SNOMED = "http://snomed.info/sct"
 ICD10 = "http://hl7.org/fhir/sid/icd-10"
 ICD10CM = "http://hl7.org/fhir/sid/icd-10-cm"
 RXNORM = "http://www.nlm.nih.gov/research/umls/rxnorm"
-# EU code systems (additive — US systems above stay). ATC is the EU medication
+# EU code systems (additive  US systems above stay). ATC is the EU medication
 # standard (vs RxNorm); EDQM Standard Terms cover dose form / route / units of
 # presentation for ePrescription/eDispensation; ICD-10-GM is the German diagnosis
 # modification (same structure as WHO ICD-10).
@@ -43,7 +43,7 @@ _LOINC_RE = re.compile(r"^\d{1,8}-\d$")
 _ATC_RE = re.compile(r"^[A-Z](\d{2}([A-Z]([A-Z](\d{2})?)?)?)?$")
 # EDQM Standard Terms concept codes are numeric identifiers.
 _EDQM_RE = re.compile(r"^\d{3,11}$")
-# LOINC Answer (LA) and Part (LP) codes — valid LOINC content used by survey /
+# LOINC Answer (LA) and Part (LP) codes  valid LOINC content used by survey /
 # social-history / answer-list Observations (Synthea emits these heavily). They
 # have the well-defined form L[AP]<digits>-<digit>; their check digit is NOT the
 # plain numeric Mod-10, so we validate the format and do not assert a check digit
@@ -106,7 +106,7 @@ def _loinc_ok(code: str) -> bool:
     exists to catch), mirroring the SNOMED Verhoeff treatment.
 
     LOINC Answer (LA) / Part (LP) codes are accepted on their well-defined format
-    without a check-digit assertion — they are valid LOINC content but do not use
+    without a check-digit assertion  they are valid LOINC content but do not use
     the plain numeric Mod-10, so asserting it would false-flag legitimate codes.
     """
     if _LOINC_LALP_RE.match(code):
@@ -140,4 +140,4 @@ def validate_code_format(system: str, code: str) -> bool | None:
         return bool(_ATC_RE.match(code))
     if system == EDQM:
         return bool(_EDQM_RE.match(code))
-    return None  # e.g. UCUM and others — needs a real terminology server
+    return None  # e.g. UCUM and others  needs a real terminology server

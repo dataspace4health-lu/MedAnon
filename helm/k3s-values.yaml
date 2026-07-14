@@ -1,5 +1,5 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# MedAnon — K3s override values
+# MedAnon  K3s override values
 #
 # Use this file when deploying to a K3s cluster (single-node or edge).
 # It handles the three main differences from a full Kubernetes cluster:
@@ -27,7 +27,7 @@
 
 # ─── Global ───────────────────────────────────────────────────────────────────
 global:
-  # No registry prefix — images are imported directly into the k3s containerd store.
+  # No registry prefix  images are imported directly into the k3s containerd store.
   registry: ""
   # Never pull from a remote registry; use only what was imported with k3s ctr.
   imagePullPolicy: Never
@@ -41,10 +41,10 @@ global:
 # ─── Anonymizer ───────────────────────────────────────────────────────────────
 anonymizer:
   tag: "latest"
-  # Two replicas — share work via Redis Streams job queue.
+  # Two replicas  share work via Redis Streams job queue.
   replicas: 2
   networkPolicy:
-    # K3s uses Traefik (kube-system) as ingress controller — must allow it in.
+    # K3s uses Traefik (kube-system) as ingress controller  must allow it in.
     additionalIngressNamespaces:
       - kube-system
   # Wait for gPAS to be ready before the anonymizer starts.
@@ -58,7 +58,7 @@ anonymizer:
     FHIR_TARGET_URL: "http://medanon-fhir-target:8080/fhir"
     ANALYTICS_SERVICE_URL: "http://medanon-analytics:8100"
     NLP_SERVICE_URL: "http://medanon-nlp:8200"
-    # Standalone Redis chart — must be in env: (not secrets) because the umbrella
+    # Standalone Redis chart  must be in env: (not secrets) because the umbrella
     # values.yaml declares MEDANON_REDIS_URL="" in env and K8s env takes precedence
     # over envFrom (would null out a secret-only value).
     MEDANON_REDIS_URL: "redis://:medanon_redis_dev@medanon-redis:6379/0"
@@ -96,11 +96,11 @@ anonymizer:
 app-db:
   secrets:
     password: "medanon_dev"
-  # SHA256 of the bootstrap admin API key — seeded into medanon.api_keys at DB init.
+  # SHA256 of the bootstrap admin API key  seeded into medanon.api_keys at DB init.
   # Key value: medanon_admin_dev_key  (change in production!)
   #
   # When MEDANON_APP_DB_URL is set the anonymizer wires in PostgresApiKeyStore,
-  # which means X-API-Key auth IS REQUIRED on every protected endpoint —
+  # which means X-API-Key auth IS REQUIRED on every protected endpoint 
   # callers without a valid key receive 401 Unauthorized.
   #
   # For the React UI: open the app, go to Settings → API Key, paste:
@@ -121,7 +121,7 @@ worker:
     FHIR_SOURCE_URL: "http://medanon-fhir-server:8080/fhir"
     NLP_SERVICE_URL: "http://medanon-nlp:8200"
     ANALYTICS_SERVICE_URL: "http://medanon-analytics:8100"
-    # Same Redis as anonymizer — enables RedisJobStore (Streams + consumer groups)
+    # Same Redis as anonymizer  enables RedisJobStore (Streams + consumer groups)
     MEDANON_REDIS_URL: "redis://:medanon_redis_dev@medanon-redis:6379/0"
     # ─── High-volume tuning (workers do the heavy lifting) ───────────────────────────
     MEDANON_PARALLEL_WORKERS: "4"
@@ -201,7 +201,7 @@ fhir-server:
   networkPolicy:
     additionalIngressNamespaces:
       - kube-system
-  # Cap JVM heap — saves ~400MB vs default (was ~938Mi at idle, now ~700Mi)
+  # Cap JVM heap  saves ~400MB vs default (was ~938Mi at idle, now ~700Mi)
   javaOpts: "-Xms128m -Xmx768m"
   resources:
     requests:
@@ -228,7 +228,7 @@ fhir-target:
 # ─── gPAS ─────────────────────────────────────────────────────────────────────
 gpas:
   tag: "latest"
-  # 2 replicas — gPAS replicas share the same PostgreSQL backend so they
+  # 2 replicas  gPAS replicas share the same PostgreSQL backend so they
   # serve pseudonymisation requests in parallel. Stickiness is only needed
   # for the JSF web console; API/REST traffic is round-robin.
   replicas: 2
@@ -273,7 +273,7 @@ ui:
   fhirServerServiceName: "medanon-fhir-server"
   fhirTargetServiceName: "medanon-fhir-target"
   fhirTargetPort: 8080
-  # Inject the dev API key via nginx — no browser Settings config needed.
+  # Inject the dev API key via nginx  no browser Settings config needed.
   injectApiKey: "medanon_admin_dev_key"
   networkPolicy:
     additionalIngressNamespaces:

@@ -81,7 +81,7 @@ def compute_coverage(det_checks: list[CheckResult], ctx: AssessmentContext) -> d
     # Verification (internal consistency) vs validation (against an external
     # reference) roll-up (Kahn 2016). In the default deployment every
     # validation-context check is NA (no validator/terminology/reference), so the
-    # verdict is verification-only — surface that rather than letting the grade
+    # verdict is verification-only  surface that rather than letting the grade
     # read as external certification.
     verification_assessed = sum(
         1 for c in det_checks if c.context == "verification" and c.result != RESULT_NA
@@ -105,7 +105,7 @@ def compute_coverage(det_checks: list[CheckResult], ctx: AssessmentContext) -> d
         },
         "external_validation_performed": validation_assessed > 0,
     }
-    # Structural conformance validates every resource (RC4) — disclose how many
+    # Structural conformance validates every resource (RC4)  disclose how many
     # were actually validated (the structural check's applicable count) so a PASS
     # is read as whole-dataset, not sampled.
     if (
@@ -124,7 +124,7 @@ def compute_coverage(det_checks: list[CheckResult], ctx: AssessmentContext) -> d
 
 def coverage_caveat(coverage: dict | None) -> str:
     """Fitness caveat naming what limited the assessment: depth capabilities that
-    did not run, phases that were descoped, and — most importantly — whether ANY
+    did not run, phases that were descoped, and  most importantly  whether ANY
     external validation occurred. Without this, a grade computed entirely from
     verification (internal-consistency) checks reads as external certification.
     """

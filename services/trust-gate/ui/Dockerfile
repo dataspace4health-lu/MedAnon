@@ -1,5 +1,5 @@
 # Build context: services/trust-gate/ui/
-# Standalone static frontend for the Trust Gate service — no build toolchain.
+# Standalone static frontend for the Trust Gate service  no build toolchain.
 # Static assets (index.html + styles.css + app.js) served by nginx and proxied
 # to trust-gate:8400.
 FROM nginx:1.27-alpine

@@ -252,7 +252,7 @@ export default function TrustProfilesPage() {
                     </Badge>
                   )}
                 </CardTitle>
-                <CardDescription>{p.description || "—"}</CardDescription>
+                <CardDescription>{p.description || ""}</CardDescription>
               </CardHeader>
               <CardContent className="space-y-3">
                 {p.intended_use && (

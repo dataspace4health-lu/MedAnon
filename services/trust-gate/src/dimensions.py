@@ -1,7 +1,7 @@
 """Data-quality dimension taxonomy + grading (DAMA DMBOK + ISO/IEC 25012).
 
 Maps each atomic check to a recognized DQ *dimension* so the passport can present
-a per-dimension scorecard with a letter grade — the consumer-facing "is this data
+a per-dimension scorecard with a letter grade  the consumer-facing "is this data
 fit for secondary use?" view layered on top of the Kahn category measurement.
 
 Dimensions are the standard set (DAMA DMBOK DQ dimensions; ISO/IEC 25012 data
@@ -23,7 +23,7 @@ CURRENCY = "currency"
 PROVENANCE = "provenance"
 # Believability of values (Wang & Strong 1996 "believability"; Kahn 2016
 # plausibility). A distinct dimension because a statistical/range implausibility
-# is NOT accuracy (which requires agreement with a real-world gold standard) — the
+# is NOT accuracy (which requires agreement with a real-world gold standard)  the
 # passport's own caveat states a plausibility PASS does not certify clinical truth.
 PLAUSIBILITY = "plausibility"
 
@@ -92,7 +92,7 @@ def dimension_for_builtin(check_id: str) -> str:
 
 
 def dimension_for_kind(kind: str) -> str:
-    # Unknown kinds are left UNMAPPED ("") — mirroring dimension_for_builtin — so a
+    # Unknown kinds are left UNMAPPED ("")  mirroring dimension_for_builtin  so a
     # novel custom rule does not silently inflate a dimension (the old ACCURACY
     # default did exactly that).
     return _KIND_DIM.get(kind, "")
@@ -113,7 +113,7 @@ def grade_for(score: float | None) -> str | None:
 
     The two cited cut-points are the policy floors, not magic numbers; A and D are
     conventional excellent/marginal marks. The authoritative verdict remains the
-    decision + fitness statement — the grade is the descriptive summary.
+    decision + fitness statement  the grade is the descriptive summary.
     """
     if score is None:
         return None

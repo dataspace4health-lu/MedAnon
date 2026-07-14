@@ -266,8 +266,8 @@ Two independent checks run in sequence:
 
 Blocks regardless of composite score if any resource has:
 
-- `text_risk > 0` — PII regex or NER detected a pattern (SSN, phone, email, ISO date, IP, MRN) in output text. A resource scoring Grade A still fails if a single field contains a phone number.
-- `identifier_risk > 0` — a HIPAA-sensitive field exists in the resource but no de-identification rule touched it. Behavior is controlled by `MEDANON_GATE_IDENTIFIER_MODE`:
+- `text_risk > 0`  PII regex or NER detected a pattern (SSN, phone, email, ISO date, IP, MRN) in output text. A resource scoring Grade A still fails if a single field contains a phone number.
+- `identifier_risk > 0`  a HIPAA-sensitive field exists in the resource but no de-identification rule touched it. Behavior is controlled by `MEDANON_GATE_IDENTIFIER_MODE`:
   - `block` (default): hard block on any uncovered HIPAA-sensitive field.
   - `warn`: release with a log warning when the only finding is uncovered HIPAA fields and no actual PII pattern was detected.
 

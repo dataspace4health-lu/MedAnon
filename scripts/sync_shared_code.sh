@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# sync_shared_code.sh — Detect drift between shared code across services.
+# sync_shared_code.sh  Detect drift between shared code across services.
 #
 # Compares:
 #   1. HEALTHCARE_ENTITIES catalogue between anonymizer and NLP service
@@ -41,7 +41,7 @@ NLP_RECOGNIZERS="$REPO_ROOT/services/nlp/src/recognizers.py"
 extract_entities() {
     # Extract HEALTHCARE_ENTITIES list entries.
     # For the anonymizer file: grab lines between HEALTHCARE_ENTITIES and the closing bracket.
-    # For the NLP recognizers: same pattern — only the catalogue list, not labels_to_ignore etc.
+    # For the NLP recognizers: same pattern  only the catalogue list, not labels_to_ignore etc.
     python3 -c "
 import re, sys
 text = open('$1').read()
@@ -73,7 +73,7 @@ if [[ -f "$ANON_ENTITIES" && -f "$NLP_RECOGNIZERS" ]]; then
         ok "HEALTHCARE_ENTITIES catalogue in sync ($(echo "$ANON_LIST" | wc -l) entities)"
     fi
 else
-    warn "Cannot check entity catalogue — file(s) missing"
+    warn "Cannot check entity catalogue  file(s) missing"
 fi
 
 # ─── 2. Analytics shared files (build-time copies) ────────────────────────
@@ -100,7 +100,7 @@ for pair in "${ANALYTICS_PAIRS[@]}"; do
 
     if [[ ! -f "$DST" ]]; then
         # Analytics service may use Dockerfile COPY at build time only
-        ok "$BASENAME — analytics uses build-time COPY (no local duplicate)"
+        ok "$BASENAME  analytics uses build-time COPY (no local duplicate)"
         continue
     fi
 
@@ -124,12 +124,12 @@ done
 
 # ─── 3. Scoring shared files (manually-synced microservice copies) ───────
 # 6 logically-identical pairs: anonymizer's pipeline/scoring/ ↔ services/scoring/src/.
-# These are NOT build-time COPYs — they're hand-maintained duplicates because
+# These are NOT build-time COPYs  they're hand-maintained duplicates because
 # the scoring microservice ships as a standalone container with no dependency
 # on the anonymizer image.  Drift here is a recurring source of bugs (e.g. the
 # decade-year k-anonymity fix had to be applied twice).
 #
-# The two trees use different import roots — anonymizer uses qualified imports
+# The two trees use different import roots  anonymizer uses qualified imports
 # (`from pipeline.scoring.models import …`, `from analytics.risk import …`),
 # the scoring service uses flat imports (`from models import …`, `from risk
 # import …`) plus a metrics stub.  We therefore compare the *normalized*
@@ -165,7 +165,7 @@ for pair in "${SCORING_PAIRS[@]}"; do
         continue
     fi
     if [[ ! -f "$DST" ]]; then
-        fail "$LABEL — destination missing: $DST"
+        fail "$LABEL  destination missing: $DST"
         continue
     fi
 
@@ -177,7 +177,7 @@ for pair in "${SCORING_PAIRS[@]}"; do
         echo "    target: $DST"
         echo "    Diff (after stripping imports):"
         diff <(normalize_scoring "$SRC") <(normalize_scoring "$DST") | head -20 | sed 's/^/      /' || true
-        echo "    NOTE: --fix is unsafe here — import paths differ between trees."
+        echo "    NOTE: --fix is unsafe here  import paths differ between trees."
         echo "    Apply the missing change manually to the target file."
     fi
 done
@@ -219,7 +219,7 @@ case "$TRUST_SYNC" in
     *PHASE_DRIFT*|*USECASE_DRIFT*|*ERROR*)
         fail "Trust Gate id drift (anonymizer trust_profile.py vs trust-gate):"
         echo "$TRUST_SYNC" | sed 's/^/    /' ;;
-    *)            warn "Cannot check Trust Gate id sync — unexpected output: $TRUST_SYNC" ;;
+    *)            warn "Cannot check Trust Gate id sync  unexpected output: $TRUST_SYNC" ;;
 esac
 
 # ─── 4. Hash manifest ─────────────────────────────────────────────────────
@@ -256,6 +256,6 @@ echo ""
 if [[ "$DRIFT" -eq 0 ]]; then
     printf "${GREEN}All shared code is in sync.${NC}\n"
 else
-    printf "${RED}Drift detected — fix before building Docker images.${NC}\n"
+    printf "${RED}Drift detected  fix before building Docker images.${NC}\n"
 fi
 exit "$DRIFT"

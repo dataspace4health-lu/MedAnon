@@ -3,11 +3,11 @@
 EHDS Regulation Art. 56 mandates a quality-and-utility label for datasets offered
 for secondary use. This derives a compact, FAIR-aligned label from a passport:
 
-  - quality   — correctness verdict (grade + decision).
-  - utility    — fitness-for-research proxy from completeness/richness.
-  - maturity   — CMM-style level from measurement coverage + provenance +
+  - quality    correctness verdict (grade + decision).
+  - utility     fitness-for-research proxy from completeness/richness.
+  - maturity    CMM-style level from measurement coverage + provenance +
                  reproducibility.
-  - fair       — interoperable / reusable signals.
+  - fair        interoperable / reusable signals.
 
 Derived purely from an already-computed passport dict, so it adds no new scoring
 and stays drift-free.
@@ -19,7 +19,7 @@ LABEL_SCHEME = "EHDS Art.56 quality+utility+maturity"
 
 # CMM maturity ceiling implied by how much was actually measured. A structural-only
 # verdict is, by definition, not a comprehensive measurement, so it cannot claim a
-# high maturity level no matter how clean the structural checks were — otherwise
+# high maturity level no matter how clean the structural checks were  otherwise
 # the EHDS label would over-state assurance (the whole point of the coverage signal).
 _DEPTH_MATURITY_CAP: dict[str, int] = {"structural_only": 2, "partial": 4}
 

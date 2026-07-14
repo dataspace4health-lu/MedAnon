@@ -16,7 +16,7 @@ function getScore(run: ProcessingRun): number | null {
 }
 
 function ScoreBadge({ value }: { value: number | null }) {
-  if (value == null) return <span className="text-xs text-muted-foreground">—</span>;
+  if (value == null) return <span className="text-xs text-muted-foreground"></span>;
   const color =
     value >= 80 ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400' :
     value >= 60 ? 'bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-400' :
@@ -116,7 +116,7 @@ export function RunsTable({ runs }: { runs: ProcessingRun[] }) {
                   </td>
                   <td className="px-4 py-3 text-xs tabular-nums">{run.resource_count.toLocaleString()}</td>
                   <td className="px-4 py-3 text-xs tabular-nums text-muted-foreground">
-                    {run.duration_ms != null ? `${(run.duration_ms / 1000).toFixed(1)}s` : '—'}
+                    {run.duration_ms != null ? `${(run.duration_ms / 1000).toFixed(1)}s` : ''}
                   </td>
                   <td className="px-4 py-3">
                     <ScoreBadge value={getScore(run)} />

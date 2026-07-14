@@ -20,7 +20,7 @@ imports `engine`, and the domain model imports nothing from the layers above it.
    │               decide → coverage → fitness → assemble the QualityPassport.
    ▼
  verdict/        The verdict layer (pure functions over the check list):
-   │  context      AssessmentContext — the immutable inputs (Parameter Object)
+   │  context      AssessmentContext  the immutable inputs (Parameter Object)
    │  registry     the FHIR check suite as a list of strategies (Strategy pattern)
    │  runner       iterates the registry + per-sector / per-phase sub-reports
    │  scoring      category/overall roll-up, dimension scorecard, grades, advisory
@@ -33,7 +33,7 @@ imports `engine`, and the domain model imports nothing from the layers above it.
    │  completeness, plausibility, timeliness, accuracy, identity, governance,
    │  code_systems, clinical_eval (OMOP), dqd (OMOP)
    ▼
- domain          passport.py — CheckResult, CategoryResult, QualityPassport, vocab.
+ domain          passport.py  CheckResult, CategoryResult, QualityPassport, vocab.
                  dimensions.py (DAMA/ISO), phases.py (selectable suites), constants.py.
                  Data only; no I/O, no rendering, no policy.
 

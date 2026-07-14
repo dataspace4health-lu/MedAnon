@@ -1,4 +1,4 @@
-"""Audit phase taxonomy — groups atomic checks into selectable suites.
+"""Audit phase taxonomy  groups atomic checks into selectable suites.
 
 A *phase* is a named quality concern the user can enable/disable independently so
 the pipeline measures exactly what they want, rather than one generic pass

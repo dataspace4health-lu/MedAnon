@@ -172,7 +172,7 @@ function PillarCard({ label, description, Icon, pct, passed, failed, total }: Pi
             <span className="text-sm font-semibold">{label}</span>
           </div>
           <span className={`text-3xl font-bold tabular-nums leading-none ${textCls}`}>
-            {assessed ? `${display}%` : "—"}
+            {assessed ? `${display}%` : ""}
           </span>
         </div>
 
@@ -251,16 +251,16 @@ function ChecksTable({ checks }: { checks: TrustCheck[] }) {
               <TableCell className="align-top text-right text-xs tabular-nums">
                 {c.applicable > 0
                   ? `${c.violations.toLocaleString()}/${c.applicable.toLocaleString()} (${Math.round(c.violation_fraction * 100)}%)`
-                  : "—"}
+                  : ""}
               </TableCell>
               <TableCell className="align-top text-right text-xs tabular-nums text-muted-foreground">
                 {Math.round(c.threshold * 100)}%
               </TableCell>
               <TableCell className="align-top whitespace-normal break-words text-xs text-muted-foreground">
-                {c.skipped ? c.skip_reason : (c.description || "—")}
+                {c.skipped ? c.skip_reason : (c.description || "")}
               </TableCell>
               <TableCell className="align-top whitespace-normal break-words text-xs text-muted-foreground">
-                {c.skipped ? "—" : (c.recommendation || "—")}
+                {c.skipped ? "" : (c.recommendation || "")}
               </TableCell>
             </TableRow>
           ))}
@@ -361,7 +361,7 @@ function FindingGroup({
                         <TableCell className="font-mono text-xs">{loc.resource}</TableCell>
                         <TableCell className="font-mono text-xs text-muted-foreground">{loc.field}</TableCell>
                         <TableCell className="font-mono text-xs">
-                          {loc.value ?? <span className="text-muted-foreground/60" title="Withheld, a field value can be PHI">—</span>}
+                          {loc.value ?? <span className="text-muted-foreground/60" title="Withheld, a field value can be PHI"></span>}
                         </TableCell>
                         <TableCell className="text-xs">{loc.problem}</TableCell>
                       </TableRow>
@@ -561,11 +561,11 @@ function EhdsLabelCard({ label }: { label: EhdsLabel }) {
       </CardHeader>
       <CardContent>
         <div className="grid gap-3 sm:grid-cols-3">
-          <LabelTile cap="Quality" val={String(q.decision ?? q.grade ?? "—")}
+          <LabelTile cap="Quality" val={String(q.decision ?? q.grade ?? "")}
             sub={q.score != null ? `${Math.round(q.score)}% checks passing` : "purpose-bound verdict"} />
-          <LabelTile cap="Utility" val={String(u.tier ?? "—")}
+          <LabelTile cap="Utility" val={String(u.tier ?? "")}
             sub={u.score != null ? `${Math.round(u.score)}% fit for declared use` : "fitness for declared use"} />
-          <LabelTile cap="Maturity" val={`Level ${m.level ?? "—"} / 5`}
+          <LabelTile cap="Maturity" val={`Level ${m.level ?? ""} / 5`}
             sub={Array.isArray(m.basis) ? m.basis.join(", ") : (m.name ?? "data-lifecycle maturity")} />
         </div>
         <div className="mt-3 flex flex-wrap gap-1.5">
@@ -661,7 +661,7 @@ function TriageRow({
                   <TableRow key={i}>
                     <TableCell className="font-mono text-xs">{loc.resource}</TableCell>
                     <TableCell className="font-mono text-xs text-muted-foreground">{loc.field}</TableCell>
-                    <TableCell className="font-mono text-xs">{loc.value ?? <span className="text-muted-foreground/60" title="Withheld, a field value can be PHI">—</span>}</TableCell>
+                    <TableCell className="font-mono text-xs">{loc.value ?? <span className="text-muted-foreground/60" title="Withheld, a field value can be PHI"></span>}</TableCell>
                     <TableCell className="text-xs">{loc.problem}</TableCell>
                   </TableRow>
                 );
@@ -750,11 +750,11 @@ function AuditReport({ passport, audit }: { passport: QualityPassport; audit: Au
   const latest = audit[0] ?? {};
   const identity = {
     dataset_id: passport.dataset_id,
-    provider_id: latest.provider_id ?? "—",
+    provider_id: latest.provider_id ?? "",
     source_model: (passport.source_types ?? []).join(", ") || "fhir",
     assessment_id: latest.assessment_id ?? "(not persisted)",
-    generated_at: passport.generated_at ?? latest.generated_at ?? "—",
-    recorded_at: latest.recorded_at ?? "—",
+    generated_at: passport.generated_at ?? latest.generated_at ?? "",
+    recorded_at: latest.recorded_at ?? "",
     records: passport.resource_count,
   };
   const determinism = {
@@ -807,7 +807,7 @@ function AuditReport({ passport, audit }: { passport: QualityPassport; audit: Au
               {audit.map((r, i) => (
                 <div key={i} className="flex items-center justify-between gap-3 rounded-md border px-3 py-2 text-sm">
                   <span className="font-medium">{r.decision}<span className="ml-2 font-mono text-xs text-muted-foreground">{r.assessment_id}</span></span>
-                  <span className="text-xs text-muted-foreground">recorded {r.recorded_at ?? r.generated_at ?? "—"}</span>
+                  <span className="text-xs text-muted-foreground">recorded {r.recorded_at ?? r.generated_at ?? ""}</span>
                 </div>
               ))}
             </div>

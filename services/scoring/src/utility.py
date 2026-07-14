@@ -1,20 +1,20 @@
-"""Utility Evaluator — continuous data usability metric.
+"""Utility Evaluator  continuous data usability metric.
 
 Measures how much analytical value survives de-identification via seven
 sub-evaluators:
 
-1. Field retention — percentage of fields preserved
-2. Semantic preservation — clinical codes (LOINC, SNOMED) remain valid
-3. Temporal consistency — event date ordering preserved
-4. Information loss — aggregate action severity (cf. NCP / discernibility,
+1. Field retention  percentage of fields preserved
+2. Semantic preservation  clinical codes (LOINC, SNOMED) remain valid
+3. Temporal consistency  event date ordering preserved
+4. Information loss  aggregate action severity (cf. NCP / discernibility,
    Xu et al. 2006; LeFevre et al. 2006)
-5. Pseudonym consistency — ID mapping is injective (no entity collisions),
+5. Pseudonym consistency  ID mapping is injective (no entity collisions),
    so cohort joins survive (ENISA; ISO/TS 25237)
-6. Longitudinal linkability — identity fields pseudonymized deterministically
+6. Longitudinal linkability  identity fields pseudonymized deterministically
    so a subject links across encounters (ENISA; ISO/TS 25237)
 
 Batch-only (``evaluate_batch``):
-7. Distribution fidelity — aggregate distributions agree with source
+7. Distribution fidelity  aggregate distributions agree with source
    (Kahn et al. 2016 *atemporal plausibility*, via total-variation distance)
 """
 
@@ -143,7 +143,7 @@ class UtilityEvaluator:
                         check="field_retention",
                         value=0.5,
                         details={
-                            "reason": "no original and no manifest — indeterminate"
+                            "reason": "no original and no manifest  indeterminate"
                         },
                     )
                 )
@@ -275,7 +275,7 @@ class UtilityEvaluator:
                 Evidence(
                     check="information_loss",
                     value=0.5,
-                    details={"reason": "no manifest entries — indeterminate"},
+                    details={"reason": "no manifest entries  indeterminate"},
                     severity="warning",
                 )
             )
@@ -311,7 +311,7 @@ class UtilityEvaluator:
 
         This is the *utility* facet of reference handling (relational-conformance
         format validity is checked by QualityEvaluator under Kahn relational
-        conformance — it is not duplicated here). For analytic linkage to
+        conformance  it is not duplicated here). For analytic linkage to
         survive, the mapping original-ID → pseudonym-ID must be **injective**:
         N distinct referenced IDs in the source must remain N distinct
         referenced IDs in the output. A collision (two source IDs → one
@@ -335,7 +335,7 @@ class UtilityEvaluator:
                 Evidence(
                     check="pseudonym_consistency",
                     value=1.0,
-                    details={"reason": "no original — injectivity not measurable"},
+                    details={"reason": "no original  injectivity not measurable"},
                 )
             )
             return 1.0
@@ -371,7 +371,7 @@ class UtilityEvaluator:
         )
         return score
 
-    # ----- 2f: Distribution fidelity — Kahn atemporal plausibility ----------
+    # ----- 2f: Distribution fidelity  Kahn atemporal plausibility ----------
 
     def _statistical_distribution_fidelity(
         self,
@@ -404,7 +404,7 @@ class UtilityEvaluator:
                 Evidence(
                     check="stat_distribution_fidelity",
                     value=1.0,
-                    details={"reason": "no originals available — not measurable"},
+                    details={"reason": "no originals available  not measurable"},
                 )
             )
             return 1.0
@@ -492,7 +492,7 @@ class UtilityEvaluator:
 
         ENISA (*Pseudonymisation techniques and best practices*) and ISO/TS
         25237 require that, where longitudinal linkage is intended, the same
-        input must map to the same pseudonym deterministically — otherwise a
+        input must map to the same pseudonym deterministically  otherwise a
         subject's records across encounters can no longer be joined. We cannot
         verify cross-encounter consistency from a single resource, but we can
         check that the transformation chosen for identity fields is itself
@@ -516,7 +516,7 @@ class UtilityEvaluator:
                     check="longitudinal_linkability",
                     value=0.0,
                     details={
-                        "reason": "id field absent — longitudinal tracking impossible"
+                        "reason": "id field absent  longitudinal tracking impossible"
                     },
                     severity="warning",
                 )
@@ -529,12 +529,12 @@ class UtilityEvaluator:
         _IDENTITY_FIELDS = frozenset({"id", "identifier"})
 
         if not manifest_entries:
-            # No manifest — assume deterministic (can't tell either way).
+            # No manifest  assume deterministic (can't tell either way).
             evidence.append(
                 Evidence(
                     check="longitudinal_linkability",
                     value=1.0,
-                    details={"reason": "no manifest — determinism assumed"},
+                    details={"reason": "no manifest  determinism assumed"},
                 )
             )
             return 1.0

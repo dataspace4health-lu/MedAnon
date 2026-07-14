@@ -38,13 +38,13 @@ export default defineConfig(({ mode }) => {
           rewrite: (p) => p.replace(/^\/fhir/, ""),
         },
         // Trailing slash so the SPA routes /trust-gate, /trust-profiles,
-        // /trust-history are NOT proxied — only the API under /trust/.
+        // /trust-history are NOT proxied  only the API under /trust/.
         "/trust/": {
           target: `http://localhost:${trustGatePort}`,
           changeOrigin: true,
           rewrite: (p) => p.replace(/^\/trust/, ""),
         },
-        // Keycloak OIDC — only used in dev when OIDC_ISSUER points at a
+        // Keycloak OIDC  only used in dev when OIDC_ISSUER points at a
         // /auth-relative path. In production nginx proxies /auth/ directly.
         "/auth": {
           target: `http://localhost:${keycloakPort}`,

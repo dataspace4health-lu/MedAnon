@@ -11,7 +11,7 @@ severity:
 # Override per-command with --exit-code 0 for non-blocking informational scans.
 exit-code: 1
 
-# Output format — table for humans locally, sarif for CI/GitHub Code Scanning
+# Output format  table for humans locally, sarif for CI/GitHub Code Scanning
 format: table
 
 # ── Vulnerability scanning ─────────────────────────────────────────────────

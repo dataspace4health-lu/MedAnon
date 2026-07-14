@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
-# MedAnon — import TestBase NDJSON files into HAPI FHIR
+# MedAnon  import TestBase NDJSON files into HAPI FHIR
 # Usage: bash scripts/import_testbase.sh [data/TestBase]
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
@@ -67,7 +67,7 @@ def post_bundle(resources):
         }
         for r in resources
     ]
-    # Use "batch" (not "transaction") — independent entry processing, no table locks,
+    # Use "batch" (not "transaction")  independent entry processing, no table locks,
     # no full-bundle ACID commit.  Load ordering already guarantees referential integrity.
     bundle = {"resourceType": "Bundle", "type": "batch", "entry": entries}
     body = json.dumps(bundle).encode()
@@ -91,7 +91,7 @@ def post_bundle(resources):
                 raise RuntimeError(f"HTTP {resp.status}: {data[:300].decode('utf-8', errors='replace')}")
             return json.loads(data)
         except (ConnectionResetError, BrokenPipeError, OSError):
-            # Connection dropped — force reconnect on next attempt
+            # Connection dropped  force reconnect on next attempt
             _local.conn = None
             if attempt == 2:
                 raise
@@ -159,7 +159,7 @@ for tier in LOAD_TIERS:
             grand_total += u
             grand_errors += e
 
-# Any resource types not in LOAD_TIERS — upload sequentially at the end
+# Any resource types not in LOAD_TIERS  upload sequentially at the end
 known = set(_LOAD_ORDER)
 extra_files = sorted(
     [p for name, p in all_files.items() if name not in known],
@@ -171,5 +171,5 @@ for path in extra_files:
     grand_errors += e
 
 print()
-print(f"Done — {grand_total} resources uploaded, {grand_errors} errors")
+print(f"Done  {grand_total} resources uploaded, {grand_errors} errors")
 PYEOF

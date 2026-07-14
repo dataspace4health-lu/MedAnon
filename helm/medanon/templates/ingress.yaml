@@ -25,7 +25,7 @@ spec:
     - {{- if .Values.ingress.host }}host: {{ .Values.ingress.host | quote }}{{ end }}
       http:
         paths:
-          # React UI — SPA served via nginx (root path)
+          # React UI  SPA served via nginx (root path)
           # The UI's nginx also proxies /api/ and /fhir/ internally,
           # but direct Ingress routes are provided for non-browser clients.
           - path: /
@@ -35,7 +35,7 @@ spec:
                 name: {{ printf "%s-ui" .Release.Name | trunc 63 | trimSuffix "-" }}
                 port:
                   name: http
-          # HAPI FHIR server (identified data source) — keeps /fhir prefix (HAPI serves at /fhir)
+          # HAPI FHIR server (identified data source)  keeps /fhir prefix (HAPI serves at /fhir)
           - path: /fhir
             pathType: Prefix
             backend:
@@ -63,7 +63,7 @@ spec:
 {{- if and .Values.ingress.enabled (eq (.Values.ingress.className | default "") "traefik") }}
 ---
 # Separate ingress for /api with strip-prefix middleware
-# Traefik middleware applies per-ingress (per-router), not per-path — requires a separate resource.
+# Traefik middleware applies per-ingress (per-router), not per-path  requires a separate resource.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:

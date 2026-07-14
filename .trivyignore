@@ -1,4 +1,4 @@
-# .trivyignore — Trivy vulnerability/secret suppressions for privacy-toolkit
+# .trivyignore  Trivy vulnerability/secret suppressions for privacy-toolkit
 # Format: <CVE-ID or finding-id> [optional expiry: until=YYYY-MM-DD] [optional comment]
 # See: https://aquasecurity.github.io/trivy/latest/docs/configuration/filtering/#trivyignore
 
@@ -12,16 +12,16 @@
 
 # ── Helm misconfig false positives ────────────────────────────────────────────
 
-# KSV-0109: ConfigMap 'anonymizer-config' — triggered by the comment
+# KSV-0109: ConfigMap 'anonymizer-config'  triggered by the comment
 # "# Dual-pass" in a YAML config file. Not a secret value.
 KSV-0109
 
-# KSV-01010: ConfigMap 'fhir-server-config' — triggered by Spring Boot
+# KSV-01010: ConfigMap 'fhir-server-config'  triggered by Spring Boot
 # in-memory H2 datasource keys "username: sa" / "password: ''".
 # H2 is the in-process dev/test DB; no real credentials are stored here.
 KSV-01010
 
-# KSV-0125: HAPI FHIR uses hapiproject/hapi (Docker Hub) — a known trusted
+# KSV-0125: HAPI FHIR uses hapiproject/hapi (Docker Hub)  a known trusted
 # registry for the open-source HAPI FHIR server project. Not a supply-chain risk.
 KSV-0125
 
@@ -36,7 +36,7 @@ KSV-0012
 # that are out of scope for this embedded database deployment.
 KSV-0014
 
-# KSV-0118: postgres pod uses default securityContext intentionally —
+# KSV-0118: postgres pod uses default securityContext intentionally 
 # see comments for KSV-0012/0014 above. Pod-level seccompProfile is added.
 KSV-0118
 

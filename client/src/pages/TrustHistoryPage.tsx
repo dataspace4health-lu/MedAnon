@@ -156,8 +156,8 @@ export default function TrustHistoryPage() {
           <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
             {[
               { k: "Runs recorded", v: history.length },
-              { k: "Latest verdict", v: latest ? latest.decision.replace("_", " ") : "—" },
-              { k: "Latest score", v: latest && latest.overall_score != null ? `${Math.round(latest.overall_score)}%` : "—" },
+              { k: "Latest verdict", v: latest ? latest.decision.replace("_", " ") : "" },
+              { k: "Latest score", v: latest && latest.overall_score != null ? `${Math.round(latest.overall_score)}%` : "" },
               { k: "Open findings", v: open },
             ].map((kpi) => (
               <Card key={kpi.k}><CardContent className="py-4"><div className="text-2xl font-bold tabular-nums">{kpi.v}</div><div className="text-xs text-muted-foreground">{kpi.k}</div></CardContent></Card>
@@ -202,7 +202,7 @@ export default function TrustHistoryPage() {
                         <span className="text-xs text-muted-foreground">{r.generated_at ?? r.recorded_at ?? ""}</span>
                       </span>
                       <span className={`font-medium tabular-nums ${rateTextClass(Math.round(r.overall_score ?? 0))}`}>
-                        {r.overall_score != null ? `${Math.round(r.overall_score)}%` : "—"}{r.grade ? ` · ${r.grade}` : ""}
+                        {r.overall_score != null ? `${Math.round(r.overall_score)}%` : ""}{r.grade ? ` · ${r.grade}` : ""}
                       </span>
                     </div>
                   ))}

@@ -1,4 +1,4 @@
-# SPE FHIR BlackBox — Comprehensive Technical Documentation
+# SPE FHIR BlackBox  Comprehensive Technical Documentation
 
 **Audience:** Architects, developers, and operations teams  
 **Last updated:** 2026-06-05  
@@ -33,10 +33,10 @@ The system accepts FHIR resources in JSON, NDJSON, or XML format, applies a conf
 
 Clinical data sharing is legally and ethically constrained. GDPR (Europe), HIPAA (US), and various national frameworks require that patient identifiers be removed before data leaves the clinical environment. Existing solutions either require expensive commercial licenses, are too opinionated about the transformation logic, or do not support reversible pseudonymization for follow-up linkage. MedAnon provides:
 
-- **Rule-driven flexibility** — YAML profiles that any team can read and audit
-- **Reversible pseudonymization** — via gPAS (a trusted third-party service), so de-identified data can be re-linked for adverse event investigation under controlled conditions
-- **Compliance profiles** — seven pre-built profiles covering GDPR, HIPAA Safe Harbor, IRB research, and structural preservation
-- **AI-assisted configuration** — natural language to YAML rule generation, PII leak detection, and regulatory gap analysis (Phase 4)
+- **Rule-driven flexibility**  YAML profiles that any team can read and audit
+- **Reversible pseudonymization**  via gPAS (a trusted third-party service), so de-identified data can be re-linked for adverse event investigation under controlled conditions
+- **Compliance profiles**  seven pre-built profiles covering GDPR, HIPAA Safe Harbor, IRB research, and structural preservation
+- **AI-assisted configuration**  natural language to YAML rule generation, PII leak detection, and regulatory gap analysis (Phase 4)
 
 ### Key use cases
 
@@ -123,7 +123,7 @@ The system isolates identified and de-identified data at the network and databas
 
         ┌──── source-net (isolated) ─────────────┐
         │  hapi-fhir:8080  → hapi-postgres:5432  │
-        │  (no host port — accessed via anonymizer│
+        │  (no host port  accessed via anonymizer│
         │   proxy endpoints only)                 │
         └────────────────────────────────────────┘
 
@@ -134,7 +134,7 @@ The system isolates identified and de-identified data at the network and databas
         └────────────────────────────────────────┘
 ```
 
-**Why two networks?** The source FHIR server stores identified patient data. Isolating it on `source-net` means that only the anonymizer (which bridges both networks) can reach it. No other service — including the UI, analytics, or target FHIR — can make direct requests to the source. This satisfies physical separation requirements under GDPR Art. 25 (data minimization by design).
+**Why two networks?** The source FHIR server stores identified patient data. Isolating it on `source-net` means that only the anonymizer (which bridges both networks) can reach it. No other service  including the UI, analytics, or target FHIR  can make direct requests to the source. This satisfies physical separation requirements under GDPR Art. 25 (data minimization by design).
 
 ---
 
@@ -151,7 +151,7 @@ The system isolates identified and de-identified data at the network and databas
 | `hapi-db` | `postgres:16-alpine` | internal | PostgreSQL for source HAPI |
 | `fhir-target` | `hapiproject/hapi:v7.6.0` | `8082` | Target FHIR R4 (de-identified data) |
 | `hapi-target-db` | `postgres:16-alpine` | internal | PostgreSQL for target HAPI |
-| `gateway` | `traefik:v3` | `8080` (gPAS), `8200` (NLP) | API gateway — Docker-provider service discovery; carries `gpas-lb` / `nlp-lb` network aliases for backward-compatible URLs |
+| `gateway` | `traefik:v3` | `8080` (gPAS), `8200` (NLP) | API gateway  Docker-provider service discovery; carries `gpas-lb` / `nlp-lb` network aliases for backward-compatible URLs |
 | `gpas` | WildFly 38 + gPAS | via gateway | Reversible pseudonymization (TTP); scaled with `--scale gpas=N` |
 | `gpas-db` | `postgres:16-alpine` | internal | gPAS pseudonym store |
 | `app-db` | `postgres:16-alpine` | internal | Jobs, configs, subscriptions, staging |
@@ -187,7 +187,7 @@ Input FHIR (JSON / NDJSON / XML)
         │              Results cached per (resource_type, rules_hash).
         ▼
  ┌──────────────────────────────────────────────────────────────┐
- │  PASS 1 — action_dispatcher.py                               │
+ │  PASS 1  action_dispatcher.py                               │
  │                                                              │
  │  For each matched rule:                                      │
  │  • Stateless actions execute immediately:                    │
@@ -202,7 +202,7 @@ Input FHIR (JSON / NDJSON / XML)
                             │ NlpWork + BatchWork collected
                             ▼
  ┌──────────────────────────────────────────────────────────────┐
- │  PASS 1.5 — nlp_orchestrator.py                              │
+ │  PASS 1.5  nlp_orchestrator.py                              │
  │                                                              │
  │  Phase A: Extract unique texts from all NlpWork items        │
  │  Phase B: Deduplicate, POST /v1/detect/batch to nlp-lb       │
@@ -217,7 +217,7 @@ Input FHIR (JSON / NDJSON / XML)
                             │
                             ▼
  ┌──────────────────────────────────────────────────────────────┐
- │  PASS 2 — gpas_orchestrator.py                               │
+ │  PASS 2  gpas_orchestrator.py                               │
  │                                                              │
  │  1. Check L1 local LRU cache (50K entries, per-process)      │
  │  2. Check L2 Redis cache (1h TTL, cross-replica)            │
@@ -232,7 +232,7 @@ Input FHIR (JSON / NDJSON / XML)
                             │
                             ▼
  ┌──────────────────────────────────────────────────────────────┐
- │  PASS 3+4 — post_processor.py + manifest.py                  │
+ │  PASS 3+4  post_processor.py + manifest.py                  │
  │                                                              │
  │  • Rewrite FHIR bundle references after ID changes          │
  │    (Patient/123 → Patient/psn-abc where IDs changed)        │
@@ -248,7 +248,7 @@ Input FHIR (JSON / NDJSON / XML)
 Output de-identified FHIR
 ```
 
-**Why staged + concurrent?** Each external service (gPAS, NLP) has per-call HTTP overhead. The match stage accumulates deferred work across all resources. The phi_detection and pseudonymize stages then each make one batch request to their respective services — concurrently, since they touch disjoint resource paths. This reduces hundreds of HTTP calls to 2–3 and overlaps the two batch calls instead of running them sequentially.
+**Why staged + concurrent?** Each external service (gPAS, NLP) has per-call HTTP overhead. The match stage accumulates deferred work across all resources. The phi_detection and pseudonymize stages then each make one batch request to their respective services  concurrently, since they touch disjoint resource paths. This reduces hundreds of HTTP calls to 2–3 and overlaps the two batch calls instead of running them sequentially.
 
 ---
 
@@ -471,15 +471,15 @@ An async processing task. Stored in Redis (production), PostgreSQL, or SQLite (d
 
 ```
 Job
-├── id: str           — UUID v4, globally unique
-├── type: str         — "bulk-export" | "cohort" | "patient-export" | ...
-├── status: enum      — pending → running → done | failed | cancelled
+├── id: str            UUID v4, globally unique
+├── type: str          "bulk-export" | "cohort" | "patient-export" | ...
+├── status: enum       pending → running → done | failed | cancelled
 ├── config_profile: str
 ├── source_url: str
 ├── created_at: datetime
 ├── updated_at: datetime
-├── error: str | null — failure message when status=failed
-└── result_path: str  — path to NDJSON output when status=done
+├── error: str | null  failure message when status=failed
+└── result_path: str   path to NDJSON output when status=done
 ```
 
 #### ProcessingRun
@@ -488,15 +488,15 @@ A record of a completed de-identification operation with scoring data.
 ```
 ProcessingRun
 ├── id: str
-├── endpoint: str         — e.g. "/process/batch"
+├── endpoint: str          e.g. "/process/batch"
 ├── config_profile: str
 ├── resource_count: int
-├── composite_score: float — privacy × utility × quality (0.0–1.0)
+├── composite_score: float  privacy × utility × quality (0.0–1.0)
 ├── privacy_score: float
 ├── utility_score: float
 ├── quality_score: float
 ├── created_at: datetime
-└── manifest: JSON        — per-rule transformation summary
+└── manifest: JSON         per-rule transformation summary
 ```
 
 #### StagedResource
@@ -507,8 +507,8 @@ StagedResource
 ├── job_id: str
 ├── resource_type: str
 ├── resource_id: str
-├── payload: JSONB        — de-identified FHIR resource
-├── tier: int             — topological upload tier
+├── payload: JSONB         de-identified FHIR resource
+├── tier: int              topological upload tier
 └── created_at: datetime
 ```
 
@@ -517,10 +517,10 @@ A user-defined de-identification rule set.
 
 ```
 ConfigProfile
-├── name: str             — slug (lowercase, hyphens)
+├── name: str              slug (lowercase, hyphens)
 ├── description: str
-├── yaml_content: text    — YAML rule profile
-├── is_system: bool       — system profiles are read-only
+├── yaml_content: text     YAML rule profile
+├── is_system: bool        system profiles are read-only
 └── created_at: datetime
 ```
 
@@ -530,9 +530,9 @@ A FHIR R4 rest-hook subscription.
 ```
 FHIRSubscription
 ├── id: str
-├── status: str           — "requested" | "active" | "error"
-├── endpoint: str         — webhook URL
-├── criteria: str         — FHIR search expression
+├── status: str            "requested" | "active" | "error"
+├── endpoint: str          webhook URL
+├── criteria: str          FHIR search expression
 └── created_at: datetime
 ```
 
@@ -568,7 +568,7 @@ medanon.processing_runs (id, endpoint, config_profile, resource_count, composite
 ```
 1. INGEST
    Clinical FHIR data lives in source HAPI FHIR (identified, source-net).
-   Accessed only by anonymizer/worker — no other service has network access.
+   Accessed only by anonymizer/worker  no other service has network access.
 
 2. DE-IDENTIFY
    Anonymizer applies YAML rules via the 4-stage pipeline.
@@ -596,7 +596,7 @@ medanon.processing_runs (id, endpoint, config_profile, resource_count, composite
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                        Data Flow — Bulk Export                          │
+│                        Data Flow  Bulk Export                          │
 └─────────────────────────────────────────────────────────────────────────┘
 
 Clinician / EHR
@@ -690,7 +690,7 @@ The anonymizer uses **API key authentication** with role-based access control.
 | `analyst` | Processing, jobs, analytics, scoring, configs (read + create). |
 | `viewer` | Read-only: config list/fetch, job status polling. |
 
-Role assignment is static per API key — the key encodes the role. Parameterized paths (e.g. `/v1/jobs/{id}`) are resolved by prefix matching in `ENDPOINT_ROLE_PREFIXES` in `api/auth.py`.
+Role assignment is static per API key  the key encodes the role. Parameterized paths (e.g. `/v1/jobs/{id}`) are resolved by prefix matching in `ENDPOINT_ROLE_PREFIXES` in `api/auth.py`.
 
 ### Encryption
 
@@ -702,12 +702,12 @@ Role assignment is static per API key — the key encodes the role. Parameterize
 **At rest:**
 - gPAS pseudonym mappings are stored in `gpas-db` (PostgreSQL, encrypted volume at OS level).
 - Job results (NDJSON) are stored on `MEDANON_OUTPUT_DIR` (filesystem) or MinIO (S3 AES-256 when configured).
-- The `encrypt` action produces RSA-encrypted ciphertext in FHIR fields — only the private key holder can decrypt.
+- The `encrypt` action produces RSA-encrypted ciphertext in FHIR fields  only the private key holder can decrypt.
 - HMAC keys (`MEDANON_HASH_KEY`) and RSA private keys must be stored outside the container (mounted as read-only volumes or injected as env vars from a secrets manager).
 
 **Key management:**
-- `MEDANON_HASH_KEY` — 32-byte hex key for HMAC-SHA3-256. Rotating this key breaks pseudonym consistency for all existing `cryptohash` output.
-- RSA keypair — generated with `openssl genrsa`. Rotating the private key makes all previously encrypted values unreadable.
+- `MEDANON_HASH_KEY`  32-byte hex key for HMAC-SHA3-256. Rotating this key breaks pseudonym consistency for all existing `cryptohash` output.
+- RSA keypair  generated with `openssl genrsa`. Rotating the private key makes all previously encrypted values unreadable.
 - All secret files are in `.gitignore`. Never commit `.env` or key files.
 
 ### Input validation and SSRF protection
@@ -753,8 +753,8 @@ All production containers apply:
 - `security_opt: no-new-privileges`
 
 Exceptions with rationale:
-- `app-db` (PostgreSQL): `cap_drop` omitted — PostgreSQL requires `CAP_CHOWN` and `CAP_SETUID` at startup for `chown` on data directory
-- `ollama`: `read_only` omitted — Ollama writes downloaded model files to volume during runtime
+- `app-db` (PostgreSQL): `cap_drop` omitted  PostgreSQL requires `CAP_CHOWN` and `CAP_SETUID` at startup for `chown` on data directory
+- `ollama`: `read_only` omitted  Ollama writes downloaded model files to volume during runtime
 
 ### GDPR considerations
 
@@ -802,11 +802,11 @@ Exceptions with rationale:
 | RAM | 8 GB (12 GB+ recommended) |
 | Disk | 10 GB (images + volumes) |
 
-**Step 1 — Environment configuration:**
+**Step 1  Environment configuration:**
 
 ```bash
 cp .env.example .env
-# Edit .env — generate secrets:
+# Edit .env  generate secrets:
 openssl rand -hex 32       # → MEDANON_HASH_KEY
 openssl rand -base64 24    # → GPAS_BASIC_PASS, GPAS_DB_PASSWORD, MEDANON_REDIS_PASSWORD, etc.
 ```
@@ -821,7 +821,7 @@ Key variables that must be set before production use:
 | `MEDANON_REDIS_PASSWORD` | Redis authentication. Required in production. |
 | `EXTERNAL_HOST` | Host/IP browsers use to reach this server. Used in CORS + HAPI address. |
 
-**Step 2 — Build images:**
+**Step 2  Build images:**
 
 ```bash
 make build
@@ -829,7 +829,7 @@ make build
 
 Builds `medanon:latest` (anonymizer, 4 stages: base/prod/dev/sdv) and `medanon-ui:latest` (React + nginx). gPAS and HAPI use upstream images.
 
-**Step 3 — Start the stack:**
+**Step 3  Start the stack:**
 
 ```bash
 make up          # start all services
@@ -838,15 +838,15 @@ docker compose ps  # wait until all show "healthy"
 
 gPAS (WildFly) takes ~90 seconds on first boot.
 
-**Step 4 — Initialize gPAS domain:**
+**Step 4  Initialize gPAS domain:**
 
 ```bash
 make init-domains
 ```
 
-Or manually via `http://localhost:8080/gpas-web/`. Always use the gPAS API — never insert domain rows directly into PostgreSQL. gPAS maintains an in-memory `domainLocks HashMap` that is only populated via its own REST API; direct SQL inserts bypass this and cause "domain not found" at runtime.
+Or manually via `http://localhost:8080/gpas-web/`. Always use the gPAS API  never insert domain rows directly into PostgreSQL. gPAS maintains an in-memory `domainLocks HashMap` that is only populated via its own REST API; direct SQL inserts bypass this and cause "domain not found" at runtime.
 
-**Step 5 — Verify:**
+**Step 5  Verify:**
 
 ```bash
 curl http://localhost:8000/health   # {"status":"ok"}
@@ -874,7 +874,7 @@ docker compose up -d --scale gpas=3
 docker compose up -d --scale nlp=4
 ```
 
-The nginx load balancers use Docker DNS (`resolver 127.0.0.11`) for dynamic discovery — scaling takes effect without restarting the load balancer.
+The nginx load balancers use Docker DNS (`resolver 127.0.0.11`) for dynamic discovery  scaling takes effect without restarting the load balancer.
 
 ### Deployment Diagram
 
@@ -952,7 +952,7 @@ helm upgrade --install medanon ./helm/medanon \
 
 **K3s (single-node / edge):**
 
-Use `helm/k3s-values.yaml` — configures Traefik ingress and `local-path` storage class. K3s uses a separate containerd image store from Docker:
+Use `helm/k3s-values.yaml`  configures Traefik ingress and `local-path` storage class. K3s uses a separate containerd image store from Docker:
 
 ```bash
 docker save medanon:latest | sudo k3s ctr images import -
@@ -966,7 +966,7 @@ Note: K3s uses Flannel by default, which does not enforce `NetworkPolicy`. For r
 | Service | RAM limit | CPU limit | Peak usage notes |
 |---|---|---|---|
 | `anonymizer` | 3 GB | 2.0 | NLP runs in separate microservice; adjust if OOM during bulk export |
-| `worker` | 2 GB | 1.0 | Lower than anonymizer — single job at a time |
+| `worker` | 2 GB | 1.0 | Lower than anonymizer  single job at a time |
 | `gpas` | 2.5 GB | 1.0 | WildFly JVM: Xms128M Xmx1536M, G1GC |
 | `gpas-db` | 2 GB | 1.0 | PostgreSQL shared_buffers 512 MB |
 | `fhir-server` | 3 GB | 2.0 | JVM heap |
@@ -1018,7 +1018,7 @@ make verify   # smoke-test a running stack
 | `medanon_requests_total` | `method`, `path`, `status` | Total HTTP requests |
 | `medanon_request_duration_seconds` | `path` | Latency histogram |
 | `medanon_gpas_calls_total` | `operation`, `cached` | gPAS call count + cache hit rate |
-| `medanon_gpas_latency_seconds` | — | gPAS round-trip latency |
+| `medanon_gpas_latency_seconds` |  | gPAS round-trip latency |
 | `medanon_fhir_calls_total` | `operation`, `server` | FHIR client call count |
 | `medanon_jobs_total` | `type`, `status` | Job completion counts |
 
@@ -1029,24 +1029,24 @@ All Helm chart pods include `prometheus.io/scrape: "true"` annotations.
 **Key health checks:**
 
 ```bash
-curl http://localhost:8000/health   # {"status":"ok"} — liveness, no external calls
-curl http://localhost:8000/ready    # {"ready":true}  — probes FHIR + gPAS (5s timeout each)
+curl http://localhost:8000/health   # {"status":"ok"}  liveness, no external calls
+curl http://localhost:8000/ready    # {"ready":true}   probes FHIR + gPAS (5s timeout each)
 docker compose ps                   # all containers + health status
 ```
 
 ### Scaling strategy
 
-**Anonymizer / worker** — scale horizontally. Redis Streams + consumer groups act as the shared job queue across replicas; each replica receives a disjoint slice of new messages and crashed-worker entries are reclaimed via `XAUTOCLAIM`. Set `MEDANON_JOB_WORKERS` to control concurrent jobs per instance.
+**Anonymizer / worker**  scale horizontally. Redis Streams + consumer groups act as the shared job queue across replicas; each replica receives a disjoint slice of new messages and crashed-worker entries are reclaimed via `XAUTOCLAIM`. Set `MEDANON_JOB_WORKERS` to control concurrent jobs per instance.
 
-**gPAS** — scale with `--scale gpas=N`. The Traefik `gateway` distributes requests round-robin (with sticky cookies for the gPAS web UI). Each gPAS instance connects to the same `gpas-db` PostgreSQL.
+**gPAS**  scale with `--scale gpas=N`. The Traefik `gateway` distributes requests round-robin (with sticky cookies for the gPAS web UI). Each gPAS instance connects to the same `gpas-db` PostgreSQL.
 
-**NLP** — scale with `--scale nlp=N`. The Traefik `gateway` distributes requests round-robin to the least busy NLP replica. NLP is CPU-bound; scaling NLP instances directly increases throughput.
+**NLP**  scale with `--scale nlp=N`. The Traefik `gateway` distributes requests round-robin to the least busy NLP replica. NLP is CPU-bound; scaling NLP instances directly increases throughput.
 
-**When NOT to scale FHIR fetch threads:** `MEDANON_FHIR_FETCH_PARALLEL` should stay at `1`. The bottleneck is gPAS, not FHIR reads. Multiple fetch threads compete for the Python GIL and the internal queue lock while waiting for gPAS — observed to be slower than single-threaded at scale.
+**When NOT to scale FHIR fetch threads:** `MEDANON_FHIR_FETCH_PARALLEL` should stay at `1`. The bottleneck is gPAS, not FHIR reads. Multiple fetch threads compete for the Python GIL and the internal queue lock while waiting for gPAS  observed to be slower than single-threaded at scale.
 
 ### Backup and recovery
 
-**gPAS PostgreSQL (critical — pseudonym mappings):**
+**gPAS PostgreSQL (critical  pseudonym mappings):**
 
 Loss of the gPAS database makes all pseudonym mappings unrecoverable. Back up before any maintenance.
 
@@ -1081,10 +1081,10 @@ cp services/anonymizer/keys/id_rsa* backup/keys-$(date +%Y%m%d)/
 
 | Secret | Rotation procedure | Impact |
 |---|---|---|
-| `MEDANON_HASH_KEY` | Update `.env`, restart anonymizer | All existing `cryptohash` pseudonyms change — old output cannot be re-linked to new |
+| `MEDANON_HASH_KEY` | Update `.env`, restart anonymizer | All existing `cryptohash` pseudonyms change  old output cannot be re-linked to new |
 | RSA private key | Generate new keypair, update `.env` paths | Old encrypted values unreadable; keep old key for historical data |
 | `GPAS_BASIC_PASS` | Update `.env` + run `CALL changePassword(...)` in gPAS DB, restart anonymizer | Existing gPAS sessions invalidated |
-| `GPAS_DB_PASSWORD` | Requires `docker compose down -v` to recreate volume | **Destroys all pseudonym mappings** — back up first |
+| `GPAS_DB_PASSWORD` | Requires `docker compose down -v` to recreate volume | **Destroys all pseudonym mappings**  back up first |
 | `MEDANON_API_KEY` | Update `.env`, restart anonymizer | All API clients must update their key |
 | `MEDANON_REDIS_PASSWORD` | Update `.env`, restart anonymizer + worker | Redis sessions invalidated |
 
@@ -1100,7 +1100,7 @@ gPAS failed 5+ times in 60s. The circuit fails-fast for 30s, then probes. Restar
 ```bash
 MEDANON_BATCH_SIZE=300       # resources per gPAS HTTP call
 FHIR_PAGE_SIZE=500           # resources per FHIR page
-MEDANON_FHIR_FETCH_PARALLEL=1  # keep at 1 — more threads compete for GIL
+MEDANON_FHIR_FETCH_PARALLEL=1  # keep at 1  more threads compete for GIL
 MEDANON_JOB_WORKERS=10       # concurrent background jobs
 ```
 
@@ -1114,7 +1114,7 @@ A resource was uploaded before one it references. The topological sort missed a 
 Job store not initialized. Check Redis connectivity (`docker compose ps redis`) or SQLite path writability (`MEDANON_JOB_DB`).
 
 **NLP returning `[NLP_UNAVAILABLE]`:**
-NLP microservice is down or unreachable. Check: `docker compose ps nlp gateway`. The system fails-closed by design — no PHI leaks, but NLP scrubbing is not applied. Restart: `docker compose restart nlp`.
+NLP microservice is down or unreachable. Check: `docker compose ps nlp gateway`. The system fails-closed by design  no PHI leaks, but NLP scrubbing is not applied. Restart: `docker compose restart nlp`.
 
 **OOM killed container:**
 ```bash
@@ -1140,7 +1140,7 @@ Increase `mem_limit` in `docker-compose.yml` for the affected container. See res
 - [ ] Source FHIR (source-net) not reachable from outside
 
 #### Logging and monitoring
-- [ ] `LOG_LEVEL=INFO` (not DEBUG — DEBUG may log PHI)
+- [ ] `LOG_LEVEL=INFO` (not DEBUG  DEBUG may log PHI)
 - [ ] `MEDANON_MANIFEST_ENABLED=true` (GDPR Art. 30 accountability)
 - [ ] Audit log volume mounted and rotated
 - [ ] Prometheus scraping configured
@@ -1160,7 +1160,7 @@ Increase `mem_limit` in `docker-compose.yml` for the affected container. See res
 
 ---
 
-## Appendix — Performance reference
+## Appendix  Performance reference
 
 | Variable | Default | Effect |
 |---|---|---|
@@ -1170,12 +1170,12 @@ Increase `mem_limit` in `docker-compose.yml` for the affected container. See res
 | `FHIR_PAGE_SIZE` | 500 | Resources per FHIR paginated fetch |
 | `MEDANON_FHIR_FETCH_PARALLEL` | 1 | Parallel FHIR resource-type fetch threads (keep at 1) |
 | `MEDANON_COHORT_PARALLEL` | 2 | Parallel `$everything` threads for cohort export |
-| `GPAS_MAX_BATCH_SIZE` | — | Maximum IDs per single gPAS request |
-| `GPAS_POOL_SIZE` | — | gPAS HTTP connection pool size |
+| `GPAS_MAX_BATCH_SIZE` |  | Maximum IDs per single gPAS request |
+| `GPAS_POOL_SIZE` |  | gPAS HTTP connection pool size |
 
 ---
 
-## Appendix — Quick reference commands
+## Appendix  Quick reference commands
 
 ```bash
 # Start / stop

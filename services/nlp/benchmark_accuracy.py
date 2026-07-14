@@ -32,7 +32,7 @@ from collections import defaultdict
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
-# PII Registry — built from structured FHIR resources
+# PII Registry  built from structured FHIR resources
 # ---------------------------------------------------------------------------
 
 _AGE_PATTERN = re.compile(r"\b(\d{1,3}\s*-?\s*year(?:s)?\s*-?\s*old)\b", re.I)
@@ -168,7 +168,7 @@ def build_pii_registry(dataset_dir: str) -> tuple[dict, set[str]]:
 
 
 # ---------------------------------------------------------------------------
-# Ground-truth extraction — FHIR-based (model-independent)
+# Ground-truth extraction  FHIR-based (model-independent)
 # ---------------------------------------------------------------------------
 
 

@@ -1,4 +1,4 @@
-# MedAnon — Data Flow Reference
+# MedAnon  Data Flow Reference
 
 ## Network layout
 
@@ -7,8 +7,8 @@
 │                                                                        │
 │  Browser ──► :8501 (UI)  :8000 (API)  :8082 (FHIR-target)  :8080 (gateway → gPAS)
 │                                                                        │
-│  (source FHIR: no host port — isolated to source-net)                 │
-│  (gateway → NLP: :8200 — host-published for direct access if needed)  │
+│  (source FHIR: no host port  isolated to source-net)                 │
+│  (gateway → NLP: :8200  host-published for direct access if needed)  │
 └────────────────────────────────────────────────────────────────────────┘
                  │             │
         ┌────────▼─────────────▼──── processing-net ──────────────────────┐
@@ -36,15 +36,15 @@
         │    → redis:6379             Redis Streams job queue            │
         │    :9091                    Prometheus metrics + health probe     │
         │                                                                  │
-        │  gateway  (Traefik v3 — joins network as gpas-lb + nlp-lb aliases)│
+        │  gateway  (Traefik v3  joins network as gpas-lb + nlp-lb aliases)│
         │    :8080  → gpas replicas:8080  (round-robin; sticky for /gpas-web│
-        │             — JSF ViewState binding)                             │
+        │              JSF ViewState binding)                             │
         │    :8200  → nlp replicas:8200   (round-robin)                    │
         │    Discovery: Docker provider, read-only socket mount             │
         │    Joins network as gpas-lb + nlp-lb aliases (backward compat)    │
         │                                                                  │
         │  hapi-fhir-target:8080 → hapi-target-postgres:5432              │
-        │  analytics:8100        (risk + synthetic — no external deps)     │
+        │  analytics:8100        (risk + synthetic  no external deps)     │
         │  app-db:5432           (jobs, configs, subscriptions, runs)      │
         │  redis:6379            (gPAS cache + job queue DB0, NLP cache DB2, audit stream)│
         │                                                                  │
@@ -57,7 +57,7 @@
         └────────────────────────────────────────────────┘
 ```
 
-Two networks: `processing-net` (all services) + `source-net` (isolated: source FHIR + `hapi-postgres`). Only anonymizer and worker bridge both networks. The source FHIR server has **no host port** — it is only reachable via anonymizer proxy endpoints.
+Two networks: `processing-net` (all services) + `source-net` (isolated: source FHIR + `hapi-postgres`). Only anonymizer and worker bridge both networks. The source FHIR server has **no host port**  it is only reachable via anonymizer proxy endpoints.
 
 ---
 
@@ -134,14 +134,14 @@ POST /v1/jobs/bulk-export
               └── worker (XREADGROUP, wakes immediately)
                       │
           ┌───────────▼──────────────────────────────────┐
-          │  PHASE 1 — Discovery                          │
+          │  PHASE 1  Discovery                          │
           │  GET /fhir/metadata → capability statement    │
           │  extract resource types: Patient, Condition,  │
           │  Observation, Encounter, Organization, ...    │
           └───────────┬──────────────────────────────────┘
                       │ MEDANON_FHIR_FETCH_PARALLEL=1 (sequential)
           ┌───────────▼──────────────────────────────────┐
-          │  PHASE 2 — Fetch + De-identify               │
+          │  PHASE 2  Fetch + De-identify               │
           │                                               │
           │  For each resource type:                      │
           │    GET /fhir/Patient?_count=500 (page 1)      │
@@ -155,7 +155,7 @@ POST /v1/jobs/bulk-export
           └───────────┬──────────────────────────────────┘
                       │
           ┌───────────▼──────────────────────────────────┐
-          │  PHASE 3 — Upload ordering                   │
+          │  PHASE 3  Upload ordering                   │
           │                                               │
           │  Build reference graph from all resources:   │
           │    Encounter.subject → Patient               │
@@ -175,7 +175,7 @@ POST /v1/jobs/bulk-export
           └───────────┬──────────────────────────────────┘
                       │
           ┌───────────▼──────────────────────────────────┐
-          │  PHASE 4 — Upload                            │
+          │  PHASE 4  Upload                            │
           │                                               │
           │  For each tier (0, 1, 2, ...):               │
           │    Split into chunks of 200 resources        │
@@ -186,7 +186,7 @@ POST /v1/jobs/bulk-export
           └───────────┬──────────────────────────────────┘
                       │
           ┌───────────▼──────────────────────────────────┐
-          │  PHASE 5 — Finalise                          │
+          │  PHASE 5  Finalise                          │
           │  Write NDJSON to MEDANON_OUTPUT_DIR          │
           │  (+ <data>.manifest.ndjson sidecar, one     │
           │   line per resource; inline meta.tag         │
@@ -196,7 +196,7 @@ POST /v1/jobs/bulk-export
           └───────────┬──────────────────────────────────┘
                       │  publish_result → 3 correlated S3 artifacts
           ┌───────────▼──────────────────────────────────┐
-          │  DELIVERY — dataspace S3 destination         │
+          │  DELIVERY  dataspace S3 destination         │
           │  <key_prefix>data/<job>.ndjson[.gz]          │  de-identified data
           │  <key_prefix>manifests/<job>.manifest.ndjson │  transformation manifest
           │  <key_prefix>audit/<job>.audit.json          │  audit record (no PHI)
@@ -241,7 +241,7 @@ gpas_orchestrator.py:
   write pseudonyms back into resource fields
 ```
 
-**Why cache at two levels?** L1 (per-process LRU) is fastest — no network. But across multiple anonymizer replicas, each replica has its own L1 and would call gPAS for the same patient IDs independently. L2 (Redis) shares results across replicas, dramatically reducing gPAS load during parallel bulk exports.
+**Why cache at two levels?** L1 (per-process LRU) is fastest  no network. But across multiple anonymizer replicas, each replica has its own L1 and would call gPAS for the same patient IDs independently. L2 (Redis) shares results across replicas, dramatically reducing gPAS load during parallel bulk exports.
 
 **Circuit breaker state machine:**
 
@@ -269,10 +269,10 @@ action_dispatcher.py collects:
 
 nlp_orchestrator.py (phi_detection stage):
 
-  Phase A — Extract unique texts from all NlpWork items across all resources:
+  Phase A  Extract unique texts from all NlpWork items across all resources:
     texts = deduplicate([nw.text for nw in all_nlp_work])  # 1000 texts → 150 unique
 
-  Phase B — Batch detect (one HTTP call via nlp-lb):
+  Phase B  Batch detect (one HTTP call via nlp-lb):
     POST http://nlp-lb:8200/v1/detect/batch
       {"texts": ["Patient John Smith...", "Dr. Jane Doe prescribed...", ...]}
     ← {"results": [
@@ -280,7 +280,7 @@ nlp_orchestrator.py (phi_detection stage):
          ...
        ]}
 
-  Phase C — Per-resource replacement with isolated token_state:
+  Phase C  Per-resource replacement with isolated token_state:
     for resource in resources:
       for nw in resource.nlp_work:
         entities = batch_results[nw.text]
@@ -305,7 +305,7 @@ anonymizer                   nlp-lb (:8200)                NLP replicas
     │  {"results": [...]}         │                              │
 ```
 
-**Fail-closed behavior:** If NLP is unavailable, all NLP-detected text is replaced with `[NLP_UNAVAILABLE]` — no PHI leaks.
+**Fail-closed behavior:** If NLP is unavailable, all NLP-detected text is replaced with `[NLP_UNAVAILABLE]`  no PHI leaks.
 
 ---
 
@@ -329,18 +329,18 @@ Browser (:8501)
 
 ### Traefik gateway (`medanon-gateway`)
 
-gPAS and NLP routing is handled by the Traefik v3 gateway. `services/gpas/lb/nginx.conf` and `services/nlp/nginx.conf` are kept as reference only — they are not mounted by docker-compose.
+gPAS and NLP routing is handled by the Traefik v3 gateway. `services/gpas/lb/nginx.conf` and `services/nlp/nginx.conf` are kept as reference only  they are not mounted by docker-compose.
 
 ```
 anonymizer → gpas-lb:8080 (Traefik gateway alias)
-    ├─ /gpas-web, /gras-web → gpas:8080 (sticky — JSF ViewState)
+    ├─ /gpas-web, /gras-web → gpas:8080 (sticky  JSF ViewState)
     └─ /*                   → gpas:8080 (round-robin)
 
 anonymizer → nlp-lb:8200 (Traefik gateway alias)
     └─ /*                   → nlp:8200 (round-robin)
 ```
 
-The gateway joins `processing-net` under `gpas-lb` and `nlp-lb` aliases so existing URL values in `.env` work without changes. New replicas are discovered automatically via Docker labels — no config reload needed.
+The gateway joins `processing-net` under `gpas-lb` and `nlp-lb` aliases so existing URL values in `.env` work without changes. New replicas are discovered automatically via Docker labels  no config reload needed.
 
 ---
 
@@ -365,7 +365,7 @@ Each upload chunk is a FHIR batch Bundle. This reduces N individual PUT requests
 }
 ```
 
-HAPI responds with a batch-response Bundle where each entry has a `response.status` and optional `response.outcome` (OperationOutcome with diagnostics). The writer parses each entry independently — one failure doesn't abort the whole batch.
+HAPI responds with a batch-response Bundle where each entry has a `response.status` and optional `response.outcome` (OperationOutcome with diagnostics). The writer parses each entry independently  one failure doesn't abort the whole batch.
 
 ---
 
@@ -498,7 +498,7 @@ POST /v1/ai/generate-config
     ├─ integrations/ai/agents/config_generator.py
     │      all 8 bundled YAML profiles injected as few-shot prompt context
     │      prompt: user description → LLM → YAML config
-    │      validation: load_config() — rejects syntactically invalid YAML
+    │      validation: load_config()  rejects syntactically invalid YAML
     │      keyword fallback: if LLM unavailable, select closest bundled profile
     │
     └─ response: {config_yaml, rationale, profile_basis}
@@ -508,8 +508,8 @@ POST /v1/ai/detect-pii
     ├─ integrations/ai/agents/pii_detector.py
     │      Layer 1: regex (SSN, phone, email, MRN)
     │      Layer 2: Presidio NER via NLP microservice (nlp-lb:8200)
-    │      Layer 3: LLM — MUST use MEDANON_AI_PII_PROVIDER (local-only model)
-    │               WARNING: no code-level enforcement of local-only — operator responsibility
+    │      Layer 3: LLM  MUST use MEDANON_AI_PII_PROVIDER (local-only model)
+    │               WARNING: no code-level enforcement of local-only  operator responsibility
     │
     └─ response: {entities: [{type, text, start, end, confidence}], layers_used}
 

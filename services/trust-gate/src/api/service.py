@@ -1,4 +1,4 @@
-"""Assessment service — the business logic behind the HTTP routers.
+"""Assessment service  the business logic behind the HTTP routers.
 
 Normalises input, runs the engine with the loaded config, records the decision
 metric, derives a label, and best-effort persists the passport + findings.
@@ -56,7 +56,7 @@ def flatten(payload: Any) -> tuple[list[dict], list[str]]:
 
 def parse_custom_rules(raw: list[dict] | None) -> list[PlausibilityRule]:
     """Parse caller-supplied custom expectations (same declarative schema as
-    config/checks.yaml) into rules. Invalid rules raise 422 — a custom expectation
+    config/checks.yaml) into rules. Invalid rules raise 422  a custom expectation
     that does not parse must not be silently dropped. Empty/None → no extra rules."""
     if not raw:
         return []
@@ -83,7 +83,7 @@ def persist(
         assessment_id = store.save(
             passport_dict, provider_id=provider_id, idempotency_key=idempotency_key
         )
-    except Exception:  # noqa: BLE001 — persistence is non-fatal
+    except Exception:  # noqa: BLE001  persistence is non-fatal
         _log.warning("passport persistence failed (non-fatal)", exc_info=True)
         return
     fstore = get_findings_store()
@@ -92,7 +92,7 @@ def persist(
     try:
         for finding in derive_findings(passport_dict, assessment_id):
             fstore.create(finding)
-    except Exception:  # noqa: BLE001 — finding derivation is non-fatal
+    except Exception:  # noqa: BLE001  finding derivation is non-fatal
         _log.warning("findings derivation failed (non-fatal)", exc_info=True)
 
 

@@ -5,7 +5,7 @@
 -- SQL source feature end-to-end:
 --   * direct identifiers   (names, SSN, MRN, email, phone)
 --   * quasi-identifiers    (DOB, ZIP, sex)
---   * free-text PHI        (clinical notes — for NLP scrubbing)
+--   * free-text PHI        (clinical notes  for NLP scrubbing)
 --   * cross-table keys     (mrn / patient_mrn) so you can verify that gPAS
 --                           pseudonymization stays CONSISTENT across tables
 --                           and foreign-key joins survive de-identification.
@@ -18,7 +18,7 @@ CREATE SCHEMA IF NOT EXISTS clinic;
 SET search_path TO clinic, public;
 
 -- ---------------------------------------------------------------------
--- patients — one row per person; mrn is the cross-table linkage key.
+-- patients  one row per person; mrn is the cross-table linkage key.
 -- ---------------------------------------------------------------------
 CREATE TABLE patients (
     patient_id   SERIAL PRIMARY KEY,
@@ -46,7 +46,7 @@ VALUES
     ('MRN-1006', 'Maria Gonzalez',   '111-22-3333', '1988-09-08', 'F', 'maria.g@example.com',    '602-555-0150', '77 Cactus Way',   'Phoenix',    'AZ', '85001');
 
 -- ---------------------------------------------------------------------
--- encounters — many per patient; references patients via patient_mrn.
+-- encounters  many per patient; references patients via patient_mrn.
 -- The note column carries free-text PHI to test NLP scrubbing.
 -- ---------------------------------------------------------------------
 CREATE TABLE encounters (
@@ -69,7 +69,7 @@ INSERT INTO encounters (patient_mrn, visit_date, department, provider, note) VAL
     ('MRN-1006', '2024-04-18', 'Pediatrics',  'Dr. Anna Kim',    'Maria Gonzalez accompanied minor. Updated contact maria.g@example.com.');
 
 -- ---------------------------------------------------------------------
--- lab_results — third table sharing the mrn key, for multi-table export.
+-- lab_results  third table sharing the mrn key, for multi-table export.
 -- ---------------------------------------------------------------------
 CREATE TABLE lab_results (
     result_id    SERIAL PRIMARY KEY,

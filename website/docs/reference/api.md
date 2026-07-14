@@ -23,7 +23,7 @@ All protected endpoints require the `X-API-Key` header when `MEDANON_API_KEY` is
 X-API-Key: <your-api-key>
 ```
 
-Bearer tokens are also accepted — either an OIDC JWT (when `MEDANON_AUTH_PROVIDER=oidc`) or a SMART on FHIR token:
+Bearer tokens are also accepted  either an OIDC JWT (when `MEDANON_AUTH_PROVIDER=oidc`) or a SMART on FHIR token:
 
 ```http
 Authorization: Bearer <token>
@@ -1299,7 +1299,7 @@ Trust Profiles bundle Trust Gate audit configuration (which phases to run, secto
 | `PUT /v1/trust-profiles/{name}` | admin | Update a trust profile |
 | `DELETE /v1/trust-profiles/{name}` | admin | Delete a trust profile |
 
-**Example — create a trust profile:**
+**Example  create a trust profile:**
 ```bash
 curl -X POST http://localhost:8000/v1/trust-profiles \
   -H 'Content-Type: application/json' \

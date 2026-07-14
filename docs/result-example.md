@@ -1,4 +1,4 @@
-# Result Example — De-identified FHIR Output
+# Result Example  De-identified FHIR Output
 
 This document shows side-by-side examples of identified input and de-identified output for selected config profiles. Each transformation is annotated to explain what rule applied and why.
 
@@ -85,14 +85,14 @@ This is the raw FHIR R4 Patient resource as it exists on the source FHIR server.
 
 | Field | Original | Result | Rule applied | Why |
 |---|---|---|---|---|
-| `id` | `patient-123` | `a7f3c91b...` | `cryptohash` (HMAC-SHA3-256) | GDPR Art. 4(5): pseudonymize all identifiers. Keyed with `MEDANON_HASH_KEY` — cannot be reversed without the key. |
+| `id` | `patient-123` | `a7f3c91b...` | `cryptohash` (HMAC-SHA3-256) | GDPR Art. 4(5): pseudonymize all identifiers. Keyed with `MEDANON_HASH_KEY`  cannot be reversed without the key. |
 | `name` | `[{family: "Müller", given: ["Hans", "Georg"]}]` | `[]` | `redact` | Direct identifier. Fully removed. |
 | `birthDate` | `1951-08-14` | `null` | `redact` | GDPR requires dates to be removed or heavily generalized. This profile removes them entirely. |
 | `address` | `[{line: "Hauptstraße 42", city: "Berlin", postalCode: "10115"}]` | `[]` | `redact` | Geographic identifiers. Fully removed. |
 | `telecom` | `[{phone: "+49 30 12345678"}, ...]` | `[]` | `redact` | Contact identifiers. Fully removed. |
 | `identifier[*].value` | `MRN-789456`, `A123456789` | hashes | `cryptohash` | Identifiers pseudonymized but retained (allows longitudinal linkage within the same dataset). |
 | `text.div` | XHTML narrative with name + phone | `[REDACTED]` | `nlp_scrub` | Free-text PHI removed by NLP entity detection. |
-| `gender` | `male` | `male` | (retained) | Gender is a quasi-identifier but retained in GDPR profile — it is a standard clinical field needed for analysis. |
+| `gender` | `male` | `male` | (retained) | Gender is a quasi-identifier but retained in GDPR profile  it is a standard clinical field needed for analysis. |
 
 ---
 
@@ -141,7 +141,7 @@ This is the raw FHIR R4 Patient resource as it exists on the source FHIR server.
 | `telecom` | phone + email | `[]` | `redact` | HIPAA categories 6 (phone) + 10 (email). |
 | `identifier` | MRN, KV-Nummer | `[]` | `redact` | HIPAA categories 12–17: account numbers, certificate numbers. |
 | `text.div` | narrative with name + phone | `[[PERSON_1]] ... [[PHONE_NUMBER_1]]` | `nlp_scrub` | Residual PHI in free text removed by NLP and replaced with typed tokens. |
-| `gender` | `male` | `male` | (retained) | Not a HIPAA PHI category — retained. |
+| `gender` | `male` | `male` | (retained) | Not a HIPAA PHI category  retained. |
 
 ---
 
@@ -235,16 +235,16 @@ This is the raw FHIR R4 Patient resource as it exists on the source FHIR server.
 | Field | Transformation | Why |
 |---|---|---|
 | `id` | `obs-456` → `psn-W5J2N8K3` | gPAS pseudonym, reversible |
-| `subject.reference` | `Patient/patient-123` → `Patient/psn-R7K2M9P4` | Reference rewriting (finalize stage) — the patient pseudonym was computed in the pseudonymize stage; all cross-resource references are updated to match in post-processing. |
-| `effectiveDateTime` | `2023-09-22T14:15:00Z` → `2023` | `generalize` (date_year) — clinical dates generalized to year only |
-| `valueQuantity.value` | `72` | retained — clinical measurements are not direct identifiers |
-| `note[0].text` | names present | NLP `[[PERSON_1]]`, `[[PERSON_2]]` — phi_detection stage identified two PERSON entities and replaced them with typed tokens |
+| `subject.reference` | `Patient/patient-123` → `Patient/psn-R7K2M9P4` | Reference rewriting (finalize stage)  the patient pseudonym was computed in the pseudonymize stage; all cross-resource references are updated to match in post-processing. |
+| `effectiveDateTime` | `2023-09-22T14:15:00Z` → `2023` | `generalize` (date_year)  clinical dates generalized to year only |
+| `valueQuantity.value` | `72` | retained  clinical measurements are not direct identifiers |
+| `note[0].text` | names present | NLP `[[PERSON_1]]`, `[[PERSON_2]]`  phi_detection stage identified two PERSON entities and replaced them with typed tokens |
 
 **Reference rewriting:** The `subject.reference` field originally pointed to `Patient/patient-123`. After pseudonymize stage, the patient ID is now `psn-R7K2M9P4`. The finalize stage (`post_processor.py`) walks every resource and rewrites all matching references to keep the FHIR graph consistent.
 
 ---
 
-## Example with NLP scrubbing — detailed
+## Example with NLP scrubbing  detailed
 
 The following shows how the NLP microservice processes a clinical narrative:
 
@@ -255,7 +255,7 @@ Charité Berlin. Phone follow-up scheduled: +49 30 98765432.
 Previous MRN at Vivantes: MRN-112233.
 ```
 
-**phi_detection stage — NLP batch detection result:**
+**phi_detection stage  NLP batch detection result:**
 
 | Entity type | Detected text | Start | End | Replacement |
 |---|---|---|---|---|
@@ -276,7 +276,7 @@ Token naming (`[[TYPE_N]]`) is deterministic within a resource: the same entity 
 
 ---
 
-## Composite score — example output
+## Composite score  example output
 
 After de-identification, a job can be scored via `POST /v1/jobs/{id}/score`:
 
@@ -309,10 +309,10 @@ After de-identification, a job can be scored via `POST /v1/jobs/{id}/score`:
 ```
 
 **Interpreting the score:**
-- `composite = 0.78` — good overall. Privacy gate passed, utility moderate (dates generalized reduces precision), quality high.
-- `utility.field_retention_rate = 0.73` — 27% of fields were redacted. Expected for a production profile.
-- `utility.date_precision = "year"` — all clinical dates generalized to year only. Expected for `config_gpas.yaml`.
-- `quality.structural_validity = 0.98` — 2% of resources had minor FHIR structural issues (common with source EHR data).
+- `composite = 0.78`  good overall. Privacy gate passed, utility moderate (dates generalized reduces precision), quality high.
+- `utility.field_retention_rate = 0.73`  27% of fields were redacted. Expected for a production profile.
+- `utility.date_precision = "year"`  all clinical dates generalized to year only. Expected for `config_gpas.yaml`.
+- `quality.structural_validity = 0.98`  2% of resources had minor FHIR structural issues (common with source EHR data).
 
 Download a Markdown audit report with `GET /v1/jobs/{id}/score/report`.
 

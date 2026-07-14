@@ -190,7 +190,7 @@ def load_policy(path: str | None = None) -> dict:
                 )
         except Exception:  # noqa: BLE001
             _log.warning(
-                "TRUST_GATE_RESOURCE_THRESHOLDS_JSON is not valid JSON — ignored"
+                "TRUST_GATE_RESOURCE_THRESHOLDS_JSON is not valid JSON  ignored"
             )
     return {
         "concordance_rules": concordance if isinstance(concordance, list) else [],
@@ -209,7 +209,7 @@ def _fhirpath(resource: dict, expr: str) -> list:
         from fhirpathpy import evaluate as _eval
 
         return _eval(resource, expr) or []
-    except Exception as exc:  # noqa: BLE001 — FHIRPath errors must not crash the gate
+    except Exception as exc:  # noqa: BLE001  FHIRPath errors must not crash the gate
         _log.debug("fhirpath eval failed for %r: %s", expr, exc)
         return []
 
@@ -224,7 +224,7 @@ def _to_instant(s: str):
     """Parse a FHIR dateTime carrying a timezone offset → aware UTC datetime.
 
     Returns None for date-only values (``YYYY``, ``YYYY-MM``, ``YYYY-MM-DD``) or
-    naive datetimes (no offset) — those cannot be ordered as instants, so callers
+    naive datetimes (no offset)  those cannot be ordered as instants, so callers
     fall back to lexicographic prefix comparison (which is chronologically correct
     for the offset-free FHIR date subset).
     """
@@ -248,7 +248,7 @@ def _compare_dates(a: str, b: str) -> int:
     Uses a true instant comparison when BOTH operands carry a timezone offset
     (so e.g. ``...+14:00`` and ``...Z`` sort by the actual moment, not by their
     raw string); otherwise falls back to a length-matched lexicographic prefix
-    compare — correct for the offset-free FHIR date subset and partial dates.
+    compare  correct for the offset-free FHIR date subset and partial dates.
     """
     ia, ib = _to_instant(a), _to_instant(b)
     if ia is not None and ib is not None:
@@ -268,7 +268,7 @@ def _first_date(resource: dict, expr: str) -> str | None:
 def _first_date_any(resource: dict, expr) -> str | None:
     """First non-empty date among one or more FHIRPath expressions.
 
-    ``expr`` may be a single path or a list of fallbacks tried in order — e.g.
+    ``expr`` may be a single path or a list of fallbacks tried in order  e.g.
     ``["performedDateTime", "performedPeriod.start"]`` so a rule anchored on an
     instant still resolves resources that carry only a period (Procedure, the
     common Synthea/real-world shape).
@@ -322,7 +322,7 @@ def _value_range_node(res: dict, codes: set[str]) -> dict | None:
     """Pick the node a value_range rule applies to: the Observation itself or the
     matching ``component[]`` entry whose coding intersects *codes*.
 
-    Component-scoped vitals are otherwise invisible to a top-level-only lookup —
+    Component-scoped vitals are otherwise invisible to a top-level-only lookup
     e.g. the US-Core blood-pressure panel carries the panel code 85354-9 at the
     top level while systolic (8480-6) / diastolic (8462-4) live under
     ``component[].valueQuantity``. With no code filter the top-level Observation
@@ -398,7 +398,7 @@ def evaluate(
 def _patient_date(res: dict, index: dict[str, str]) -> str | None:
     """Resolve the subject Patient's indexed date (birth/death) for *res*.
 
-    A Patient resource has no subject/patient reference — it *is* the subject —
+    A Patient resource has no subject/patient reference  it *is* the subject
     so resolve against its own ``Patient/{id}`` key. Without this, patient-level
     temporal rules (e.g. death-after-birth) can never be assessed and always NA.
     """
@@ -449,7 +449,7 @@ def _eval_one(
         # OHDSI plausibleBeforeDeath: a clinical event must not occur after the
         # subject's recorded death (only assessed for deceased patients).
         # Death-certificate / cause-of-death Observations are legitimately
-        # recorded post-mortem — exempt them via params.exempt_codes.
+        # recorded post-mortem  exempt them via params.exempt_codes.
         exempt = set(p.get("exempt_codes", []))
         if exempt and _has_code(res, exempt):
             return True, False
@@ -463,7 +463,7 @@ def _eval_one(
 
     if kind == "not_in_future":
         # DAMA timeliness: a recorded date must not be in the future. "Future" is
-        # only meaningful relative to a reference clock — anchor on the single
+        # only meaningful relative to a reference clock  anchor on the single
         # assessment-wide reference_time (provenance extraction_time, else one
         # captured assessment timestamp) so the verdict has no per-resource drift
         # and is fully reproducible when provenance is present. A direct caller
@@ -485,7 +485,7 @@ def _eval_one(
         vq = node.get("valueQuantity")
         if not isinstance(vq, dict) or not isinstance(vq.get("value"), (int, float)):
             return True, False
-        # Unit check: an unexpected OR missing unit is itself an implausibility —
+        # Unit check: an unexpected OR missing unit is itself an implausibility
         # a magnitude like 200 is meaningless without its unit (the classic
         # "weight in grams recorded against a kg range" error from the article).
         # A unit-filtered rule therefore FAILs a value whose unit is absent or

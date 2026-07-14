@@ -39,7 +39,7 @@ def blockers(det_checks: list[CheckResult]) -> list[str]:
     """Plain-language blocker lines for failed critical checks (shared)."""
     return [
         f"{c.check_id}: {c.violations}/{c.applicable} violating "
-        f"({round(c.violation_fraction * 100, 1)}%) — {c.recommendation}".strip()
+        f"({round(c.violation_fraction * 100, 1)}%)  {c.recommendation}".strip()
         for c in det_checks
         if c.critical and c.result == RESULT_FAIL
     ]
@@ -63,14 +63,14 @@ def regulated_blockers(det_checks: list[CheckResult]) -> list[str]:
     not accept "not assessed" for the externally-validated conformance dimension:
     a *skipped* check that is critical or in the ``conformance`` category (its
     terminology server or FHIR validator was unavailable, timed out, or was not
-    configured) must BLOCK — you cannot release regulated data on an assessment
+    configured) must BLOCK  you cannot release regulated data on an assessment
     that could not run.
     """
     if not _regulated_mode():
         return []
     return [
         f"{c.check_id}: assessment could not run "
-        f"({c.skip_reason or 'prerequisite unavailable'}) — regulated mode "
+        f"({c.skip_reason or 'prerequisite unavailable'})  regulated mode "
         f"requires this check to complete before release"
         for c in det_checks
         if c.skipped and (c.critical or c.category == "conformance")
@@ -108,7 +108,7 @@ def subset_decision(
     Sub-reports (per-sector, per-phase) must never be more lenient than the
     overall verdict. Routing them through the shared ``category_and_overall`` +
     ``decide`` (instead of an inline "blockers + below PASS_MIN_RATE" rule)
-    guarantees the ``CATEGORY_MIN_RATE`` floor — and any provenance cap — applies
+    guarantees the ``CATEGORY_MIN_RATE`` floor  and any provenance cap  applies
     identically. Returns (decision, overall_score, has_assessed).
     """
     category_scores, overall, has_assessed = category_and_overall(checks)
@@ -130,7 +130,7 @@ def _observation_threshold_key(resources: list[dict]) -> str | None:
 
     Inspects ``Observation.category`` codings. Returns ``Observation_lab`` or
     ``Observation_vital_signs`` only when *every* Observation in the batch shares
-    that single category (a homogeneous batch — the common bulk-export case);
+    that single category (a homogeneous batch  the common bulk-export case);
     returns None for an empty or mixed batch so the caller falls back to the
     plain ``Observation`` key, then ``default``. This keeps the sub-type keys
     reachable without misattributing a mixed pool to one threshold.
@@ -183,12 +183,12 @@ def check_resource_type_thresholds(
     resource_thresholds: dict[str, float],
 ) -> list[str]:
     """Return resource types whose genuine per-type pass-rate is below threshold
-    (Phase 2A calibration — ONC ASTP Dec 2024).
+    (Phase 2A calibration  ONC ASTP Dec 2024).
 
     Per-type pass-rate = % of assessed checks passing among (a) checks scoped to
-    that resource type (``check.resource_type == rt`` — e.g. vital-sign range
+    that resource type (``check.resource_type == rt``  e.g. vital-sign range
     rules, the Patient identity SAM) plus (b) batch-wide checks
-    (``check.resource_type == ""`` — structural, terminology, reference integrity)
+    (``check.resource_type == ""``  structural, terminology, reference integrity)
     which apply to every type. NA (skipped) checks are excluded from the
     denominator. Thresholds are on the percentage scale (normalized at load).
 

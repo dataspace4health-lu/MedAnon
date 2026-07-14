@@ -9,6 +9,7 @@ import {
 import type { ReactNode } from "react";
 import { getJobStatus, getJobResult, cancelJob as cancelJobApi, reprocessJob as reprocessJobApi, listJobs } from "@/api/medanon";
 import type { JobResponse, JobScoreResponse, UploadErrorDetail } from "@/api/medanon";
+import { useAuth } from "@/context/AuthContext";
 
 export type ExportJobStatus = "submitting" | "pending" | "running" | "done" | "error" | "cancelled";
 export type ExportJobPhase = "queued" | "fetching" | "processing" | "loading" | "uploading" | "done" | string;
@@ -128,6 +129,7 @@ function jobResponseToExportJob(jr: JobResponse): ExportJob {
 }
 
 export function BulkExportProvider({ children }: { children: ReactNode }) {
+  const { loading: authLoading, isAuthenticated } = useAuth();
   const [jobs, setJobs] = useState<ExportJob[]>([]);
   const nextIdRef = useRef(1);
   // Stores timeout handles (not intervals) so we can cancel scheduled polls.
@@ -241,8 +243,16 @@ export function BulkExportProvider({ children }: { children: ReactNode }) {
     [stopPolling, updateJob],
   );
 
-  // Recover jobs from backend on mount
+  // Recover jobs from backend once auth has settled. BulkExportProvider mounts
+  // as a child of AuthProvider, which renders children immediately without
+  // waiting for its async bootstrap (fetch auth config -> restore OIDC session
+  // from localStorage -> publish the access token). Firing this on a bare `[]`
+  // mount effect races that bootstrap: the request goes out with no bearer
+  // token yet and the backend correctly 401s. Gating on `authLoading` avoids
+  // the race, and re-running when `isAuthenticated` flips true also recovers
+  // jobs right after an OIDC login.
   useEffect(() => {
+    if (authLoading || !isAuthenticated) return;
     let cancelled = false;
     (async () => {
       try {
@@ -286,7 +296,7 @@ export function BulkExportProvider({ children }: { children: ReactNode }) {
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [authLoading, isAuthenticated]);
 
   const submitExport = useCallback(
     (

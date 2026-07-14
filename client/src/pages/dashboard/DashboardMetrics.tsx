@@ -73,7 +73,7 @@ export function DashboardMetrics() {
         icon={<Database  className="size-5 text-white" />}
         gradient="bg-sky-600" loading={sLoading}
       />
-      <KpiCard label="Avg Score" value={avgScore != null ? `${Math.round(avgScore)}%` : '—'}
+      <KpiCard label="Avg Score" value={avgScore != null ? `${Math.round(avgScore)}%` : ''}
         icon={<TrendingUp className="size-5 text-white" />}
         gradient="bg-blue-700" loading={sLoading}
         sub="composite"

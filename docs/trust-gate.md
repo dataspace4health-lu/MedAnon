@@ -119,7 +119,7 @@ Conformance:
 - `conformance.reference_integrity`: literal references resolve within the
   assessed set. A 100% rate on a batch slice (e.g. a single resource type without
   its referenced Patients or Encounters) is expected, not a sign of a clean dataset
-  — the referenced resources exist on the server but were not included. Run a
+   the referenced resources exist on the server but were not included. Run a
   full-server scan or `Patient/$everything` to assess reference integrity correctly.
 - `conformance.status_not_entered_in_error`: clinical resources are not
   `status=entered-in-error` (FHIR Safety Checklist; these are retracted records).
@@ -130,7 +130,7 @@ Completeness:
 
 - `completeness.required_elements`: required elements per resource type are
   populated. Includes `Observation.subject`, which is contextually required for
-  secondary use even though it is not a base FHIR SHALL element — an observation
+  secondary use even though it is not a base FHIR SHALL element  an observation
   with no subject reference cannot be attributed to a patient for analysis.
 - `completeness.value_or_absent`: an Observation carries a value (top-level
   `value[x]`, a `component[].value[x]`, or a `dataAbsentReason`). Panel

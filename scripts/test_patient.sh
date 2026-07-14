@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
-# MedAnon — interactive patient de-identification test
+# MedAnon  interactive patient de-identification test
 # Usage: bash scripts/test_patient.sh
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
@@ -11,7 +11,7 @@ MEDANON_URL="http://localhost:${MEDANON_PORT}"
 MEDANON_CONFIG_PROFILE="${MEDANON_CONFIG_PROFILE:-structural}"
 FHIR_SOURCE_URL="${FHIR_SOURCE_URL:-http://localhost:8081/fhir}"
 # URL that MedAnon uses to reach HAPI FHIR from *inside* Docker.
-# When MedAnon runs in the compose stack it can't use localhost — it must
+# When MedAnon runs in the compose stack it can't use localhost  it must
 # use the Docker service hostname. Override to http://localhost:8081/fhir
 # only if running MedAnon directly on the host (outside Docker).
 MEDANON_FHIR_URL="${MEDANON_FHIR_URL:-http://hapi-fhir:8080/fhir}"
@@ -21,7 +21,7 @@ mkdir -p "$DATA_DIR" "$OUTPUT_DIR"
 
 # ── 1. Ensure MedAnon container is running ────────────────────────────────────
 if ! curl -sf "${MEDANON_URL}/health" > /dev/null 2>&1; then
-  echo "MedAnon not reachable at ${MEDANON_URL} — starting container..."
+  echo "MedAnon not reachable at ${MEDANON_URL}  starting container..."
   docker rm -f medanon-test 2>/dev/null || true
 # Detect the Docker network where gPAS is running
   # Use the stable network name declared in docker-compose.yml.  Falls back to
@@ -60,7 +60,7 @@ if [[ -z "$PATIENT_ID" ]]; then
   exit 1
 fi
 
-# Sanitize patient ID — allow only alphanumeric, hyphens and underscores
+# Sanitize patient ID  allow only alphanumeric, hyphens and underscores
 # to prevent path traversal (e.g. ../../../etc/passwd) in file names.
 SAFE_PATIENT_ID="${PATIENT_ID//[^a-zA-Z0-9_-]/}"
 if [[ -z "$SAFE_PATIENT_ID" || "$SAFE_PATIENT_ID" != "$PATIENT_ID" ]]; then

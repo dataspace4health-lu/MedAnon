@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
-# init_gpas_domains.sh — Bootstrap gPAS database: users, permissions, domains
+# init_gpas_domains.sh  Bootstrap gPAS database: users, permissions, domains
 #
 # Idempotent.  Safe to run on a fresh rebuild (volumes deleted) or against a
 # running stack.  Covers everything docker-entrypoint-initdb.d would do on
@@ -82,8 +82,8 @@ _psql_exec() {
 # data here so that make init-domains is sufficient to fully restore a stack.
 #
 # Credentials after seeding:
-#   admin@ths / ttp-tools  — full admin access to all gPAS domains + web UI
-#   user@ths  / ttp-tools  — pseudonym mapping + dashboard (no admin actions)
+#   admin@ths / ttp-tools   full admin access to all gPAS domains + web UI
+#   user@ths  / ttp-tools   pseudonym mapping + dashboard (no admin actions)
 GRAS_SQL="${REPO_ROOT}/services/gpas/sqls_pg/01_create_database_gras.sql"
 GRAS_SEED="${REPO_ROOT}/services/gpas/sqls_pg/02_init_database_gras_for_gpas.sql"
 
@@ -92,7 +92,7 @@ if [[ ! -f "${GRAS_SQL}" || ! -f "${GRAS_SEED}" ]]; then
     exit 1
 fi
 
-echo "==> Seeding gRAS schema (idempotent — safe to re-run)..."
+echo "==> Seeding gRAS schema (idempotent  safe to re-run)..."
 _psql_exec "${GRAS_SQL}" stdin
 
 echo "==> Seeding gRAS users and permissions..."
@@ -141,7 +141,7 @@ while true; do
         echo "ERROR: gPAS did not become healthy within ${TIMEOUT}s. Check: docker compose logs gpas"
         exit 1
     fi
-    printf "    [%3ds] status=%s — waiting...\r" "${ELAPSED}" "${STATUS}"
+    printf "    [%3ds] status=%s  waiting...\r" "${ELAPSED}" "${STATUS}"
     sleep 5
     ELAPSED=$((ELAPSED + 5))
 done
@@ -155,5 +155,5 @@ echo "Done. gPAS is fully initialised."
 echo ""
 echo "  Web UI:  http://localhost:8080/gpas-web/"
 echo "  Logins:"
-echo "    admin@ths / ttp-tools  — full admin (all domains + web UI config)"
-echo "    user@ths  / ttp-tools  — standard   (pseudonym mapping + dashboards)"
+echo "    admin@ths / ttp-tools   full admin (all domains + web UI config)"
+echo "    user@ths  / ttp-tools   standard   (pseudonym mapping + dashboards)"

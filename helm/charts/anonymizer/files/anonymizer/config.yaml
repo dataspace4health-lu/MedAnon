@@ -39,7 +39,7 @@ rules:
   - match: Patient.address
     action: redact
 
-  # Geolocation (lat/lon) nested inside Patient.address.extension — re-identification PHI
+  # Geolocation (lat/lon) nested inside Patient.address.extension  re-identification PHI
   - name: redact patient address geolocation
     match: Patient.address.extension
     action: redact
@@ -250,7 +250,7 @@ rules:
     action: redact
 
   # subject.reference / patient.reference link clinical resources back to the
-  # patient — must be redacted to break re-identification via reference strings
+  # patient  must be redacted to break re-identification via reference strings
   - match: "*.subject.reference"
     action: redact
 
@@ -261,11 +261,11 @@ rules:
   # 10. DOCUMENTS / ATTACHMENTS
   # text/* payloads: Base64-decoded → NLP-scrubbed → re-encoded.
   # Non-text MIME types (image/*, application/pdf …): data field redacted.
-  # NOTE: *.attachment.data does NOT match DocumentReference — the attachment is
+  # NOTE: *.attachment.data does NOT match DocumentReference  the attachment is
   # nested under content[*].attachment, so specific paths are required per resource.
   # ===========================================================================
 
-  # DocumentReference — clinical notes (content[*].attachment, nested one level)
+  # DocumentReference  clinical notes (content[*].attachment, nested one level)
   - name: scrub document reference attachment text
     match: DocumentReference.content.attachment.data
     action: nlp_detect_act
@@ -286,7 +286,7 @@ rules:
     match: DocumentReference.content.attachment.hash
     action: redact
 
-  # DiagnosticReport, QuestionnaireResponse — presentedForm is Attachment directly
+  # DiagnosticReport, QuestionnaireResponse  presentedForm is Attachment directly
   - name: scrub presented form text
     match: "*.presentedForm.data"
     action: nlp_detect_act
@@ -303,7 +303,7 @@ rules:
     match: "*.presentedForm.title"
     action: redact
 
-  # Observation, Task — valueAttachment
+  # Observation, Task  valueAttachment
   - name: scrub value attachment text
     match: "*.valueAttachment.data"
     action: nlp_detect_act
@@ -316,7 +316,7 @@ rules:
     match: "*.valueAttachment.url"
     action: redact
 
-  # Photos — biometric identifiers (never NLP-scrubable)
+  # Photos  biometric identifiers (never NLP-scrubable)
   - name: redact photo data
     match: "*.photo.data"
     action: redact
@@ -370,7 +370,7 @@ rules:
       mode: html_tokenize
       patterns: all
 
-  # NLP-based text scrubbing (second pass — catches names/locations regex misses)
+  # NLP-based text scrubbing (second pass  catches names/locations regex misses)
   - match: "*.text"
     action: nlp_scrub
     params:
@@ -383,7 +383,7 @@ rules:
     params:
       threshold: 0.4
 
-  # CodeableConcept.text fields — may contain embedded names/IDs alongside
+  # CodeableConcept.text fields  may contain embedded names/IDs alongside
   # clinical terminology. NLP pass detects PHI; regex pass catches dates/phones.
   - match: "*.code.text"
     action: nlp_scrub
@@ -409,7 +409,7 @@ rules:
       mode: tokenize
       threshold: 0.4
 
-  # Street address pattern — fires on any valueString containing a recognizable
+  # Street address pattern  fires on any valueString containing a recognizable
   # address regardless of LOINC code or resource structure (covers PRAPARE 56799-0,
   # custom SDOH panels, and any other free-text fields with address content).
   # Two rules: one for top-level valueString, one for component.valueString

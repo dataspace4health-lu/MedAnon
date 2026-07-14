@@ -122,7 +122,7 @@ function RunAuditRow({ run }: { run: ProcessingRun }) {
         {/* Score */}
         <div className="text-right shrink-0">
           <p className={`text-xl font-black tabular-nums ${statusColor}`}>
-            {composite != null ? `${Math.round(composite)}%` : '—'}
+            {composite != null ? `${Math.round(composite)}%` : ''}
           </p>
           <p className="text-[10px] text-muted-foreground">composite</p>
         </div>

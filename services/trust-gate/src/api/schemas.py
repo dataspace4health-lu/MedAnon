@@ -10,18 +10,18 @@ from pydantic import BaseModel, Field
 class AssessRequest(BaseModel):
     resource: dict[str, Any] | list[dict[str, Any]] = Field(...)
     dataset_id: str = "dataset"
-    # Data provider identity — keys the retained assessment history.
+    # Data provider identity  keys the retained assessment history.
     provider_id: str | None = None
     source_types: list[str] = Field(default_factory=lambda: ["fhir"])
     config_profile: str = "auto"
     provenance: dict[str, Any] = Field(default_factory=dict)
     # Selectable audit phases (None/empty → all). See phases.ALL_PHASES.
     phases: list[str] | None = None
-    # Sector targets — each {id?, resource_types?, code_systems?} gets its own verdict.
+    # Sector targets  each {id?, resource_types?, code_systems?} gets its own verdict.
     targets: list[dict[str, Any]] | None = None
-    # Declared downstream use — makes the fitness verdict purpose-bound.
+    # Declared downstream use  makes the fitness verdict purpose-bound.
     intended_use: str | None = None
-    # Declared use case — resolves to a metric subset via use_case_profiles.yaml.
+    # Declared use case  resolves to a metric subset via use_case_profiles.yaml.
     # Explicit `phases` (if given) still wins.
     use_case: str | None = None
     # Source-of-truth reference: {"records": {"Type/id": {field: expected}}}.

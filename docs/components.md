@@ -15,11 +15,11 @@ Technical reference for all services and modules. For architecture diagrams and 
 | `anonymizer` | `medanon:latest` | `8000` | FastAPI de-identification engine |
 | `worker` | `medanon:latest` | `9091` (metrics) | Dedicated async job worker |
 | `ui` | `medanon-ui:latest` | `8501` | React SPA served by nginx |
-| `fhir-server` | `hapiproject/hapi:v7.6.0` | none (isolated) | Source HAPI FHIR R4 — identified data |
+| `fhir-server` | `hapiproject/hapi:v7.6.0` | none (isolated) | Source HAPI FHIR R4  identified data |
 | `hapi-db` | `postgres:16-alpine` | internal | PostgreSQL backing source HAPI |
-| `fhir-target` | `hapiproject/hapi:v7.6.0` | `8082` | Target HAPI FHIR R4 — de-identified data |
+| `fhir-target` | `hapiproject/hapi:v7.6.0` | `8082` | Target HAPI FHIR R4  de-identified data |
 | `hapi-target-db` | `postgres:16-alpine` | internal | PostgreSQL backing target HAPI |
-| `gateway` | `traefik:v3` | `8080` (gPAS), `8200` (NLP) | API gateway — Docker-provider service discovery; carries `gpas-lb` / `nlp-lb` network aliases |
+| `gateway` | `traefik:v3` | `8080` (gPAS), `8200` (NLP) | API gateway  Docker-provider service discovery; carries `gpas-lb` / `nlp-lb` network aliases |
 | `gpas` | WildFly 38 + gPAS | via gateway | Reversible pseudonymization (TTP); scaled with `--scale gpas=N` |
 | `gpas-db` | `postgres:16-alpine` | internal | gPAS pseudonym store |
 | `app-db` | `postgres:16-alpine` | internal | Jobs, configs, subscriptions, staging |
@@ -35,7 +35,7 @@ Technical reference for all services and modules. For architecture diagrams and 
 | `minio` | `s3` | `9000`, `9001` | S3-compatible object storage for job results |
 | `ollama` | `ai` | internal | Local LLM inference for AI agents |
 
-**Scaling (Traefik discovers replicas via Docker labels — no config reload):**
+**Scaling (Traefik discovers replicas via Docker labels  no config reload):**
 ```bash
 docker compose up -d --scale gpas=3   # 3 gPAS replicas (round-robin via gateway)
 docker compose up -d --scale nlp=4    # 4 NLP replicas (round-robin via gateway)
@@ -50,13 +50,13 @@ Two Docker bridge networks enforce physical isolation between identified and de-
 | `processing-net` | All services (anonymizer, worker, ui, target FHIR, gPAS, NLP, analytics, Redis, PostgreSQL) | Main application network |
 | `source-net` | `fhir-server`, `hapi-db`, `anonymizer`, `worker` | Isolated network for identified data. Only anonymizer and worker bridge both networks. |
 
-The source FHIR server has no published host port — it is accessible only through anonymizer proxy endpoints. This prevents accidental direct access to identified patient data from the UI, analytics, or any other service.
+The source FHIR server has no published host port  it is accessible only through anonymizer proxy endpoints. This prevents accidental direct access to identified patient data from the UI, analytics, or any other service.
 
 ### Edge & routing
 
 Two edge components handle ingress, routing, and horizontal scaling:
 
-#### UI nginx (`client/nginx.conf`) — port 8501
+#### UI nginx (`client/nginx.conf`)  port 8501
 
 Serves the React SPA and proxies API / FHIR requests:
 
@@ -72,15 +72,15 @@ Security headers added: `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-P
 
 **Why dynamic DNS?** Using a variable `$upstream` with `resolver 127.0.0.11` forces nginx to re-resolve the container hostname on each request. Without this, nginx caches the IP at startup and returns 502 after container restarts (even though the DNS record updates immediately).
 
-#### Traefik gateway (`gateway` container) — ports 8080 (gPAS), 8200 (NLP)
+#### Traefik gateway (`gateway` container)  ports 8080 (gPAS), 8200 (NLP)
 
 The `gateway` service joins `processing-net` under the `gpas-lb` and `nlp-lb` aliases so existing `GPAS_URL=http://gpas-lb:80/...` and `NLP_SERVICE_URL=http://nlp-lb:8200` values work without `.env` changes. `services/gpas/lb/nginx.conf` and `services/nlp/nginx.conf` are kept as reference only.
 
 | Entry point | Routes to | Strategy |
 |---|---|---|
-| `gpas` (`:80`, host `8080`) — `/gpas-web`, `/gras-web` | `gpas:8080` | Sticky sessions (`gpas_session` cookie) — keeps JSF ViewState bound to one replica |
-| `gpas` (`:80`, host `8080`) — `/` | `gpas:8080` | Round-robin |
-| `nlp` (`:8200`, host `8200`) — `/` | `nlp:8200` | Round-robin |
+| `gpas` (`:80`, host `8080`)  `/gpas-web`, `/gras-web` | `gpas:8080` | Sticky sessions (`gpas_session` cookie)  keeps JSF ViewState bound to one replica |
+| `gpas` (`:80`, host `8080`)  `/` | `gpas:8080` | Round-robin |
+| `nlp` (`:8200`, host `8200`)  `/` | `nlp:8200` | Round-robin |
 | `metrics` (`:8082`, internal) | Traefik Prometheus exporter | Not host-published |
 
 **Discovery:** Docker provider with read-only socket mount, `exposedbydefault=false`. Traefik labels live on `gpas` and `nlp` services; new replicas appear automatically when scaled.
@@ -89,7 +89,7 @@ The `gateway` service joins `processing-net` under the `gpas-lb` and `nlp-lb` al
 
 ### PostgreSQL databases
 
-Four independent PostgreSQL 16 instances — each has its own lifecycle, backup schedule, and resource limits:
+Four independent PostgreSQL 16 instances  each has its own lifecycle, backup schedule, and resource limits:
 
 | Instance | Container | Schema owner | What it stores |
 |---|---|---|---|
@@ -101,11 +101,11 @@ Four independent PostgreSQL 16 instances — each has its own lifecycle, backup 
 The app-db schema (`medanon`) is initialized by `services/anonymizer/sql/init.sql`:
 
 ```
-medanon.jobs                — async job records
-medanon.staged_resources    — two-phase staging for bulk operations
-medanon.configs             — user-defined config profiles
-medanon.subscriptions       — FHIR R4 Subscriptions
-medanon.processing_runs     — scoring history
+medanon.jobs                 async job records
+medanon.staged_resources     two-phase staging for bulk operations
+medanon.configs              user-defined config profiles
+medanon.subscriptions        FHIR R4 Subscriptions
+medanon.processing_runs      scoring history
 ```
 
 ### Redis
@@ -115,14 +115,14 @@ Redis 7 serves three independent roles, isolated on separate logical databases:
 | DB | Role | Activated by |
 |----|------|-------------|
 | `0` | Anonymizer job queue **and** gPAS L2 cache | `MEDANON_REDIS_URL` (anonymizer + worker) |
-| `1` | Reserved for future cross-service queues | — |
+| `1` | Reserved for future cross-service queues |  |
 | `2` | NLP L2 detection cache | `NLP_REDIS_URL` (defaulted in compose) |
 
-**Job queue (DB 0):** Jobs submitted to `/v1/jobs/*` are pushed to a Redis Stream (`medanon:job_stream`). Workers consume via `XREADGROUP` against the `workers` consumer group — blocking read with at-least-once delivery semantics. If a worker crashes after popping a job but before ACKing, the message stays in the Pending Entry List (PEL) and is reclaimed by `XAUTOCLAIM`. Multiple anonymizer replicas share the same queue; a job submitted to replica A can be executed by replica B.
+**Job queue (DB 0):** Jobs submitted to `/v1/jobs/*` are pushed to a Redis Stream (`medanon:job_stream`). Workers consume via `XREADGROUP` against the `workers` consumer group  blocking read with at-least-once delivery semantics. If a worker crashes after popping a job but before ACKing, the message stays in the Pending Entry List (PEL) and is reclaimed by `XAUTOCLAIM`. Multiple anonymizer replicas share the same queue; a job submitted to replica A can be executed by replica B.
 
-**gPAS pseudonym cache (L2, DB 0):** Cross-replica sharing of gPAS results. Key format: `medanon:gpas:["pseudonymize", url, domain, op, original_id]`. TTL: 1 hour. Redis errors are swallowed — the cache falls back to a direct gPAS call gracefully, so a Redis outage degrades performance but does not break de-identification.
+**gPAS pseudonym cache (L2, DB 0):** Cross-replica sharing of gPAS results. Key format: `medanon:gpas:["pseudonymize", url, domain, op, original_id]`. TTL: 1 hour. Redis errors are swallowed  the cache falls back to a direct gPAS call gracefully, so a Redis outage degrades performance but does not break de-identification.
 
-**NLP detection cache (L2, DB 2):** Cross-replica sharing of Presidio detection results. Key format: `medanon:nlp:detect:<lang>:<threshold>:<entities-hash>:<text-sha256>`. Default TTL: 7 days (`NLP_REDIS_TTL_SEC=604800`). Survives NLP container restarts — eliminates the cold-cache penalty after deploys. Implemented in `services/nlp/src/cache.py`. Redis errors are swallowed (soft-fail to L1 + compute path).
+**NLP detection cache (L2, DB 2):** Cross-replica sharing of Presidio detection results. Key format: `medanon:nlp:detect:<lang>:<threshold>:<entities-hash>:<text-sha256>`. Default TTL: 7 days (`NLP_REDIS_TTL_SEC=604800`). Survives NLP container restarts  eliminates the cold-cache penalty after deploys. Implemented in `services/nlp/src/cache.py`. Redis errors are swallowed (soft-fail to L1 + compute path).
 
 **Why three layers?** L1 (in-process LRU per replica) is fastest but not shared. L2 (Redis) shares results across replicas and survives restarts. For a fleet of N anonymizer + M NLP replicas processing parallel bulk exports, L2 collapses N×M cold-start costs into a single warm-up.
 
@@ -134,16 +134,16 @@ All services read configuration from environment variables, set in `.env` (Docke
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `MEDANON_HASH_KEY` | (required in prod) | HMAC-SHA3-256 key for `cryptohash` action. Without this, plain SHA3-256 is used — reversible via rainbow tables. |
+| `MEDANON_HASH_KEY` | (required in prod) | HMAC-SHA3-256 key for `cryptohash` action. Without this, plain SHA3-256 is used  reversible via rainbow tables. |
 | `MEDANON_API_KEY` | (blank = open) | API authentication key. Leave blank for local dev only. |
-| `MEDANON_REDIS_URL` | — | Enables Redis job store + gPAS L2 cache. Format: `redis://:password@redis:6379/0`. |
+| `MEDANON_REDIS_URL` |  | Enables Redis job store + gPAS L2 cache. Format: `redis://:password@redis:6379/0`. |
 | `NLP_REDIS_URL` | `redis://:…@redis:6379/2` (in compose) | Enables the NLP L2 detection cache on Redis DB 2. Leave empty to disable. |
 | `NLP_REDIS_TTL_SEC` | `604800` (7 days) | TTL for NLP L2 cache entries. |
-| `MEDANON_APP_DB_URL` | — | PostgreSQL URL for app state (auto-constructed in docker-compose). |
-| `GPAS_URL` | — | gPAS server URL. When set, auto-selects `config_gpas.yaml` profile. |
+| `MEDANON_APP_DB_URL` |  | PostgreSQL URL for app state (auto-constructed in docker-compose). |
+| `GPAS_URL` |  | gPAS server URL. When set, auto-selects `config_gpas.yaml` profile. |
 | `NLP_SERVICE_URL` | `http://nlp-lb:8200` | NLP microservice URL (hardcoded in docker-compose, override for external NLP). |
 | `ANALYTICS_SERVICE_URL` | `http://analytics:8100` | Analytics microservice URL. |
-| `LOG_LEVEL` | `INFO` | `DEBUG` may log resource content containing PHI — use `INFO` in production. |
+| `LOG_LEVEL` | `INFO` | `DEBUG` may log resource content containing PHI  use `INFO` in production. |
 | `MEDANON_MANIFEST_ENABLED` | `false` | Attach transformation manifest to `meta.tag`. Required for GDPR Art. 30 accountability. |
 
 Full variable reference: [DEPLOYMENT.md § Environment variables](DEPLOYMENT.md) and `.env.example`.
@@ -158,8 +158,8 @@ gPAS (Generic Pseudonym Administration Service) is a trusted third-party (TTP) s
 
 | Approach | Problem |
 |---|---|
-| Local SHA3-256 hash | Irreversible — adverse event investigation and follow-up linkage become impossible |
-| HMAC hash (keyed) | Reversible only by whoever holds the key — no TTP separation |
+| Local SHA3-256 hash | Irreversible  adverse event investigation and follow-up linkage become impossible |
+| HMAC hash (keyed) | Reversible only by whoever holds the key  no TTP separation |
 | gPAS TTP | Reversible by an authorized third party, completely separate from the clinical and research teams |
 
 The TTP model provides organizational separation: the clinical team does not have the pseudonym key, and the research team does not have the patient identifiers. Only the TTP (gPAS operator) can perform reverse lookups, and only under controlled procedures.
@@ -198,7 +198,7 @@ gPAS is a critical external dependency. Without a circuit breaker, a gPAS outage
 CLOSED (normal operation)
     │ 5 failures within 60s
     ▼
-OPEN (fail-fast — no gPAS calls for 30s)
+OPEN (fail-fast  no gPAS calls for 30s)
     │ 30s elapsed
     ▼
 HALF-OPEN (1 probe call)
@@ -216,8 +216,8 @@ gPAS organizes pseudonyms into domains. Each domain has its own pseudonym namesp
 
 1. **Create domain** via gPAS web UI (`http://localhost:8080/gpas-web/`) or `make init-domains`
 2. Domain stored in `gpas-db` + loaded into JVM `domainLocks HashMap`
-3. `$pseudonymizeAllowCreate` — creates pseudonym if not exists, returns existing if already created
-4. To reverse: `$depseudonymize` — requires TTP admin credentials
+3. `$pseudonymizeAllowCreate`  creates pseudonym if not exists, returns existing if already created
+4. To reverse: `$depseudonymize`  requires TTP admin credentials
 
 **Critical:** Never create domains by inserting rows directly into PostgreSQL. gPAS maintains a `domainLocks HashMap` in JVM memory populated only when domains are created through the gPAS API. Direct SQL inserts appear to work at the DB level but cause "domain not found" errors at runtime when pseudonymization is attempted.
 
@@ -229,7 +229,7 @@ gPAS organizes pseudonyms into domains. Each domain has its own pseudonym namesp
 | `transport.py` | HTTP retry loop (2 retries, exponential backoff), URL resolution, cache helpers (`_cache_get`, `_cache_set`), domain listing. |
 | `circuit_breaker.py` | Three-state circuit breaker (CLOSED → OPEN → HALF_OPEN). Singleton per process. |
 | `protocol.py` | FHIR Parameters request builders + response parsers for `$pseudonymize` / `$depseudonymize`. |
-| `adapter.py` | `GpasPseudonymizerAdapter` — implements `PseudonymizerPort`. Wraps `gpas_pseudonymize_batch`. |
+| `adapter.py` | `GpasPseudonymizerAdapter`  implements `PseudonymizerPort`. Wraps `gpas_pseudonymize_batch`. |
 
 ### Depseudonymization
 
@@ -252,10 +252,10 @@ The anonymizer is the core service. It exposes a FastAPI REST API, runs the 4-st
 
 | Method | Path | Role | Description |
 |---|---|---|---|
-| GET | `/health` | — | Liveness. Fast — no external calls. Used by Docker healthcheck. |
-| GET | `/ready` | — | Readiness. Probes FHIR + gPAS with 5s timeout each. |
-| GET | `/metrics` | — | Prometheus metrics |
-| GET | `/docs` | — | Swagger UI |
+| GET | `/health` |  | Liveness. Fast  no external calls. Used by Docker healthcheck. |
+| GET | `/ready` |  | Readiness. Probes FHIR + gPAS with 5s timeout each. |
+| GET | `/metrics` |  | Prometheus metrics |
+| GET | `/docs` |  | Swagger UI |
 | POST | `/process` | analyst | De-identify a single FHIR resource |
 | POST | `/process/batch` | analyst | De-identify NDJSON / Bundle / XML |
 | POST | `/process/ndjson` | analyst | NDJSON-only streaming endpoint |
@@ -309,14 +309,14 @@ Override config per-request: `?config_profile=<name>`.
 | `routers/jobs.py` | `POST/GET/DELETE /v1/jobs/*` |
 | `routers/scoring.py` | `/v1/score`, `/v1/jobs/{id}/score`, `/v1/jobs/{id}/score/report` |
 | `routers/configs.py` | `/v1/configs` CRUD |
-| `routers/analytics.py` | `POST /analyse/risk` — proxies to analytics service |
-| `routers/synthetic.py` | `POST /generate/synthetic` — proxies to analytics service |
+| `routers/analytics.py` | `POST /analyse/risk`  proxies to analytics service |
+| `routers/synthetic.py` | `POST /generate/synthetic`  proxies to analytics service |
 | `routers/dicom.py` | `/process/dicom`, `/process/dicom/batch` |
 | `routers/hl7v2.py` | `/process/hl7v2`, `/process/hl7v2/batch` |
 | `routers/fhir_subscriptions.py` | FHIR R4 Subscription CRUD (`POST/GET/PUT/DELETE /fhir/Subscription`) |
 | `routers/smart.py` | `GET /.well-known/smart-configuration`, `POST /oauth2/introspect` |
 | `routers/audit.py` | `GET /v1/audit/events` |
-| `routers/agents.py` | `GET/POST /v1/ai/*` — AI agent endpoints with SSE streaming |
+| `routers/agents.py` | `GET/POST /v1/ai/*`  AI agent endpoints with SSE streaming |
 | `routers/processing_runs.py` | `GET/DELETE /v1/processing-runs/*` |
 | `routers/permits.py` | `GET/POST /v1/permits`, lifecycle transitions (submit/approve/reject/revoke) - admin-only, 409 on illegal transition |
 | `routers/minimise.py` | `POST /v1/minimise/assess` - data-minimisation report (evaluate-only) |
@@ -370,7 +370,7 @@ Pure functions: input value → transformed value. No side effects.
 | `redact.py` | `redact` | No | Replaces with `replacement` param (default `""`) |
 | `cryptohash.py` | `cryptohash` | No | HMAC-SHA3-256 (keyed) or plain SHA3-256. CSPRNG-safe. Warns if no key set. |
 | `encrypt.py` | `encrypt` | Yes (RSA key) | RSA public-key encryption |
-| `decrypt.py` | `decrypt` | — | RSA private-key decryption |
+| `decrypt.py` | `decrypt` |  | RSA private-key decryption |
 | `perturb.py` | `perturb` | No | Bounded random noise via `secrets.randbelow()` (CSPRNG) |
 | `substitute.py` | `substitute` | No | Replace with fixed `substitute_with` value |
 | `generalize.py` | `generalize` | No | `date_year`, `date_year_month`, `zip_prefix`, `age_bracket`, `number_round`, `category` |
@@ -385,7 +385,7 @@ Pure functions: input value → transformed value. No side effects.
 | `worker.py` | Async job executor. `RedisJobStore`: Redis Streams (XREADGROUP). `PostgresJobStore`: LISTEN/NOTIFY. `SqliteJobStore`: polls every 2s. `max_concurrent` semaphore. Periodic Redis index orphan sweep. |
 | `worker_main.py` | Standalone worker entrypoint. Prometheus metrics on port 9091. PostgresJobStore fallback between Redis and SQLite. |
 | `executors.py` | Bulk-operation executors: `bulk-export`, `cohort`, `patient-export`, `bulk-import`, `reprocess`. Cross-chunk gPAS dedup via `seen_values`. |
-| `checkpoint.py` | Saves processing position to PostgreSQL for crash recovery — a failed job can be resumed from the last successful page. |
+| `checkpoint.py` | Saves processing position to PostgreSQL for crash recovery  a failed job can be resumed from the last successful page. |
 | `staged_worker/` | Two-phase staged bulk-export (`_core.py` + `_executors.py`). Phase 1: fetch + stage to `medanon.staged_resources`. Phase 2: claim partitions (`FOR UPDATE SKIP LOCKED`), de-identify, write NDJSON. Decouples slow FHIR fetch from processing. |
 | `summary.py` | Job progress summary: resource counts, bytes processed, error rate. |
 
@@ -402,7 +402,7 @@ Neither                  → SqliteJobStore   (polling, local dev only)
 | Module | Role |
 |---|---|
 | `engine.py` | Composite scorer: `privacy_norm × utility × quality`. Runs all three sub-scorers. |
-| `privacy.py` | Privacy risk: k-anonymity, l-diversity, HIPAA 18-identifier check, text risk. Hard gate — fails the composite if risk exceeds threshold. |
+| `privacy.py` | Privacy risk: k-anonymity, l-diversity, HIPAA 18-identifier check, text risk. Hard gate  fails the composite if risk exceeds threshold. |
 | `utility.py` | Utility: field retention rate, date precision, clinical code coverage, structural completeness. |
 | `quality.py` | Quality: FHIR structural validity, required fields, reference integrity, valid code values. |
 | `audit.py` | Markdown audit report builder. Formats per-resource findings into human-readable compliance report. |
@@ -419,7 +419,7 @@ Phase 4 feature. Activated with `MEDANON_AI_ENABLED=true`. All agents degrade gr
 |---|---|
 | `provider.py` | `LLMProvider` singleton. `litellm` wrapper with circuit breaker, TTL response cache, SSE streaming. |
 | `agents/config_generator.py` | Few-shot config generation: all 8 bundled YAML profiles injected directly into the prompt. Validates output through `Settings` loader. Falls back to keyword matching. |
-| `agents/pii_detector.py` | 3-layer PII detection: regex → NER (Presidio) → LLM. **LLM layer must use a local provider** (`MEDANON_AI_PII_PROVIDER`) — PHI must not be sent to external APIs. |
+| `agents/pii_detector.py` | 3-layer PII detection: regex → NER (Presidio) → LLM. **LLM layer must use a local provider** (`MEDANON_AI_PII_PROVIDER`)  PHI must not be sent to external APIs. |
 | `agents/rule_explainer.py` | Plain-language rule explanation via SSE streaming. Static descriptions as fallback. |
 | `agents/compliance.py` | Regulatory gap analysis vs HIPAA, GDPR, and other frameworks. Static HIPAA fallback. |
 
@@ -427,9 +427,9 @@ Phase 4 feature. Activated with `MEDANON_AI_ENABLED=true`. All agents degrade gr
 
 | Module | Role |
 |---|---|
-| `adapter.py` | `RemoteNlpAdapter` — delegates all NLP inference to the NLP microservice. Supports `detect_batch()` for the phi_detection stage. |
-| `remote_detector.py` | HTTP client for the NLP microservice. `detect_batch_remote()` for batch requests. **Fail-closed:** returns `[NLP_UNAVAILABLE]` on any failure — no PHI leaks via unscrubbed text. |
-| `utils.py` | Pure-Python NLP utilities: `HEALTHCARE_ENTITIES`, `_tokenize`, `_scrub_xhtml_text_nodes`. No Presidio dependency — safe to import in any context. |
+| `adapter.py` | `RemoteNlpAdapter`  delegates all NLP inference to the NLP microservice. Supports `detect_batch()` for the phi_detection stage. |
+| `remote_detector.py` | HTTP client for the NLP microservice. `detect_batch_remote()` for batch requests. **Fail-closed:** returns `[NLP_UNAVAILABLE]` on any failure  no PHI leaks via unscrubbed text. |
+| `utils.py` | Pure-Python NLP utilities: `HEALTHCARE_ENTITIES`, `_tokenize`, `_scrub_xhtml_text_nodes`. No Presidio dependency  safe to import in any context. |
 
 ### Utilities (`src/utils/`)
 
@@ -452,12 +452,12 @@ Phase 4 feature. Activated with `MEDANON_AI_ENABLED=true`. All agents degrade gr
 
 | Module | Role |
 |---|---|
-| `client.py` | Barrel file — re-exports from all sub-modules for backward compatibility. |
+| `client.py` | Barrel file  re-exports from all sub-modules for backward compatibility. |
 | `_transport.py` | Shared HTTP transport: connection pool, retry (2x, exponential backoff), pagination, ID validation/sanitization. |
 | `reader.py` | Paginated fetch (`fetch_resources`, page size `FHIR_PAGE_SIZE`), `$everything`, bulk export status polling. |
-| `writer.py` | `upload_resources` — batch Bundle PUT. `_infer_upload_tiers` — Bellman-Ford topological sort to satisfy referential integrity. `_compute_id_map` + `_rewrite_references`. `_strip_manifest_tags`. |
+| `writer.py` | `upload_resources`  batch Bundle PUT. `_infer_upload_tiers`  Bellman-Ford topological sort to satisfy referential integrity. `_compute_id_map` + `_rewrite_references`. `_strip_manifest_tags`. |
 | `bulk.py` | FHIR `$export` operation (async kick-off + poll), NDJSON file download. |
-| `adapter.py` | `FhirServerAdapter` — unified interface wrapping reader + writer + bulk. |
+| `adapter.py` | `FhirServerAdapter`  unified interface wrapping reader + writer + bulk. |
 
 **Upload ordering (topological sort):** HAPI rejects a resource if it references a resource that does not exist yet. The writer builds a reference dependency graph and uses Bellman-Ford relaxation (`tier[A] = 1 + max(tier[B] for B in deps[A])`) to assign upload tiers. Resources in tier 0 have no dependencies and upload first. Resources within the same tier batch into a single Bundle PUT.
 
@@ -474,9 +474,9 @@ A separate Docker service (~200 MB image). Proxied by the anonymizer at `/analys
 **Why a separate service?** SDV (Synthetic Data Vault), an optional dependency for advanced synthetic data, adds ~2 GB to the Docker image. Isolating it prevents this from bloating the anonymizer image. The analytics service is independently scalable and can be disabled entirely.
 
 **Analytics modules:**
-- `src/risk.py` — k-anonymity, l-diversity, prosecutor/journalist/marketer attacker models
-- `src/synthetic.py` — stdlib synthetic patient generation (no SDV dependency)
-- `src/synthetic_sdv.py` — SDV-powered synthesis (conditional, relational, time-series)
+- `src/risk.py`  k-anonymity, l-diversity, prosecutor/journalist/marketer attacker models
+- `src/synthetic.py`  stdlib synthetic patient generation (no SDV dependency)
+- `src/synthetic_sdv.py`  SDV-powered synthesis (conditional, relational, time-series)
 
 ### NLP microservice (`services/nlp/`)
 
@@ -487,14 +487,14 @@ Always-on (~800 MB Docker image, Presidio + spaCy `en_core_web_lg`).
 | `/v1/detect` | POST | Detect PII entities in a single text |
 | `/v1/detect/batch` | POST | Batch detect PII entities across multiple texts (one HTTP call) |
 | `/metrics` | GET | Prometheus metrics |
-| `/health` | GET | Answered by Traefik gateway — no upstream |
+| `/health` | GET | Answered by Traefik gateway  no upstream |
 
 **Why isolated from the anonymizer?** The spaCy model alone is ~800 MB. Running it in-process would double memory consumption per anonymizer replica. The NLP microservice keeps this cost fixed regardless of anonymizer scaling, and can be independently replicated for CPU-intensive NLP workloads.
 
 **NLP modules:**
-- `src/detector.py` — Presidio NER facade; deterministic `[[TYPE_N]]` token substitution; XHTML-safe output
-- `src/recognizers.py` — Custom Presidio recognizers for healthcare-specific patterns (MRN, NPI, DEA number)
-- `src/tokenizer.py` — Token state tracking + XHTML text node scrubbing
+- `src/detector.py`  Presidio NER facade; deterministic `[[TYPE_N]]` token substitution; XHTML-safe output
+- `src/recognizers.py`  Custom Presidio recognizers for healthcare-specific patterns (MRN, NPI, DEA number)
+- `src/tokenizer.py`  Token state tracking + XHTML text node scrubbing
 
 ### FHIR Subscriptions (`src/integrations/subscriptions/`)
 
@@ -502,8 +502,8 @@ FHIR R4 rest-hook subscriptions. When a configured criteria is matched (e.g. new
 
 | Module | Role |
 |---|---|
-| `store.py` | `SqliteSubscriptionStore` — FHIR R4 Subscription persistence |
-| `integrations/postgres/subscription_store.py` | `PostgresSubscriptionStore` — drop-in replacement |
+| `store.py` | `SqliteSubscriptionStore`  FHIR R4 Subscription persistence |
+| `integrations/postgres/subscription_store.py` | `PostgresSubscriptionStore`  drop-in replacement |
 
 Subscriptions are managed via `/fhir/Subscription` endpoints. The anonymizer acts as both the subscription client (registering with the source FHIR server) and the webhook receiver (processing incoming notifications).
 
@@ -536,9 +536,9 @@ This decoupling means a FHIR server timeout in Phase 1 does not require re-uploa
 | Module | Role |
 |---|---|
 | `pool.py` | Shared `psycopg2.ThreadedConnectionPool` singleton (5–25 connections). One pool shared across all PostgreSQL stores to avoid multiple independent pools. |
-| `job_store.py` | `PostgresJobStore` — drop-in for `SqliteJobStore`. `FOR UPDATE SKIP LOCKED` for contention-free multi-worker job claims. `NOTIFY`/`LISTEN` for instant wake-up. |
-| `config_store.py` | `PostgresConfigStore` — drop-in for SQLite config store. |
-| `subscription_store.py` | `PostgresSubscriptionStore` — drop-in for SQLite subscription store. |
+| `job_store.py` | `PostgresJobStore`  drop-in for `SqliteJobStore`. `FOR UPDATE SKIP LOCKED` for contention-free multi-worker job claims. `NOTIFY`/`LISTEN` for instant wake-up. |
+| `config_store.py` | `PostgresConfigStore`  drop-in for SQLite config store. |
+| `subscription_store.py` | `PostgresSubscriptionStore`  drop-in for SQLite subscription store. |
 | `permit_store.py` | `PostgresPermitStore` - durable `medanon.permits` (Art 79 audit queries). In-memory default; one-line startup swap. |
 | `passport_store.py` | `PostgresPassportStore` - durable Transformation Passports with an `assert_pii_safe()` structural guard that fails closed before writing. |
 | `connector_stores.py` / `settings_store.py` | Encrypted dataspace connectors + deployment-wide instance settings. |
@@ -546,9 +546,9 @@ This decoupling means a FHIR server timeout in Phase 1 does not require re-uploa
 
 ### Inlined domain types (`src/domain/`)
 
-Core domain types inlined into the anonymizer service (previously a shared `packages/medanon-core/` library — removed to simplify the Docker build context):
+Core domain types inlined into the anonymizer service (previously a shared `packages/medanon-core/` library  removed to simplify the Docker build context):
 
-- `domain/jobs.py` — `Job`, `JobStatus` dataclass and lifecycle enum (`pending → running → done / failed / cancelled`)
+- `domain/jobs.py`  `Job`, `JobStatus` dataclass and lifecycle enum (`pending → running → done / failed / cancelled`)
 - Exception types: `JobStoreUnavailable`, `JobNotFound`, `JobNotComplete`, `JobResultMissing`
 
 ---

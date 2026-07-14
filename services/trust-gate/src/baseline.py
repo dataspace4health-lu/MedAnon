@@ -2,17 +2,17 @@
 
 The batch-relative outlier check is blind to two things: small batches (no
 distribution to learn) and *whole-batch* corruption (a uniformly wrong feed looks
-internally clean). A persisted baseline fixes both — each batch is judged against
+internally clean). A persisted baseline fixes both  each batch is judged against
 a distribution accumulated across *previous* batches for the same (code, unit).
 
 We keep a bounded **reservoir sample** per (code, unit) (Vitter's Algorithm R) so
 storage stays O(reservoir_size) regardless of volume while remaining an unbiased
-sample of the population — enough to compute a stable median/MAD/IQR.
+sample of the population  enough to compute a stable median/MAD/IQR.
 
 Backends (selected by ``get_baseline_store``):
-  - none (default)          — stateless; outlier check uses batch-only (current).
-  - ``TRUST_GATE_BASELINE=memory`` — in-process dict (single-process / dev / tests).
-  - ``TRUST_GATE_BASELINE_DB_URL`` — Postgres, durable + cross-replica.
+  - none (default)           stateless; outlier check uses batch-only (current).
+  - ``TRUST_GATE_BASELINE=memory``  in-process dict (single-process / dev / tests).
+  - ``TRUST_GATE_BASELINE_DB_URL``  Postgres, durable + cross-replica.
 """
 
 from __future__ import annotations
@@ -44,7 +44,7 @@ def _reservoir_merge(
         if len(res) < cap:
             res.append(v)
         else:
-            j = _RNG.randint(0, n - 1)  # noqa: S311 — sampling, not security
+            j = _RNG.randint(0, n - 1)  # noqa: S311  sampling, not security
             if j < cap:
                 res[j] = v
     return res, n
@@ -56,7 +56,7 @@ class BaselineStore(Protocol):
 
 
 class InMemoryBaselineStore:
-    """Process-local baseline. Not shared across uvicorn workers/replicas — use
+    """Process-local baseline. Not shared across uvicorn workers/replicas  use
     the Postgres backend for durable, consistent cross-replica baselines."""
 
     def __init__(self, cap: int = BASELINE_RESERVOIR_SIZE) -> None:
@@ -167,7 +167,7 @@ def get_baseline_store() -> BaselineStore | None:
             _log.info("trust-gate baseline: in-memory (process-local)")
         else:
             _STORE = None  # stateless: outlier check is batch-only
-    except Exception as exc:  # noqa: BLE001 — never let baseline setup break the gate
-        _log.warning("baseline store init failed (%s) — running stateless", exc)
+    except Exception as exc:  # noqa: BLE001  never let baseline setup break the gate
+        _log.warning("baseline store init failed (%s)  running stateless", exc)
         _STORE = None
     return _STORE

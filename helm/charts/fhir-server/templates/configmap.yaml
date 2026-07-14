@@ -6,7 +6,7 @@ metadata:
     {{- include "fhir-server.labels" . | nindent 4 }}
     app.kubernetes.io/component: fhir-server
 data:
-  # Spring Boot application config — overrides the image-baked defaults.
+  # Spring Boot application config  overrides the image-baked defaults.
   # Customise the file under files/application.yaml to change HAPI settings.
   application.yaml: |-
 {{ .Files.Get "files/application.yaml" | indent 4 }}

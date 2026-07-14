@@ -6,7 +6,7 @@ emits a Quality Passport. It never transforms, pseudonymizes, or writes back dat
 "record of processing activities" view over a stored assessment + its ALCOA++ audit
 trail, so a data holder can attach an EU-audit-ready record to the QC report.
 
-Derived purely from an already-computed passport + audit trail — adds no scoring
+Derived purely from an already-computed passport + audit trail  adds no scoring
 and persists nothing new.
 """
 

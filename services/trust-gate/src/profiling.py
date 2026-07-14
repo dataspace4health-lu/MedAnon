@@ -1,7 +1,7 @@
-"""Descriptive data profiling — analysis support, NOT a scored quality check.
+"""Descriptive data profiling  analysis support, NOT a scored quality check.
 
 The Kahn/OHDSI checks answer *"is the data good enough?"*. Profiling answers
-*"what is in the data?"* — the descriptive statistics an analyst needs before
+*"what is in the data?"*  the descriptive statistics an analyst needs before
 modelling: resource-type counts, terminology-system distribution, numeric value
 summaries, and reference density. It carries no PASS/FAIL and never affects the
 decision; it is attached to the passport as a separate ``profile`` block.
@@ -96,7 +96,7 @@ def _obs_display(res: dict) -> str | None:
     return str(text) if isinstance(text, str) and text else None
 
 
-# Demographic stratification for FHIR Observations — same age-band x sex strata
+# Demographic stratification for FHIR Observations  same age-band x sex strata
 # the OMOP clinical-eval path uses, so the flat and stratified clinical-value cards
 # read identically across source models. PHI-free: bands + sex letter + LOINC only.
 _GENDER = {"male": "M", "female": "F"}
@@ -121,7 +121,7 @@ def _patient_index(valid: list[dict]) -> dict[str, tuple[int | None, str]]:
 def _subject_id(res: dict) -> str | None:
     """The Patient id an Observation references via subject.
 
-    Resolves both server-relative refs (``Patient/<id>`` — what a HAPI scan
+    Resolves both server-relative refs (``Patient/<id>``  what a HAPI scan
     returns) and intra-bundle ``urn:uuid:<uuid>`` refs (what a freshly imported
     Synthea-style transaction Bundle carries, where each Patient's id is its uuid).
     """
@@ -238,7 +238,7 @@ def profile(resources: list[dict]) -> dict:
                 disp = _obs_display(r)
                 if disp:
                     display_by_code[key] = disp
-    # Every distinct numeric (concept, unit) gets a distribution card — no cap, so
+    # Every distinct numeric (concept, unit) gets a distribution card  no cap, so
     # the analyst sees the patient's whole clinical panel. Ordered by frequency
     # (most-measured first) purely for display; the long tail is fully retained.
     observation_value_stats = [

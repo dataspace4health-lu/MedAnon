@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# batch_fetch.sh — pull all resources from HAPI FHIR, anonymize, write NDJSON
+# batch_fetch.sh  pull all resources from HAPI FHIR, anonymize, write NDJSON
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

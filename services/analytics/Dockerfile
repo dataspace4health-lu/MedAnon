@@ -10,7 +10,7 @@ RUN pip install --no-cache-dir -r /code/requirements.txt
 # Service entry point
 COPY services/analytics/src/main.py /code/main.py
 
-# Analytics logic — single source of truth lives in the anonymizer's analytics/
+# Analytics logic  single source of truth lives in the anonymizer's analytics/
 # directory. Copied here at build time so both services always run the same code.
 COPY services/anonymizer/src/analytics/dp.py /code/dp.py
 COPY services/anonymizer/src/analytics/risk.py /code/risk.py

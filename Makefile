@@ -1,5 +1,5 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# MedAnon — developer convenience Makefile
+# MedAnon  developer convenience Makefile
 # ─────────────────────────────────────────────────────────────────────────────
 
 VENV        := .venv
@@ -19,13 +19,13 @@ PYBIN       := $(if $(wildcard $(VENV)/bin/python3),$(CURDIR)/$(VENV)/bin/python
 RUFF        := $(if $(wildcard $(VENV)/bin/ruff),$(CURDIR)/$(VENV)/bin/ruff,ruff)
 LINT_IMPORTS := $(if $(wildcard $(VENV)/bin/lint-imports),$(CURDIR)/$(VENV)/bin/lint-imports,lint-imports)
 
-# Worker replica count — read from .env (default 2 if not set or .env absent).
+# Worker replica count  read from .env (default 2 if not set or .env absent).
 # gPAS and NLP always run as a single instance (scaling them does not improve
 # single-job latency; see MEDANON_BATCH_SIZE and sub-batch parallelism instead).
 WORKER_REPLICAS := $(shell grep -s '^WORKER_REPLICAS=' .env | cut -d= -f2 | tr -d '[:space:]')
 WORKER_REPLICAS := $(if $(WORKER_REPLICAS),$(WORKER_REPLICAS),2)
 
-# HAPI FHIR image — update both together when bumping the HAPI version.
+# HAPI FHIR image  update both together when bumping the HAPI version.
 # v7.x uses Java 17 (eclipse-temurin:17-jre-jammy base).
 HAPI_IMAGE     := hapiproject/hapi:v7.6.0
 HAPI_JAVA_VER  := 17
@@ -49,7 +49,7 @@ ANONYMIZER_PORT := $(if $(ANONYMIZER_PORT),$(ANONYMIZER_PORT),8000)
 # ── Default target ────────────────────────────────────────────────────────────
 help:
 	@echo ""
-	@echo "MedAnon — available commands"
+	@echo "MedAnon  available commands"
 	@echo "────────────────────────────────────────────────────────────────"
 	@echo "  make setup              Install Python deps into .venv"
 	@echo "  make test               Run full test suite"
@@ -98,7 +98,7 @@ setup:
 	# `make lint`, `make format` and `make test` all invoke $(VENV)/bin/{ruff,pytest},
 	# which nothing installed. Pinned in requirements-dev.txt so local == CI.
 	$(PIP) install -r requirements-dev.txt
-	@echo "virtualenv ready — activate with: source $(VENV)/bin/activate"
+	@echo "virtualenv ready  activate with: source $(VENV)/bin/activate"
 	@echo "run 'make install-hooks' to gate pushes on 'make ci-local'"
 
 # ── Testing ───────────────────────────────────────────────────────────────────
@@ -183,7 +183,7 @@ trust-id-sync:
 env-check:
 	python3 scripts/check_env.py
 
-# Same, plus a diff of your real .env — which keys you are missing (and so are
+# Same, plus a diff of your real .env  which keys you are missing (and so are
 # silently running on a compose/code default) and which are undocumented.
 env-diff:
 	python3 scripts/check_env.py --env .env
@@ -221,12 +221,12 @@ preflight:
 	@grep -q '^HAPI_TARGET_DB_PASSWORD=.\+' .env || { echo "FAIL: HAPI_TARGET_DB_PASSWORD not set in .env"; exit 1; }
 	@echo "  [OK] HAPI_TARGET_DB_PASSWORD is set"
 	@# 5. HAPI FHIR health check class exists and is compiled for correct Java version
-	@test -f $(HC_DIR)/HealthCheck.class || { echo "WARN: HealthCheck.class not found — run 'make build-healthcheck'"; exit 1; }
+	@test -f $(HC_DIR)/HealthCheck.class || { echo "WARN: HealthCheck.class not found  run 'make build-healthcheck'"; exit 1; }
 	@python3 -c "\
 	with open('$(HC_DIR)/HealthCheck.class','rb') as f: \
 	    d=f.read(8); v=int.from_bytes(d[6:8],'big'); \
 	    exit(0 if v <= 61 else 1)" 2>/dev/null \
-	    || { echo "FAIL: HealthCheck.class compiled for wrong Java version — run 'make build-healthcheck'"; exit 1; }
+	    || { echo "FAIL: HealthCheck.class compiled for wrong Java version  run 'make build-healthcheck'"; exit 1; }
 	@echo "  [OK] HealthCheck.class targets Java <= 17"
 	@# 6. Required ports are free
 	@for port in $${ANONYMIZER_PORT:-8000} $${HAPI_PORT:-8081} $${HAPI_TARGET_PORT:-8082} $${GPAS_PORT:-8080} $${UI_PORT:-8501}; do \
@@ -239,7 +239,7 @@ preflight:
 	@# ./output is bind-mounted over the image's /output, so the host directory's
 	@# ownership decides whether the container can write. When it cannot, the
 	@# worker cannot write its heartbeat and the anonymizer cannot write
-	@# /output/audit.log — a silent, hard-to-diagnose outage. Fail here instead.
+	@# /output/audit.log  a silent, hard-to-diagnose outage. Fail here instead.
 	@uid=$$(docker run --rm --entrypoint id $(ANONYMIZER_IMAGE) -u 2>/dev/null || echo 100); \
 	 if [ -d output ] && ! docker run --rm -u $$uid -v "$(CURDIR)/output:/out" busybox \
 	      sh -c 'touch /out/.preflight_probe && rm -f /out/.preflight_probe' 2>/dev/null; then \
@@ -277,13 +277,13 @@ build-ui:
 
 build-sdv:
 	docker build -t medanon-sdv:latest --target sdv services/anonymizer
-	@echo "medanon-sdv:latest built — activate with: make up-sdv"
+	@echo "medanon-sdv:latest built  activate with: make up-sdv"
 
 up-sdv: _dirs preflight build-sdv
 	ANONYMIZER_IMAGE=medanon-sdv:latest $(COMPOSE) --profile nlp up -d \
 		--scale worker=$(WORKER_REPLICAS)
 	@echo ""
-	@echo "SDV stack running — /generate/synthetic will use GaussianCopula engine"
+	@echo "SDV stack running  /generate/synthetic will use GaussianCopula engine"
 	@echo "Worker replicas: $(WORKER_REPLICAS)"
 
 # The containers run as a non-root user baked into the image (`appuser`). The
@@ -308,7 +308,7 @@ _dirs:
 	@uid=$$(docker run --rm --entrypoint id $(ANONYMIZER_IMAGE) -u 2>/dev/null || echo 100); \
 	 if ! docker run --rm -u $$uid -v "$(CURDIR)/output:/out" busybox \
 	      sh -c 'touch /out/.dirs_probe && rm -f /out/.dirs_probe' 2>/dev/null; then \
-	   echo "  ./output is not writable by the container user (uid $$uid) — chowning"; \
+	   echo "  ./output is not writable by the container user (uid $$uid)  chowning"; \
 	   docker run --rm -v "$(CURDIR)/output:/out" busybox chown -R $$uid:$$(id -g) /out \
 	   || echo "  WARNING: chown failed. Run: docker run --rm -v $(CURDIR)/output:/out busybox chown -R $$uid /out"; \
 	 fi
@@ -328,7 +328,7 @@ up: _dirs preflight
 down:
 	$(COMPOSE) --profile analytics --profile nlp --profile monitoring --profile ha --profile  down --remove-orphans
 
-# Wipes ALL volumes including HAPI source DB — only for a full reset.
+# Wipes ALL volumes including HAPI source DB  only for a full reset.
 down-wipe:
 	$(COMPOSE) --profile analytics --profile nlp --profile monitoring --profile ha --profile s3 down --remove-orphans -v
 
@@ -354,7 +354,7 @@ ai-up: _dirs preflight
 	@echo "AI is enabled. Verifying agent status…"
 	@$(MAKE) --no-print-directory ai-status
 
-# Pull the configured model into the running Ollama container.  Idempotent —
+# Pull the configured model into the running Ollama container.  Idempotent 
 # Ollama skips the download if the model is already present.
 ai-pull:
 	@echo "Waiting for Ollama to become healthy…"
@@ -371,7 +371,7 @@ ai-pull:
 # Smoke-check the AI status endpoint (enabled + provider reachable).
 ai-status:
 	@curl -sf http://localhost:$(ANONYMIZER_PORT)/v1/ai/status \
-		&& echo "" || echo "AI status check failed — is the stack up with MEDANON_AI_ENABLED=true?"
+		&& echo "" || echo "AI status check failed  is the stack up with MEDANON_AI_ENABLED=true?"
 
 # ── Helm (Kubernetes deployment) ─────────────────────────────────────────────
 # Build the custom gPAS image (bundles WAR/EAR deployments + CLI scripts).
@@ -383,7 +383,7 @@ helm-build-gpas:
 helm-lint:
 	helm lint ./helm/medanon
 
-# Dry-run — print all rendered Kubernetes YAML without installing
+# Dry-run  print all rendered Kubernetes YAML without installing
 helm-template:
 	helm template medanon ./helm/medanon
 
@@ -398,7 +398,7 @@ helm-install:
 		$(if $(GPAS_URL),--set anonymizer.env.GPAS_URL=$(GPAS_URL),) \
 		$(if $(FHIR_SOURCE_URL),--set anonymizer.env.FHIR_SOURCE_URL=$(FHIR_SOURCE_URL),)
 
-# Remove the release (keeps PVCs by default — use kubectl delete pvc to wipe data)
+# Remove the release (keeps PVCs by default  use kubectl delete pvc to wipe data)
 helm-uninstall:
 	helm uninstall medanon
 
@@ -431,7 +431,7 @@ cold-reset:
 	docker exec medanon-redis redis-cli -a "$$RP" -n 2 FLUSHDB >/dev/null 2>&1 && echo "  Redis DB2 (NLP L2) flushed"; \
 	kept=$$(docker exec medanon-redis sh -c "redis-cli -a '$$RP' -n 0 --scan --pattern 'medanon:job*' --count 5000 2>/dev/null | wc -l"); \
 	echo "  job-queue keys preserved: $$kept"
-	@echo "cold-reset complete — next export runs fully cold (restart worker to drop L1)"
+	@echo "cold-reset complete  next export runs fully cold (restart worker to drop L1)"
 
 # ── Security scanning (Trivy) ─────────────────────────────────────────────────
 # Requires trivy in PATH. Install: curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b ~/.local/bin

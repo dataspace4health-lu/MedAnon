@@ -1,4 +1,4 @@
-"""NLP microservice — POST /v1/detect.
+"""NLP microservice  POST /v1/detect.
 
 Hosts Presidio + spaCy (en_core_web_lg) in isolation so the ~800 MB NLP
 dependencies are not bundled into every anonymizer replica.
@@ -29,12 +29,12 @@ logger = logging.getLogger("nlp")
 app = FastAPI(title="MedAnon NLP", version="1.0.0")
 
 # Maximum number of items accepted by the batch endpoint. Prevents CPU/memory
-# exhaustion — each Presidio+spaCy detection call is CPU-intensive. Configurable
+# exhaustion  each Presidio+spaCy detection call is CPU-intensive. Configurable
 # via NLP_MAX_BATCH_ITEMS; must stay in sync with MEDANON_STAGING_BATCH_SIZE.
 _MAX_BATCH_ITEMS: int = int(os.environ.get("NLP_MAX_BATCH_ITEMS", "1000"))
 
 # ---------------------------------------------------------------------------
-# Prometheus metrics (optional — degrades gracefully if package absent)
+# Prometheus metrics (optional  degrades gracefully if package absent)
 # ---------------------------------------------------------------------------
 
 try:
@@ -149,15 +149,15 @@ def _verify_detector_import():
         set_l2_cache(init_l2_cache())
 
         entities = tuple(_resolve_entities("healthcare"))
-        # Minimal real detection — exercises the full Presidio + spaCy stack.
+        # Minimal real detection  exercises the full Presidio + spaCy stack.
         _detect_entities_cached("John Smith DOB 1980-01-01", entities, 0.4, "en")
         from recognizers import _SUPPORTED_LANGS
 
         if "fr" in _SUPPORTED_LANGS:
             _detect_entities_cached("Jean Dupont né le 01/01/1980", entities, 0.4, "fr")
-            logger.info("detector warm-up complete — Presidio/spaCy ready (en + fr)")
+            logger.info("detector warm-up complete  Presidio/spaCy ready (en + fr)")
         else:
-            logger.info("detector warm-up complete — Presidio/spaCy ready (en)")
+            logger.info("detector warm-up complete  Presidio/spaCy ready (en)")
     except Exception as exc:
         logger.error("detector warm-up failed: %s", exc, exc_info=True)
         app.state.detector_ok = False
@@ -176,7 +176,7 @@ def health():
 
 @app.get("/ready")
 def ready():
-    """Readiness probe — 503 until Presidio/spaCy warm-up has completed.
+    """Readiness probe  503 until Presidio/spaCy warm-up has completed.
 
     Distinct from /health (process liveness) so a slow first-load (~30 s) does
     not cause Kubernetes to kill the pod via a too-aggressive livenessProbe.
@@ -260,7 +260,7 @@ def detect_batch(req: BatchDetectRequest):
     all_detections: list[list] | None = [] if any_detect_only else None
     _t0 = time.monotonic()
 
-    # Fast path: all items are detect-only — no shared mutable token_state,
+    # Fast path: all items are detect-only  no shared mutable token_state,
     # so we can run detections in parallel using a thread pool.
     if all_detect_only:
         from concurrent.futures import ThreadPoolExecutor
@@ -328,7 +328,7 @@ def detect_batch(req: BatchDetectRequest):
         return i, scrubbed
 
     try:
-        # Detect-only items in a thread pool — Presidio releases the GIL.
+        # Detect-only items in a thread pool  Presidio releases the GIL.
         if detect_idx:
             from concurrent.futures import ThreadPoolExecutor
 
@@ -348,7 +348,7 @@ def detect_batch(req: BatchDetectRequest):
                     if all_detections is not None:
                         det_results[i] = hits
 
-        # Replacement items sequentially — token_state is shared mutable state.
+        # Replacement items sequentially  token_state is shared mutable state.
         for i in replace_idx:
             _, scrubbed = _run_replace(i)
             results[i] = scrubbed

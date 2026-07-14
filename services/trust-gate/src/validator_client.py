@@ -2,7 +2,7 @@
 
 Targets the HL7 / Inferno **FHIR validator-wrapper** standalone server
 (``POST /validate?profile=...`` → OperationOutcome; ``GET /version`` readiness)
-— see https://github.com/inferno-community/fhir-validator-wrapper. Any endpoint
+ see https://github.com/inferno-community/fhir-validator-wrapper. Any endpoint
 that returns a FHIR ``OperationOutcome`` works, including a FHIR server's
 ``[base]/{type}/$validate`` (set ``TRUST_GATE_VALIDATOR_ENDPOINT`` to
 ``/{type}/$validate``).
@@ -41,7 +41,7 @@ class ValidatorUnavailable(RuntimeError):
     """Raised when the FHIR validator cannot be reached (transport/outage).
 
     Trips the circuit breaker and degrades the affected check to NA. Reserve this
-    for *service-level* failures (connection refused, timeout, DNS) — never for a
+    for *service-level* failures (connection refused, timeout, DNS)  never for a
     per-request error from a validator that did respond (see ValidatorBadRequest).
     """
 
@@ -126,7 +126,7 @@ class ValidatorClient:
         url = self._url(resource.get("resourceType", ""))
         if profiles:
             # Append profile as a query-string parameter; don't mix urllib3
-            # fields (form-encoding) with a raw body — urllib3 rejects that.
+            # fields (form-encoding) with a raw body  urllib3 rejects that.
             profile_qs = "&".join(f"profile={p}" for p in profiles)
             url = f"{url}?{profile_qs}"
         _guard_url(url)
@@ -167,7 +167,7 @@ class ValidatorClient:
             raise ValidatorUnavailable(f"invalid JSON: {exc}") from exc
 
         self._breaker.record_success()
-        # Structural/profile/IG all exclude terminology — code/binding validity is
+        # Structural/profile/IG all exclude terminology  code/binding validity is
         # measured solely by conformance.terminology (its own tx client), so tx
         # state never distorts the structure axis. See _error_issues.
         return _error_issues(outcome)
@@ -178,8 +178,8 @@ class ValidatorClient:
 # ``TerminologyEngine`` source. Terminology validity has its own dedicated check
 # (``conformance.terminology``), so terminology issues must NOT also drive the
 # structural OR profile verdict (double-counting + wrong dimension). This also
-# means a terminology-server outage — where the engine escalates "couldn't check
-# this code" to a hard ``code-invalid`` error — and over-strict binding quirks
+# means a terminology-server outage  where the engine escalates "couldn't check
+# this code" to a hard ``code-invalid`` error  and over-strict binding quirks
 # (e.g. ``text/plain; charset=utf-8`` vs the ``MimeType`` value set) never block
 # on the structure axis. See _is_terminology_issue / _is_transport_issue.
 _TERMINOLOGY_SOURCE = "terminologyengine"
@@ -230,7 +230,7 @@ def _is_transport_issue(issue: dict) -> bool:
 
     The tx server was unreachable/slow or returned a non-FHIR page (e.g.
     "Error from http://tx...: Unparseable HTML", a socket timeout). These mean
-    the code could not be checked — never a data defect — so they are dropped
+    the code could not be checked  never a data defect  so they are dropped
     even when (rarely) the issue carries no engine source tag.
     """
     text = _issue_detail_text(issue)

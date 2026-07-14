@@ -5,7 +5,7 @@ prometheus_client==0.21.1
 urllib3==2.7.0
 PyYAML==6.0.3
 fhirpathpy==0.1.0
-# PostgreSQL — baseline store + SQL connector
+# PostgreSQL  baseline store + SQL connector
 psycopg2-binary==2.9.10
 # File connector: multipart upload support
 python-multipart==0.0.20

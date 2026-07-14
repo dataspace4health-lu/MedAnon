@@ -1,18 +1,18 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# MedAnon React UI Helm Chart — default values
+# MedAnon React UI Helm Chart  default values
 #
 # Customise with --set / -f my-values.yaml.
 # When deployed via the medanon umbrella chart, prefix keys with "ui."
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Helm global values — automatically populated by a parent (umbrella) chart.
+# Helm global values  automatically populated by a parent (umbrella) chart.
 # These defaults are only active when the chart is installed standalone.
 global:
   registry: ""
   imagePullPolicy: ""
   imagePullSecrets: []
 
-# Container registry prefix — prepended to the image name.
+# Container registry prefix  prepended to the image name.
 # Leave empty to pull by image name directly.
 # Sub-chart: overridden by global.registry from the parent if set.
 registry: ""
@@ -43,7 +43,7 @@ anonymizerServiceName: "anonymizer"
 anonymizerPort: 8000
 fhirServerServiceName: "fhir-server"
 fhirServerPort: 8080
-# Target FHIR server (de-identified data) — leave empty to disable the /fhir-target/ proxy.
+# Target FHIR server (de-identified data)  leave empty to disable the /fhir-target/ proxy.
 # When using the umbrella chart, set to "<release>-fhir-target".
 fhirTargetServiceName: ""
 fhirTargetPort: 8080

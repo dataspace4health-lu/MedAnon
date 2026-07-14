@@ -1,8 +1,8 @@
 """Completeness category (Kahn 2016): is a variable present / are values recorded?
 
-- required_elements (verification) — minimal required elements per resource type
-- value_or_absent  (verification)  — Observation has value[x] or dataAbsentReason
-- element_density  (verification)  — *frequency* of recommended-element population
+- required_elements (verification)  minimal required elements per resource type
+- value_or_absent  (verification)   Observation has value[x] or dataAbsentReason
+- element_density  (verification)   *frequency* of recommended-element population
                                      (Kahn completeness / OHDSI measureValueCompleteness)
 """
 
@@ -104,7 +104,7 @@ def evaluate(
                     detail=f"missing required element(s): {', '.join(missing)}",
                 )
         # SAM prerequisite (PIQI HDQT): an Observation with no status is
-        # structurally incomplete — required_elements already counts that defect.
+        # structurally incomplete  required_elements already counts that defect.
         # value_or_absent is NA for that resource so one missing status is not
         # double-counted across two completeness checks.
         if rtype in VALUE_OR_ABSENT_TYPES and not _empty(res.get("status")):
@@ -112,7 +112,7 @@ def evaluate(
             has_value = any(k in OBSERVATION_VALUE_KEYS for k in res)
             # Panel Observations (e.g. Blood Pressure) carry their results in
             # Observation.component[].value[x] (or a component dataAbsentReason),
-            # not at the top level — those are NOT missing a value (FHIR R4 §Observation).
+            # not at the top level  those are NOT missing a value (FHIR R4 §Observation).
             if not has_value:
                 components = res.get("component")
                 if isinstance(components, list):

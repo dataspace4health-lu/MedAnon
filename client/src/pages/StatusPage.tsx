@@ -340,10 +340,10 @@ function AiSafetySection({
             {enabled && (
               <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[11px]">
                 <dt className="text-muted-foreground">Model</dt>
-                <dd className="font-mono text-foreground">{ai?.model || '—'}</dd>
+                <dd className="font-mono text-foreground">{ai?.model || ''}</dd>
                 <dt className="text-muted-foreground">Endpoint</dt>
                 <dd className="font-mono truncate text-foreground" title={ai?.api_base}>
-                  {ai?.api_base || '—'}
+                  {ai?.api_base || ''}
                 </dd>
               </dl>
             )}
@@ -403,7 +403,7 @@ function AiSafetySection({
               {piiConfigured && (
                 <>
                   <dt className="text-muted-foreground">PII model</dt>
-                  <dd className="font-mono text-foreground">{pii?.model || '—'}</dd>
+                  <dd className="font-mono text-foreground">{pii?.model || ''}</dd>
                   <dt className="text-muted-foreground">Endpoint</dt>
                   <dd className="font-mono truncate text-foreground" title={pii?.api_base}>
                     {pii?.api_base || '(provider default)'}

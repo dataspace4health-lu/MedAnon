@@ -5,7 +5,7 @@ journalist, marketer) on the *output* of a de-identification pipeline.
 
 Why this is needed alongside gPAS pseudonymization
 ---------------------------------------------------
-gPAS replaces direct identifiers (Patient.id, MRN) with reversible pseudonyms —
+gPAS replaces direct identifiers (Patient.id, MRN) with reversible pseudonyms
 this protects against lookup attacks on known IDs.  However, the de-identified
 output still contains quasi-identifiers (birth year, gender, zip prefix) and
 sensitive attributes (Condition codes) that can be combined to re-identify
@@ -54,7 +54,7 @@ _QI_SUPPRESSED_VALUES: frozenset[str] = frozenset(
 _DECADE_DATE_RE = re.compile(r"^\d{3}x$")
 # Decade-aligned 4-digit year emitted by the ``date_decade`` generalize strategy
 # (e.g. "1940", "1990"). These are coarse buckets, not real birth years, so they
-# should be treated as suppressed for k-anonymity purposes — otherwise small
+# should be treated as suppressed for k-anonymity purposes  otherwise small
 # datasets with patients spread across multiple decades produce false-positive
 # k=1 singletons.
 _DECADE_YEAR_RE = re.compile(r"^\d{3}0$")
@@ -151,7 +151,7 @@ def build_conditions_map(resources: list[dict]) -> dict[str, set[str]]:
         patient_id = subject_ref.split("/")[-1] if subject_ref else ""
         if not patient_id:
             continue
-        # Extract SNOMED/ICD code — prefer coding[0].code, fall back to text
+        # Extract SNOMED/ICD code  prefer coding[0].code, fall back to text
         code_obj = r.get("code") or {}
         codings = code_obj.get("coding") or []
         code_str = ""
@@ -277,7 +277,7 @@ def compute_l_diversity(
     if not conditions_by_patient:
         return {
             "computed": False,
-            "reason": "No Condition resources found in input — include Patient + Condition NDJSON for l-diversity",
+            "reason": "No Condition resources found in input  include Patient + Condition NDJSON for l-diversity",
         }
 
     # Build group → set of codes
@@ -342,7 +342,7 @@ def assess_risk_resources(resources: list[dict]) -> dict[str, Any]:
 
     if patient_count == 0:
         warnings.append(
-            "No Patient resources found in input — risk metrics require Patient resources."
+            "No Patient resources found in input  risk metrics require Patient resources."
         )
         k_result = compute_k_anonymity([])
         return {
@@ -370,7 +370,7 @@ def assess_risk_resources(resources: list[dict]) -> dict[str, Any]:
         warnings.append(
             f"{missing_count} Patient record(s) have one or more missing "
             "quasi-identifier fields (gender, birthDate, or postalCode). "
-            "They are grouped under sentinel values — risk may be underestimated."
+            "They are grouped under sentinel values  risk may be underestimated."
         )
 
     k_result = compute_k_anonymity(qi_tuples)

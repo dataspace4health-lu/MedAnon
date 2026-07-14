@@ -1,5 +1,5 @@
 """Offline (verification) conformance checks: presence, primitive format, coding
-structure. No external server — these always run and are the always-on structural
+structure. No external server  these always run and are the always-on structural
 BLOCK authority (resource_type/id present, entered-in-error filter).
 """
 
@@ -42,7 +42,7 @@ def _resource_type_present(resources: list[dict], thresholds) -> CheckResult:
         if not (isinstance(rt, str) and rt.strip()):
             chk.violations += 1
             # enumerate(): list.index() is O(n²) and, worse, returns the first
-            # *equal* dict's position — wrong precisely here, where violating
+            # *equal* dict's position  wrong precisely here, where violating
             # resources are often empty/identical. add_detail() also bounds the count.
             chk.add_detail(
                 resource_index=idx,

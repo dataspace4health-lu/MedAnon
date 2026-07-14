@@ -563,7 +563,6 @@ const DETAIL_CAP = 50;
 /**
  * Estimate the median from a histogram via ogive (linear) interpolation within
  * the bin that crosses the n/2 cumulative boundary. Approximate for merged data
- * but far more useful than showing "—" across every distribution card.
  */
 function histMedian(bins: Array<{ x0: number; x1: number; n: number }>, total: number): number | undefined {
   if (!bins.length || !total) return undefined;

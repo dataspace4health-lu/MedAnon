@@ -1,12 +1,12 @@
-# Introduction — Health Data Preparation & Privacy Toolkit
+# Introduction  Health Data Preparation & Privacy Toolkit
 
 ## Who this documentation is for
 
 This documentation targets three audiences:
 
-- **Architects** — understand the system design, integration patterns, and the rationale behind key decisions
-- **Developers** — onboard quickly, understand module boundaries, run tests, extend the pipeline
-- **Operations teams** — deploy, monitor, back up, and troubleshoot the system in production
+- **Architects**  understand the system design, integration patterns, and the rationale behind key decisions
+- **Developers**  onboard quickly, understand module boundaries, run tests, extend the pipeline
+- **Operations teams**  deploy, monitor, back up, and troubleshoot the system in production
 
 New team members should read [Section 0 → 1 → 2.3](INDEX.md) in order before touching any configuration or code.
 
@@ -14,15 +14,15 @@ New team members should read [Section 0 → 1 → 2.3](INDEX.md) in order before
 
 ## What the system does
 
-**SPE FHIR BlackBox** (branded as **MedAnon**) is a healthcare data de-identification and pseudonymization engine. It transforms identified patient records — clinical FHIR R4 resources, HL7 v2 messages, and DICOM files — into privacy-safe equivalents that can be shared with research institutions, analytics platforms, or data space connectors without exposing patient identity.
+**SPE FHIR BlackBox** (branded as **MedAnon**) is a healthcare data de-identification and pseudonymization engine. It transforms identified patient records  clinical FHIR R4 resources, HL7 v2 messages, and DICOM files  into privacy-safe equivalents that can be shared with research institutions, analytics platforms, or data space connectors without exposing patient identity.
 
 The system does three things well:
 
-1. **Rule-driven de-identification** — A YAML configuration file maps FHIRPath expressions to de-identification actions (redact, hash, pseudonymize, generalize, encrypt, NLP scrub). Any team member can read and audit the rules. Seven built-in profiles cover the main regulatory scenarios out of the box.
+1. **Rule-driven de-identification**  A YAML configuration file maps FHIRPath expressions to de-identification actions (redact, hash, pseudonymize, generalize, encrypt, NLP scrub). Any team member can read and audit the rules. Seven built-in profiles cover the main regulatory scenarios out of the box.
 
-2. **Reversible pseudonymization** — Via gPAS (Generic Pseudonym Administration Service), a trusted third-party (TTP) service, patient IDs can be pseudonymized in a way that is reversible under controlled conditions. This supports adverse event investigation and longitudinal study linkage.
+2. **Reversible pseudonymization**  Via gPAS (Generic Pseudonym Administration Service), a trusted third-party (TTP) service, patient IDs can be pseudonymized in a way that is reversible under controlled conditions. This supports adverse event investigation and longitudinal study linkage.
 
-3. **Compliance-ready output** — Profiles for GDPR, HIPAA Safe Harbor, IRB research, and structural preservation. Every processed resource can be scored for privacy risk, data utility, and FHIR structural quality.
+3. **Compliance-ready output**  Profiles for GDPR, HIPAA Safe Harbor, IRB research, and structural preservation. Every processed resource can be scored for privacy risk, data utility, and FHIR structural quality.
 
 ---
 
@@ -34,7 +34,7 @@ Clinical data sharing is constrained by law and ethics. GDPR (EU), HIPAA (US), a
 |---|---|
 | Manual de-identification | Slow, error-prone, not reproducible |
 | Commercial products | Expensive licenses, opaque rules, vendor lock-in |
-| Simple hashing | Irreversible — prevents follow-up linkage for adverse events |
+| Simple hashing | Irreversible  prevents follow-up linkage for adverse events |
 | NLP-only tools | No FHIR structure awareness, no compliance profiles |
 
 SPE FHIR BlackBox addresses all four trade-offs: it is open, auditable, reversible where needed, FHIR-native, and covers the main regulatory frameworks.

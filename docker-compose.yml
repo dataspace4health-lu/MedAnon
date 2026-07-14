@@ -1,5 +1,5 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# MedAnon — full stack
+# MedAnon  full stack
 # Usage:
 #   docker compose up              # start all services
 #   docker compose up anonymizer   # start only the anonymizer
@@ -61,9 +61,9 @@ x-worker-env: &worker-env
   MEDANON_SCORING_ENABLED: ${MEDANON_SCORING_ENABLED:-false}
   #
   MEDANON_SCORE_NER_ENABLED: ${MEDANON_SCORE_NER_ENABLED:-false}
-  # MEDANON_REDIS_URL must be set explicitly in .env — no default password shipped here.
+  # MEDANON_REDIS_URL must be set explicitly in .env  no default password shipped here.
   MEDANON_REDIS_URL: ${MEDANON_REDIS_URL:?MEDANON_REDIS_URL must be set in .env}
-  # Shared Redis client pool (utils/redis_pool.py). Bump for big-volume workloads —
+  # Shared Redis client pool (utils/redis_pool.py). Bump for big-volume workloads 
   # Redis itself caps at `maxclients` (default 10000), so headroom is generous.
   MEDANON_REDIS_MAX_CONNECTIONS: ${MEDANON_REDIS_MAX_CONNECTIONS:-128}
   MEDANON_REDIS_SOCKET_TIMEOUT: ${MEDANON_REDIS_SOCKET_TIMEOUT:-5}
@@ -89,7 +89,7 @@ x-worker-env: &worker-env
   # 2 CPUs of the 8-CPU worker free for I/O.
   MEDANON_STAGING_PROCESS_WORKERS: ${MEDANON_STAGING_PROCESS_WORKERS:-4}
   # Phase-2 executor: "thread" (default; overlaps I/O + partial-GIL FHIRPath) or
-  # "process" (separate processes, bypasses the GIL plateau — ~2x faster on
+  # "process" (separate processes, bypasses the GIL plateau  ~2x faster on
   # warm-cache CPU-bound jobs). Process children rebuild their own store +
   # pseudonymizer and drain partitions via FOR UPDATE SKIP LOCKED.
   MEDANON_STAGING_EXECUTOR: ${MEDANON_STAGING_EXECUTOR:-thread}
@@ -97,7 +97,7 @@ x-worker-env: &worker-env
   MEDANON_STAGING_PROCESS_MIN_PARTITIONS: ${MEDANON_STAGING_PROCESS_MIN_PARTITIONS:-4}
   # Phase-2 re-fetch _id batch size (B2): larger = fewer round-trips per group.
   MEDANON_FHIR_REFETCH_CHUNK: ${MEDANON_FHIR_REFETCH_CHUNK:-200}
-  # Claim heartbeat interval (s) — refresh Redis-Streams claims for running jobs.
+  # Claim heartbeat interval (s)  refresh Redis-Streams claims for running jobs.
   MEDANON_CLAIM_HEARTBEAT_SEC: ${MEDANON_CLAIM_HEARTBEAT_SEC:-30}
   # Rows per partition for shards mode. Smaller = better load balance.
   MEDANON_PARTITION_TARGET_ROWS: ${MEDANON_PARTITION_TARGET_ROWS:-10000}
@@ -113,7 +113,7 @@ x-worker-env: &worker-env
   # fire per chunk.  At default batch=1000 = gPAS max=1000: exactly 1 sub-batch → only
   # 1 worker ever used.  Set to 4 so a larger batch size doesn't need a config change.
   GPAS_SUBBATCH_PARALLEL: ${GPAS_SUBBATCH_PARALLEL:-4}
-  # NLP client — parallel sub-batches when a single chunk exceeds NLP_MAX_BATCH_ITEMS.
+  # NLP client  parallel sub-batches when a single chunk exceeds NLP_MAX_BATCH_ITEMS.
   # At batch=1000 = NLP limit=1000: 1 sub-batch.  4 handles up to 4× batch size growth.
   NLP_CLIENT_SUBBATCH_PARALLEL: ${NLP_CLIENT_SUBBATCH_PARALLEL:-4}
   # Bigger anonymizer-side L1 cache => fewer NLP RPCs across batches.
@@ -141,17 +141,17 @@ x-worker-env: &worker-env
   MINIO_ROOT_USER: ${MINIO_ROOT_USER:-}
   MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-}
   MINIO_BUCKET: ${MINIO_BUCKET:-medanon-results}
-  # Analytics microservice — always running on processing-net, no profile needed.
+  # Analytics microservice  always running on processing-net, no profile needed.
   # Proxied by /analyse/risk and /generate/synthetic endpoints.
   ANALYTICS_SERVICE_URL: http://analytics:8100
-  # NLP microservice — always running, no profile needed.
+  # NLP microservice  always running, no profile needed.
   # Proxied by nlp_scrub / nlp_detect actions via RemoteNlpAdapter.
   NLP_SERVICE_URL: http://nlp-lb:8200
-  # Scoring microservice — always running, no profile needed.
+  # Scoring microservice  always running, no profile needed.
   # Proxied by pipeline.scoring.engine.score_resource via RemoteScoringClient.
   # Anonymizer falls back to local in-process scoring if the service is unreachable.
   SCORING_SERVICE_URL: ${SCORING_SERVICE_URL:-http://scoring:8300}
-  # AI agent integration — disabled by default.
+  # AI agent integration  disabled by default.
   # Set MEDANON_AI_ENABLED=true and configure the provider to enable AI features.
   MEDANON_AI_ENABLED: ${MEDANON_AI_ENABLED:-false}
   MEDANON_AI_PROVIDER: ${MEDANON_AI_PROVIDER:-ollama/llama3.1}
@@ -177,7 +177,7 @@ x-worker-env: &worker-env
   MEDANON_HASH_ALLOW_PLAIN: ${MEDANON_HASH_ALLOW_PLAIN:-false}
   MEDANON_REQUIRE_DURABLE_STORE: ${MEDANON_REQUIRE_DURABLE_STORE:-false}
   MEDANON_ALLOW_SQLITE_FALLBACK: ${MEDANON_ALLOW_SQLITE_FALLBACK:-false}
-  # Trust Gate microservice — pre-privacy data-quality / trust assessment.
+  # Trust Gate microservice  pre-privacy data-quality / trust assessment.
   # Opt-in: start the stack with `--profile trust` AND set
   # TRUST_GATE_SERVICE_URL=http://trust-gate:8400 to activate the intake
   # barrier. Empty (default) = the intake gate is a no-op. TRUST_GATE_MODE is
@@ -218,7 +218,7 @@ services:
       - "${GPAS_PORT:-8080}:80"
       - "${NLP_PORT:-8200}:8200"
     volumes:
-      # Read-only socket mount — Traefik discovers labels but cannot mutate.
+      # Read-only socket mount  Traefik discovers labels but cannot mutate.
       - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:
       processing-net:
@@ -318,7 +318,7 @@ services:
       dockerfile: Dockerfile
       target: worker
     image: ${WORKER_IMAGE:-medanon-worker:latest}
-    # container_name intentionally absent — allows `--scale worker=N` and
+    # container_name intentionally absent  allows `--scale worker=N` and
     # prevents port-binding conflicts when running multiple replicas.
     # Scale via: make up  (reads WORKER_REPLICAS from .env, default 2)
     restart: unless-stopped
@@ -386,7 +386,7 @@ services:
     image: hapiproject/hapi:v7.6.0
     container_name: hapi-fhir
     restart: unless-stopped
-    # Source FHIR server holds identified patient data — intentionally NOT published
+    # Source FHIR server holds identified patient data  intentionally NOT published
     # to a host port. Only anonymizer/worker on source-net can connect to it.
     # To inspect the source FHIR during development:
     #   docker compose exec fhir-server curl http://localhost:8080/fhir/metadata
@@ -457,7 +457,7 @@ services:
       - no-new-privileges:true
 
   # HAPI FHIR target server (target-net) ──────────────────────────────
-  # Holds de-identified data. Isolated on target-net — only anonymizer, worker,
+  # Holds de-identified data. Isolated on target-net  only anonymizer, worker,
   # and UI can reach it. gPAS, Redis, NLP, and analytics have no path to it.
   fhir-target:
     image: hapiproject/hapi:v7.6.0
@@ -568,7 +568,7 @@ services:
       - no-new-privileges:true
 
   # ── 5. gPAS TTP pseudonymisation service (processing-net) ─────────────────
-  # No container_name or static host-port binding here — both would block
+  # No container_name or static host-port binding here  both would block
   # `docker compose up --scale gpas=N`.  External access goes via the Traefik
   # gateway which exposes the legacy ``gpas-lb`` network alias on port 80.
   # Anonymizer/worker route through ``http://gpas-lb:80/...`` (re-resolved on
@@ -593,14 +593,14 @@ services:
       # connect, the AnonymDomainBean/Cache EJBs never start, and every
       # $pseudonymize* call hangs until timeout.
       #
-      # Global host/port — inherited by the gras (auth) and noti datasources,
+      # Global host/port  inherited by the gras (auth) and noti datasources,
       # which all share the single `gpas` database on gpas-db (gras/noti use
       # dedicated schemas; see services/gpas/sqls_pg/).
       TTP_DB_HOST: gpas-db
       TTP_DB_PORT: "5432"
       TTP_DB_USER: ${GPAS_DB_USER:-gpas_user}
       TTP_DB_PASS: ${GPAS_DB_PASSWORD:-gpas_password}
-      # gPAS pseudonymization datasource — must be postgresql, not the mysql default.
+      # gPAS pseudonymization datasource  must be postgresql, not the mysql default.
       TTP_GPAS_DB_DBMS: postgresql
       TTP_GPAS_DB_HOST: gpas-db
       TTP_GPAS_DB_PORT: "5432"
@@ -623,13 +623,13 @@ services:
       # ── Traefik routing (replaces the legacy gpas-lb nginx container) ──
       - traefik.enable=true
       - traefik.docker.network=medanon-processing-net
-      # FHIR API path — round-robin across all gpas replicas (default LB).
+      # FHIR API path  round-robin across all gpas replicas (default LB).
       - traefik.http.routers.gpas-fhir.entrypoints=gpas
       - traefik.http.routers.gpas-fhir.rule=PathPrefix(`/`)
       - traefik.http.routers.gpas-fhir.priority=1
       - traefik.http.routers.gpas-fhir.service=gpas-svc
       - traefik.http.services.gpas-svc.loadbalancer.server.port=8080
-      # JSF web UI — sticky cookie keeps each session pinned to one replica
+      # JSF web UI  sticky cookie keeps each session pinned to one replica
       # so WildFly's in-memory ViewState does not raise ViewExpiredException.
       - traefik.http.routers.gpas-web.entrypoints=gpas
       - traefik.http.routers.gpas-web.rule=PathPrefix(`/gpas-web`) || PathPrefix(`/gras-web`)
@@ -724,7 +724,7 @@ services:
   # Activate with: docker compose --profile trust up  AND set
   # TRUST_GATE_SERVICE_URL=http://trust-gate:8400 in .env (see env anchor above).
   # Terminology validation is fail-soft: leave TRUST_GATE_TERMINOLOGY_URL empty
-  # to skip it, or point it at an operator-provided server (e.g. Snowstorm —
+  # to skip it, or point it at an operator-provided server (e.g. Snowstorm 
   # requires Elasticsearch + a licensed SNOMED CT import; see docs/trust-gate.md).
   trust-gate:
     build:
@@ -753,7 +753,7 @@ services:
       TRUST_GATE_VALIDATOR_TIMEOUT_SEC: ${TRUST_GATE_VALIDATOR_TIMEOUT_SEC:-60}
       TRUST_GATE_VALIDATOR_ASYNC_TIMEOUT_SEC: ${TRUST_GATE_VALIDATOR_ASYNC_TIMEOUT_SEC:-90}
       TRUST_GATE_TERMINOLOGY_URL: ${TRUST_GATE_TERMINOLOGY_URL:-}
-      # Decision-policy cut-offs (% checks passing) — OHDSI-DQD style, tunable.
+      # Decision-policy cut-offs (% checks passing)  OHDSI-DQD style, tunable.
       TRUST_GATE_PASS_MIN_RATE: ${TRUST_GATE_PASS_MIN_RATE:-90}
       TRUST_GATE_CATEGORY_MIN_RATE: ${TRUST_GATE_CATEGORY_MIN_RATE:-80}
       # Stateful QC platform: retain passports + findings + ALCOA++ audit trail so
@@ -845,7 +845,7 @@ services:
       JAVA_OPTS: ${TRUST_GATE_VALIDATOR_JAVA_OPTS:--XX:MaxRAMPercentage=75.0}
       # Terminology server wiring.
       # Tier 0 (default): DISABLE_TX=true → structural/profile validate OFFLINE
-      # against loaded IG value sets — no tx.fhir.org round-trips, no cold-load
+      # against loaded IG value sets  no tx.fhir.org round-trips, no cold-load
       # latency; conformance.terminology reports NA honestly.
       # Tier 1/2: stand up a self-hosted tx server, then in .env set
       # TRUST_GATE_VALIDATOR_DISABLE_TX=false and TRUST_GATE_VALIDATOR_TX_URL to it
@@ -888,7 +888,7 @@ services:
     expose:
       - "8200"
     environment:
-      # ── L2 cache (Redis) — shared across replicas, survives restarts.
+      # ── L2 cache (Redis)  shared across replicas, survives restarts.
       # Uses DB 2 to stay isolated from anonymizer L2 (db 0) and job queue (db 1).
       NLP_REDIS_URL: ${NLP_REDIS_URL:-redis://:${MEDANON_REDIS_PASSWORD:-}@redis:6379/2}
       NLP_REDIS_TTL_SEC: ${NLP_REDIS_TTL_SEC:-604800}
@@ -1061,7 +1061,7 @@ services:
   # ── Keycloak OIDC identity provider (processing-net) ──────────────────────
   # Opt-in: docker compose --profile auth up -d keycloak
   #
-  # Reached ONLY through the UI's TLS nginx at https://<host>:8501/auth/ — there
+  # Reached ONLY through the UI's TLS nginx at https://<host>:8501/auth/  there
   # is intentionally NO published host port. Keycloak's own admin console is a
   # PKCE public client and therefore also needs an HTTPS secure context, so it
   # must be served via the same TLS edge (a plain-HTTP host port would hit the
@@ -1139,7 +1139,7 @@ services:
         condition: service_healthy
     healthcheck:
       # The stock Keycloak image has no curl/wget; use bash /dev/tcp against the
-      # master-realm discovery doc (path is known: /auth relative path) — 200
+      # master-realm discovery doc (path is known: /auth relative path)  200
       # once the server is fully up and the realm is served.
       test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8080 && printf 'GET /auth/realms/master/.well-known/openid-configuration HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && grep -qm1 '200' <&3"]
       interval: 15s
@@ -1159,7 +1159,7 @@ services:
 
   # Redis (processing-net) ────────────────────────────────────────────
   # Note: Redis logs "WARNING Memory overcommit must be enabled!" on Linux VMs.
-  # This is a host kernel setting — fix with: sudo sysctl -w vm.overcommit_memory=1
+  # This is a host kernel setting  fix with: sudo sysctl -w vm.overcommit_memory=1
   # (add to /etc/sysctl.conf for persistence). Not fixable inside the container.
   redis:
     image: redis:7-alpine
@@ -1167,7 +1167,7 @@ services:
     restart: unless-stopped
     user: redis
     # AOF persistence is REQUIRED.  The gPAS pseudonym cache (and the NLP
-    # detection cache) must survive Redis restarts — otherwise the second bulk
+    # detection cache) must survive Redis restarts  otherwise the second bulk
     # run is as slow as the first because every value is a fresh L2 miss.
     # `volatile-lru` only evicts keys with an explicit TTL, so the no-TTL
     # pseudonym entries are pinned for the lifetime of the dataset.
@@ -1299,7 +1299,7 @@ services:
     networks:
       - processing-net
     environment:
-      # CPU inference tuning — without these Ollama grabs every core and runs
+      # CPU inference tuning  without these Ollama grabs every core and runs
       # multiple model copies, saturating the host. Cap threads to a sane
       # subset and serialise requests so the AI never starves the pipeline.
       OLLAMA_NUM_THREADS: ${OLLAMA_NUM_THREADS:-4}

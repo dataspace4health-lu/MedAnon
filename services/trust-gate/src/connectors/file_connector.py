@@ -2,8 +2,8 @@
 
 Format is auto-detected from filename extension; falls back to probing content.
 Returns either:
-  ("fhir",    list[dict])               — route to assess / assess_batch
-  ("tabular", dict[str, list[dict]])    — route to assess_omop via tabular_to_omop
+  ("fhir",    list[dict])                route to assess / assess_batch
+  ("tabular", dict[str, list[dict]])     route to assess_omop via tabular_to_omop
 
 Excel sheets are returned as separate tables keyed by sheet name.
 CSV is returned as a single table keyed by the filename stem (or the caller's
@@ -71,7 +71,7 @@ def parse_file(
     if name_lower.endswith(".json"):
         return _parse_json(content)
 
-    # Unknown extension — probe in order: JSON, NDJSON, CSV
+    # Unknown extension  probe in order: JSON, NDJSON, CSV
     for fn in (_parse_json, _parse_ndjson):
         try:
             return fn(content)
@@ -140,7 +140,7 @@ def _parse_ndjson(content: bytes) -> tuple[str, list[dict] | dict[str, list[dict
         try:
             obj = json.loads(line)
         except json.JSONDecodeError as exc:
-            raise ConnectorError(f"Line {i}: invalid JSON — {exc}") from exc
+            raise ConnectorError(f"Line {i}: invalid JSON  {exc}") from exc
         if isinstance(obj, dict):
             records.append(obj)
     if not records:

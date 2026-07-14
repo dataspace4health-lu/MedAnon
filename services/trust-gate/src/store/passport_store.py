@@ -1,12 +1,12 @@
 """Passport / check-result repository for the Trust Gate platform.
 
 Two backends behind one Protocol (mirrors ``baseline.py``):
-  - ``SqlitePassportStore``   — single-instance / dev (WAL, process-local lock).
-  - ``PostgresPassportStore`` — durable, cross-replica (use with ``--scale``).
+  - ``SqlitePassportStore``    single-instance / dev (WAL, process-local lock).
+  - ``PostgresPassportStore``  durable, cross-replica (use with ``--scale``).
 
 Schema (``trust_gate`` schema on Postgres; plain tables on SQLite):
-  - ``assessments``  — one row per Quality Passport (summary columns + full JSON).
-  - ``check_results`` — one row per atomic check (for per-metric trend / findings).
+  - ``assessments``   one row per Quality Passport (summary columns + full JSON).
+  - ``check_results``  one row per atomic check (for per-metric trend / findings).
 
 PHI-safe: only the passport's own (already-redacted) content is stored; the gate
 never persists raw values (see ``passport.redact_token`` / ``accuracy.py``).
@@ -234,7 +234,7 @@ class SqlitePassportStore:
                 ),
             )
             if idempotency_key and cur.rowcount == 0:
-                return aid  # already persisted under this key — idempotent replay
+                return aid  # already persisted under this key  idempotent replay
             rows = _check_rows(aid, passport)
             if rows:
                 conn.executemany(
@@ -393,7 +393,7 @@ class PostgresPassportStore:
                 ),
             )
             if idempotency_key and cur.rowcount == 0:
-                conn.commit()  # already persisted under this key — idempotent replay
+                conn.commit()  # already persisted under this key  idempotent replay
                 return aid
             rows = _check_rows(aid, passport)
             if rows:
@@ -475,8 +475,8 @@ def get_passport_store() -> PassportStore | None:
             _log.info("trust-gate store: SQLite at %s", sqlite_path)
         else:
             _STORE = None  # stateless: assessments are not retained
-    except Exception as exc:  # noqa: BLE001 — never let store setup break the gate
-        _log.warning("passport store init failed (%s) — running stateless", exc)
+    except Exception as exc:  # noqa: BLE001  never let store setup break the gate
+        _log.warning("passport store init failed (%s)  running stateless", exc)
         _STORE = None
     return _STORE
 

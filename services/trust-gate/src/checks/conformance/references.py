@@ -1,7 +1,7 @@
 """Relational conformance (verification): literal references resolve within the
 batch. Relative ``ResourceType/id`` refs resolve against the batch Type/id set;
 absolute / ``urn:uuid:`` refs resolve against Bundle ``fullUrl`` values (only when
-a fullUrl context is supplied, else NA — no false dangling-reference violations).
+a fullUrl context is supplied, else NA  no false dangling-reference violations).
 """
 
 from __future__ import annotations
@@ -44,9 +44,9 @@ def _reference_integrity(resources, thresholds, full_urls=None):
             continue
         for ref in _iter_references(res):
             if ref.startswith("#"):
-                continue  # contained-resource reference — not a batch reference
+                continue  # contained-resource reference  not a batch reference
             if ref.startswith(("urn:", "http://", "https://")):
-                # Absolute / urn:uuid reference — resolvable only against Bundle
+                # Absolute / urn:uuid reference  resolvable only against Bundle
                 # fullUrls. NA when no fullUrl context was provided.
                 if not full_set:
                     continue
@@ -63,7 +63,7 @@ def _reference_integrity(resources, thresholds, full_urls=None):
             if "/" not in ref:
                 continue
             # Normalize to the exact "ResourceType/id" key (drop query string and
-            # any /_history/{vid} suffix) and require an exact match — a loose
+            # any /_history/{vid} suffix) and require an exact match  a loose
             # endswith() can false-resolve "Patient/1" against "RelatedPerson/x1"
             # or match the right id under the wrong resource type.
             short = _normalize_ref(ref)

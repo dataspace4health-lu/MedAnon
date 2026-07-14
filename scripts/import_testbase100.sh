@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
-# MedAnon — import TestBase NDJSON files into HAPI FHIR
+# MedAnon  import TestBase NDJSON files into HAPI FHIR
 # Usage: bash scripts/import_testbase100.sh [data/TestBase]
 #
-# The source FHIR server (hapi-fhir) has no host port in the default stack —
+# The source FHIR server (hapi-fhir) has no host port in the default stack 
 # identified patient data must not be reachable outside Docker in production.
 #
 # URL resolution order:
 #   1. FHIR_SOURCE_URL env var (explicit override)
-#   2. http://localhost:8081/fhir — works when dev override is active
+#   2. http://localhost:8081/fhir  works when dev override is active
 #      (docker compose -f docker-compose.yml -f docker-compose.dev.yml up)
-#   3. Auto proxy — spins up a temporary socat container on source-net,
+#   3. Auto proxy  spins up a temporary socat container on source-net,
 #      forwards localhost:8081 → hapi-fhir:8080, tears it down on exit.
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
@@ -27,14 +27,14 @@ if [ -z "${FHIR_SOURCE_URL:-}" ] && ! curl -sf --max-time 3 "${FHIR_URL}/metadat
   # Remove any leftover proxy from a previous interrupted run
   docker rm -f "${PROXY_CONTAINER}" >/dev/null 2>&1 || true
 
-  echo "Note: localhost:8081 not reachable — starting temporary proxy (localhost:8081 → hapi-fhir:8080)"
+  echo "Note: localhost:8081 not reachable  starting temporary proxy (localhost:8081 → hapi-fhir:8080)"
   echo "      The proxy is removed automatically when the import finishes."
   echo ""
 
   # Determine project network name (prefix varies with working dir)
   SOURCE_NET=$(docker network ls --format '{{.Name}}' | grep 'source-net' | head -1)
   if [ -z "$SOURCE_NET" ]; then
-    echo "ERROR: source-net Docker network not found — is the stack running?"
+    echo "ERROR: source-net Docker network not found  is the stack running?"
     echo "  Start it with: make up"
     exit 1
   fi
@@ -65,7 +65,7 @@ for i in $(seq 1 30); do
     break
   fi
   if [ "$i" -eq 30 ]; then
-    echo " TIMEOUT — server not reachable at ${FHIR_URL}"
+    echo " TIMEOUT  server not reachable at ${FHIR_URL}"
     echo ""
     echo "Troubleshooting:"
     echo "  • Stack running?    docker compose ps"
@@ -129,7 +129,7 @@ def post_bundle(resources):
         }
         for r in resources
     ]
-    # Use "batch" (not "transaction") — independent entry processing, no table locks,
+    # Use "batch" (not "transaction")  independent entry processing, no table locks,
     # no full-bundle ACID commit.  Load ordering already guarantees referential integrity.
     bundle = {"resourceType": "Bundle", "type": "batch", "entry": entries}
     body = json.dumps(bundle).encode()
@@ -153,7 +153,7 @@ def post_bundle(resources):
                 raise RuntimeError(f"HTTP {resp.status}: {data[:300].decode('utf-8', errors='replace')}")
             return json.loads(data)
         except (ConnectionResetError, BrokenPipeError, OSError):
-            # Connection dropped — force reconnect on next attempt
+            # Connection dropped  force reconnect on next attempt
             _local.conn = None
             if attempt == 2:
                 raise
@@ -226,7 +226,7 @@ for tier in LOAD_TIERS:
             grand_total += u
             grand_errors += e
 
-# Any resource types not in LOAD_TIERS — upload sequentially at the end
+# Any resource types not in LOAD_TIERS  upload sequentially at the end
 known = set(_LOAD_ORDER)
 extra_files = sorted(
     [p for rtype, paths in all_files.items() if rtype not in known for p in paths],
@@ -238,5 +238,5 @@ for path in extra_files:
     grand_errors += e
 
 print()
-print(f"Done — {grand_total} resources uploaded, {grand_errors} errors")
+print(f"Done  {grand_total} resources uploaded, {grand_errors} errors")
 PYEOF

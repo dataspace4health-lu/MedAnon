@@ -1,5 +1,5 @@
 {{- if .Values.monitoring.prometheusRule.enabled }}
-# PrometheusRule — starter alerting rules for the anonymizer.
+# PrometheusRule  starter alerting rules for the anonymizer.
 # Tune thresholds in values.yaml under monitoring.prometheusRule.thresholds.
 # CRD (monitoring.coreos.com/v1) is provided by the Prometheus Operator.
 apiVersion: monitoring.coreos.com/v1
@@ -52,7 +52,7 @@ spec:
             component: anonymizer
           annotations:
             summary: "p95 request latency above threshold"
-            description: "p95 latency is {{`{{ $value }}`}}s — investigate gPAS/NLP/FHIR upstream health."
+            description: "p95 latency is {{`{{ $value }}`}}s  investigate gPAS/NLP/FHIR upstream health."
 
     - name: medanon.anonymizer.upstreams
       rules:

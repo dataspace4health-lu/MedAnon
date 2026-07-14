@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# verify_deployment.sh — post-startup smoke test for the MedAnon stack.
+# verify_deployment.sh  post-startup smoke test for the MedAnon stack.
 # Checks that every service is healthy and responding correctly.
 # Usage: bash scripts/verify_deployment.sh
 set -euo pipefail
@@ -7,7 +7,7 @@ set -euo pipefail
 # Source .env so we pick up MEDANON_API_KEY and port overrides.
 # Use grep to skip comments and empty lines, then export.
 if [ -f .env ]; then
-    # Use grep+sed to safely export vars — quote values containing spaces so
+    # Use grep+sed to safely export vars  quote values containing spaces so
     # multi-word values like OIDC_SCOPE="openid profile email" don't get
     # interpreted as shell commands by eval.
     set -a
@@ -103,7 +103,7 @@ HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' \
 if [ "$HTTP_CODE" = "200" ]; then
     pass "/process -> 200 (de-identification works)"
 elif [ "$HTTP_CODE" = "401" ] && [ "$AUTH_PROVIDER" = "oidc" ] && [ -z "$API_KEY" ]; then
-    warn "/process -> 401 (expected — OIDC auth active, no token in verify script)"
+    warn "/process -> 401 (expected  OIDC auth active, no token in verify script)"
 else
     fail "/process -> $HTTP_CODE"
 fi
@@ -113,7 +113,7 @@ echo ""
 # The source FHIR server holds identified patient data and is intentionally
 # NOT published to a host port.  Verify it via the anonymizer container
 # which shares the internal Docker network.
-echo "3. HAPI FHIR source server (internal only — no host port)"
+echo "3. HAPI FHIR source server (internal only  no host port)"
 HTTP_CODE=$(docker compose exec -T anonymizer python3 -c "
 import urllib.request
 try:

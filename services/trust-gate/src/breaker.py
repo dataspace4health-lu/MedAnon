@@ -1,6 +1,6 @@
 """Minimal three-state circuit breaker (in-service copy).
 
-A trimmed version of the anonymizer's ``utils/circuit_breaker.py`` — the Trust
+A trimmed version of the anonymizer's ``utils/circuit_breaker.py``  the Trust
 Gate is self-contained, so it carries its own copy rather than importing across
 service boundaries.
 """

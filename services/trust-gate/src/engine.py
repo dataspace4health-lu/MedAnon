@@ -1,4 +1,4 @@
-"""Trust Gate engine — the assessment pipeline.
+"""Trust Gate engine  the assessment pipeline.
 
 Thin orchestrator over the ``verdict`` package. ``assess`` runs the pipeline for a
 FHIR resource set; ``assess_omop`` for an OMOP CDM dataset. Both follow the same
@@ -137,7 +137,7 @@ def assess(
     # Category pass-rates + overall (Kahn roll-up over deterministic checks).
     category_scores, overall, has_assessed = category_and_overall(det_checks)
 
-    # Per-resource-type threshold check (Phase 2A — ONC ASTP calibration).
+    # Per-resource-type threshold check (Phase 2A  ONC ASTP calibration).
     rt_below: list[str] = []
     if resource_thresholds:
         rt_below = check_resource_type_thresholds(
@@ -181,7 +181,7 @@ def assess(
     )
 
     # Per-dimension scorecard + overall grade + purpose-bound fitness statement
-    # (deterministic checks only — reproducible).
+    # (deterministic checks only  reproducible).
     scorecard_data = scorecard(det_checks)
     overall_grade = grade_with_floor(overall, det_checks) if has_assessed else None
     fitness = fitness_statement(
@@ -205,7 +205,7 @@ def assess(
         # by which organization role this assessment ran (Wassell et al. 2026).
         "lifecycle_stage": lifecycle_stage,
         "org_role": org_role,
-        # Deequ-style suggested tolerances (advisory only — never auto-applied).
+        # Deequ-style suggested tolerances (advisory only  never auto-applied).
         "suggested_thresholds": suggest_thresholds(det_checks),
     }
 

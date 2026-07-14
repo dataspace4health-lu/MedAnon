@@ -7,7 +7,7 @@ registry: ""
 imagePullPolicy: IfNotPresent
 imagePullSecrets: []
 
-# Same image as anonymizer — different entrypoint
+# Same image as anonymizer  different entrypoint
 image: medanon
 # Pinned to chart appVersion. Override at install time with `--set tag=<version>`.
 tag: "2025.2.0"
@@ -53,7 +53,7 @@ podDisruptionBudget:
   minAvailable: 1
 
 # ─── Shared output PVC (job results) ─────────────────────────────────────────
-# Same value as anonymizer.sharedOutputPVC — must reference the same PVC.
+# Same value as anonymizer.sharedOutputPVC  must reference the same PVC.
 sharedOutputPVC: ""
 
 # ─── Observability (Prometheus Operator) ───────────────────────────────────

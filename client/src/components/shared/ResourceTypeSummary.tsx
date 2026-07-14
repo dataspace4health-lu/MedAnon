@@ -257,7 +257,7 @@ export function ResourceTypeSummary({
                                     </span>
                                   ) : (
                                     <span className="text-muted-foreground/40">
-                                      —
+                                      
                                     </span>
                                   )}
                                 </td>
@@ -305,7 +305,7 @@ export function ResourceTypeSummary({
                                   </span>
                                 ) : (
                                   <span className="text-muted-foreground/40">
-                                    —
+                                    
                                   </span>
                                 )}
                               </td>
@@ -344,7 +344,7 @@ export function ResourceTypeSummary({
                                           </span>
                                         ) : (
                                           <span className="text-muted-foreground/40">
-                                            —
+                                            
                                           </span>
                                         )}
                                       </td>

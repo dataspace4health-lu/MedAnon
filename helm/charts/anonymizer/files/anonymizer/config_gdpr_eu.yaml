@@ -3,13 +3,13 @@
 # =============================================================================
 #
 # Legal basis: GDPR (EU) 2016/679
-#   - Art. 4(1)  — Personal data definition (name, ID, location, online ID,
+#   - Art. 4(1)   Personal data definition (name, ID, location, online ID,
 #                  physical/physiological/genetic/economic/cultural identifiers)
-#   - Art. 4(5)  — Pseudonymisation (replacing identifiers with a pseudonym)
-#   - Art. 5(1)  — Data minimisation & storage limitation
-#   - Art. 25    — Data protection by design and by default
-#   - Art. 32    — Security of processing (cryptographic measures)
-#   - Art. 89    — Safeguards for health / research data processing
+#   - Art. 4(5)   Pseudonymisation (replacing identifiers with a pseudonym)
+#   - Art. 5(1)   Data minimisation & storage limitation
+#   - Art. 25     Data protection by design and by default
+#   - Art. 32     Security of processing (cryptographic measures)
+#   - Art. 89     Safeguards for health / research data processing
 #
 # Strategy used:
 #   cryptohash  → SHA3-256 HMAC (reversible with key; satisfies Art. 4(5))
@@ -25,7 +25,7 @@
 #   Patient, Practitioner, PractitionerRole, RelatedPerson, Organization,
 #   Person, Group (with wildcards for common cross-resource identifiers)
 #
-# Implementation note — HumanName / Identifier complex types:
+# Implementation note  HumanName / Identifier complex types:
 #   cryptohash targets scalar leaf fields only.  Applying cryptohash to the
 #   parent complex object (e.g. Patient.name, Patient.identifier) replaces
 #   the entire struct with a hex string, breaking FHIR R4 schema validity.
@@ -49,7 +49,7 @@ rules:
   # PATIENT  (most common PHI carrier in FHIR)
   # ---------------------------------------------------------------------------
 
-  # Direct identifier: legal name(s) — target HumanName leaf scalars only
+  # Direct identifier: legal name(s)  target HumanName leaf scalars only
   # (hashing the parent HumanName object would replace it with a hex string,
   #  breaking FHIR R4 schema)
   - name: patient name family
@@ -78,16 +78,16 @@ rules:
     action: cryptohash
 
   # Administrative identifiers: MRN, SSN, health card, insurance number, etc.
-  # Target .value only — preserves .system, .type, .use for structural fidelity
+  # Target .value only  preserves .system, .type, .use for structural fidelity
   - name: patient identifier value
     match: Patient.identifier.value
     action: cryptohash
 
-  # Date of birth — high re-identification risk (quasi-identifier)
+  # Date of birth  high re-identification risk (quasi-identifier)
   - match: Patient.birthDate
     action: redact
 
-  # Deceased date/boolean — retained as boolean structure, exact date redacted
+  # Deceased date/boolean  retained as boolean structure, exact date redacted
   - match: Patient.deceasedDateTime
     action: redact
 
@@ -102,7 +102,7 @@ rules:
   - match: Patient.address
     action: redact
 
-  # Geolocation (lat/lon) nested inside Patient.address.extension — re-identification PHI
+  # Geolocation (lat/lon) nested inside Patient.address.extension  re-identification PHI
   - name: redact patient address geolocation
     match: Patient.address.extension
     action: redact
@@ -118,7 +118,7 @@ rules:
   - match: Patient.link
     action: redact
 
-  # Quasi-identifiers — GDPR Art. 4(1): marital status and language are personal
+  # Quasi-identifiers  GDPR Art. 4(1): marital status and language are personal
   # data that enable re-identification when combined with other attributes.
   - match: Patient.maritalStatus
     action: redact
@@ -193,7 +193,7 @@ rules:
   # ---------------------------------------------------------------------------
   # ORGANIZATION  (named entity that may identify a patient indirectly by
   #                association, e.g. specialist clinic)
-  # Organization.name is a plain string in FHIR R4 — cryptohash applies
+  # Organization.name is a plain string in FHIR R4  cryptohash applies
   # directly without breaking schema.
   # ---------------------------------------------------------------------------
 
@@ -254,7 +254,7 @@ rules:
     action: cryptohash
 
   # Subject/patient reference strings link clinical resources back to the patient
-  # — must be redacted to break re-identification via reference strings.
+  #  must be redacted to break re-identification via reference strings.
   - match: "*.subject.reference"
     action: redact
 
@@ -312,7 +312,7 @@ rules:
   # NLP catches unstructured names and locations.
   # ---------------------------------------------------------------------------
 
-  # FHIR Narrative (XHTML) — safe-harbor tokenization preserving structure
+  # FHIR Narrative (XHTML)  safe-harbor tokenization preserving structure
   - match: "*.text"
     action: scrub_text
     params:
@@ -326,14 +326,14 @@ rules:
       html: true
       threshold: 0.4
 
-  # Clinical notes — plain text
+  # Clinical notes  plain text
   - match: "*.note.text"
     action: nlp_scrub
     params:
       mode: tokenize
       threshold: 0.4
 
-  # Nested CodeableConcept text fields — NLP only (preserves clinical terms,
+  # Nested CodeableConcept text fields  NLP only (preserves clinical terms,
   # catches embedded patient names/IDs inserted by EHR systems)
   - match: "*.code.text"
     action: nlp_scrub
@@ -359,7 +359,7 @@ rules:
       mode: tokenize
       threshold: 0.4
 
-  # Street address pattern — fires on any valueString containing a recognizable
+  # Street address pattern  fires on any valueString containing a recognizable
   # address regardless of LOINC code or resource structure (covers PRAPARE 56799-0,
   # custom SDOH panels, and any other free-text fields with address content).
   # Two rules: one for top-level valueString, one for component.valueString
@@ -414,15 +414,15 @@ rules:
       threshold: 0.4
 
   # ===========================================================================
-  # DOCUMENTS / ATTACHMENTS (GDPR Art. 4(1) — personal data in any format)
+  # DOCUMENTS / ATTACHMENTS (GDPR Art. 4(1)  personal data in any format)
   # text/* payloads: Base64-decoded → NLP-scrubbed → re-encoded.
   # Non-text MIME types (image/*, application/pdf …): data field redacted.
   # Attachment URL/title/hash always redacted.
-  # NOTE: *.attachment.data does NOT match DocumentReference — the attachment is
+  # NOTE: *.attachment.data does NOT match DocumentReference  the attachment is
   # nested under content[*].attachment, so specific paths are required per resource.
   # ===========================================================================
 
-  # DocumentReference — clinical notes (content[*].attachment, nested one level)
+  # DocumentReference  clinical notes (content[*].attachment, nested one level)
   - name: scrub document reference attachment text
     match: DocumentReference.content.attachment.data
     action: nlp_detect_act
@@ -443,7 +443,7 @@ rules:
     match: DocumentReference.content.attachment.hash
     action: redact
 
-  # DiagnosticReport, QuestionnaireResponse — presentedForm is Attachment directly
+  # DiagnosticReport, QuestionnaireResponse  presentedForm is Attachment directly
   - name: scrub presented form text
     match: "*.presentedForm.data"
     action: nlp_detect_act
@@ -460,7 +460,7 @@ rules:
     match: "*.presentedForm.title"
     action: redact
 
-  # Observation, Task — valueAttachment
+  # Observation, Task  valueAttachment
   - name: scrub value attachment text
     match: "*.valueAttachment.data"
     action: nlp_detect_act
@@ -473,7 +473,7 @@ rules:
     match: "*.valueAttachment.url"
     action: redact
 
-  # Photos — biometric identifiers, never NLP-scrubable
+  # Photos  biometric identifiers, never NLP-scrubable
   - name: redact photo data
     match: "*.photo.data"
     action: redact

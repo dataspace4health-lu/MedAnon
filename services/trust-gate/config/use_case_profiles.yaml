@@ -1,4 +1,4 @@
-# Use-case profiles (Phase 2) — the decision-tree that maps a declared
+# Use-case profiles (Phase 2)  the decision-tree that maps a declared
 # `intended_use` to the metric subset (phases) + threshold tweaks that matter for
 # it. Selecting by use case is more honest than a flat "run everything": quality
 # is fitness for a *declared* purpose (Kahn 2016; Wang & Strong 1996).
@@ -9,7 +9,7 @@
 
 use_cases:
   ai_training:
-    description: "ML training/test data — needs structure, completeness, and plausibility."
+    description: "ML training/test data  needs structure, completeness, and plausibility."
     phases:
       - structural_conformance
       - terminology_validity
@@ -21,7 +21,7 @@ use_cases:
     citation: "Metric Hub 2026 (fit-for-purpose ML data); Kahn 2016"
 
   cohort_discovery:
-    description: "Feasibility / cohort counts — identity + core fields suffice."
+    description: "Feasibility / cohort counts  identity + core fields suffice."
     phases:
       - structural_conformance
       - terminology_validity
@@ -30,7 +30,7 @@ use_cases:
     citation: "OHDSI feasibility use; Kahn 2016 completeness"
 
   regulatory_rwe:
-    description: "Regulatory real-world evidence — strictest: provenance + accuracy + timeliness."
+    description: "Regulatory real-world evidence  strictest: provenance + accuracy + timeliness."
     phases:
       - structural_conformance
       - terminology_validity
@@ -51,7 +51,7 @@ use_cases:
     citation: "EMA RWD DQ Framework; FDA RWD/RWE; ICH E6(R3)"
 
   lab_analytics:
-    description: "Lab-centric analysis — terminology + value plausibility focus."
+    description: "Lab-centric analysis  terminology + value plausibility focus."
     phases:
       - structural_conformance
       - terminology_validity
@@ -60,7 +60,7 @@ use_cases:
     citation: "LOINC/UCUM; Kahn 2016 plausibility"
 
   exchange_interoperability:
-    description: "Standards-based exchange — structural + terminology + references."
+    description: "Standards-based exchange  structural + terminology + references."
     phases:
       - structural_conformance
       - terminology_validity

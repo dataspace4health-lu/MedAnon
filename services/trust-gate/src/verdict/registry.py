@@ -3,7 +3,7 @@
 Each entry is a *check strategy*: a callable that maps an ``AssessmentContext`` to a
 list of ``CheckResult``. ``runner.run_checks`` iterates this registry instead of
 hardcoding each check call, so the orchestrator no longer knows about individual
-checks — adding a check to the FHIR suite means registering one adapter here (then
+checks  adding a check to the FHIR suite means registering one adapter here (then
 phase/dimension-tagging it in ``phases.py`` / ``dimensions.py``).
 
 Each adapter is a thin translation from the context's fields to the check module's

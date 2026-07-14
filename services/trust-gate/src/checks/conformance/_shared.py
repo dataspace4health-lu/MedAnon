@@ -27,7 +27,7 @@ _TERMINOLOGY_TIMEOUT_SEC = float(
     os.environ.get("TRUST_GATE_TERMINOLOGY_ASYNC_TIMEOUT_SEC", "5")
 )
 # Validator is the slowest upstream (Java FHIR validator cold start). Bound it on
-# the critical path too — a larger default than terminology since validation of a
+# the critical path too  a larger default than terminology since validation of a
 # whole batch legitimately takes longer than a single code lookup.
 _VALIDATOR_TIMEOUT_SEC = float(
     os.environ.get("TRUST_GATE_VALIDATOR_ASYNC_TIMEOUT_SEC", "45")
@@ -36,9 +36,9 @@ _VALIDATOR_TIMEOUT_SEC = float(
 # BLOCK-gating checks let a malformed resource past the sample window escape. To
 # keep a full sweep off the timeout wall, the per-resource validator calls fan out
 # across a bounded thread pool and the timeout scales with batch size.
-#   _VALIDATOR_CONCURRENCY      — parallel validator calls (fan-out width).
-#   _VALIDATOR_PER_RESOURCE_SEC — time budget added per resource (timeout scaling).
-#   _VALIDATOR_MAX_RESOURCES    — safety valve; 0 = unbounded.
+#   _VALIDATOR_CONCURRENCY       parallel validator calls (fan-out width).
+#   _VALIDATOR_PER_RESOURCE_SEC  time budget added per resource (timeout scaling).
+#   _VALIDATOR_MAX_RESOURCES     safety valve; 0 = unbounded.
 _VALIDATOR_CONCURRENCY = int(os.environ.get("TRUST_GATE_VALIDATOR_CONCURRENCY", "8"))
 _VALIDATOR_PER_RESOURCE_SEC = float(
     os.environ.get("TRUST_GATE_VALIDATOR_PER_RESOURCE_SEC", "0.5")
@@ -65,7 +65,7 @@ VALIDATOR_TIMEOUTS = Counter(
 )
 
 # Persistent worker pool for off-critical-path terminology (and validator)
-# evaluation. Created once at module scope — NOT per call. A per-call
+# evaluation. Created once at module scope  NOT per call. A per-call
 # `with ThreadPoolExecutor(...)` block triggers an implicit shutdown(wait=True) on
 # exit, which blocks the caller until the slow upstream finishes and defeats the
 # entire purpose of the timeout. With a persistent pool, future.result(timeout=...)

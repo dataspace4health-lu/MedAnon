@@ -1,5 +1,5 @@
 -- =========================================================================
--- gRAS seed data for gPAS — PostgreSQL 16
+-- gRAS seed data for gPAS  PostgreSQL 16
 --
 -- Translated from MySQL 8.0 original (services/gpas/sqls/02_init_database_gras_for_gpas.sql).
 -- Replaces MySQL @variables and CALL statements with PostgreSQL function calls.

@@ -1,4 +1,4 @@
-# MedAnon — De-identification Policy Guide
+# MedAnon  De-identification Policy Guide
 
 ## Profile comparison
 
@@ -16,23 +16,23 @@
 
 ## When to use each profile
 
-### `config.yaml` — Default (Local dev / Testing)
+### `config.yaml`  Default (Local dev / Testing)
 
-Use when running local tests or CI pipelines without external dependencies. Uses plain SHA3-256 hash without an HMAC key — hashes are reversible via rainbow tables. **Not suitable for real patient data or any data sharing.**
+Use when running local tests or CI pipelines without external dependencies. Uses plain SHA3-256 hash without an HMAC key  hashes are reversible via rainbow tables. **Not suitable for real patient data or any data sharing.**
 
-### `config_gpas.yaml` — gPAS Production
+### `config_gpas.yaml`  gPAS Production
 
 Use when you need **reversible pseudonymization**: the ability to re-link records to original patients under controlled conditions (e.g. adverse event investigation, follow-up studies). Requires a live gPAS server. Pseudonyms are managed by gPAS and can be decoded by authorized users through the TTP gateway.
 
 Required env: `GPAS_URL`, `GPAS_DOMAIN`, `GPAS_BASIC_USER`, `GPAS_BASIC_PASS`.
 
-### `config_gdpr_eu.yaml` — GDPR Art. 4(5)
+### `config_gdpr_eu.yaml`  GDPR Art. 4(5)
 
-Use for EU/EEA patient data. All direct identifiers are HMAC-SHA3-256 hashed — this satisfies GDPR Art. 4(5) pseudonymization (data cannot be attributed to a person without the key). Dates are fully redacted. Geographic data redacted.
+Use for EU/EEA patient data. All direct identifiers are HMAC-SHA3-256 hashed  this satisfies GDPR Art. 4(5) pseudonymization (data cannot be attributed to a person without the key). Dates are fully redacted. Geographic data redacted.
 
-**Key requirement:** Set `MEDANON_HASH_KEY` in the environment. Do not store the key in the config file. Losing this key makes re-linkage impossible. Per GDPR Art. 32, the key is itself a security-relevant asset — store it in a secrets manager and rotate according to your data retention policy.
+**Key requirement:** Set `MEDANON_HASH_KEY` in the environment. Do not store the key in the config file. Losing this key makes re-linkage impossible. Per GDPR Art. 32, the key is itself a security-relevant asset  store it in a secrets manager and rotate according to your data retention policy.
 
-### `config_hipaa_safe_harbor.yaml` — HIPAA Safe Harbor
+### `config_hipaa_safe_harbor.yaml`  HIPAA Safe Harbor
 
 Use for US patient data under HIPAA. Removes all 18 PHI identifier categories per 45 CFR § 164.514(b):
 - Names, contact information, all geographic data below state level
@@ -45,35 +45,35 @@ Use for US patient data under HIPAA. Removes all 18 PHI identifier categories pe
 
 **Limitation:** HIPAA Safe Harbor additionally requires that ages ≥ 90 be further de-identified (the year alone is still identifying at extreme ages). This profile generalizes all birth dates to year. Organizations with patients ≥ 90 should additionally redact `Patient.birthDate` or use the `age_bracket` strategy in a custom profile.
 
-### `config_research_pseudonymous.yaml` — Research Pseudonymous
+### `config_research_pseudonymous.yaml`  Research Pseudonymous
 
 Use for internal clinical research under IRB approval where temporal analysis requires month-level precision. Key differences from HIPAA Safe Harbor:
-- Dates generalized to **year-month** (not year-only) — preserves seasonal patterns for epidemiology
-- Patient IDs are **cryptohashed** (not redacted) — preserves referential integrity for longitudinal linkage across multiple export runs (same patient ID → same hash)
+- Dates generalized to **year-month** (not year-only)  preserves seasonal patterns for epidemiology
+- Patient IDs are **cryptohashed** (not redacted)  preserves referential integrity for longitudinal linkage across multiple export runs (same patient ID → same hash)
 - City/district redacted, state and 3-digit zip retained
 
 **Not suitable for:** external data sharing, regulatory submissions, or contexts requiring HIPAA Safe Harbor compliance.
 
-### `config_structure_preserving.yaml` — Structure Preserving
+### `config_structure_preserving.yaml`  Structure Preserving
 
-Use when downstream consumers require a **complete, valid FHIR structure** with no missing fields — for example, feeding de-identified data into a FHIR validator, another FHIR server, or a system that validates cardinality constraints.
+Use when downstream consumers require a **complete, valid FHIR structure** with no missing fields  for example, feeding de-identified data into a FHIR validator, another FHIR server, or a system that validates cardinality constraints.
 
 Key behaviour:
-- Fields are **never removed** — names, addresses, telecom replaced with `[REDACTED]` via `substitute` (field stays present and valid)
-- All IDs pseudonymized via gPAS with `rewrite_references: true` — referential integrity maintained across bundles
+- Fields are **never removed**  names, addresses, telecom replaced with `[REDACTED]` via `substitute` (field stays present and valid)
+- All IDs pseudonymized via gPAS with `rewrite_references: true`  referential integrity maintained across bundles
 - Only `birthDate` is generalized (year-only); all other dates preserved
 - All clinical data (codes, values, observations, conditions) untouched
 
-**Gender fields:** `Patient.gender` and `Practitioner.gender` use `substitute_with: "unknown"` — NOT `[REDACTED]`. This is because FHIR R4 binds these fields to the `AdministrativeGender` value set (`male | female | other | unknown`). Any other value causes HAPI to reject the resource with HAPI-1821. `unknown` is the correct FHIR-compliant substitute.
+**Gender fields:** `Patient.gender` and `Practitioner.gender` use `substitute_with: "unknown"`  NOT `[REDACTED]`. This is because FHIR R4 binds these fields to the `AdministrativeGender` value set (`male | female | other | unknown`). Any other value causes HAPI to reject the resource with HAPI-1821. `unknown` is the correct FHIR-compliant substitute.
 
 **Requires gPAS.** Use `config_research_pseudonymous.yaml` if gPAS is unavailable.
 
-### `config_value_masking.yaml` — Value Masking
+### `config_value_masking.yaml`  Value Masking
 
-Use when you need **fine-grained, entity-specific de-identification** — for example, generalizing dates rather than redacting them, and selectively encrypting certain field types while keeping clinical codes intact.
+Use when you need **fine-grained, entity-specific de-identification**  for example, generalizing dates rather than redacting them, and selectively encrypting certain field types while keeping clinical codes intact.
 
 Key behaviour:
-- Uses `nlp_detect_act` — NLP detects entity type first, then dispatches a per-entity action (e.g. `PERSON` → `redact`, `DATE` → `generalize`)
+- Uses `nlp_detect_act`  NLP detects entity type first, then dispatches a per-entity action (e.g. `PERSON` → `redact`, `DATE` → `generalize`)
 - IDs pseudonymized via gPAS with `rewrite_references: true`
 - Birth dates generalized to decade; clinical dates to year
 - Geographic data replaced with `[REDACTED]`
@@ -88,15 +88,15 @@ Key behaviour:
 When de-identified resources are uploaded to a FHIR server, referenced resources must exist before the resources that reference them. The uploader computes a topological sort:
 
 ```
-Organization  (tier 0 — no outbound references)
-Practitioner  (tier 0 — no outbound references)
-Patient       (tier 0 — no outbound references)
-Encounter     (tier 1 — references Patient, Practitioner, Organization)
-Observation   (tier 2 — references Encounter)
-DiagnosticReport (tier 3 — references Observation)
+Organization  (tier 0  no outbound references)
+Practitioner  (tier 0  no outbound references)
+Patient       (tier 0  no outbound references)
+Encounter     (tier 1  references Patient, Practitioner, Organization)
+Observation   (tier 2  references Encounter)
+DiagnosticReport (tier 3  references Observation)
 ```
 
-Resources in the same tier upload together in a FHIR batch Bundle. This ordering is computed automatically from the `reference` fields in the actual data — it is not hardcoded.
+Resources in the same tier upload together in a FHIR batch Bundle. This ordering is computed automatically from the `reference` fields in the actual data  it is not hardcoded.
 
 Additionally, HAPI rejects purely numeric resource IDs (HAPI-0960). The uploader prefixes them with `p-` and rewrites all `reference` fields that pointed to those IDs.
 
@@ -134,8 +134,8 @@ rules:
 
 **Important constraints when writing rules:**
 - `Patient.gender` and `Practitioner.gender` must use `substitute` with a valid AdministrativeGender code (`male | female | other | unknown`), never `redact` or arbitrary text
-- `rewrite_references: true` is required whenever IDs change (cryptohash or gPAS) — otherwise cross-resource references will point to non-existent IDs on the target server
-- Rules are applied in order — more specific rules (`Patient.name`) should appear before wildcards (`*.name`)
+- `rewrite_references: true` is required whenever IDs change (cryptohash or gPAS)  otherwise cross-resource references will point to non-existent IDs on the target server
+- Rules are applied in order  more specific rules (`Patient.name`) should appear before wildcards (`*.name`)
 
 ---
 
@@ -147,7 +147,7 @@ For production use of `cryptohash`:
 # Generate
 openssl rand -hex 32
 
-# Set in .env — never in the YAML config
+# Set in .env  never in the YAML config
 MEDANON_HASH_KEY=<value>
 
 # Reference in rule params

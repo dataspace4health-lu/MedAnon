@@ -1,11 +1,11 @@
-"""Scoring microservice — composite privacy/utility/quality scoring.
+"""Scoring microservice  composite privacy/utility/quality scoring.
 
 Stateless HTTP service mirroring the analytics/NLP extraction pattern.
 Exposes:
-- ``POST /v1/score`` — score a single de-identified resource
-- ``POST /v1/score/batch`` — score a list of resources
-- ``GET /health`` — liveness
-- ``GET /metrics`` — Prometheus exposition
+- ``POST /v1/score``  score a single de-identified resource
+- ``POST /v1/score/batch``  score a list of resources
+- ``GET /health``  liveness
+- ``GET /metrics``  Prometheus exposition
 
 The anonymizer routes scoring through this service when ``SCORING_SERVICE_URL``
 is set in its environment. On failure the anonymizer falls back to local
@@ -67,7 +67,7 @@ def health() -> dict[str, str]:
 
 @app.get("/ready")
 def ready() -> dict[str, str]:
-    """Readiness probe — scoring is stateless so /ready mirrors /health.
+    """Readiness probe  scoring is stateless so /ready mirrors /health.
 
     Kept as a separate endpoint so K8s startup vs liveness probes can be
     tuned independently and so dashboards can distinguish "process up" from

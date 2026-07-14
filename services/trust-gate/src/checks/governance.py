@@ -1,10 +1,10 @@
-"""Auditability evidence (fitness-for-use policy layer — NOT a Kahn DQ category).
+"""Auditability evidence (fitness-for-use policy layer  NOT a Kahn DQ category).
 
 Provenance presence is a sharing-readiness signal, not a data-quality measure, so
 it is reported separately from the Kahn category scores and feeds the decision
 policy (e.g. missing provenance caps a dataset at CONDITIONAL_PASS).
 
-Phase 3B addition: PROVENANCE_PRESENT SAM — a scored CheckResult (Kahn conformance /
+Phase 3B addition: PROVENANCE_PRESENT SAM  a scored CheckResult (Kahn conformance /
 ISO HL7 21089 trust-anchor pattern) when TRUST_GATE_PROVENANCE_SEVERITY is set to
 "block". Default is "warn" (advisory only, exposed via auditability dict).
 """
@@ -64,7 +64,7 @@ def evaluate_provenance_sam(
     Returns a CheckResult (conformance / relational / validation) or None.
     """
     if _PROVENANCE_SEVERITY not in ("block", "score"):
-        return None  # advisory only in warn mode — not a Kahn scored check
+        return None  # advisory only in warn mode  not a Kahn scored check
 
     chk = CheckResult(
         check_id="conformance.provenance_present",
@@ -96,7 +96,7 @@ def evaluate_provenance_sam(
             expected_ids.add(f"{rt}/{rid}")
 
     if not expected_ids:
-        return chk  # NA — no expected-provenance resources in batch
+        return chk  # NA  no expected-provenance resources in batch
 
     # Collect what Provenance targets.
     covered: set[str] = set()

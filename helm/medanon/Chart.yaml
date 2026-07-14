@@ -1,7 +1,7 @@
 apiVersion: v2
 name: medanon
 description: >
-  Full FHIR de-identification and pseudonymization stack — anonymizer,
+  Full FHIR de-identification and pseudonymization stack  anonymizer,
   HAPI FHIR R4 server, gPAS TTP service, and React browser UI.
   Umbrella chart that composes the four standalone sub-charts.
 type: application

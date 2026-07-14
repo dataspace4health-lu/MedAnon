@@ -37,7 +37,7 @@ hapi:
   fhir:
     fhir_version: R4
     # Public base URL for Bundle fullUrl and pagination links.
-    # HAPI_SERVER_ADDRESS must be set explicitly — no hardcoded fallback.
+    # HAPI_SERVER_ADDRESS must be set explicitly  no hardcoded fallback.
     # Docker Compose: set HAPI_SERVER_ADDRESS=http://localhost:8081/fhir in .env
     # Kubernetes:     set via Helm --set fhir-server.serverAddress=...
     server_address: ${HAPI_SERVER_ADDRESS}
@@ -46,7 +46,7 @@ hapi:
     validation:
       enabled: false       # set to true if you want profile validation
 
-    # CORS — restrict to in-cluster service names and configured origins.
+    # CORS  restrict to in-cluster service names and configured origins.
     # Do NOT use raw IP addresses here; use DNS names or env-var-driven origins.
     cors:
       allow_Credentials: true
@@ -60,7 +60,7 @@ hapi:
     # Narrative generation (disable for de-identified data)
     narrative_enabled: false
 
-    # Page size — no artificial cap; the client controls page size via _count
+    # Page size  no artificial cap; the client controls page size via _count
     # when FHIR_PAGE_SIZE env var is set, otherwise the server returns up to
     # default_page_size resources per page.  Pagination (link[rel=next])
     # handles datasets larger than a single page.

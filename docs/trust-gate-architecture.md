@@ -33,7 +33,7 @@ services/trust-gate/src/
       catalog.py         /v1/metric-catalog, /v1/use-cases
   engine.py          thin orchestrator: assess() and assess_omop() only
   verdict/           the verdict layer (extracted from engine.py):
-    context.py         AssessmentContext — immutable check inputs (Parameter Object)
+    context.py         AssessmentContext  immutable check inputs (Parameter Object)
     registry.py        the FHIR check suite as a list of strategies (Strategy pattern)
     runner.py          iterates the registry + per-sector / per-phase sub-reports
     scoring.py         category/overall roll-up, dimension scorecard, grades, advisory

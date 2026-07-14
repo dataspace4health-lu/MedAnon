@@ -1,7 +1,7 @@
 ---
 title: "Configure Authentication"
 sidebar_position: 8
-description: "Choose an auth provider — open, API key, per-client keys, or OIDC/Keycloak — and understand the SPA login flow."
+description: "Choose an auth provider  open, API key, per-client keys, or OIDC/Keycloak  and understand the SPA login flow."
 ---
 
 # Configure Authentication
@@ -13,7 +13,7 @@ Authentication is pluggable via `MEDANON_AUTH_PROVIDER`. The backend and the Rea
 | `auto` (default) | API-key mode if `MEDANON_API_KEY` is set, else open |
 | `apikey` | Require `X-API-Key` on all protected endpoints |
 | `oidc` | Validate OIDC/JWT bearer tokens (SPA shows login form) |
-| `none` | Fully open — local dev only |
+| `none` | Fully open  local dev only |
 
 **Open paths** (always unauthenticated): `/health`, `/ready`, `/metrics`, `/docs`, `/v1/auth/config`.
 
@@ -24,7 +24,7 @@ Authentication is pluggable via `MEDANON_AUTH_PROVIDER`. The backend and the Rea
 ## Open mode (local dev)
 
 ```bash
-# .env — no auth required
+# .env  no auth required
 MEDANON_AUTH_PROVIDER=none
 ```
 
@@ -58,7 +58,7 @@ curl -s -X POST http://localhost:8000/v1/api-keys \
   -H 'X-API-Key: <admin-key>' \
   -H 'Content-Type: application/json' \
   -d '{"client": "research-team", "role": "analyst"}'
-# → returns {"key": "..."} once — store it securely, it is not recoverable
+# → returns {"key": "..."} once  store it securely, it is not recoverable
 
 # List all keys
 curl http://localhost:8000/v1/api-keys -H 'X-API-Key: <admin-key>'
@@ -72,7 +72,7 @@ curl -X DELETE http://localhost:8000/v1/api-keys/research-team \
   -H 'X-API-Key: <admin-key>'
 ```
 
-Per-client keys work alongside a shared `MEDANON_API_KEY` — the backend accepts either.
+Per-client keys work alongside a shared `MEDANON_API_KEY`  the backend accepts either.
 
 ---
 
@@ -98,7 +98,7 @@ The UI nginx proxies `/auth/` → `medanon-keycloak:8080`, so Keycloak shares th
 MEDANON_AUTH_PROVIDER=oidc
 MEDANON_AUTH_ALLOW_API_KEY=true          # also accept X-API-Key alongside OIDC
 
-# Issuer is BROWSER-FACING (through nginx /auth) — it must equal the `iss`
+# Issuer is BROWSER-FACING (through nginx /auth)  it must equal the `iss`
 # claim Keycloak stamps into tokens, which the browser also receives.
 OIDC_ISSUER=http://localhost:8501/auth/realms/medanon
 OIDC_CLIENT_ID=medanon-ui                # default; matches the realm client
@@ -110,7 +110,7 @@ OIDC_JWKS_URL=http://medanon-keycloak:8080/auth/realms/medanon/protocol/openid-c
 
 OIDC_ROLE_CLAIM_PATH=realm_access.roles  # where Keycloak puts realm roles
 OIDC_ROLE_MAP={"medanon-admin":"admin","medanon-analyst":"analyst","medanon-viewer":"viewer"}
-# OIDC_AUDIENCE=medanon                   # optional — only enforced if set
+# OIDC_AUDIENCE=medanon                   # optional  only enforced if set
 ```
 
 :::warning Split-URL gotcha
@@ -119,7 +119,7 @@ OIDC_ROLE_MAP={"medanon-admin":"admin","medanon-analyst":"analyst","medanon-view
 
 ### 3. How the SPA auth flow works
 
-The React SPA has no hardcoded auth mode. At startup it calls `GET /api/v1/auth/config` and adapts. Note there is **no token URL in the response** — the SPA derives Keycloak's token/logout endpoints from `oidc_issuer`:
+The React SPA has no hardcoded auth mode. At startup it calls `GET /api/v1/auth/config` and adapts. Note there is **no token URL in the response**  the SPA derives Keycloak's token/logout endpoints from `oidc_issuer`:
 
 ```
 SPA boots
@@ -150,9 +150,9 @@ SPA boots
 An authenticated token whose roles don't map to any MedAnon role is granted `viewer` (not rejected).
 
 **Why sessionStorage for the refresh token?**
-The refresh token needs to survive a page reload (so the user doesn't have to log in again after `F5`), but should not outlive the browser tab (to minimize the window if XSS were to occur). `localStorage` would survive tab close and is shared across tabs — too broad. `sessionStorage` is tab-scoped and cleared on close.
+The refresh token needs to survive a page reload (so the user doesn't have to log in again after `F5`), but should not outlive the browser tab (to minimize the window if XSS were to occur). `localStorage` would survive tab close and is shared across tabs  too broad. `sessionStorage` is tab-scoped and cleared on close.
 
-The access token is **never written to any storage** — it lives only in the `AuthContext` React state and the `authToken.ts` in-memory bridge. If the page reloads, the refresh token is used to re-derive it silently.
+The access token is **never written to any storage**  it lives only in the `AuthContext` React state and the `authToken.ts` in-memory bridge. If the page reloads, the refresh token is used to re-derive it silently.
 
 ### 4. Create users in Keycloak
 
@@ -175,7 +175,7 @@ OIDC_ROLE_CLAIM_PATH=roles          # Azure puts app roles here
 OIDC_ROLE_MAP={"MedAnonAdmin":"admin","MedAnonAnalyst":"analyst"}
 ```
 
-Note: Azure AD uses Authorization Code flow in most deployments. The SPA's Direct Access Grant (`grant_type=password`) requires the Azure AD app to have "Allow public client flows" enabled. If your Azure policy prohibits this, use the Authorization Code + PKCE flow instead (requires adding `react-oidc-context` redirect-based login — the embedded form currently uses Direct Access Grant only).
+Note: Azure AD uses Authorization Code flow in most deployments. The SPA's Direct Access Grant (`grant_type=password`) requires the Azure AD app to have "Allow public client flows" enabled. If your Azure policy prohibits this, use the Authorization Code + PKCE flow instead (requires adding `react-oidc-context` redirect-based login  the embedded form currently uses Direct Access Grant only).
 
 ---
 
@@ -187,7 +187,7 @@ Note: Azure AD uses Authorization Code flow in most deployments. The SPA's Direc
 | `apikey` or `auto` (key set) | No | Yes (settings panel) | No |
 | `oidc` | Yes (`LoginPage`) | No (unless `ALLOW_API_KEY=true`) | Yes |
 
-The mode is determined entirely by the `/v1/auth/config` response at runtime — the SPA bundle itself is the same for all modes.
+The mode is determined entirely by the `/v1/auth/config` response at runtime  the SPA bundle itself is the same for all modes.
 
 ---
 
@@ -195,9 +195,9 @@ The mode is determined entirely by the `/v1/auth/config` response at runtime —
 
 | Token | Storage | Why |
 |---|---|---|
-| Access token | JS memory (`AuthContext` state + `authToken.ts`) | Never persisted — lost on reload, re-derived from refresh token automatically |
+| Access token | JS memory (`AuthContext` state + `authToken.ts`) | Never persisted  lost on reload, re-derived from refresh token automatically |
 | Refresh token | `sessionStorage` | Survives page reload within the tab; cleared on tab close; not shared across tabs |
-| API key | `localStorage` | Intentional persistence — the user explicitly configures it once |
+| API key | `localStorage` | Intentional persistence  the user explicitly configures it once |
 
 ---
 
@@ -212,11 +212,11 @@ The mode is determined entirely by the `/v1/auth/config` response at runtime —
 | `OIDC_CLIENT_ID` | `medanon-ui` | Public client ID used by the SPA's password grant |
 | `OIDC_SCOPE` | `openid profile email` | Scopes requested at login |
 | `OIDC_JWKS_URL` | derived | Defaults to `<issuer>/.well-known/jwks.json`; override when the backend can't reach the public issuer host |
-| `OIDC_AUDIENCE` | (blank) | Expected `aud` claim — only enforced when set |
+| `OIDC_AUDIENCE` | (blank) | Expected `aud` claim  only enforced when set |
 | `OIDC_ROLE_CLAIM_PATH` | `realm_access.roles` | Dotted path to the role list (`roles` for Azure) |
 | `OIDC_ROLE_MAP` | (blank) | JSON mapping OIDC role names → MedAnon roles; unmapped authenticated users default to `viewer` |
 | `OIDC_USERNAME_CLAIM` | `preferred_username` | JWT claim used as display name in SPA `UserMenu` |
 | `OIDC_CLOCK_SKEW_SEC` | `10` | Allowed JWT clock skew in seconds |
 | `KEYCLOAK_PORT` | `8180` | Host port for Keycloak (`--profile auth`) |
-| `KEYCLOAK_ADMIN_USER` / `_PASSWORD` | — | Keycloak bootstrap admin credentials |
-| `KEYCLOAK_PUBLIC_URL` | — | Public URL for Keycloak (needed when browser and server use different URLs) |
+| `KEYCLOAK_ADMIN_USER` / `_PASSWORD` |  | Keycloak bootstrap admin credentials |
+| `KEYCLOAK_PUBLIC_URL` |  | Public URL for Keycloak (needed when browser and server use different URLs) |

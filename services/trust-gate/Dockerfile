@@ -1,6 +1,6 @@
 # Build context: services/trust-gate/
 # Stateless pre-privacy trust/quality assessment microservice.
-# No FHIR client, no Presidio, no gPAS — talks to the FHIR validator and
+# No FHIR client, no Presidio, no gPAS  talks to the FHIR validator and
 # terminology sidecars over HTTP.
 
 FROM python:3.12-slim AS base

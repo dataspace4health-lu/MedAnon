@@ -4,7 +4,7 @@ Provides the process-level AnalyzerEngine (lazy-initialized, thread-safe)
 and the full catalogue of custom recognizers extending Presidio's built-ins
 to cover HIPAA Safe Harbor, GDPR Art. 9, and EU national identifiers.
 
-IMPORTANT — ENTITY CATALOGUE SYNC:
+IMPORTANT  ENTITY CATALOGUE SYNC:
     HEALTHCARE_ENTITIES here must stay in sync with the canonical copy in
     services/anonymizer/src/integrations/nlp/utils.py.
     Any addition here MUST also be added there, and vice-versa.
@@ -77,12 +77,12 @@ HEALTHCARE_ENTITIES = [
     "EU_DATE_WRITTEN",
     # Synthetic data artifacts
     "SYNTHEA_SEED",
-    # Clinical note PHI — inline demographic / administrative
+    # Clinical note PHI  inline demographic / administrative
     "GENDER",  # inline patient gender (male/female/non-binary etc.)
     "RACE_ETHNICITY",  # bare inline race/ethnicity (not label-prefixed)
     "INSURANCE_STATUS",  # coverage status, named payers
     "GEO_COORDINATES",  # decimal/DMS lat-long pairs
-    # Organizations (hospitals, clinics, payers) — relies on spaCy NER
+    # Organizations (hospitals, clinics, payers)  relies on spaCy NER
     "ORGANIZATION",
     # Financial / fiscal identifiers
     "SWIFT_BIC",
@@ -99,7 +99,7 @@ HEALTHCARE_ENTITIES = [
     "UUID",
     "BEARER_TOKEN",
     "USERNAME_HANDLE",
-    # GDPR Art.9 — genetic data
+    # GDPR Art.9  genetic data
     "GENETIC_VARIANT",
 ]
 
@@ -196,7 +196,7 @@ def _build_custom_recognizers():
                 ),
                 0.85,
             ),
-            # French standard: number FIRST — "10 Rue de Paris", "25 bis Avenue Victor Hugo"
+            # French standard: number FIRST  "10 Rue de Paris", "25 bis Avenue Victor Hugo"
             (
                 "fr_address_num_first",
                 (
@@ -376,7 +376,7 @@ def _build_custom_recognizers():
                 (
                     r"\b(?:"
                     r"MRN|medical\s+record(?:\s+number)?|"
-                    # "patient id" / "patient #" but NOT "patient identifies" — require non-alpha after keyword
+                    # "patient id" / "patient #" but NOT "patient identifies"  require non-alpha after keyword
                     r"patient\s*(?:id(?!entif)|number|no\.?|#|identifier(?:\s+number)?)|"
                     r"hospital\s*(?:id(?!entif)|number|no\.?|#)|"
                     r"case\s*(?:id(?!entif)|number|no\.?|#)|"
@@ -453,9 +453,9 @@ def _build_custom_recognizers():
         [
             ("nl_postcode", r"\b\d{4}\s?[A-Z]{2}\b", 0.6),
             ("pl_postcode", r"\b\d{2}-\d{3}\b", 0.5),
-            # SE postcode "123 45" — too generic alone, requires SE/Sweden context bonus
+            # SE postcode "123 45"  too generic alone, requires SE/Sweden context bonus
             ("se_postcode", r"\b\d{3}\s\d{2}\b", 0.15),
-            # Bare 5-digit FR/DE/ES/IT postcode followed by capitalised city name —
+            # Bare 5-digit FR/DE/ES/IT postcode followed by capitalised city name
             # high-recall pattern, low confidence so context bonus / city co-location is required.
             # Inline (?-i:) override forces case-sensitive capital match for city since
             # Presidio applies re.IGNORECASE globally.
@@ -480,7 +480,7 @@ def _build_custom_recognizers():
         "US_SSN",
         "us_ssn_strong_recognizer",
         [
-            # Standard SSN format — high confidence even without context label
+            # Standard SSN format  high confidence even without context label
             (
                 "ssn_dashed",
                 r"\b(?!000|666|9\d{2})\d{3}-(?!00)\d{2}-(?!0000)\d{4}\b",
@@ -495,7 +495,7 @@ def _build_custom_recognizers():
         "SWIFT_BIC",
         "swift_bic_recognizer",
         [
-            # Only fire on labeled BIC — bare 8-letter word would match any English word.
+            # Only fire on labeled BIC  bare 8-letter word would match any English word.
             # (?-i:...) forces case-sensitive uppercase to defeat Presidio's IGNORECASE.
             (
                 "bic_labeled",
@@ -560,7 +560,7 @@ def _build_custom_recognizers():
         "AGE",
         "age_marker_recognizer",
         [
-            # "age: 45" / "aged 45" — keyword must be followed immediately by separator+digit
+            # "age: 45" / "aged 45"  keyword must be followed immediately by separator+digit
             (
                 "age_labeled",
                 (r"\b(?:age|aged|Alter|âge|edad|età)\s*[:\-]\s*\d{1,3}\b"),
@@ -634,7 +634,7 @@ def _build_custom_recognizers():
             (
                 "plate",
                 (
-                    # "registration" alone is too broad — require "plate" or vehicle context words
+                    # "registration" alone is too broad  require "plate" or vehicle context words
                     r"\b(?:license\s*plate|number\s*plate|Kennzeichen|immatriculation|"
                     r"matrícula|targa|kenteken)\s*[:#\-]?\s*[A-Z0-9\-\s]{3,12}\b"
                 ),
@@ -740,7 +740,7 @@ def _build_custom_recognizers():
 
     # --- Gender (bare inline, no label prefix) ---
     # "male", "female", "non-binary" etc. as they appear in clinical note
-    # demographics — consistent with structured Patient.gender redaction.
+    # demographics  consistent with structured Patient.gender redaction.
     #
     # The bare "male"/"female" pattern uses a base score (0.35) BELOW the
     # default detection threshold (0.4) on purpose: it only fires when
@@ -787,7 +787,7 @@ def _build_custom_recognizers():
 
     # --- Race / Ethnicity (bare inline, no label prefix) ---
     # "nonhispanic white female", "African American", "Hispanic" etc. as they
-    # appear in clinical notes — distinct from ETHNICITY_LABEL which requires
+    # appear in clinical notes  distinct from ETHNICITY_LABEL which requires
     # the "ethnicity:" label prefix.
     _add(
         "RACE_ETHNICITY",
@@ -892,7 +892,7 @@ def _build_custom_recognizers():
         r"Krankenhaus|Klinik|Klinikum|Universitätsklinikum|"
         r"Ospedale|Policlinico|Clinica|Clínica|Centro\s+Médico|Ziekenhuis|Kliniek"
     )
-    # Legal-entity suffixes — a strong organisation signal on their own. Absorbed
+    # Legal-entity suffixes  a strong organisation signal on their own. Absorbed
     # into the facility span (so "ACME MEDICAL ASSOCIATES, LLC" masks whole) and
     # also matched standalone for named orgs with no facility keyword
     # (e.g. "ACME HEALTH SOLUTIONS LLC").
@@ -904,7 +904,7 @@ def _build_custom_recognizers():
         "ORGANIZATION",
         "healthcare_org_recognizer",
         [
-            # "<Name> Hospital/Clinic/Urgent Care/..." — trailing keyword, optional
+            # "<Name> Hospital/Clinic/Urgent Care/..."  trailing keyword, optional
             # trailing legal-entity suffix absorbed into the span.
             (
                 "facility_suffix",
@@ -917,7 +917,7 @@ def _build_custom_recognizers():
                 ),
                 0.8,
             ),
-            # "Hospital/Clinic <Name>" — leading keyword (covers "Clinique Saint-Louis", "Hôpital Necker")
+            # "Hospital/Clinic <Name>"  leading keyword (covers "Clinique Saint-Louis", "Hôpital Necker")
             (
                 "facility_prefix",
                 (
@@ -929,7 +929,7 @@ def _build_custom_recognizers():
                 ),
                 0.85,
             ),
-            # Insurance / payer suffix — "AXA Health France", "Blue Cross", "Aetna Inc"
+            # Insurance / payer suffix  "AXA Health France", "Blue Cross", "Aetna Inc"
             (
                 "payer_suffix",
                 (
@@ -939,7 +939,7 @@ def _build_custom_recognizers():
                 ),
                 0.7,
             ),
-            # Named organisation with a legal-entity suffix but no facility keyword —
+            # Named organisation with a legal-entity suffix but no facility keyword
             # "<Name...> LLC/Inc/PC/Corp". Legal suffixes almost never occur in
             # clinical narrative, so this stays high-precision.
             (
@@ -962,7 +962,7 @@ def _build_custom_recognizers():
         ],
     )
 
-    # Decimal pairs, labeled lat/lon, and DMS format — all appear in FHIR
+    # Decimal pairs, labeled lat/lon, and DMS format  all appear in FHIR
     # address extensions and Synthea-generated Location resources.
     (
         _add(
@@ -1045,7 +1045,7 @@ def _build_custom_recognizers():
         context=["DEA", "prescriber", "controlled substance"],
     )
 
-    # (E) US National Provider Identifier — 10 digits with Luhn-style check
+    # (E) US National Provider Identifier  10 digits with Luhn-style check
     _add(
         "US_NPI",
         "us_npi_recognizer",
@@ -1062,7 +1062,7 @@ def _build_custom_recognizers():
         context=["NPI", "provider", "physician", "clinician"],
     )
 
-    # (M) Device identifiers — MAC address (IEEE 802 EUI-48 / EUI-64)
+    # (M) Device identifiers  MAC address (IEEE 802 EUI-48 / EUI-64)
     _add(
         "MAC_ADDRESS",
         "mac_address_recognizer",
@@ -1073,7 +1073,7 @@ def _build_custom_recognizers():
         context=["MAC", "ethernet", "BSSID"],
     )
 
-    # (M) Mobile device IMEI — 15 digits with Luhn check
+    # (M) Mobile device IMEI  15 digits with Luhn check
     _add(
         "IMEI",
         "imei_recognizer",
@@ -1084,7 +1084,7 @@ def _build_custom_recognizers():
         context=["IMEI", "MEID", "mobile", "phone"],
     )
 
-    # (I) Vehicle identifier — VIN (17 chars, no I/O/Q)
+    # (I) Vehicle identifier  VIN (17 chars, no I/O/Q)
     _add(
         "VIN",
         "vin_recognizer",
@@ -1102,7 +1102,7 @@ def _build_custom_recognizers():
         context=["VIN", "vehicle", "chassis"],
     )
 
-    # (M) FDA Unique Device Identifier — barcode/string with parenthesized AIs
+    # (M) FDA Unique Device Identifier  barcode/string with parenthesized AIs
     _add(
         "FDA_UDI",
         "fda_udi_recognizer",
@@ -1120,7 +1120,7 @@ def _build_custom_recognizers():
         context=["UDI", "GTIN", "device identifier"],
     )
 
-    # (R) Universally Unique Identifier (UUID v1-v5) — generic but identifying
+    # (R) Universally Unique Identifier (UUID v1-v5)  generic but identifying
     _add(
         "UUID",
         "uuid_recognizer",
@@ -1136,7 +1136,7 @@ def _build_custom_recognizers():
         ],
     )
 
-    # (P) Account numbers — cryptocurrency wallet addresses
+    # (P) Account numbers  cryptocurrency wallet addresses
     _add(
         "CRYPTO_WALLET",
         "crypto_wallet_recognizer",
@@ -1151,7 +1151,7 @@ def _build_custom_recognizers():
         context=["wallet", "bitcoin", "ethereum", "BTC", "ETH", "crypto"],
     )
 
-    # (R) Authentication tokens — Bearer / JWT / API keys
+    # (R) Authentication tokens  Bearer / JWT / API keys
     _add(
         "BEARER_TOKEN",
         "bearer_token_recognizer",
@@ -1181,7 +1181,7 @@ def _build_custom_recognizers():
         context=["bearer", "token", "api key", "authorization"],
     )
 
-    # (R) Username / handle — social media @handles
+    # (R) Username / handle  social media @handles
     _add(
         "USERNAME_HANDLE",
         "username_handle_recognizer",
@@ -1190,7 +1190,7 @@ def _build_custom_recognizers():
         ],
     )
 
-    # (S) US ABA bank routing number — 9 digits with checksum
+    # (S) US ABA bank routing number  9 digits with checksum
     _add(
         "US_ROUTING",
         "us_routing_recognizer",
@@ -1207,7 +1207,7 @@ def _build_custom_recognizers():
         context=["ABA", "routing", "RTN", "bank"],
     )
 
-    # GDPR Art.9 — Genetic data (HGVS variant nomenclature)
+    # GDPR Art.9  Genetic data (HGVS variant nomenclature)
     _add(
         "GENETIC_VARIANT",
         "genetic_variant_recognizer",
@@ -1254,15 +1254,15 @@ def _get_analyzer():
                 models.append({"lang_code": "fr", "model_name": "fr_core_news_lg"})
                 if "fr" not in _SUPPORTED_LANGS:
                     _SUPPORTED_LANGS.append("fr")
-                log.info("fr_core_news_lg detected — enabling French NER")
+                log.info("fr_core_news_lg detected  enabling French NER")
             else:
                 log.info(
-                    "fr_core_news_lg not installed — French NER unavailable; "
+                    "fr_core_news_lg not installed  French NER unavailable; "
                     "rebuild with NLP_LANG_FR=true to enable"
                 )
 
             log.info(
-                "Initializing Presidio AnalyzerEngine — languages: %s",
+                "Initializing Presidio AnalyzerEngine  languages: %s",
                 ", ".join(_SUPPORTED_LANGS),
             )
             provider = NlpEngineProvider(
@@ -1294,7 +1294,7 @@ def _get_analyzer():
             for rec in custom:
                 _ANALYZER.registry.add_recognizer(rec)
             log.info(
-                "Presidio ready — %d entity types, %d custom recognizers across %d language(s)",
+                "Presidio ready  %d entity types, %d custom recognizers across %d language(s)",
                 len(HEALTHCARE_ENTITIES),
                 len(custom),
                 len(_SUPPORTED_LANGS),

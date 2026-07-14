@@ -88,7 +88,7 @@ function DataCard({ stat, strata }: { stat: ObservationValueStat; strata: Observ
       {/* stats */}
       <div className="mt-2 grid grid-cols-4 gap-2 border-t pt-2">
         <Stat label="min" value={fmt(stat.min)} />
-        <Stat label="median" value={stat.median != null ? fmt(stat.median) : "—"} />
+        <Stat label="median" value={stat.median != null ? fmt(stat.median) : ""} />
         <Stat label="mean" value={fmt(stat.mean)} />
         <Stat label="max" value={fmt(stat.max)} />
       </div>
@@ -109,7 +109,7 @@ function DataCard({ stat, strata }: { stat: ObservationValueStat; strata: Observ
                   <span className="h-1.5 overflow-hidden rounded-full bg-muted">
                     <span className="block h-full rounded-full bg-primary/60" style={{ width: `${(s.count / maxStratN) * 100}%` }} />
                   </span>
-                  <span className="text-muted-foreground">n {s.count} · med {s.median != null ? fmt(s.median) : "—"}</span>
+                  <span className="text-muted-foreground">n {s.count} · med {s.median != null ? fmt(s.median) : ""}</span>
                 </div>
               ))}
             </div>

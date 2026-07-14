@@ -1,6 +1,6 @@
 # Connector Integration
 
-How to connect SPE FHIR BlackBox to a dataspace connector — Eclipse Dataspace Components (EDC), FIWARE/NGSI-LD, or any HTTP-based connector — for privacy-preserving FHIR data exchange.
+How to connect SPE FHIR BlackBox to a dataspace connector  Eclipse Dataspace Components (EDC), FIWARE/NGSI-LD, or any HTTP-based connector  for privacy-preserving FHIR data exchange.
 
 ---
 
@@ -8,10 +8,10 @@ How to connect SPE FHIR BlackBox to a dataspace connector — Eclipse Dataspace 
 
 | Pattern | When to use |
 |---|---|
-| **A — Pre-built asset** | Connector pulls a pre-built NDJSON file. Zero runtime coupling between MedAnon and the connector. Best for scheduled batch transfers. |
-| **B — Round-trip** | MedAnon fetches from source FHIR, de-identifies in-flight, pushes to target FHIR. Connector negotiates access on either end. |
-| **C — EDC HTTP Data Plane** | EDC's HTTP Data Plane calls MedAnon as a transformation proxy. De-identification happens transparently inside the EDC transfer. |
-| **D — FIWARE/NGSI-LD** | MedAnon acts as a NGSI-LD Context Broker middleware that de-identifies FHIR-to-NGSI-LD entity payloads before forwarding. |
+| **A  Pre-built asset** | Connector pulls a pre-built NDJSON file. Zero runtime coupling between MedAnon and the connector. Best for scheduled batch transfers. |
+| **B  Round-trip** | MedAnon fetches from source FHIR, de-identifies in-flight, pushes to target FHIR. Connector negotiates access on either end. |
+| **C  EDC HTTP Data Plane** | EDC's HTTP Data Plane calls MedAnon as a transformation proxy. De-identification happens transparently inside the EDC transfer. |
+| **D  FIWARE/NGSI-LD** | MedAnon acts as a NGSI-LD Context Broker middleware that de-identifies FHIR-to-NGSI-LD entity payloads before forwarding. |
 
 ---
 
@@ -87,7 +87,7 @@ never delivered to the dataspace bucket.
 
 ---
 
-## Pattern A — Pre-built NDJSON Asset
+## Pattern A  Pre-built NDJSON Asset
 
 ```
 FHIR Server → MedAnon bulk export → NDJSON file → Connector asset → Consumer
@@ -145,7 +145,7 @@ curl -s -X POST http://edc-control-plane:8181/management/v2/assets \
     "@context": {"@vocab": "https://w3id.org/edc/v0.0.1/ns/"},
     "@id": "urn:asset:fhir-cardiovascular-cohort-gdpr",
     "properties": {
-      "name": "Cardiovascular Cohort — GDPR de-identified",
+      "name": "Cardiovascular Cohort  GDPR de-identified",
       "description": "FHIR R4 Patient, Observation, Condition resources. De-identified per GDPR Art. 4(5).",
       "contenttype": "application/x-ndjson",
       "version": "2026-04-21"
@@ -160,7 +160,7 @@ curl -s -X POST http://edc-control-plane:8181/management/v2/assets \
 ### 4. Attach a usage policy and contract definition
 
 ```bash
-# Usage policy — allow only research purposes
+# Usage policy  allow only research purposes
 curl -s -X POST http://edc-control-plane:8181/management/v2/policydefinitions \
   -H "Content-Type: application/json" \
   -H "X-Api-Key: $EDC_API_KEY" \
@@ -198,7 +198,7 @@ curl -s -X POST http://edc-control-plane:8181/management/v2/contractdefinitions 
 
 ---
 
-## Pattern B — Server-to-Server Round-Trip
+## Pattern B  Server-to-Server Round-Trip
 
 ```
 Source FHIR (authenticated) → MedAnon → Target FHIR (de-identified) ← Consumer Connector
@@ -218,7 +218,7 @@ curl -X POST http://localhost:8000/process/round-trip \
   }'
 ```
 
-The source FHIR server (`fhir-server`) has no host port — it is only reachable from within the Docker `source-net`. The target FHIR server (`fhir-target`, port 8082) is the publicly accessible de-identified store.
+The source FHIR server (`fhir-server`) has no host port  it is only reachable from within the Docker `source-net`. The target FHIR server (`fhir-target`, port 8082) is the publicly accessible de-identified store.
 
 **Set FHIR server credentials in `.env`:**
 ```bash
@@ -228,7 +228,7 @@ FHIR_TARGET_TOKEN=Bearer <token>    # Bearer token for target FHIR
 
 ---
 
-## Pattern C — EDC HTTP Data Plane Proxy
+## Pattern C  EDC HTTP Data Plane Proxy
 
 In this pattern, the EDC HTTP Data Plane calls MedAnon as a **transformation proxy** during data transfer. EDC fetches raw FHIR from the provider, forwards it to MedAnon's `/process` endpoint, and delivers the de-identified response to the consumer.
 
@@ -299,7 +299,7 @@ public class MedanonTransformController implements DataFlowController {
 
 ---
 
-## Pattern D — FIWARE/NGSI-LD Middleware
+## Pattern D  FIWARE/NGSI-LD Middleware
 
 In FIWARE dataspaces, MedAnon acts as a middleware between a FHIR source and an NGSI-LD Context Broker. FHIR resources are de-identified by MedAnon before being converted to NGSI-LD entity format and published to the broker.
 
@@ -350,7 +350,7 @@ ngsi_entity = {
     ],
     "gender": {"type": "Property", "value": deidentified.get("gender")},
     "birthYear": {"type": "Property", "value": deidentified.get("birthDate")},
-    # name, address, telecom are redacted in GDPR profile — not mapped
+    # name, address, telecom are redacted in GDPR profile  not mapped
 }
 ```
 
@@ -371,7 +371,7 @@ If using FIWARE's TrueConnector (IDS-compatible), register the Orion-LD entity a
 {
   "@type": "ids:Resource",
   "@id": "urn:resource:fhir-cohort-ngsi-ld",
-  "ids:title": [{"@value": "FHIR Cardiovascular Cohort — GDPR de-identified (NGSI-LD)", "@language": "en"}],
+  "ids:title": [{"@value": "FHIR Cardiovascular Cohort  GDPR de-identified (NGSI-LD)", "@language": "en"}],
   "ids:description": [{"@value": "NGSI-LD entities derived from FHIR R4 Patient, Observation, Condition. De-identified per GDPR Art. 4(5).", "@language": "en"}],
   "ids:resourceEndpoint": [{
     "@type": "ids:ConnectorEndpoint",

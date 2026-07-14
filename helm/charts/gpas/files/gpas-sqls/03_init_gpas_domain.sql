@@ -1,5 +1,5 @@
 -- ─────────────────────────────────────────────────────────────────────────────
--- gPAS domain seed — SPE FHIR de-identification hierarchy + TESTING domain
+-- gPAS domain seed  SPE FHIR de-identification hierarchy + TESTING domain
 --
 -- PostgreSQL 16 version.
 -- Translated from MySQL original: INSERT IGNORE → ON CONFLICT DO NOTHING.
@@ -16,7 +16,7 @@
 
 -- Runs against the gpas database (public schema).
 
--- ── Parent domains (insert first — children reference them via FK) ────────────
+-- ── Parent domains (insert first  children reference them via FK) ────────────
 
 INSERT INTO domain (name, label, alphabet, comment, generatorclass, properties) VALUES
 ('spe.direct', 'Direct Identifiers',
@@ -188,7 +188,7 @@ INSERT INTO domain (name, label, alphabet, comment, generatorclass, properties) 
  'FORCE_CACHE=DEFAULT;INCLUDE_PREFIX_IN_CHECK_DIGIT_CALCULATION=false;INCLUDE_SUFFIX_IN_CHECK_DIGIT_CALCULATION=false;MAX_DETECTED_ERRORS=2;PSN_LENGTH=10;PSN_PREFIX=ext_;PSN_SUFFIX=;PSNS_DELETABLE=true;USE_LAST_CHAR_AS_DELIMITER_AFTER_X_CHARS=0;')
 ON CONFLICT (name) DO NOTHING;
 
--- ── TESTING domain — default GPAS_DOMAIN for out-of-the-box use ──────────────
+-- ── TESTING domain  default GPAS_DOMAIN for out-of-the-box use ──────────────
 
 INSERT INTO domain (name, label, alphabet, comment, generatorclass, properties) VALUES
 ('TESTING', 'TESTING',

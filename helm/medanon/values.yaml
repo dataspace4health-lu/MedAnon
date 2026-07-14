@@ -1,5 +1,5 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# MedAnon Umbrella Chart — default values
+# MedAnon Umbrella Chart  default values
 #
 # Usage:
 #   helm dependency update helm/medanon
@@ -26,7 +26,7 @@ global:
   # ── mTLS / Service Mesh ────────────────────────────────────────────────────
   # Set global.mtls.enabled=true after the mesh control plane is installed.
   #
-  # Linkerd (recommended for K3s — lightweight, no config changes needed):
+  # Linkerd (recommended for K3s  lightweight, no config changes needed):
   #   1. Install: linkerd install | kubectl apply -f -
   #   2. Enable:  --set global.mtls.enabled=true,global.mtls.provider=linkerd
   #
@@ -55,12 +55,12 @@ anonymizer:
   gpasServiceName: ""
 
   env:
-    # In-cluster gPAS URL — set to http://<release>-gpas:8080/ttp-fhir/fhir/gpas
+    # In-cluster gPAS URL  set to http://<release>-gpas:8080/ttp-fhir/fhir/gpas
     GPAS_URL: ""
-    # In-cluster FHIR source URL — set to http://<release>-fhir-server:8080/fhir
+    # In-cluster FHIR source URL  set to http://<release>-fhir-server:8080/fhir
     FHIR_SOURCE_URL: ""
     FHIR_SOURCE_TOKEN: ""
-    # In-cluster FHIR target URL — set to http://<release>-fhir-target:8080/fhir
+    # In-cluster FHIR target URL  set to http://<release>-fhir-target:8080/fhir
     FHIR_TARGET_URL: ""
     FHIR_TARGET_TOKEN: ""
     # Profile used by /process/and-upload and /process/round-trip.
@@ -129,7 +129,7 @@ gpas:
       # REQUIRED: set via --set or a sealed secret. Generate: openssl rand -base64 24
       rootPassword: ""
 
-# ─── Analytics microservice overrides (Phase 3 — opt-in) ─────────────────────
+# ─── Analytics microservice overrides (Phase 3  opt-in) ─────────────────────
 # Deploy the analytics sub-chart by setting analytics.enabled=true.
 # When deployed, also set anonymizer.env.ANALYTICS_SERVICE_URL to
 # http://<release>-analytics:8100 so the anonymizer proxies to it.
@@ -147,7 +147,7 @@ ui:
   # Set to "<release>-anonymizer" and "<release>-fhir-server".
   anonymizerServiceName: ""
   fhirServerServiceName: ""
-  # Target FHIR server proxy — set to "<release>-fhir-target" to expose /fhir-target/ in nginx.
+  # Target FHIR server proxy  set to "<release>-fhir-target" to expose /fhir-target/ in nginx.
   fhirTargetServiceName: ""
   fhirTargetPort: 8080
 

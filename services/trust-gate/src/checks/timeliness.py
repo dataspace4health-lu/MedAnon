@@ -3,10 +3,10 @@
 Two opt-in measures, both NA until the operator declares what "timely" means for
 their use (no invented thresholds):
 
-  - record_lag — event→record latency: a clinical event recorded far later than it
+  - record_lag  event→record latency: a clinical event recorded far later than it
     occurred is a data-capture-lag defect. Configured by
     ``TRUST_GATE_MAX_RECORD_LAG_DAYS``; NA when unset or dates absent.
-  - currency   — freshness vs the dataset's extraction time: a resource whose
+  - currency    freshness vs the dataset's extraction time: a resource whose
     ``meta.lastUpdated`` is older than ``TRUST_GATE_CURRENCY_WINDOW_DAYS`` before
     ``provenance.extraction_time`` is stale. NA when unset or no extraction time.
 
@@ -72,7 +72,7 @@ def _int_env(name: str):
     try:
         return int(raw)
     except ValueError:
-        _log.warning("%s is not an integer (%r) — ignored", name, raw)
+        _log.warning("%s is not an integer (%r)  ignored", name, raw)
         return None
 
 

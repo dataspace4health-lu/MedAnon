@@ -23,7 +23,7 @@ Authentication is a **pluggable provider chain** selected at startup by `MEDANON
 | `auto` (default) | legacy chain | DB key → env `MEDANON_API_KEY` → SMART bearer → open |
 | `apikey` | `ApiKeyProvider` | Only `X-API-Key` (DB-hashed or env key) |
 | `oidc` | `OidcProvider` | OIDC JWT bearer, with optional `X-API-Key` dual-accept |
-| `none` | `OpenProvider` | Open — every caller granted admin (local dev only) |
+| `none` | `OpenProvider` | Open  every caller granted admin (local dev only) |
 
 The modes below describe the credential types these providers accept.
 
@@ -71,10 +71,10 @@ Fallback: when `SMART_INTROSPECTION_URL` is not set, MedAnon accepts the configu
 When `MEDANON_AUTH_PROVIDER=oidc`, callers authenticate with an OIDC JWT in the `Authorization: Bearer` header. Validation lives in `integrations/oidc/validator.py`:
 
 1. The signing key is fetched from the issuer's JWKS (`<OIDC_ISSUER>/.well-known/jwks.json`, or `OIDC_JWKS_URL` when overridden; keys cached 5 min).
-2. The token signature, `exp` (with `OIDC_CLOCK_SKEW_SEC` leeway), `iss` (must equal `OIDC_ISSUER`), and — only if `OIDC_AUDIENCE` is set — `aud` are verified.
+2. The token signature, `exp` (with `OIDC_CLOCK_SKEW_SEC` leeway), `iss` (must equal `OIDC_ISSUER`), and  only if `OIDC_AUDIENCE` is set  `aud` are verified.
 3. Roles are read from the dotted `OIDC_ROLE_CLAIM_PATH` (default `realm_access.roles`) and translated through `OIDC_ROLE_MAP`. **An authenticated token with no mapped role defaults to `viewer`, never higher.**
 
-**Downgrade guard:** if a Bearer token's unverified `iss` matches `OIDC_ISSUER`, it is validated strictly — a failure returns `HTTP 401` and never silently falls through to the API-key path. Bearer tokens from a *different* issuer are routed to SMART introspection (§1.2) instead.
+**Downgrade guard:** if a Bearer token's unverified `iss` matches `OIDC_ISSUER`, it is validated strictly  a failure returns `HTTP 401` and never silently falls through to the API-key path. Bearer tokens from a *different* issuer are routed to SMART introspection (§1.2) instead.
 
 **Dual-accept:** with `MEDANON_AUTH_ALLOW_API_KEY=true` (default), `X-API-Key` still works alongside OIDC so CLI and service-to-service callers keep functioning during a migration.
 
@@ -84,7 +84,7 @@ The bundled identity provider is Keycloak (realm `medanon`, client `medanon-ui`,
 
 ### 1.4 Per-client API keys
 
-Beyond the single env `MEDANON_API_KEY`, individual keys can be issued per client via `/v1/api-keys/*` (`PostgresApiKeyStore`, table `medanon.api_keys`). Keys are stored as **SHA-256 hashes** — the plaintext is shown once at creation and never recoverable. Each key carries its own role and a `last_used` timestamp.
+Beyond the single env `MEDANON_API_KEY`, individual keys can be issued per client via `/v1/api-keys/*` (`PostgresApiKeyStore`, table `medanon.api_keys`). Keys are stored as **SHA-256 hashes**  the plaintext is shown once at creation and never recoverable. Each key carries its own role and a `last_used` timestamp.
 
 ### 1.5 RBAC
 

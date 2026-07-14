@@ -2,7 +2,7 @@
 
 When the caller supplies a gold reference (expected field values keyed by
 ``ResourceType/id``), each present field is compared against it. A mismatch is an
-accuracy violation. NA when no reference is supplied — accuracy against an external
+accuracy violation. NA when no reference is supplied  accuracy against an external
 benchmark cannot be assessed without one (never a false PASS).
 
 PHI safety: only the field *name* is recorded in the audit detail, never the
@@ -33,7 +33,7 @@ def evaluate_against_reference(
     )
     records = (reference or {}).get("records") if isinstance(reference, dict) else None
     if not isinstance(records, dict) or not records:
-        return chk  # NA — no reference supplied
+        return chk  # NA  no reference supplied
 
     for res in resources:
         if not isinstance(res, dict):

@@ -51,7 +51,7 @@ spec:
             # Persistent PostgreSQL data directory
             - name: data
               mountPath: /var/lib/postgresql/data
-            # Init SQL scripts — run once on first boot when data dir is empty
+            # Init SQL scripts  run once on first boot when data dir is empty
             - name: init-scripts
               mountPath: /docker-entrypoint-initdb.d
               readOnly: true
@@ -81,7 +81,7 @@ spec:
         - name: init-scripts
           configMap:
             name: {{ include "gpas.fullname" . }}-db-init
-  # Persistent volume for PostgreSQL data — survives pod restarts and rescheduling
+  # Persistent volume for PostgreSQL data  survives pod restarts and rescheduling
   volumeClaimTemplates:
     - metadata:
         name: data

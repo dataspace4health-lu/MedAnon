@@ -7,7 +7,7 @@ description: "Compose multi-stage de-identification workflows with the workflow 
 # Run DAG Workflows
 
 Workflows let you compose multi-stage pipelines (a DAG of stages) and run them
-as a single logical operation — for example: fetch, de-identify, score, and upload.
+as a single logical operation  for example: fetch, de-identify, score, and upload.
 The workflow API is available without any additional profile; the `/v1/workflows`
 endpoints are part of the always-on `anonymizer` service.
 

@@ -75,8 +75,8 @@ export function locateProblem(checkId: string, d: Record<string, unknown>): Loca
   const rtype = d.resource_type ? String(d.resource_type) : "";
   const rid = d.resource_id != null && String(d.resource_id) !== "" ? String(d.resource_id)
     : d.resource_index != null ? `[${String(d.resource_index)}]` : "";
-  const resource = rtype ? `${rtype}${rid && !rid.startsWith("[") ? "/" : ""}${rid}` : (rid || "—");
-  const field = String(d.path ?? d.attribute ?? "—");
+  const resource = rtype ? `${rtype}${rid && !rid.startsWith("[") ? "/" : ""}${rid}` : (rid || "");
+  const field = String(d.path ?? d.attribute ?? "");
   // Only ever a non-PHI token the backend explicitly chose to expose.
   const rawVal = d.found ?? d.value ?? d.expected;
   const value = rawVal != null && rawVal !== "" ? String(rawVal) : undefined;

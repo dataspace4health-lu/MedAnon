@@ -4,7 +4,7 @@
 # violation fraction exceeds its threshold). Overrides constants.DEFAULT_THRESHOLDS.
 # 0.0 = zero tolerance. Tune per data source rather than editing code.
 thresholds:
-  # SAM prerequisite block checks — always zero tolerance.
+  # SAM prerequisite block checks  always zero tolerance.
   conformance.resource_type_present: 0.0
   conformance.resource_id_present: 0.0
   conformance.status_not_entered_in_error: 0.0
@@ -17,7 +17,7 @@ thresholds:
   completeness.required_elements: 0.0
   completeness.value_or_absent: 0.0
   # Frequency metric (richness): fail only when >50% of recommended elements are
-  # empty across the dataset. Tune per source — sparse-but-valid feeds run higher.
+  # empty across the dataset. Tune per source  sparse-but-valid feeds run higher.
   completeness.element_density: 0.5
   plausibility.uniqueness: 0.0
   plausibility.value_outlier: 0.01
@@ -25,14 +25,14 @@ thresholds:
   plausibility.concordance: 0.0
 
 # Definitional unit bounds (plausibility.definitional_bounds). These follow from
-# the UNIT'S definition, not clinical knowledge — a percentage cannot exceed 100
+# the UNIT'S definition, not clinical knowledge  a percentage cannot exceed 100
 # or be negative. Catches whole-batch unit corruption the outlier check can't see.
 # Only add bounds that are definitionally true for your context (NOT "normal"
-# clinical ranges — see the value_range note below for those).
+# clinical ranges  see the value_range note below for those).
 definitional_unit_bounds:
   "%": [0, 100]
 
-# Concordance rules (plausibility.concordance — HL7 EHR-S 'concordance' / OHDSI
+# Concordance rules (plausibility.concordance  HL7 EHR-S 'concordance' / OHDSI
 # gender-concept consistency). Each forbids a code set for a Patient.gender.
 # ILLUSTRATIVE only: production should bind these to terminology value sets via
 # FHIRPath memberOf rather than literal code lists. Empty = check is NA.
@@ -85,11 +85,11 @@ plausibility_rules:
 
   # NOTE on clinical value ranges:
   #   The data-driven `plausibility.value_outlier` check (built in, no config)
-  #   flags values that are extreme vs the dataset's own distribution — it needs
+  #   flags values that are extreme vs the dataset's own distribution  it needs
   #   no per-code limits and is the recommended default. The `value_range` kind
   #   below is for when you have an AUTHORITATIVE range for a measurement (e.g.
   #   your lab's reportable interval, an ELaPro/IG-published limit). DO NOT invent
-  #   generic min/max values — OHDSI removed most of theirs precisely because
+  #   generic min/max values  OHDSI removed most of theirs precisely because
   #   universal ranges caused false failures. The single rule below is ILLUSTRATIVE
   #   (a deliberately wide "humanly-possible" weight bound + UCUM unit guard) to
   #   show the schema; replace/extend it with operator-sourced ranges.
@@ -107,7 +107,7 @@ plausibility_rules:
     threshold: 0.0
     recommendation: "Confirm body-weight value/unit against an authoritative reference range."
 
-  # OHDSI plausibleBeforeDeath — clinical events must not occur after death.
+  # OHDSI plausibleBeforeDeath  clinical events must not occur after death.
   - rule_id: OBS_EFFECTIVE_BEFORE_DEATH_001
     description: Observation effective date must not occur after the patient's death.
     resource_type: Observation
@@ -115,7 +115,7 @@ plausibility_rules:
     params:
       date: "effectiveDateTime"
       # Death-certificate / cause-of-death Observations are legitimately recorded
-      # after death — exempt them (LOINC 69453-9 Cause of Death [US Std Cert of Death],
+      # after death  exempt them (LOINC 69453-9 Cause of Death [US Std Cert of Death],
       # 69441-4 Death date). Add site-specific post-mortem codes here as needed.
       exempt_codes: ["69453-9", "69441-4"]
     severity: major
@@ -129,7 +129,7 @@ plausibility_rules:
     kind: date_before_death
     params:
       # Procedures usually carry performedPeriod (start/end), not a bare
-      # performedDateTime — fall back to the period start so the rule actually
+      # performedDateTime  fall back to the period start so the rule actually
       # assesses the common shape instead of degrading to NA.
       date: ["performedDateTime", "performedPeriod.start"]
     severity: major
@@ -137,7 +137,7 @@ plausibility_rules:
     threshold: 0.0
     recommendation: "Review Procedure.performedDateTime / performedPeriod.start vs Patient.deceasedDateTime."
 
-  # DAMA timeliness — recorded clinical dates must not be in the future.
+  # DAMA timeliness  recorded clinical dates must not be in the future.
   - rule_id: OBS_NOT_FUTURE_001
     description: Observation effective date must not be in the future.
     resource_type: Observation
@@ -160,7 +160,7 @@ plausibility_rules:
     threshold: 0.0
     recommendation: "Correct future-dated Encounter.period.start values."
 
-  # PATIENT_BIRTH_NOT_FUTURE — impossible date, always a blocker.
+  # PATIENT_BIRTH_NOT_FUTURE  impossible date, always a blocker.
   - rule_id: PATIENT_BIRTH_NOT_FUTURE_001
     description: Patient birth date must not be in the future.
     resource_type: Patient
@@ -170,9 +170,9 @@ plausibility_rules:
     severity: critical
     criticality: blocker
     threshold: 0.0
-    recommendation: "A future birth date is impossible — correct the data source mapping."
+    recommendation: "A future birth date is impossible  correct the data source mapping."
 
-  # PATIENT_DEATH_AFTER_BIRTH — deceased date cannot precede birth.
+  # PATIENT_DEATH_AFTER_BIRTH  deceased date cannot precede birth.
   - rule_id: PATIENT_DEATH_AFTER_BIRTH_001
     description: Patient deceased date must not predate the patient's birth.
     resource_type: Patient
@@ -186,7 +186,7 @@ plausibility_rules:
 
   # Condition onset/abatement ordering. date_order PASSES when the `after` field
   # is chronologically >= the `before` field. Abatement is the LATER event, onset
-  # the EARLIER one — so after=abatementDateTime, before=onsetDateTime. (These were
+  # the EARLIER one  so after=abatementDateTime, before=onsetDateTime. (These were
   # previously swapped, which flagged valid onset<=abatement records as violations.)
   - rule_id: COND_ONSET_BEFORE_ABATEMENT_001
     description: Condition onset must not be after abatement.
@@ -202,7 +202,7 @@ plausibility_rules:
 
   # Vital sign value ranges (Kahn atemporal plausibility).
   # These are WIDE "humanly-possible" bounds sourced from clinical literature
-  # (Berne & Levy Physiology + extreme case reports) — NOT normal ranges.
+  # (Berne & Levy Physiology + extreme case reports)  NOT normal ranges.
   # They catch unit errors and gross mis-keying; authoritative site-specific
   # ranges should be added as additional rules for your measurement context.
   - rule_id: OBS_HEART_RATE_RANGE_001
@@ -217,7 +217,7 @@ plausibility_rules:
     severity: major
     criticality: non_blocker
     threshold: 0.0
-    recommendation: "Confirm heart-rate value/unit — possible unit conversion error."
+    recommendation: "Confirm heart-rate value/unit  possible unit conversion error."
 
   - rule_id: OBS_SPO2_RANGE_001
     description: "Peripheral oxygen saturation (LOINC 59408-5) within possible bounds."
@@ -231,7 +231,7 @@ plausibility_rules:
     severity: major
     criticality: non_blocker
     threshold: 0.0
-    recommendation: "SpO2 cannot exceed 100% or fall below 50% — likely a unit or probe error."
+    recommendation: "SpO2 cannot exceed 100% or fall below 50%  likely a unit or probe error."
 
   - rule_id: OBS_BODY_TEMP_RANGE_001
     description: "Body temperature (LOINC 8310-5) within humanly-possible Celsius bounds."
@@ -259,9 +259,9 @@ plausibility_rules:
     severity: major
     criticality: non_blocker
     threshold: 0.0
-    recommendation: "Systolic BP outside 40–320 mmHg is physiologically impossible — check unit."
+    recommendation: "Systolic BP outside 40–320 mmHg is physiologically impossible  check unit."
 
-# Per-resource-type minimum pass-rate thresholds (Phase 2A — ONC ASTP calibration).
+# Per-resource-type minimum pass-rate thresholds (Phase 2A  ONC ASTP calibration).
 # These override the global TRUST_GATE_PASS_MIN_RATE for specific resource types.
 # Rationale: ONC ASTP Dec 2024 real-world data shows 22–68% single-trip lab integrity,
 # so a flat 90% threshold miscalibrates for lab data while being too lenient for

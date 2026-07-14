@@ -99,7 +99,7 @@
   --sidebar-accent-foreground:  #001d42;
   --sidebar-border:     #d1dce8;
   --sidebar-ring:       #0072bc;
-  /* Charts — NTT DATA blues, no purple */
+  /* Charts  NTT DATA blues, no purple */
   --chart-1: #0072bc;
   --chart-2: #0099d8;
   --chart-3: #004d80;
@@ -119,7 +119,7 @@
   --card-foreground:    #e2eaf4;
   --popover:            #132035;
   --popover-foreground: #e2eaf4;
-  /* NTT DATA Blue — lightened for dark bg readability */
+  /* NTT DATA Blue  lightened for dark bg readability */
   --primary:            #4499d8;
   --primary-foreground: #001d42;
   /* Neutrals */
@@ -150,7 +150,7 @@
   --sidebar-accent-foreground:  #e2eaf4;
   --sidebar-border:     #1e3450;
   --sidebar-ring:       #4499d8;
-  /* Charts — lighter for dark bg */
+  /* Charts  lighter for dark bg */
   --chart-1: #4499d8;
   --chart-2: #38bdf8;
   --chart-3: #7ec8e3;

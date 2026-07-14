@@ -1,4 +1,4 @@
-# MedAnon — Operations Runbook
+# MedAnon  Operations Runbook
 
 ## Daily operations
 
@@ -21,20 +21,20 @@ docker compose --profile s3 up    # MinIO S3 object storage for job results
 docker compose --profile ai up    # Ollama local LLM for AI agent endpoints
 ```
 
-The NLP microservice (`nlp`) and analytics service (`analytics`) are **always-on** — they start with `make up`. `nlp-lb` is a Traefik gateway network alias, not a separate container.
+The NLP microservice (`nlp`) and analytics service (`analytics`) are **always-on**  they start with `make up`. `nlp-lb` is a Traefik gateway network alias, not a separate container.
 
 ### Check health
 
 ```bash
 docker compose ps                          # all containers, health status
-curl -s http://localhost:8000/health       # {"status":"ok"} — liveness (fast, no external calls)
-curl -s http://localhost:8000/ready        # {"ready":true} — readiness (probes FHIR, gPAS, NLP)
+curl -s http://localhost:8000/health       # {"status":"ok"}  liveness (fast, no external calls)
+curl -s http://localhost:8000/ready        # {"ready":true}  readiness (probes FHIR, gPAS, NLP)
 curl -s http://localhost:8200/health       # NLP microservice liveness
 curl -s http://localhost:9091/ready        # worker readiness probe
 docker compose exec anonymizer tail -f /output/audit.log  # structured JSON audit log
 ```
 
-`/health` vs `/ready`: Health is a lightweight liveness check used by Docker's healthcheck. Ready probes FHIR, gPAS, and NLP with a 5 s timeout each — use it to confirm the stack is actually operational, not just started.
+`/health` vs `/ready`: Health is a lightweight liveness check used by Docker's healthcheck. Ready probes FHIR, gPAS, and NLP with a 5 s timeout each  use it to confirm the stack is actually operational, not just started.
 
 ---
 
@@ -66,7 +66,7 @@ docker compose exec anonymizer tail -f /output/audit.log  # structured JSON audi
 
 Auto-selection: `GPAS_URL` set → `config_gpas.yaml`; otherwise → `config.yaml`.
 
-Override per-request: `?config_profile=<name>` — values: `auto`, `minimal`, `gpas`, `gdpr`, `hipaa`, `research`, `structural`, `value-masking`.
+Override per-request: `?config_profile=<name>`  values: `auto`, `minimal`, `gpas`, `gdpr`, `hipaa`, `research`, `structural`, `value-masking`.
 
 See [policies.md](policies.md) for full compliance details per profile.
 
@@ -82,18 +82,18 @@ curl -s http://localhost:9091/metrics      # worker metrics
 ```
 
 Key metrics exposed:
-- `medanon_requests_total{method,path,status}` — request counts
-- `medanon_request_duration_seconds{path}` — latency histogram
-- `medanon_gpas_calls_total{operation,cached}` — gPAS call rate + cache hit rate
-- `medanon_gpas_latency_seconds` — gPAS round-trip latency
-- `medanon_fhir_calls_total{operation,server}` — FHIR client call counts
-- `medanon_nlp_calls_total{cached}` — NLP microservice call count and cache hits
-- `medanon_jobs_total{status}` — job completion counts (worker metrics port 9091)
-- `medanon_circuit_breaker_state{name}` — 0=closed, 1=half_open, 2=open per integration
-- `medanon_circuit_breaker_trips_total{name}` — CLOSED→OPEN transitions
-- `medanon_proxy_retries_total{upstream,reason}` — outbound HTTP retry rate (`reason`: `http_5xx`, `http_429`, `connection`)
-- `medanon_bulkhead_acquired_total{upstream}` / `medanon_bulkhead_rejected_total{upstream}` — per-upstream concurrency saturation; sustained `rejected` rate signals a need to raise `BULKHEAD_<UPSTREAM>_MAX_CONCURRENT` or scale the upstream
-- `medanon_fhirpath_cache_{hits,misses,size,maxsize}{cache}` — sampled at scrape time; cache types: `compile`, `classify`, `where_plan`, `candidates`. A high miss rate at `size == maxsize` means the cache is thrashing — raise `FHIRPATH_CACHE_SIZE`
+- `medanon_requests_total{method,path,status}`  request counts
+- `medanon_request_duration_seconds{path}`  latency histogram
+- `medanon_gpas_calls_total{operation,cached}`  gPAS call rate + cache hit rate
+- `medanon_gpas_latency_seconds`  gPAS round-trip latency
+- `medanon_fhir_calls_total{operation,server}`  FHIR client call counts
+- `medanon_nlp_calls_total{cached}`  NLP microservice call count and cache hits
+- `medanon_jobs_total{status}`  job completion counts (worker metrics port 9091)
+- `medanon_circuit_breaker_state{name}`  0=closed, 1=half_open, 2=open per integration
+- `medanon_circuit_breaker_trips_total{name}`  CLOSED→OPEN transitions
+- `medanon_proxy_retries_total{upstream,reason}`  outbound HTTP retry rate (`reason`: `http_5xx`, `http_429`, `connection`)
+- `medanon_bulkhead_acquired_total{upstream}` / `medanon_bulkhead_rejected_total{upstream}`  per-upstream concurrency saturation; sustained `rejected` rate signals a need to raise `BULKHEAD_<UPSTREAM>_MAX_CONCURRENT` or scale the upstream
+- `medanon_fhirpath_cache_{hits,misses,size,maxsize}{cache}`  sampled at scrape time; cache types: `compile`, `classify`, `where_plan`, `candidates`. A high miss rate at `size == maxsize` means the cache is thrashing  raise `FHIRPATH_CACHE_SIZE`
 
 ### SLO targets (default)
 
@@ -108,14 +108,14 @@ All pods have Prometheus scrape annotations (`prometheus.io/scrape: "true"`) in 
 
 ### Health vs readiness
 
-- `/health` — process liveness; cheap; always 200 unless the FastAPI app died.
-- `/ready` — dependency check (Redis + Postgres + gPAS canary); 503 until ready.
+- `/health`  process liveness; cheap; always 200 unless the FastAPI app died.
+- `/ready`  dependency check (Redis + Postgres + gPAS canary); 503 until ready.
 - Helm charts use a `startupProbe` against `/ready` with up to 5 minutes (60 × 5 s) before liveness kicks in. This accommodates gPAS WildFly cold-start (~90 s) without restart-looping the pod.
 - For Compose, the `redis` healthcheck must be `healthy` before anonymizer + worker start; gPAS uses a 10-minute `start_period` for the same reason.
 
 ### Redis durability
 
-When `MEDANON_REDIS_URL` is set, the anonymizer logs at startup whether AOF (append-only file) persistence is enabled. AOF should be on in production — RDB snapshots alone may be up to 60 s stale, which can lose queued jobs across an unexpected restart.
+When `MEDANON_REDIS_URL` is set, the anonymizer logs at startup whether AOF (append-only file) persistence is enabled. AOF should be on in production  RDB snapshots alone may be up to 60 s stale, which can lose queued jobs across an unexpected restart.
 
 ```bash
 # Verify AOF is enabled in your redis.conf
@@ -124,11 +124,11 @@ docker compose exec redis redis-cli config get appendonly
 # 2) "yes"
 ```
 
-Set `MEDANON_REQUIRE_REDIS_AOF=true` to make the anonymizer refuse to start when AOF is disabled — recommended for production.
+Set `MEDANON_REQUIRE_REDIS_AOF=true` to make the anonymizer refuse to start when AOF is disabled  recommended for production.
 
 ### Job store durability guard (C11)
 
-The dedicated `worker` container shares `/output` with the API container, so the SQLite job store at `/output/jobs.db` is **never safe** in this configuration — SQLite WAL across container boundaries can corrupt or double-claim jobs.
+The dedicated `worker` container shares `/output` with the API container, so the SQLite job store at `/output/jobs.db` is **never safe** in this configuration  SQLite WAL across container boundaries can corrupt or double-claim jobs.
 
 The runtime enforces this via `pipeline/jobs/store_factory.assert_durable_store_or_exit()`:
 
@@ -142,8 +142,8 @@ Recommended production posture: set `MEDANON_REDIS_URL` AND `MEDANON_APP_DB_URL`
 
 The NLP microservice keeps two cache tiers:
 
-- **L1** — in-process LRU (~20k entries, per replica). Lost on container restart.
-- **L2** — Redis DB 2 (key prefix `medanon:nlp:detect:`, TTL `NLP_REDIS_TTL_SEC`, default 7 days). Shared across NLP replicas, survives restarts.
+- **L1**  in-process LRU (~20k entries, per replica). Lost on container restart.
+- **L2**  Redis DB 2 (key prefix `medanon:nlp:detect:`, TTL `NLP_REDIS_TTL_SEC`, default 7 days). Shared across NLP replicas, survives restarts.
 
 ```bash
 # Confirm L2 is wired (logs at startup)
@@ -160,15 +160,15 @@ docker compose exec redis redis-cli -a "$MEDANON_REDIS_PASSWORD" -n 2 FLUSHDB
 docker compose restart nlp
 ```
 
-**Cold-cache symptom:** First bulk export after `make up` runs ~4× slower than subsequent runs because both L1 and L2 are empty and every text snippet must hit Presidio + spaCy. Once L2 warms, subsequent NLP container restarts re-hydrate L1 lazily from L2 — restart latency disappears.
+**Cold-cache symptom:** First bulk export after `make up` runs ~4× slower than subsequent runs because both L1 and L2 are empty and every text snippet must hit Presidio + spaCy. Once L2 warms, subsequent NLP container restarts re-hydrate L1 lazily from L2  restart latency disappears.
 
 ### Audit log
 
 The anonymizer emits structured JSON audit events to three destinations simultaneously:
 
-1. **stdout** (always) — captured by Docker/K8s log driver; forward to ELK, Loki, Splunk
-2. **Redis Stream** `medanon:audit` (when `MEDANON_REDIS_URL` set) — queryable via `GET /v1/audit`
-3. **Rotating file** (when `MEDANON_AUDIT_LOG_FILE` set) — 10 MB/file, 5 backups
+1. **stdout** (always)  captured by Docker/K8s log driver; forward to ELK, Loki, Splunk
+2. **Redis Stream** `medanon:audit` (when `MEDANON_REDIS_URL` set)  queryable via `GET /v1/audit`
+3. **Rotating file** (when `MEDANON_AUDIT_LOG_FILE` set)  10 MB/file, 5 backups
 
 Each entry records: timestamp, HTTP method, path, status code, request ID, auth subject, auth method. **PHI is never logged.**
 
@@ -184,7 +184,7 @@ curl -s http://localhost:8000/v1/audit?count=50 -H "X-API-Key: $ADMIN_KEY"
 
 ## Backup
 
-### gPAS PostgreSQL (pseudonym mappings — critical)
+### gPAS PostgreSQL (pseudonym mappings  critical)
 
 Loss of the gPAS database means pseudonym-to-original mappings are unrecoverable. Back up before any destructive operation.
 
@@ -218,11 +218,11 @@ cp services/anonymizer/keys/id_rsa* backup/keys-$(date +%Y%m%d)/
 
 | Secret | How to rotate | Impact |
 |---|---|---|
-| `MEDANON_HASH_KEY` | Update `.env`, restart anonymizer | All existing cryptohash/tokenize/date_shift pseudonyms change — old output cannot be re-linked to new. **Bump `MEDANON_HASH_KEY_ID` too** (see below). |
-| `MEDANON_HASH_KEY_ID` | Set alongside a `MEDANON_HASH_KEY` change (e.g. `v1`→`v2`) | Recorded in each Transformation Passport's `identification.hash_key_id`, so post-rotation output is attributable to the new key generation and a mixed-key dataset is detectable (D7.2 §4.2). Purely documentary — does not itself change pseudonyms. |
+| `MEDANON_HASH_KEY` | Update `.env`, restart anonymizer | All existing cryptohash/tokenize/date_shift pseudonyms change  old output cannot be re-linked to new. **Bump `MEDANON_HASH_KEY_ID` too** (see below). |
+| `MEDANON_HASH_KEY_ID` | Set alongside a `MEDANON_HASH_KEY` change (e.g. `v1`→`v2`) | Recorded in each Transformation Passport's `identification.hash_key_id`, so post-rotation output is attributable to the new key generation and a mixed-key dataset is detectable (D7.2 §4.2). Purely documentary  does not itself change pseudonyms. |
 | RSA private key | Generate new keypair, update `.env` paths | Old encrypted values become unreadable; keep old key for historical data |
 | `GPAS_BASIC_PASS` | Update `.env` + `CALL changePassword('user@ths','new');` in gRAS | Existing gPAS sessions invalidated |
-| `GPAS_DB_PASSWORD` | `docker compose down -v` to recreate PostgreSQL volume | **Destroys all pseudonym mappings** — back up first |
+| `GPAS_DB_PASSWORD` | `docker compose down -v` to recreate PostgreSQL volume | **Destroys all pseudonym mappings**  back up first |
 | `MEDANON_API_KEY` | Update `.env`, restart anonymizer | All API clients must update their key |
 
 ---
@@ -243,7 +243,7 @@ Verify env: `GPAS_URL`, `GPAS_DOMAIN`, `GPAS_BASIC_USER`, `GPAS_BASIC_PASS` in `
 
 ### gPAS "Unknown Domain"
 
-Domain not created yet. Run `make init-domains` or create it via `http://localhost:8080/gpas-web/`. **Never insert domains directly into PostgreSQL** — gPAS maintains an in-memory `domainLocks HashMap` that is only populated via its own API. Direct SQL inserts bypass this and cause "domain not found" errors at runtime even though the row exists in the DB.
+Domain not created yet. Run `make init-domains` or create it via `http://localhost:8080/gpas-web/`. **Never insert domains directly into PostgreSQL**  gPAS maintains an in-memory `domainLocks HashMap` that is only populated via its own API. Direct SQL inserts bypass this and cause "domain not found" errors at runtime even though the row exists in the DB.
 
 ### gPAS circuit breaker open
 
@@ -278,7 +278,7 @@ docker compose logs nlp --tail 50               # check NLP for startup errors
 docker compose logs gateway --tail 20           # check Traefik routing errors
 ```
 
-NLP fails closed — PHI is replaced with `[NLP_UNAVAILABLE]` rather than leaking. Scale NLP replicas if latency is high:
+NLP fails closed  PHI is replaced with `[NLP_UNAVAILABLE]` rather than leaking. Scale NLP replicas if latency is high:
 
 ```bash
 docker compose up -d --scale nlp=3
@@ -303,14 +303,14 @@ docker exec medanon-ollama ollama pull llama3.2
 
 If using an external LLM: verify `MEDANON_AI_API_BASE` and `MEDANON_AI_MODEL` in `.env`.
 
-**IMPORTANT — PHI safety:** `MEDANON_AI_PII_PROVIDER` must always point to the local Ollama model, never to an external API. PII detection sends text that may contain PHI to this model.
+**IMPORTANT  PHI safety:** `MEDANON_AI_PII_PROVIDER` must always point to the local Ollama model, never to an external API. PII detection sends text that may contain PHI to this model.
 
 ### 503 on job endpoints (`/v1/jobs/*`)
 
 Job store not initialized. Check in priority order:
 1. `MEDANON_REDIS_URL` set and Redis reachable: `docker compose ps redis`
 2. `MEDANON_APP_DB_URL` set and `app-db` reachable: `docker compose ps app-db`
-3. SQLite fallback: `MEDANON_JOB_DB` path is writable inside the container (default `/output/jobs.db`) — only safe in single-container dev mode (see "Job store durability guard" above).
+3. SQLite fallback: `MEDANON_JOB_DB` path is writable inside the container (default `/output/jobs.db`)  only safe in single-container dev mode (see "Job store durability guard" above).
 
 Backend selection order at startup: Redis → PostgreSQL (`app-db`) → SQLite. Centralised in `pipeline/jobs/store_factory.select_job_store()`.
 
@@ -335,14 +335,14 @@ Tune these variables in `.env`:
 ```bash
 MEDANON_BATCH_SIZE=1000         # resources per gPAS batch (default; raise only if gPAS is fast and memory allows)
 FHIR_PAGE_SIZE=500              # resources per FHIR paginated fetch
-MEDANON_FHIR_FETCH_PARALLEL=1   # keep at 1 — more threads compete for GIL without benefit
+MEDANON_FHIR_FETCH_PARALLEL=1   # keep at 1  more threads compete for GIL without benefit
 MEDANON_COHORT_PARALLEL=2       # parallel $everything calls (safe, I/O-bound)
 MEDANON_JOB_WORKERS=10          # concurrent background jobs
 ```
 
-**Why `FHIR_FETCH_PARALLEL=1`?** The bottleneck is gPAS (sequential HTTP per batch). Adding parallel FHIR fetch threads makes them compete for the GIL and queue lock while waiting for gPAS — this increases overhead without reducing total time. Observed: 4 parallel threads was slower than 1.
+**Why `FHIR_FETCH_PARALLEL=1`?** The bottleneck is gPAS (sequential HTTP per batch). Adding parallel FHIR fetch threads makes them compete for the GIL and queue lock while waiting for gPAS  this increases overhead without reducing total time. Observed: 4 parallel threads was slower than 1.
 
-### FHIR upload failures (HAPI-1094 — referenced resource not found)
+### FHIR upload failures (HAPI-1094  referenced resource not found)
 
 This error means a resource was uploaded before a resource it references. The uploader computes a topological sort based on `reference` fields. If you see this error in logs, it indicates a reference pattern the topological sort didn't catch. Check `docker compose logs anonymizer` for `tier map:` debug output.
 
@@ -350,7 +350,7 @@ This error means a resource was uploaded before a resource it references. The up
 
 **Symptom:** `Patient` or `Practitioner` resources rejected: "not a valid code for `http://hl7.org/fhir/ValueSet/administrative-gender`".
 
-FHIR R4 binds `Patient.gender` and `Practitioner.gender` to the `AdministrativeGender` value set (`male | female | other | unknown`). The `config_structure_preserving.yaml` profile uses `substitute_with: "unknown"` for gender fields — this is correct. If you use a custom profile that substitutes `[REDACTED]`, HAPI will reject it. Always use a valid code value.
+FHIR R4 binds `Patient.gender` and `Practitioner.gender` to the `AdministrativeGender` value set (`male | female | other | unknown`). The `config_structure_preserving.yaml` profile uses `substitute_with: "unknown"` for gender fields  this is correct. If you use a custom profile that substitutes `[REDACTED]`, HAPI will reject it. Always use a valid code value.
 
 ### 413 Request Too Large
 
@@ -376,7 +376,7 @@ Override port mappings in `.env`: `ANONYMIZER_PORT`, `UI_PORT`, `HAPI_PORT`, `GP
 
 ### Docker healthcheck failure: "container has no healthcheck configured"
 
-If `depends_on: condition: service_healthy` is configured, the target container must have a healthcheck defined. Setting `healthcheck: disable: true` breaks the dependency chain. The anonymizer healthcheck must target `/health` (not `/ready` — `/ready` calls FHIR and gPAS and may time out during startup).
+If `depends_on: condition: service_healthy` is configured, the target container must have a healthcheck defined. Setting `healthcheck: disable: true` breaks the dependency chain. The anonymizer healthcheck must target `/health` (not `/ready`  `/ready` calls FHIR and gPAS and may time out during startup).
 
 ---
 
@@ -386,16 +386,16 @@ If `depends_on: condition: service_healthy` is configured, the target container 
 - [ ] `MEDANON_HASH_KEY` set (`openssl rand -hex 32`)
 - [ ] `MEDANON_API_KEY` set for authenticated access
 - [ ] `GPAS_BASIC_PASS` rotated from default
-- [ ] `GPAS_DB_PASSWORD` rotated from default (PostgreSQL — not MySQL)
+- [ ] `GPAS_DB_PASSWORD` rotated from default (PostgreSQL  not MySQL)
 - [ ] `MEDANON_REDIS_PASSWORD` set
 - [ ] `HAPI_DB_PASSWORD` and `HAPI_TARGET_DB_PASSWORD` set
-- [ ] No secrets in git (`git status` — verify `.env` is gitignored)
+- [ ] No secrets in git (`git status`  verify `.env` is gitignored)
 
 ### Network and TLS
 - [ ] TLS termination at reverse proxy (nginx/Caddy/Traefik) or Ingress controller
 - [ ] `MEDANON_CORS_ORIGINS` restricted to known origins
 - [ ] gPAS web UI (port 8080) not publicly accessible
-- [ ] Source FHIR server has no external port — verify `docker compose ps fhir-server` shows no host port
+- [ ] Source FHIR server has no external port  verify `docker compose ps fhir-server` shows no host port
 
 ### Logging, monitoring, and compliance
 - [ ] `LOG_LEVEL=INFO` (DEBUG may log resource content containing PHI)
@@ -421,4 +421,4 @@ If `depends_on: condition: service_healthy` is configured, the target container 
 - [ ] End-to-end: POST a sample Patient to `/process`, verify output is de-identified
 - [ ] Score the output: `POST /v1/score` returns `privacy.gate: PASS`
 - [ ] `/v1/analyse/risk` run on de-identified output before data sharing
-- [ ] Appropriate config profile selected — see [policies.md](policies.md)
+- [ ] Appropriate config profile selected  see [policies.md](policies.md)

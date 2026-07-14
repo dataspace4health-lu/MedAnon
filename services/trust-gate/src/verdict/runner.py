@@ -28,7 +28,7 @@ def run_checks(ctx: AssessmentContext) -> list[CheckResult]:
     pass and each per-sector target pass (``ctx.scoped_to(subset)``).
 
     ``ctx.reference_time`` is the single stable "now" anchor for time-relative
-    plausibility rules (``not_in_future``) — held constant across the whole
+    plausibility rules (``not_in_future``)  held constant across the whole
     assessment so the verdict has no per-resource clock drift (see ``rules.evaluate``).
     """
     checks: list[CheckResult] = []
@@ -67,14 +67,14 @@ def _fhirpath_match(resource: dict, expr: str) -> bool:
 
     A boolean expression (e.g. ``gender = 'female'``) matches on its truth value;
     a path expression (e.g. ``telecom``) matches when it yields any value. A
-    FHIRPath error never raises — it is treated as "does not match" so a bad
+    FHIRPath error never raises  it is treated as "does not match" so a bad
     predicate cannot crash the gate (mirrors the rule engine's fail-safe eval).
     """
     try:
         from fhirpathpy import evaluate as _eval
 
         result = _eval(resource, expr) or []
-    except Exception:  # noqa: BLE001 — FHIRPath errors must not crash the gate
+    except Exception:  # noqa: BLE001  FHIRPath errors must not crash the gate
         return False
     if not result:
         return False
@@ -143,7 +143,7 @@ def targets_report(
         assessed = [c for c in det_tchecks if c.result != RESULT_NA]
         passed = sum(1 for c in assessed if c.result == RESULT_PASS)
         # A sector is a slice of the same dataset, so a missing-provenance cap on
-        # the headline applies to it too — pass it through so a sector can never
+        # the headline applies to it too  pass it through so a sector can never
         # badge PASS while the headline is CONDITIONAL.
         decision, score, has_assessed = subset_decision(
             det_tchecks, provenance_capped=provenance_capped

@@ -90,7 +90,7 @@ spec:
               containerPort: {{ .Values.port }}
               protocol: TCP
           env:
-            # DB hostnames — computed from chart fullname unless overridden in values.
+            # DB hostnames  computed from chart fullname unless overridden in values.
             # gPAS / gRAS / notification_service all live in the same PostgreSQL
             # database (schema isolation via ?currentSchema= in the JDBC URL).
             - name: TTP_DB_HOST

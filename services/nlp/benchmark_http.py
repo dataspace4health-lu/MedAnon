@@ -1,11 +1,11 @@
 """
-Presidio NLP accuracy benchmark — HTTP API edition.
+Presidio NLP accuracy benchmark  HTTP API edition.
 
 Calls POST /v1/detect on the running NLP service instead of loading the model
 in-process, so it works even when the container has no memory headroom.
 
 Ground truth is derived from structured FHIR data (Patient, Practitioner),
-not from regex patterns that mirror the detector — prevents overfitting.
+not from regex patterns that mirror the detector  prevents overfitting.
 
 Usage:
   python3 benchmark_http.py
@@ -222,7 +222,7 @@ def detect_via_http(
     with urllib.request.urlopen(req, timeout=30) as resp:
         body = json.loads(resp.read())
 
-    # Response is scrubbed_text + token_state — extract spans from token_state map
+    # Response is scrubbed_text + token_state  extract spans from token_state map
     # token_state.map: {"ENTITY_TYPE,original_value": "[[ENTITY_TYPE_N]]"}
     spans: list[tuple[int, int, str]] = []
     token_map = body.get("token_state", {}).get("map", {})
@@ -260,7 +260,7 @@ def run_benchmark(
             health = json.loads(r.read())
         print(f"NLP service: {health}")
     except Exception as exc:
-        print(f"ERROR: NLP service not reachable at {url} — {exc}")
+        print(f"ERROR: NLP service not reachable at {url}  {exc}")
         sys.exit(1)
 
     print(f"\nMedAnon NLP Accuracy Benchmark (HTTP)")

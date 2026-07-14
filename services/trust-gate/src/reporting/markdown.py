@@ -13,7 +13,7 @@ from passport import CATEGORIES, RESULT_FAIL, RESULT_NA, RESULT_PASS
 def render_markdown(p) -> str:
     """Render *p* (a QualityPassport) as a Markdown quality report."""
     lines: list[str] = [
-        f"# Quality Passport — {p.dataset_id}",
+        f"# Quality Passport  {p.dataset_id}",
         "",
         f"- **Decision:** {p.decision}",
         "- **Overall score:** "
@@ -158,7 +158,7 @@ def render_markdown(p) -> str:
 
     prof = p.profile or {}
     if prof:
-        lines.append("## Data profile (descriptive — not scored)")
+        lines.append("## Data profile (descriptive  not scored)")
         lines.append("")
         counts = prof.get("resource_counts") or {}
         if counts:

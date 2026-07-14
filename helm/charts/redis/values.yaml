@@ -14,7 +14,7 @@ maxclients: "2000"
 # volatile-lru only evicts keys with TTL; gPAS pseudonym entries (no TTL) are pinned.
 maxmemoryPolicy: "volatile-lru"
 
-# AOF persistence — REQUIRED so gPAS/NLP caches survive restart.
+# AOF persistence  REQUIRED so gPAS/NLP caches survive restart.
 appendonly: "yes"
 appendfsync: "everysec"
 

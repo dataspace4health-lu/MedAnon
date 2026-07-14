@@ -84,7 +84,7 @@ function UptimeTable({ results }: { results: PromResult[] }) {
       <div className="divide-y">
         {results.map((r) => {
           const up = r.value[1] === '1';
-          const job = r.metric.job ?? r.metric.instance ?? '—';
+          const job = r.metric.job ?? r.metric.instance ?? '';
           const instance = r.metric.instance ?? '';
           return (
             <div key={`${job}-${instance}`} className="flex items-center gap-3 px-4 py-2.5">

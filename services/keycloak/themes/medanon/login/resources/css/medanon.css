@@ -1,5 +1,5 @@
 /* ===========================================================================
-   MedAnon · Data Privacy Toolkit — Keycloak login theme
+   MedAnon · Data Privacy Toolkit  Keycloak login theme
    Restyles the base (PatternFly) login/reset/update-password pages to match the
    SPA brand. Targets both legacy (.pf-c-) and current (.pf-v5-c-) PatternFly
    class prefixes plus base elements, so it is resilient across Keycloak versions.
@@ -128,7 +128,7 @@ form, .pf-c-form, .pf-v5-c-form { width: 100%; display: block; float: none; }
 
 /* Text inputs only.
    PatternFly 5 applies .pf-v5-c-form-control to ALL inputs including checkboxes.
-   :not() guards prevent the 100%×42px rule from hitting checkboxes/radios —
+   :not() guards prevent the 100%×42px rule from hitting checkboxes/radios 
    without these guards the checkbox renders as a 42px-tall block. */
 input[type="text"], input[type="password"], input[type="email"],
 input[type="tel"], input[type="number"],
@@ -192,12 +192,18 @@ a, #kc-registration a, #kc-form-options a {
 }
 a:hover { color: var(--m-primary-hover); text-decoration: underline; }
 
-/* ── Checkboxes / radios — pinned 16 px, never full-width ───────────────────
+/* ── Checkboxes / radios  pinned 16 px, never full-width ───────────────────
    !important beats any PatternFly compound selector (e.g. .pf-v5-c-check >
    .pf-v5-c-check__input) that may load after this stylesheet and override
-   the natural cascade. */
+   the natural cascade.
+   position: static cancels Bootstrap/PatternFly-v3's `.checkbox input
+   {position:absolute; margin-left:-20px}` (base login.css) - left in place,
+   the absolutely-positioned input drops out of the `.checkbox label` flex
+   layout below and renders at its static position, on top of the label
+   text (the "Remember me shifted left, covered by the checkbox" bug). */
 input[type="checkbox"],
 input[type="radio"] {
+  position: static !important;
   width:     16px !important;
   height:    16px !important;
   min-width: 16px !important;
@@ -229,6 +235,7 @@ input[type="radio"] {
   align-items: center;
   gap: 7px;
   margin: 0;
+  padding: 0;
   font-weight: 500;
   color: var(--m-muted);
   cursor: pointer;
@@ -279,7 +286,7 @@ input[type="radio"] {
 
 /* ── Info / instruction area (reset-password hint, back-to-login, etc.) ─────
    Forced to a full-width centered block. The grey box appearance comes from
-   the card-pf style inherited by the info column — strip it here. */
+   the card-pf style inherited by the info column  strip it here. */
 #kc-info,
 #kc-info-wrapper,
 #kc-info-message,

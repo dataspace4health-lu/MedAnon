@@ -1,5 +1,5 @@
 -- =========================================================================
--- gRAS authentication schema — PostgreSQL 16
+-- gRAS authentication schema  PostgreSQL 16
 --
 -- Translated from MySQL 8.0 original (services/gpas/sqls/01_create_database_gras.sql).
 -- gRAS provides form-based web UI auth for gPAS.
@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS project (
     PRIMARY KEY (name)
 );
 
--- "user" is a PostgreSQL reserved word — must be quoted
+-- "user" is a PostgreSQL reserved word  must be quoted
 CREATE TABLE IF NOT EXISTS "user" (
     name         VARCHAR(255) NOT NULL DEFAULT '',
     password     VARCHAR(255) DEFAULT NULL,

@@ -1,5 +1,5 @@
 /* ===========================================================================
-   Trust Gate QC — standalone frontend logic (no build step).
+   Trust Gate QC  standalone frontend logic (no build step).
    Flow: submit (FHIR | OMOP | tabular) -> animated step-by-step QC pipeline ->
    full Quality Passport report + full ALCOA++ audit report.
    =========================================================================== */
@@ -14,7 +14,7 @@ const rateText = (p) => (p >= 90 ? "ok" : p >= 80 ? "warn" : "bad");
 
 // ---- humanizer: plain-language problems + where they are -------------------
 // The passport is PHI-safe: a violation detail carries the record, the exact
-// field/path, and a short reason — never the raw field value (a value can be
+// field/path, and a short reason  never the raw field value (a value can be
 // PHI). We translate the technical signal and pinpoint the location.
 const CHECK_PLAIN = {
   "conformance.structural": "The FHIR validator reported a structural error in this record.",
@@ -57,8 +57,8 @@ function locateProblem(id, d) {
   const rtype = d.resource_type ? String(d.resource_type) : "";
   const rid = d.resource_id != null && String(d.resource_id) !== "" ? String(d.resource_id)
     : d.resource_index != null ? `[${d.resource_index}]` : "";
-  const resource = rtype ? `${rtype}${rid && !rid.startsWith("[") ? "/" : ""}${rid}` : (rid || "—");
-  const field = String(d.path ?? d.attribute ?? "—");
+  const resource = rtype ? `${rtype}${rid && !rid.startsWith("[") ? "/" : ""}${rid}` : (rid || "");
+  const field = String(d.path ?? d.attribute ?? "");
   const raw = d.found ?? d.value ?? d.expected;
   const value = raw != null && raw !== "" ? String(raw) : null;
   return { resource, field, value, problem: humanizeDetail(id, d.detail) };
@@ -69,7 +69,7 @@ function affectedRecords(c) {
   const body = rows.map((d) => {
     const l = locateProblem(c.check_id, d);
     return `<tr><td class="mono">${esc(l.resource)}</td><td class="mono muted">${esc(l.field)}</td>
-      <td class="mono">${l.value != null ? esc(l.value) : '<span class="muted" title="Withheld — a field value can be PHI">—</span>'}</td>
+      <td class="mono">${l.value != null ? esc(l.value) : '<span class="muted" title="Withheld  a field value can be PHI"></span>'}</td>
       <td>${esc(l.problem)}</td></tr>`;
   }).join("");
   const more = c.violations > rows.length ? ` (first ${rows.length} of ${c.violations})` : ` (${rows.length})`;
@@ -151,8 +151,8 @@ const SAMPLES = {
 };
 const INPUT_LABELS = {
   fhir: "FHIR resource, list, or Bundle (JSON)",
-  omop: "OMOP tables — { tables: { person: [...], measurement: [...] } }",
-  tabular: "Source tables + column mapping — { tables: {...}, mapping: {...} }",
+  omop: "OMOP tables  { tables: { person: [...], measurement: [...] } }",
+  tabular: "Source tables + column mapping  { tables: {...}, mapping: {...} }",
 };
 
 // ---- source-type tabs ------------------------------------------------------
@@ -192,7 +192,7 @@ async function loadUseCases() {
       const desc = u.description || "";
       const o = document.createElement("option");
       o.value = id;
-      o.textContent = id.replace(/_/g, " ") + (desc ? ` — ${desc.slice(0, 60)}` : "");
+      o.textContent = id.replace(/_/g, " ") + (desc ? `  ${desc.slice(0, 60)}` : "");
       sel.appendChild(o);
     }
   } catch { /* non-fatal */ }
@@ -215,7 +215,7 @@ const STAGES = [
 function stageResult(st, p) {
   // Returns { status:'done'|'warn'|'fail', meta:html, tag:'' }
   if (st.kind === "intake") {
-    const n = p.resource_count ?? "—";
+    const n = p.resource_count ?? "";
     return { status: "done", meta: `${n} record(s) ingested as <b>${esc(LAST.sourceModel)}</b>` };
   }
   if (st.kind === "cat") {
@@ -246,9 +246,9 @@ function stageResult(st, p) {
   }
   if (st.kind === "label") {
     const l = p.label || {};
-    const q = l.quality && l.quality.decision ? l.quality.decision : "—";
-    const t = l.utility && l.utility.tier ? l.utility.tier : "—";
-    const m = l.maturity && l.maturity.level ? `L${l.maturity.level}` : "—";
+    const q = l.quality && l.quality.decision ? l.quality.decision : "";
+    const t = l.utility && l.utility.tier ? l.utility.tier : "";
+    const m = l.maturity && l.maturity.level ? `L${l.maturity.level}` : "";
     return { status: "done", meta: `EHDS label issued · quality <b>${esc(q)}</b> · utility <b>${esc(t)}</b> · maturity <b>${esc(m)}</b>` };
   }
   return { status: "done", meta: "" };
@@ -397,7 +397,7 @@ async function fetchFindings(datasetId) {
 // ===========================================================================
 const BLURB = {
   PASS: "Data meets the quality bar for its declared purpose.",
-  CONDITIONAL_PASS: "Usable with caveats — review the advisory findings before release.",
+  CONDITIONAL_PASS: "Usable with caveats  review the advisory findings before release.",
   BLOCK: "Deterministic quality failures must be remediated before this data is fit for use.",
 };
 const GLYPH = { PASS: "&#10003;", CONDITIONAL_PASS: "&#33;", BLOCK: "&#10007;" };
@@ -474,11 +474,11 @@ function ehdsLabel(l) {
   return `<section class="card"><div class="hd"><h2>EHDS dataset label <span class="framework">${esc(l.scheme || "")}</span></h2></div>
     <div class="bd">
       <div class="ehds">
-        <div class="lab"><div class="cap">Quality</div><div class="val ${rateText(pct(q.score))}">${esc(q.decision || q.grade || "—")}</div>
+        <div class="lab"><div class="cap">Quality</div><div class="val ${rateText(pct(q.score))}">${esc(q.decision || q.grade || "")}</div>
           <div class="sub">${q.score != null ? pct(q.score) + "% checks passing" : "purpose-bound verdict"}${q.grade ? " · grade " + esc(q.grade) : ""}</div></div>
-        <div class="lab"><div class="cap">Utility</div><div class="val">${esc(u.tier || "—")}</div>
+        <div class="lab"><div class="cap">Utility</div><div class="val">${esc(u.tier || "")}</div>
           <div class="sub">${u.score != null ? pct(u.score) + "% fit for declared use" : "fitness for declared use"}</div></div>
-        <div class="lab"><div class="cap">Maturity</div><div class="val">Level ${esc(m.level ?? "—")}<span class="framework"> / 5</span></div>
+        <div class="lab"><div class="cap">Maturity</div><div class="val">Level ${esc(m.level ?? "")}<span class="framework"> / 5</span></div>
           <div class="sub">${esc(maturitySub)}</div></div>
       </div>
       ${fair}
@@ -488,7 +488,7 @@ function ehdsLabel(l) {
 function kpiStrip(p, failedN) {
   const run = (p.checks || []).filter((c) => c.result !== "NA").length;
   const items = [
-    ["Records", p.resource_count ?? "—"],
+    ["Records", p.resource_count ?? ""],
     ["Checks run", run],
     ["Deterministic failures", failedN],
     ["Processing", p.privacy_processing_allowed ? "allowed" : "blocked"],
@@ -511,7 +511,7 @@ function pillars(p) {
     const has = score != null;
     const v = has ? pct(score) : 0;
     return `<div class="pillar">
-      <div class="top"><span class="nm">${label}</span><span class="pc ${has ? rateText(v) : ""}">${has ? v + "%" : "—"}</span></div>
+      <div class="top"><span class="nm">${label}</span><span class="pc ${has ? rateText(v) : ""}">${has ? v + "%" : ""}</span></div>
       <div class="bar"><span style="width:${v}%;background:${rateColor(v)}"></span></div>
       <div class="counts"><span class="ok">${passed} passed</span>${failed ? `<span class="bad">${failed} failed</span>` : ""}<span style="margin-left:auto;color:var(--muted)">${checks.length} assessed</span></div>
       <div class="desc">${desc}</div>
@@ -530,7 +530,7 @@ function scorecard(sc) {
       <div><div style="font-weight:600;text-transform:capitalize">${esc(dim)}</div>
       <div class="framework" style="font-size:11px">${esc(txt)}</div></div></div>`;
   }).join("");
-  return `<section class="card"><div class="hd"><h2>Dimension scorecard — DAMA / ISO 25012</h2></div>
+  return `<section class="card"><div class="hd"><h2>Dimension scorecard  DAMA / ISO 25012</h2></div>
     <div class="bd"><div class="scoregrid">${items}</div></div></section>`;
 }
 
@@ -540,7 +540,7 @@ function blockers(bs) {
 }
 
 function checkRow(c, cls) {
-  const frac = c.applicable > 0 ? `${c.violations}/${c.applicable} (${pct(c.violation_fraction * 100)}%)` : "—";
+  const frac = c.applicable > 0 ? `${c.violations}/${c.applicable} (${pct(c.violation_fraction * 100)}%)` : "";
   const tax = [c.category, c.subcategory, c.context].filter(Boolean).join(" · ");
   return `<div class="check ${cls}">
     <div class="top"><span class="id">${esc(c.check_id)}${c.critical ? '<span class="badge critical">critical</span>' : ""}${c.advisory ? '<span class="badge advisory">advisory</span>' : ""}</span>
@@ -626,7 +626,7 @@ function findingsCard(p) {
   } else {
     const fails = (p.checks || []).filter((c) => c.result === "FAIL" && !c.advisory);
     if (!fails.length) return `<section class="card"><div class="hd"><h2>Remediation findings</h2></div>
-      <div class="bd note ok">No open findings — nothing to remediate.</div></section>`;
+      <div class="bd note ok">No open findings  nothing to remediate.</div></section>`;
     rows = fails.map((c) => {
       const sev = c.critical ? "critical" : c.violation_fraction >= 0.5 ? "major" : "minor";
       return `<div class="check ${c.critical ? "crit" : "fail"}">
@@ -682,7 +682,7 @@ function profileCard(prof) {
       <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-top:8px">${plots}</div></div>`);
   }
   if (!blocks.length) return "";
-  return `<section class="card"><div class="hd"><h2>Data profile <span class="framework">(descriptive — not scored)</span></h2></div>
+  return `<section class="card"><div class="hd"><h2>Data profile <span class="framework">(descriptive  not scored)</span></h2></div>
     <div class="bd stack" style="gap:16px">${blocks.join("")}</div></section>`;
 }
 
@@ -711,12 +711,12 @@ function auditReport(p) {
   const latest = trail[0] || {};
   const identity = {
     dataset_id: LAST.datasetId,
-    provider_id: $("provider").value.trim() || latest.provider_id || "—",
+    provider_id: $("provider").value.trim() || latest.provider_id || "",
     source_model: LAST.sourceModel,
     assessment_id: latest.assessment_id || "(not persisted)",
-    generated_at: p.generated_at || latest.generated_at || "—",
-    recorded_at: latest.recorded_at || "—",
-    records: p.resource_count ?? "—",
+    generated_at: p.generated_at || latest.generated_at || "",
+    recorded_at: latest.recorded_at || "",
+    records: p.resource_count ?? "",
   };
   const determinism = {
     decision: p.decision,
@@ -733,8 +733,8 @@ function auditReport(p) {
 
   const trailHtml = trail.length
     ? `<div class="trail">${trail.map((r) => `<div class="row">
-        <div><b>${esc(r.decision || "—")}</b> &middot; ${esc(r.source_model || "")} &middot; <span class="framework">${esc(r.assessment_id || "")}</span></div>
-        <div class="when">recorded ${esc(r.recorded_at || r.generated_at || "—")}${r.provider_id ? " · provider " + esc(r.provider_id) : ""}</div>
+        <div><b>${esc(r.decision || "")}</b> &middot; ${esc(r.source_model || "")} &middot; <span class="framework">${esc(r.assessment_id || "")}</span></div>
+        <div class="when">recorded ${esc(r.recorded_at || r.generated_at || "")}${r.provider_id ? " · provider " + esc(r.provider_id) : ""}</div>
       </div>`).join("")}</div>`
     : `<div class="note">No persisted trail for this dataset. Set <code>TRUST_GATE_STORE_DB</code> (or <code>TRUST_GATE_STORE_DB_URL</code>) on the service to retain an append-only ALCOA++ history across runs. This run's verdict is shown above.</div>`;
 
@@ -836,20 +836,20 @@ function renderHistory(ds, history, trend, findings) {
 
   const summary = `<div class="kpis">
     <div class="kpi"><div class="v">${history.length}</div><div class="k">runs recorded</div></div>
-    <div class="kpi"><div class="v">${latest ? esc((latest.decision || "").replace(/_/g, " ")) : "—"}</div><div class="k">latest verdict</div></div>
-    <div class="kpi"><div class="v">${latest && latest.overall_score != null ? pct(latest.overall_score) + "%" : "—"}</div><div class="k">latest score</div></div>
+    <div class="kpi"><div class="v">${latest ? esc((latest.decision || "").replace(/_/g, " ")) : ""}</div><div class="k">latest verdict</div></div>
+    <div class="kpi"><div class="v">${latest && latest.overall_score != null ? pct(latest.overall_score) + "%" : ""}</div><div class="k">latest score</div></div>
     <div class="kpi"><div class="v">${open.length}</div><div class="k">open findings</div></div>
   </div>`;
 
   const runs = history.length
     ? `<section class="card"><div class="hd"><h2>Assessment runs</h2></div><div class="bd stack">
         ${history.map((r) => `<div class="kv"><span class="k">${decisionChip(r.decision)} <span class="framework">${esc(r.generated_at || r.recorded_at || "")}</span></span>
-          <span class="v ${rateText(pct(r.overall_score))}">${r.overall_score != null ? pct(r.overall_score) + "%" : "—"}${r.grade ? " · " + esc(r.grade) : ""}</span></div>`).join("")}
+          <span class="v ${rateText(pct(r.overall_score))}">${r.overall_score != null ? pct(r.overall_score) + "%" : ""}${r.grade ? " · " + esc(r.grade) : ""}</span></div>`).join("")}
       </div></section>`
     : `<section class="card"><div class="bd note">No persisted runs for <b>${esc(ds)}</b>. Run a QC assessment for this dataset first (the service must have a store configured).</div></section>`;
 
   const findCard = findings.length
-    ? `<section class="card"><div class="hd"><h2>Findings — triage (${findings.length})</h2>
+    ? `<section class="card"><div class="hd"><h2>Findings  triage (${findings.length})</h2>
         <p class="note">Set status + root cause (source-error / ETL-error / genuine-biology) and save. PDSA study/act loop.</p></div>
         <div class="bd stack">${findings.map((f) => findingRow(f, true)).join("")}</div></section>`
     : `<section class="card"><div class="hd"><h2>Findings</h2></div><div class="bd note ok">No open findings for this dataset.</div></section>`;

@@ -1,4 +1,4 @@
-"""Trust Gate microservice — pre-privacy data-quality / trust assessment.
+"""Trust Gate microservice  pre-privacy data-quality / trust assessment.
 
 Composition root: builds the FastAPI ``app`` and mounts the routers from the ``api``
 package. The service assesses FHIR (or OMOP CDM) data quality and returns a graded
@@ -21,7 +21,7 @@ from fastapi import FastAPI  # noqa: E402
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest  # noqa: E402
 from starlette.responses import Response  # noqa: E402
 
-import api.config  # noqa: E402,F401  — import triggers the one-time config load + log
+import api.config  # noqa: E402,F401   import triggers the one-time config load + log
 from api.routers import (  # noqa: E402
     assess,
     catalog,

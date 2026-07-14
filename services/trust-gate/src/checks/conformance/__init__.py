@@ -79,7 +79,7 @@ def resolve_ig_profiles(ig_name: str | None) -> dict[str, list[str]] | None:
     """Return the resourceType -> [profile URLs] map for the named IG, or None.
 
     None (the default, no IG selected) keeps the IG check inert (NA). An unknown or
-    missing IG name also returns None rather than raising — IG conformance is opt-in
+    missing IG name also returns None rather than raising  IG conformance is opt-in
     and must never block on a config typo.
     """
     if not ig_name:
@@ -90,7 +90,7 @@ def resolve_ig_profiles(ig_name: str | None) -> dict[str, list[str]] | None:
         with open(_ig_config_path(), encoding="utf-8") as fh:
             doc = yaml.safe_load(fh) or {}
     except (FileNotFoundError, ValueError) as exc:  # noqa: BLE001 via narrow set
-        _log.warning("ig_profiles.yaml unavailable (%s) — IG check inert", exc)
+        _log.warning("ig_profiles.yaml unavailable (%s)  IG check inert", exc)
         return None
     igs = doc.get("implementation_guides") or {}
     entry = igs.get(ig_name) or {}
@@ -134,7 +134,7 @@ def evaluate(
         out.extend(_ig_conformance(resources, validator, ig_profiles, thresholds))
     out.append(_coding_structure(resources, thresholds))
     out.append(_value_format(resources, thresholds))
-    # Offline code well-formedness (format + check digit) — always runs, no server.
+    # Offline code well-formedness (format + check digit)  always runs, no server.
     out.append(_code_wellformed(resources, thresholds))
     if run_terminology:
         out.append(_terminology_async(resources, terminology, thresholds))

@@ -1,8 +1,8 @@
-# MedAnon — Architecture
+# MedAnon  Architecture
 
 ## What it does
 
-MedAnon is a FHIR R4 de-identification engine. It accepts FHIR resources (JSON / NDJSON / XML), applies configurable match-action rules from a YAML profile, and returns transformed data with PII removed or pseudonymized. It is designed to be the privacy layer between an identified FHIR source and any downstream consumer — research databases, dataspace connectors, analytics pipelines.
+MedAnon is a FHIR R4 de-identification engine. It accepts FHIR resources (JSON / NDJSON / XML), applies configurable match-action rules from a YAML profile, and returns transformed data with PII removed or pseudonymized. It is designed to be the privacy layer between an identified FHIR source and any downstream consumer  research databases, dataspace connectors, analytics pipelines.
 
 ---
 
@@ -26,7 +26,7 @@ MedAnon is a FHIR R4 de-identification engine. It accepts FHIR resources (JSON /
 ┌──────────────────────┐   ┌──────────────────────────────────┐
 │  anonymizer :8000    │   │  hapi-fhir (source) :8080        │
 │  (FastAPI)           │◄──┤  PostgreSQL-backed FHIR R4       │
-│  worker :9091(metrics│   │  source-net (isolated — no host  │
+│  worker :9091(metrics│   │  source-net (isolated  no host  │
 │                      │   │  port; accessed only via anon.)  │
 │  reads  ──────────►  │   └──────────────────────────────────┘
 │  de-identifies       │
@@ -58,7 +58,7 @@ Opt-in profiles:
   --profile ai  → ollama (local LLM for AI agents)
 ```
 
-**Two separate FHIR servers** — identified and de-identified data never share a database. This is a deliberate design: it prevents accidental joins, satisfies physical separation requirements under GDPR Art. 25 (data minimization by design), and allows different access controls per server.
+**Two separate FHIR servers**  identified and de-identified data never share a database. This is a deliberate design: it prevents accidental joins, satisfies physical separation requirements under GDPR Art. 25 (data minimization by design), and allows different access controls per server.
 
 **Why a dedicated NLP microservice?** The Presidio + spaCy `en_core_web_lg` model adds ~800 MB to the Docker image. Running it in the anonymizer process would double memory consumption for every anonymizer replica. The NLP microservice keeps this cost fixed regardless of anonymizer scaling, and its replicas can be independently sized for CPU-intensive NLP workloads.
 
@@ -79,7 +79,7 @@ Opt-in profiles:
 | `hapi-db` | `postgres:16-alpine` | internal | PostgreSQL for source HAPI |
 | `fhir-target` | `hapiproject/hapi:v7.6.0` | 8082 | Target FHIR R4 (de-identified data) |
 | `hapi-target-db` | `postgres:16-alpine` | internal | PostgreSQL for target HAPI |
-| `gateway` | `traefik:v3` | 8080 (gPAS), 8200 (NLP) | Traefik v3 API gateway — Docker-provider service discovery; carries `gpas-lb` and `nlp-lb` network aliases for backward compatibility |
+| `gateway` | `traefik:v3` | 8080 (gPAS), 8200 (NLP) | Traefik v3 API gateway  Docker-provider service discovery; carries `gpas-lb` and `nlp-lb` network aliases for backward compatibility |
 | `gpas` | WildFly 38 + gPAS | via gateway | Reversible pseudonymization (TTP); scaled with `--scale gpas=N` |
 | `gpas-db` | `postgres:16-alpine` | internal | gPAS pseudonym store |
 | `app-db` | `postgres:16-alpine` | internal | Jobs, configs, subscriptions, staging |
@@ -118,7 +118,7 @@ The `gateway` service joins `processing-net` under the `gpas-lb` and `nlp-lb` al
 - Round-robin for both gPAS REST and NLP traffic
 - Internal Prometheus metrics endpoint on `:8082/metrics` (gateway-internal; not host-published)
 
-**Scaling (Traefik discovers new replicas via Docker labels — no config reload):**
+**Scaling (Traefik discovers new replicas via Docker labels  no config reload):**
 ```bash
 docker compose up -d --scale gpas=3              # 3 gPAS replicas
 docker compose up -d --scale nlp=4               # 4 NLP replicas
@@ -138,7 +138,7 @@ Input (JSON / NDJSON / XML)
 io_formats.py          Parse. XML uses defusedxml to prevent entity expansion attacks.
     │
     ▼
-config_service.py      Load YAML profile. @lru_cache(maxsize=8) — loaded once per profile
+config_service.py      Load YAML profile. @lru_cache(maxsize=8)  loaded once per profile
                        per process. Env vars interpolated with ${VAR:-default} syntax.
     │
     ▼
@@ -147,28 +147,28 @@ rule_matcher.py        Build per-resource-type rule index using FHIRPath express
                        FHIRPath evaluation on identical inputs.
     │
     ▼
-action_dispatcher.py   STAGE 1 — match: Iterate matched rules. Apply stateless actions
+action_dispatcher.py   STAGE 1  match: Iterate matched rules. Apply stateless actions
                        immediately (redact, cryptohash, generalize, substitute, perturb,
                        scrub_text, encrypt). Defer NLP actions (nlp_scrub, nlp_detect_act)
                        into NlpWork items. Collect gPAS-bound values into BatchWork.
-                       Neither NLP nor gPAS is called yet — batching is critical
+                       Neither NLP nor gPAS is called yet  batching is critical
                        for throughput.
     │
     ▼  ┌─────────── STAGES 2 & 3 RUN CONCURRENTLY ───────────┐
        │  (disjoint resource paths, so it is safe to overlap) │
-nlp_orchestrator.py    STAGE 2 — phi_detection: Batch NLP detection across all resources.
-                       Phase A — extract text fields from all deferred NlpWork items.
-                       Phase B — deduplicate and batch-detect unique texts (one HTTP
-                       call to the NLP service). Phase C — per-resource replacement with
+nlp_orchestrator.py    STAGE 2  phi_detection: Batch NLP detection across all resources.
+                       Phase A  extract text fields from all deferred NlpWork items.
+                       Phase B  deduplicate and batch-detect unique texts (one HTTP
+                       call to the NLP service). Phase C  per-resource replacement with
                        isolated token_state so surrogate tokens are deterministic within
                        a resource but unique across resources.
                                           ‖  (concurrent with)
-gpas_orchestrator.py   STAGE 3 — pseudonymize: Send one HTTP request to gPAS for all
+gpas_orchestrator.py   STAGE 3  pseudonymize: Send one HTTP request to gPAS for all
                        collected values. Checks cache first (local LRU → Redis L2 → live
                        call). Results written back into the resource tree.
     │  └──────────────────────────────────────────────────────┘
     ▼
-post_processor.py      STAGE 4 — finalize: Rewrite FHIR references (Patient/123 →
+post_processor.py      STAGE 4  finalize: Rewrite FHIR references (Patient/123 →
                        Patient/p-123) and replace pseudonym-changed IDs in text fields.
     │
     ▼
@@ -181,7 +181,7 @@ manifest.py            Tag meta.tag with a per-rule transformation summary if
 io_formats.py          Serialize. Output format matches input or as requested.
 ```
 
-**Why staged + concurrent?** Both NLP and gPAS have non-trivial per-call overhead. Processing 300 resources with individual calls would be ~300 HTTP round-trips for each. The **match** stage collects deferred work (NlpWork for NLP, BatchWork for gPAS) without making any external calls. The **phi_detection** and **pseudonymize** stages then run **concurrently**: NLP deduplicates texts across all resources and sends a single batch, while gPAS does the same for pseudonymization — they touch disjoint resource paths, so overlapping them hides one upstream's latency behind the other. This reduces hundreds of HTTP calls to 2-3 regardless of resource count, and the two batch calls overlap rather than running back-to-back. Per-stage latency is exported as `medanon_pipeline_stage_latency{stage=...}`.
+**Why staged + concurrent?** Both NLP and gPAS have non-trivial per-call overhead. Processing 300 resources with individual calls would be ~300 HTTP round-trips for each. The **match** stage collects deferred work (NlpWork for NLP, BatchWork for gPAS) without making any external calls. The **phi_detection** and **pseudonymize** stages then run **concurrently**: NLP deduplicates texts across all resources and sends a single batch, while gPAS does the same for pseudonymization  they touch disjoint resource paths, so overlapping them hides one upstream's latency behind the other. This reduces hundreds of HTTP calls to 2-3 regardless of resource count, and the two batch calls overlap rather than running back-to-back. Per-stage latency is exported as `medanon_pipeline_stage_latency{stage=...}`.
 
 ---
 
@@ -222,11 +222,11 @@ GET /v1/jobs/abc123/result  ◄── download NDJSON when done
 **Problem:** FHIR referential integrity. HAPI rejects a resource if it references another resource that doesn't exist yet. For example, uploading an `Encounter` before its `Organization` and `Practitioner` causes HAPI-1094.
 
 **Why a naive 2-tier approach fails:** A simple "base types first, rest second" doesn't work when there are 3+ levels of dependency:
-- `Organization` (tier 0 — no deps)
-- `Practitioner` (tier 0 — no deps)
-- `Encounter` (tier 1 — references Organization + Practitioner)
-- `Observation` (tier 2 — references Encounter)
-- `DiagnosticReport` (tier 3 — references Observation)
+- `Organization` (tier 0  no deps)
+- `Practitioner` (tier 0  no deps)
+- `Encounter` (tier 1  references Organization + Practitioner)
+- `Observation` (tier 2  references Encounter)
+- `DiagnosticReport` (tier 3  references Observation)
 
 **Solution:** Bellman-Ford relaxation over the reference graph. `tier[A] = 1 + max(tier[B] for B in deps[A])`. Converges in at most N passes where N = number of distinct resource types. Resources within the same tier upload in a single batch Bundle.
 
@@ -236,7 +236,7 @@ GET /v1/jobs/abc123/result  ◄── download NDJSON when done
 
 **Problem:** HAPI FHIR rejects purely numeric resource IDs (HAPI-0960). The de-identification pipeline may produce numeric IDs (e.g. gPAS pseudonyms are sometimes numeric, or the source FHIR server uses numeric auto-increment IDs). These are prefixed with `p-` before upload (e.g. `Patient/123` → `Patient/p-123`).
 
-**Consequence:** Any resource that contains `{"reference": "Patient/123"}` will now point to a non-existent resource — causing HAPI-1094 on upload.
+**Consequence:** Any resource that contains `{"reference": "Patient/123"}` will now point to a non-existent resource  causing HAPI-1094 on upload.
 
 **Fix:** Before uploading, `_compute_id_map()` collects all `(resourceType, originalId) → sanitisedId` mappings, and `_rewrite_references()` walks every resource recursively to update matching `reference` fields. This must happen after topological sort (sort is read-only) and before chunking into batch Bundles.
 
@@ -311,7 +311,7 @@ Four AI-powered agents are exposed via `/v1/ai/*` when `MEDANON_AI_ENABLED=true`
 **Known limitations (tracked):**
 - PHI must not be sent to external LLM providers. Code-level enforcement for the PII detector's AI layer is pending.
 - Prompt injection: user input is interpolated into LLM messages in `config_generator.py`.
-- AI response cache (`LLMProvider._cache`) has no eviction — grows unbounded.
+- AI response cache (`LLMProvider._cache`) has no eviction  grows unbounded.
 
 ---
 
@@ -363,7 +363,7 @@ Dependency note: `Anonymeter`, `SDV`, `torch`, and `opacus` are not installable 
 
 RBAC roles: `admin` (all), `analyst` (processing + jobs + scoring + AI), `viewer` (read-only).
 
-**Health check strategy:** Docker's `healthcheck` targets `/health` (lightweight — returns `{"status":"ok"}` immediately). The `depends_on: condition: service_healthy` chain requires this. `/ready` is more expensive — it probes FHIR and gPAS connectivity with a 5 s timeout each — and is used for readiness gates only, not for Docker's healthcheck polling.
+**Health check strategy:** Docker's `healthcheck` targets `/health` (lightweight  returns `{"status":"ok"}` immediately). The `depends_on: condition: service_healthy` chain requires this. `/ready` is more expensive  it probes FHIR and gPAS connectivity with a 5 s timeout each  and is used for readiness gates only, not for Docker's healthcheck polling.
 
 ---
 
@@ -377,6 +377,6 @@ RBAC roles: `admin` (all), `analyst` (processing + jobs + scoring + AI), `viewer
 | `MEDANON_FHIR_FETCH_PARALLEL` | 1 | Parallel FHIR resource-type fetch threads |
 | `MEDANON_COHORT_PARALLEL` | 2 | Parallel `$everything` threads for cohort export |
 
-**Why `FHIR_FETCH_PARALLEL=1`?** The pipeline bottleneck is gPAS (sequential HTTP calls per batch). Adding parallel FHIR fetch threads makes them compete for the GIL and the internal queue lock while gPAS is processing — this adds overhead without reducing total processing time. Sequential fetching avoids this contention. `COHORT_PARALLEL=2` is safe because cohort is I/O-bound (waiting on FHIR server), not CPU-bound.
+**Why `FHIR_FETCH_PARALLEL=1`?** The pipeline bottleneck is gPAS (sequential HTTP calls per batch). Adding parallel FHIR fetch threads makes them compete for the GIL and the internal queue lock while gPAS is processing  this adds overhead without reducing total processing time. Sequential fetching avoids this contention. `COHORT_PARALLEL=2` is safe because cohort is I/O-bound (waiting on FHIR server), not CPU-bound.
 
 **Memory:** See [DEPLOYMENT.md § Resource limits](DEPLOYMENT.md) for container memory allocations. NLP inference runs in the separate NLP microservice, not in the anonymizer process.

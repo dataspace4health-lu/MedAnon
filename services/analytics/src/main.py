@@ -1,4 +1,4 @@
-"""Analytics microservice — /v1/analyse/risk and /v1/generate/synthetic.
+"""Analytics microservice  /v1/analyse/risk and /v1/generate/synthetic.
 
 Lightweight service containing only analytics logic. No gPAS, no Presidio,
 no fhirpathpy. Typical image size: ~200 MB vs the 1.5 GB anonymizer monolith.
@@ -24,7 +24,7 @@ logger = logging.getLogger("analytics")
 app = FastAPI(title="MedAnon Analytics", version="1.0.0")
 
 # ---------------------------------------------------------------------------
-# Prometheus metrics (optional — degrades gracefully if package absent)
+# Prometheus metrics (optional  degrades gracefully if package absent)
 # ---------------------------------------------------------------------------
 
 try:
@@ -73,7 +73,7 @@ def metrics():
 
 
 # ---------------------------------------------------------------------------
-# Minimal body parser (NDJSON + JSON — no XML, no fhirpathpy)
+# Minimal body parser (NDJSON + JSON  no XML, no fhirpathpy)
 # ---------------------------------------------------------------------------
 
 
@@ -104,7 +104,7 @@ def health():
 
 @app.get("/ready")
 def ready():
-    """Readiness probe — analytics is stateless so /ready mirrors /health."""
+    """Readiness probe  analytics is stateless so /ready mirrors /health."""
     return {"status": "ok"}
 
 
@@ -291,7 +291,7 @@ async def generate_synthetic(
     if not patients:
         raise HTTPException(
             status_code=422,
-            detail="No Patient resources found — provide de-identified Patient FHIR resources",
+            detail="No Patient resources found  provide de-identified Patient FHIR resources",
         )
 
     # DP synthesis is only defined for the stdlib marginal engine.

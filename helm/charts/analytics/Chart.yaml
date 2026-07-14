@@ -1,7 +1,7 @@
 apiVersion: v2
 name: analytics
 description: >
-  MedAnon Analytics microservice — lightweight container for risk analysis and
+  MedAnon Analytics microservice  lightweight container for risk analysis and
   synthetic data generation. No gPAS, Presidio, or fhirpathpy dependencies.
   Enable via the medanon umbrella chart with analytics.enabled=true.
 type: application

@@ -33,7 +33,7 @@ Mode behaviour:
 | `block` | A `BLOCK` verdict returns HTTP 422 before any privacy transformation is applied. |
 | `off` | Disable the gate entirely (equivalent to leaving `TRUST_GATE_SERVICE_URL` unset). |
 
-Fail-soft: if the Trust Gate itself is unreachable the verdict degrades to advisory `CONDITIONAL_PASS` — the privacy pipeline is never blocked by a Trust Gate outage.
+Fail-soft: if the Trust Gate itself is unreachable the verdict degrades to advisory `CONDITIONAL_PASS`  the privacy pipeline is never blocked by a Trust Gate outage.
 
 ## What it checks
 
@@ -62,7 +62,7 @@ The checks follow the Kahn et al. (2016) taxonomy (Conformance / Completeness / 
 
 The three SAM prerequisite checks run before all others and BLOCK immediately on failure.
 
-Slow checks (FHIR validator, terminology server) run in a persistent background pool with per-upstream timeouts. On timeout they are marked **SKIPPED** (NA — never FAIL), so intake latency is bounded by `TRUST_GATE_VALIDATOR_ASYNC_TIMEOUT_SEC` (default 20 s).
+Slow checks (FHIR validator, terminology server) run in a persistent background pool with per-upstream timeouts. On timeout they are marked **SKIPPED** (NA  never FAIL), so intake latency is bounded by `TRUST_GATE_VALIDATOR_ASYNC_TIMEOUT_SEC` (default 20 s).
 
 ## Decision policy
 
@@ -77,7 +77,7 @@ Slow checks (FHIR validator, terminology server) run in a persistent background 
 
 ## Quality Passport
 
-The passport is PHI-free (counts, paths, check IDs — never values). It is stored in `medanon.processing_runs.trust_passport` and retrievable as Markdown:
+The passport is PHI-free (counts, paths, check IDs  never values). It is stored in `medanon.processing_runs.trust_passport` and retrievable as Markdown:
 
 ```bash
 GET /v1/processing-runs/{run_id}/passport
@@ -96,7 +96,7 @@ Key fields:
 | `skipped_checks` | Checks that could not run, with the reason (honesty mechanism) |
 | `report` | Markdown summary (rendered in the UI via `MarkdownReport`) |
 
-`violation_details` rows carry `{resource_type, resource_id, path, detail}` — never values. Capped at 50 per check.
+`violation_details` rows carry `{resource_type, resource_id, path, detail}`  never values. Capped at 50 per check.
 
 ## FHIR validator
 
@@ -110,7 +110,7 @@ TRUST_GATE_VALIDATOR_URL=http://fhir-validator:4567
 TRUST_GATE_VALIDATOR_ENDPOINT=/validate
 ```
 
-If the validator is unreachable, conformance checks degrade to **NA** — never a false PASS, never a hard block on the validator's own outage.
+If the validator is unreachable, conformance checks degrade to **NA**  never a false PASS, never a hard block on the validator's own outage.
 
 ## Terminology server (optional)
 
@@ -118,7 +118,7 @@ Code validation (`$validate-code`) requires a terminology server such as Snowsto
 
 ## Trust Profiles
 
-Reusable audit configurations — named bundles of phases, sector, and intended use — stored in the database and forwarded per request.
+Reusable audit configurations  named bundles of phases, sector, and intended use  stored in the database and forwarded per request.
 
 ```bash
 # Create a profile
@@ -177,7 +177,7 @@ TRUST_GATE_VALIDATOR_URL=http://localhost:4567 TRUST_GATE_VALIDATOR_ENDPOINT=/va
 ## References
 
 - Kahn MG et al. *A Harmonized Data Quality Assessment Terminology and Framework for the Secondary Use of EHR Data.* eGEMs 2016;4(1):18.
-- OHDSI Data Quality Dashboard — github.com/OHDSI/DataQualityDashboard
+- OHDSI Data Quality Dashboard  github.com/OHDSI/DataQualityDashboard
 - ASTP/ONC *PIQI Healthcare Data Quality Taxonomy v2.0* (December 2024)
 - ISO HL7 21089 *Trusted End-to-End Information Flows* (2026)
-- HL7 FHIR Safety Checklist — hl7.org/fhir/safety.html
+- HL7 FHIR Safety Checklist  hl7.org/fhir/safety.html

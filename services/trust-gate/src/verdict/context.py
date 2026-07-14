@@ -1,4 +1,4 @@
-"""AssessmentContext — the immutable parameter object carrying every input a check
+"""AssessmentContext  the immutable parameter object carrying every input a check
 run needs. Replaces the long (14-arg) parameter list that used to be threaded through
 ``run_checks`` / ``targets_report`` / coverage. A per-sector re-run is a one-liner
 (``ctx.scoped_to(subset)``) instead of re-passing thirteen keyword arguments.

@@ -1,8 +1,8 @@
-# Metric catalog (Phase 2) — one "metric card" per built-in check.
+# Metric catalog (Phase 2)  one "metric card" per built-in check.
 #
 # Operationalizes the Metric Hub (2026) idea: each metric is documented with its
 # applicability, level, and citation so selection is transparent and governed.
-# The check's Kahn category / dimension / phase are NOT duplicated here — the
+# The check's Kahn category / dimension / phase are NOT duplicated here  the
 # engine assigns those (phases.py / dimensions.py) and emits them per check, so
 # this catalog stays drift-free and additive.
 #

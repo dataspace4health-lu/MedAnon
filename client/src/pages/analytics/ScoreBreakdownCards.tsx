@@ -77,7 +77,7 @@ function Gauge({
         </ResponsiveContainer>
         <div className="absolute inset-0 flex flex-col items-center justify-end pb-0">
           <span className="text-2xl font-black tabular-nums leading-none" style={{ color: scoreColor }}>
-            {isEmpty ? '—' : `${pct}%`}
+            {isEmpty ? '' : `${pct}%`}
           </span>
         </div>
       </div>

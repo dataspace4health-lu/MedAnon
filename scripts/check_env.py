@@ -373,7 +373,7 @@ def diff_env(path: pathlib.Path) -> int:
     nothing reads (a typo, or a knob that was removed).
     """
     if not path.exists():
-        print(f"\n{path} does not exist — nothing to diff")
+        print(f"\n{path} does not exist  nothing to diff")
         return 0
 
     code, literals = code_vars()
@@ -400,7 +400,7 @@ def diff_env(path: pathlib.Path) -> int:
     unset_posture = sorted(POSTURE_FLAGS - set(actual))
     if unset_posture:
         print(
-            f"\n  posture flags you never set ({len(unset_posture)}) — these take the "
+            f"\n  posture flags you never set ({len(unset_posture)})  these take the "
             f"compose default:"
         )
         for name in unset_posture:
@@ -409,7 +409,7 @@ def diff_env(path: pathlib.Path) -> int:
 
     unknown = sorted(set(actual) - consumed)
     if unknown:
-        print(f"\n  keys nothing reads ({len(unknown)}) — typo, or a removed knob:")
+        print(f"\n  keys nothing reads ({len(unknown)})  typo, or a removed knob:")
         for name in unknown:
             print(f"    {name}")
 

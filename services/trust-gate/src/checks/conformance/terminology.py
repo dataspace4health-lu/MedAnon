@@ -37,7 +37,7 @@ def _code_wellformed(resources, thresholds):
         threshold=threshold_for("conformance.code_wellformed", thresholds),
         description="Codes are well-formed for their code system (format + check digit).",
         recommendation=(
-            "Fix malformed codes — LOINC format, SNOMED Verhoeff check digit, "
+            "Fix malformed codes  LOINC format, SNOMED Verhoeff check digit, "
             "ICD-10 pattern, numeric RxNorm."
         ),
         hdqt_category="accuracy",
@@ -83,10 +83,10 @@ def _terminology_result(thresholds, *, skipped: bool = False, skip_reason: str =
 
 
 def _terminology_sync(resources, terminology, thresholds) -> CheckResult:
-    """Inner sync implementation — called inside a thread for timeout isolation."""
+    """Inner sync implementation  called inside a thread for timeout isolation."""
     chk = _terminology_result(thresholds)
     if terminology is None:
-        return chk  # NA — no terminology server → no false PASS
+        return chk  # NA  no terminology server → no false PASS
     try:
         for res in resources:
             if not isinstance(res, dict):
@@ -98,7 +98,7 @@ def _terminology_sync(resources, terminology, thresholds) -> CheckResult:
                     if not terminology.validate_code(system, code):
                         chk.violations += 1
     except TerminologyUnavailable as exc:
-        _log.warning("terminology not assessed — server unavailable: %s", exc)
+        _log.warning("terminology not assessed  server unavailable: %s", exc)
         chk.applicable = chk.violations = 0
     return chk
 
@@ -106,21 +106,21 @@ def _terminology_sync(resources, terminology, thresholds) -> CheckResult:
 def _terminology_async(resources, terminology, thresholds) -> CheckResult:
     """Run terminology validation in a background thread with timeout.
 
-    A timeout degrades to SKIPPED (NA) — terminology latency must not stall
+    A timeout degrades to SKIPPED (NA)  terminology latency must not stall
     the intake critical path (Snowstorm cold start: 30 s+).
     """
     if terminology is None:
         # Fast path: no server configured → NA immediately, no thread needed.
         return _terminology_result(thresholds)
     # Submit onto the persistent pool; on timeout return immediately (the abandoned
-    # task drains in the background — we never block on shutdown).
+    # task drains in the background  we never block on shutdown).
     future = _offpath_pool.submit(_terminology_sync, resources, terminology, thresholds)
     try:
         return future.result(timeout=_TERMINOLOGY_TIMEOUT_SEC)
     except _FuturesTimeout:
         TERMINOLOGY_TIMEOUTS.inc()
         _log.warning(
-            "terminology check timed out after %ss — marking SKIPPED",
+            "terminology check timed out after %ss  marking SKIPPED",
             _TERMINOLOGY_TIMEOUT_SEC,
         )
         return _terminology_result(

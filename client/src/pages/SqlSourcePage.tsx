@@ -380,7 +380,7 @@ export default function SqlSourcePage() {
               type="text"
               value={schemaName}
               onChange={(e) => setSchemaName(e.target.value)}
-              placeholder="public"
+              placeholder="clinic"
               spellCheck={false}
               className="w-full rounded-md border bg-background px-3 py-2 text-sm"
             />

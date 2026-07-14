@@ -1,4 +1,4 @@
-# MedAnon — User Manual
+# MedAnon  User Manual
 
 ## Service URLs
 
@@ -7,8 +7,8 @@
 | Web UI | `http://localhost:8501` | Browser-based interface |
 | Anonymizer API | `http://localhost:8000` | REST API |
 | Swagger / OpenAPI docs | `http://localhost:8000/docs` | Interactive API explorer |
-| Source FHIR Server | (internal only — `source-net`) | HAPI FHIR R4 — identified patient data; no host port published for security isolation. Access via anonymizer proxy endpoints (`/process/from-server`, `/process/everything`, etc.) |
-| Target FHIR Server | `http://localhost:8082/fhir` | HAPI FHIR R4 — de-identified data |
+| Source FHIR Server | (internal only  `source-net`) | HAPI FHIR R4  identified patient data; no host port published for security isolation. Access via anonymizer proxy endpoints (`/process/from-server`, `/process/everything`, etc.) |
+| Target FHIR Server | `http://localhost:8082/fhir` | HAPI FHIR R4  de-identified data |
 | gPAS Web UI | `http://localhost:8080/gpas-web/` | Pseudonym management (admin only) |
 
 ---
@@ -46,7 +46,7 @@ Search patients in the source FHIR server by name and de-identify their complete
 1. Enter a patient name (partial match supported) → **Search**
 2. Results appear as expandable cards with demographics (identifiers, addresses, telecom)
 3. Click a card → **De-identify $everything** to fetch all linked resources (Observations, Conditions, Encounters, Medications, etc.)
-4. De-identified output appears as NDJSON — click **Download** to save
+4. De-identified output appears as NDJSON  click **Download** to save
 5. Optionally click **Upload to Target** to push the de-identified bundle to the target FHIR server
 
 ### Condition Browser
@@ -63,7 +63,7 @@ Fetch a single patient's complete record from the source FHIR server and de-iden
 
 1. Enter a Patient ID
 2. Select config profile
-3. Click **De-identify** — fetches `$everything` for that patient and runs the pipeline
+3. Click **De-identify**  fetches `$everything` for that patient and runs the pipeline
 4. Download the de-identified NDJSON or upload to the target FHIR server
 
 ### Process Resource
@@ -81,7 +81,7 @@ De-identify multiple resources from a file upload.
 
 1. Upload a JSON, NDJSON, or XML file (or drag-and-drop)
 2. Select config profile and output format
-3. Click **Process** — results stream back as NDJSON
+3. Click **Process**  results stream back as NDJSON
 4. Download the de-identified output
 
 ### Bulk De-identify
@@ -107,7 +107,7 @@ Generate synthetic FHIR data from de-identified datasets (requires the analytics
 
 1. Upload or paste de-identified NDJSON
 2. Configure generation parameters (sample size, privacy budget)
-3. Click **Generate** — synthetic resources returned as downloadable NDJSON
+3. Click **Generate**  synthetic resources returned as downloadable NDJSON
 
 ### Status
 
@@ -127,7 +127,7 @@ Create custom de-identification profiles through a guided UI.
 
 1. Start from a blank profile or clone an existing one
 2. Add, edit, and reorder rules with match expressions and actions
-3. Save the profile — available immediately via `?config_profile=<name>` on any endpoint
+3. Save the profile  available immediately via `?config_profile=<name>` on any endpoint
 
 **AI-assisted config generation (requires `MEDANON_AI_ENABLED=true`, role: `admin`):**
 
@@ -144,9 +144,9 @@ View a running log of all de-identification processing runs (requires `MEDANON_S
 
 1. Shows all past runs: endpoint, config profile, resource count, composite score, timestamp
 2. Click a row to see the full score breakdown (privacy / utility / quality)
-3. Runs are grouped by endpoint — filter by `/v1/process`, `/v1/jobs/bulk-export`, etc.
+3. Runs are grouped by endpoint  filter by `/v1/process`, `/v1/jobs/bulk-export`, etc.
 4. Aggregate statistics at the top: total runs, average composite score, runs by profile
-5. Use **Purge** to delete all run history (analyst role — admin enforcement pending)
+5. Use **Purge** to delete all run history (analyst role  admin enforcement pending)
 
 ### Jobs Monitor
 
@@ -155,7 +155,7 @@ Fleet view of all server-side async jobs.
 1. Browse all jobs with status pills and live progress bars
 2. Filter by status and job type
 3. Click a job row to open the detail drawer (progress, resource breakdown, error, cancel/reprocess actions)
-4. Dead-letter panel shows jobs with `status=dead` — requeue via the action menu
+4. Dead-letter panel shows jobs with `status=dead`  requeue via the action menu
 
 ### Analytics Dashboard
 
@@ -274,7 +274,7 @@ curl -X POST http://localhost:8000/process/and-upload \
 For large datasets that take longer than an HTTP timeout:
 
 ```bash
-# Submit — returns immediately
+# Submit  returns immediately
 curl -X POST http://localhost:8000/v1/jobs/bulk-export \
   -H "Content-Type: application/json" \
   -d '{"config_profile":"gdpr"}'
@@ -306,10 +306,10 @@ curl -X POST http://localhost:8000/v1/analyse/risk \
 
 | `k_anonymity` | Risk level | Action |
 |---|---|---|
-| ≥ 5 | low | No action required — meets basic k-anonymity |
+| ≥ 5 | low | No action required  meets basic k-anonymity |
 | 3–4 | medium | Consider broader date generalization or additional field suppression |
 | 2 | high | Suppress records that form pairs |
-| 1 | critical | Unique records exist — do not share without remediation |
+| 1 | critical | Unique records exist  do not share without remediation |
 
 ### Score a de-identified resource
 
@@ -333,7 +333,7 @@ Add `?include_audit=true` to include a Markdown audit report in the response.
 # Check AI availability
 curl http://localhost:8000/v1/ai/status -H "X-API-Key: $MEDANON_API_KEY"
 
-# Detect PII in a text snippet (local model only — never sent to external API)
+# Detect PII in a text snippet (local model only  never sent to external API)
 curl -X POST http://localhost:8000/v1/ai/detect-pii \
   -H "Content-Type: application/json" \
   -H "X-API-Key: $MEDANON_API_KEY" \
@@ -373,7 +373,7 @@ python3 -m cli.main process input.ndjson output.ndjson \
   --config config/config_hipaa_safe_harbor.yaml
 
 # Fetch from FHIR server and de-identify
-# (run inside the container — source FHIR has no host port)
+# (run inside the container  source FHIR has no host port)
 python3 -m cli.main fetch \
   --server http://hapi-fhir:8080/fhir \
   --resource-type Patient,Observation \
@@ -381,13 +381,13 @@ python3 -m cli.main fetch \
   --config config/config_gpas.yaml
 ```
 
-**Note on NLP in the CLI:** Presidio + spaCy no longer run in the anonymizer process. NLP de-identification delegates to the NLP microservice (`nlp-lb:8200`). When using the CLI outside Docker, set `NLP_SERVICE_URL=http://localhost:8200` (or omit NLP rules if the microservice is not running — text fields will not be scrubbed).
+**Note on NLP in the CLI:** Presidio + spaCy no longer run in the anonymizer process. NLP de-identification delegates to the NLP microservice (`nlp-lb:8200`). When using the CLI outside Docker, set `NLP_SERVICE_URL=http://localhost:8200` (or omit NLP rules if the microservice is not running  text fields will not be scrubbed).
 
 ---
 
 ## Config file format
 
-Rules are evaluated in order — more specific rules before wildcards.
+Rules are evaluated in order  more specific rules before wildcards.
 
 ```yaml
 general:
@@ -414,7 +414,7 @@ rules:
       strategy: date_year          # date_year | date_year_month | zip_prefix | age_bracket
 
   - name: "apply to all resource types"
-    match: "*.text.div"            # wildcard — matches any resourceType
+    match: "*.text.div"            # wildcard  matches any resourceType
     action: redact
 ```
 
@@ -431,7 +431,7 @@ rules:
 | `date_shift` | Deterministic per-subject date offset (preserves ordering/intervals) | `max_days`, `direction` (`past`/`future`/`both`), `anchor_path`, `preserve_age_bracket` |
 | `tokenize` | Format-preserving deterministic pseudonym | `format` (`#`=digit, `@`=alpha, `*`=alnum), `namespace`, `preserve_length` |
 | `scrub_text` | Regex-based PHI removal in free text | `mode`, `patterns` |
-| `nlp_detect` | NLP entity detection via NLP microservice (Presidio + spaCy) — PERSON, GPE, DATE, etc. | `mode`, `threshold` |
+| `nlp_detect` | NLP entity detection via NLP microservice (Presidio + spaCy)  PERSON, GPE, DATE, etc. | `mode`, `threshold` |
 | `nlp_detect_act` | Entity-specific conditional NLP: detect first, then apply a per-entity action (e.g. dates->generalize, names->redact). No-op when nothing detected. | `threshold`, `html`, `entity_actions`, `entities` |
 | `encrypt` | RSA public-key encryption | `public_key_path` |
 | `gpas_pseudonymize` | Reversible gPAS pseudonym | `gpas_url`, `gpas_domain`, `gpas_operation` |

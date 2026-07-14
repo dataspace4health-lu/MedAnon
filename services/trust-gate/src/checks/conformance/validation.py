@@ -2,7 +2,7 @@
 validity, asserted meta.profile conformance, and Implementation-Guide conformance.
 
 All three run off the critical path in the shared pool with a timeout that degrades
-to SKIPPED (NA) — never a false PASS, never a false BLOCK on validator slowness.
+to SKIPPED (NA)  never a false PASS, never a false BLOCK on validator slowness.
 ``conformance.structural`` is the critical BLOCK gate and validates every resource;
 ``profile`` and ``ig_profile`` are non-critical (CONDITIONAL contributors).
 """
@@ -51,7 +51,7 @@ def _new_struct_prof(thresholds, *, skipped: bool = False, skip_reason: str = ""
         threshold=threshold_for("conformance.profile", thresholds),
         # Non-critical (RC4): a meta.profile mismatch is a Kahn *validation* gap
         # (often IG version skew), not data the pipeline cannot pseudonymize. It
-        # downgrades to CONDITIONAL_PASS rather than hard-BLOCK — matching the
+        # downgrades to CONDITIONAL_PASS rather than hard-BLOCK  matching the
         # opt-in conformance.ig_profile check. True structural invalidity is caught
         # by the always-on, full-batch conformance.structural BLOCK.
         critical=False,
@@ -72,7 +72,7 @@ def _validate_one(res, validator) -> tuple[int, int, int, int]:
     propagates so the caller can degrade the whole check to NA.
     """
     s_appl = s_viol = p_appl = p_viol = 0
-    # Base-spec structural validation: a 500 is a true per-request reject — skip
+    # Base-spec structural validation: a 500 is a true per-request reject  skip
     # this resource (don't count it applicable) rather than fail or pass it.
     try:
         struct_issues = validator.validate(res)
@@ -85,7 +85,7 @@ def _validate_one(res, validator) -> tuple[int, int, int, int]:
         if struct_issues:
             s_viol = 1
     # Profile conformance vs declared meta.profile. The validator 500s with
-    # "Unable to resolve profile" when that IG is not loaded — that means we cannot
+    # "Unable to resolve profile" when that IG is not loaded  that means we cannot
     # assess profile conformance for this resource, not that it failed.
     profiles = [
         p for p in (res.get("meta", {}) or {}).get("profile", []) if isinstance(p, str)
@@ -107,7 +107,7 @@ def _validate_one(res, validator) -> tuple[int, int, int, int]:
 
 
 def _structural_and_profile_sync(resources, validator, thresholds):
-    """Inner sync validation — called inside a thread for timeout isolation.
+    """Inner sync validation  called inside a thread for timeout isolation.
 
     Validates EVERY resource (RC4): structural conformance is the BLOCK gate, so a
     per-type sample let a malformed resource past the sample window escape. The
@@ -136,7 +136,7 @@ def _structural_and_profile_sync(resources, validator, thresholds):
                 prof.applicable += p_appl
                 prof.violations += p_viol
     except ValidatorUnavailable as exc:
-        _log.warning("conformance not assessed — validator unavailable: %s", exc)
+        _log.warning("conformance not assessed  validator unavailable: %s", exc)
         struct.applicable = struct.violations = 0
         prof.applicable = prof.violations = 0
     return [struct, prof]
@@ -157,7 +157,7 @@ def _structural_and_profile(resources, validator, thresholds):
 
     The validator is the slowest upstream; a cold start or a slow-but-not-failing
     instance must not stall intake. Runs in the persistent off-path pool with a
-    batch-size-scaled timeout; on expiry both checks degrade to SKIPPED (NA) —
+    batch-size-scaled timeout; on expiry both checks degrade to SKIPPED (NA)
     never a false PASS, never a false BLOCK on validator slowness. The always-on,
     full-batch in-process structural checks remain the BLOCK authority when this
     external pass degrades to NA.
@@ -174,7 +174,7 @@ def _structural_and_profile(resources, validator, thresholds):
     except _FuturesTimeout:
         VALIDATOR_TIMEOUTS.inc()
         _log.warning(
-            "structural/profile validation timed out after %.1fs — marking SKIPPED",
+            "structural/profile validation timed out after %.1fs  marking SKIPPED",
             timeout,
         )
         return list(
@@ -240,7 +240,7 @@ def _ig_conformance_sync(resources, validator, ig_profiles, thresholds):
                     detail=f"does not conform to IG profile(s): {', '.join(profiles)}",
                 )
     except ValidatorUnavailable as exc:
-        _log.warning("IG conformance not assessed — validator unavailable: %s", exc)
+        _log.warning("IG conformance not assessed  validator unavailable: %s", exc)
         return [_new_ig_check(thresholds, skipped=True, skip_reason=str(exc))]
     return [chk]
 
@@ -254,7 +254,7 @@ def _ig_conformance(resources, validator, ig_profiles, thresholds):
     base structural validation.
     """
     if not ig_profiles or validator is None:
-        return [_new_ig_check(thresholds)]  # NA — no false PASS, no false BLOCK
+        return [_new_ig_check(thresholds)]  # NA  no false PASS, no false BLOCK
     future = _offpath_pool.submit(
         _ig_conformance_sync, resources, validator, ig_profiles, thresholds
     )
@@ -263,7 +263,7 @@ def _ig_conformance(resources, validator, ig_profiles, thresholds):
     except _FuturesTimeout:
         VALIDATOR_TIMEOUTS.inc()
         _log.warning(
-            "IG validation timed out after %ss — marking SKIPPED",
+            "IG validation timed out after %ss  marking SKIPPED",
             _VALIDATOR_TIMEOUT_SEC,
         )
         return [

@@ -276,7 +276,7 @@ export function RiskDrivenExportPanel({
 
             {ap && (
               <div className="grid gap-3 sm:grid-cols-3">
-                <Metric label="Achieved k" value={ap.achieved_k ?? "—"} />
+                <Metric label="Achieved k" value={ap.achieved_k ?? ""} />
                 <Metric label="Suppressed" value={ap.suppressed_count ?? 0} />
                 <Metric
                   label="Feasible"

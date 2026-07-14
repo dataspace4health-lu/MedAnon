@@ -5,9 +5,9 @@ Quality Passport back, and the platform retains the assessment history so qualit
 can be tracked, trended, and remediated over time. This package owns that state.
 
 Backends mirror ``baseline.py`` (selected by env, see ``get_passport_store``):
-  - none (default)           — stateless; assess still works, nothing is retained.
-  - ``TRUST_GATE_STORE_DB_URL`` — Postgres, durable + cross-replica (use when scaled).
-  - ``TRUST_GATE_STORE_DB``     — SQLite path (single-instance / dev).
+  - none (default)            stateless; assess still works, nothing is retained.
+  - ``TRUST_GATE_STORE_DB_URL``  Postgres, durable + cross-replica (use when scaled).
+  - ``TRUST_GATE_STORE_DB``      SQLite path (single-instance / dev).
 
 Persistence is best-effort: a store outage never blocks an assessment.
 """

@@ -1,4 +1,4 @@
-# Health Data Preparation & Privacy Toolkit — Documentation
+# Health Data Preparation & Privacy Toolkit  Documentation
 
 **System:** SPE FHIR BlackBox (MedAnon)  
 **Version:** Phase 5 (use-case validation, AI agents + Kubernetes)  
@@ -97,8 +97,8 @@ How to connect SPE FHIR BlackBox to IDSA / FIWARE dataspace connectors and EDC.
 - Encryption at rest: HMAC-SHA3-256 pseudonyms, RSA field encryption, gPAS TTP mappings
 - Input safety: defusedxml, request size limit, SSRF protection, rate limiting
 - Container hardening: `read_only`, `cap_drop: ALL`, `no-new-privileges`, memory limits
-- Audit logging: structured JSON, Redis Stream, rotating file — never logs PHI
-- GDPR compliance mapping: Art. 4(5), 25, 30, 32, 89 — per profile
+- Audit logging: structured JSON, Redis Stream, rotating file  never logs PHI
+- GDPR compliance mapping: Art. 4(5), 25, 30, 32, 89  per profile
 - HIPAA Safe Harbor: all 18 PHI categories with FHIR field mapping
 - Known open security issues (Phase 4 AI agents)
 
@@ -164,7 +164,7 @@ Side-by-side examples of identified FHIR input vs de-identified output for each 
 | [TECHNICAL_DOCUMENTATION.md](TECHNICAL_DOCUMENTATION.md) | Comprehensive single-document reference: all 9 areas in one file (for onboarding or printing) |
 | [RUNBOOK.md](RUNBOOK.md) | Operations runbook: monitoring, backup, secret rotation, common troubleshooting |
 
-## Internal references *(docs/internal/ — not tracked by git)*
+## Internal references *(docs/internal/  not tracked by git)*
 
 These files exist locally but are excluded from the repository via `.gitignore`. They contain planning documents and architecture reviews not intended for public distribution. See [internal/INDEX.md](internal/INDEX.md) for the full index; superseded snapshots are under `internal/_archive/`.
 
@@ -174,4 +174,4 @@ These files exist locally but are excluded from the repository via `.gitignore`.
 | [internal/BACKEND_FILE_MAP_2026_06_04.md](internal/BACKEND_FILE_MAP_2026_06_04.md) | Authoritative file-by-file module map + 4-stage pipeline |
 | [internal/REVIEW_STATUS.md](internal/REVIEW_STATUS.md) | Single-source-of-truth ledger for every review finding |
 | [internal/MASTER_TASK_PLAN_2026_06_08.md](internal/MASTER_TASK_PLAN_2026_06_08.md) | Consolidated forward roadmap (platform + engine-quality tracks) |
-| [internal/keycloak-auth-plan.md](internal/keycloak-auth-plan.md) | Keycloak/OIDC integration design (auth — NOT STARTED) |
+| [internal/keycloak-auth-plan.md](internal/keycloak-auth-plan.md) | Keycloak/OIDC integration design (auth  NOT STARTED) |
