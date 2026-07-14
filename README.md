@@ -17,6 +17,7 @@ MedAnon accepts FHIR resources (JSON, NDJSON, XML), applies the `match → actio
 - NLP free-text scrubbing (Presidio + spaCy), fail-closed
 - Async bulk export for large cohorts
 - Privacy × utility × quality scoring
+- EHDS / TEHDAS2 D7.2 governance: data permits, permit-scoped pseudonyms, opt-out registers, Five-Safes disclosure control, data-minimisation and cumulative-exposure assessment, anonymous Transformation and Synthetic Data Passports, statistical-format (aggregate + DP) release, and HealthDCAT-AP dataset discovery
 
 ---
 
@@ -92,6 +93,11 @@ Target FHIR server (:8082): de-identified output
 | `POST` | `/v1/score` | Score de-identified output |
 | `GET` | `/v1/configs` | List config profiles |
 | `POST` | `/v1/ai/generate-config` | Generate config from description (AI) |
+| `POST` | `/v1/minimise/assess` | Data-minimisation report (identifier classification) |
+| `POST` | `/v1/export/decision` | Five-Safes disclosure decision (REFUSE / REFER / RELEASE) |
+| `POST` | `/v1/export/statistical` | Aggregate release with small-cell suppression and/or DP |
+| `GET`/`POST` | `/v1/permits` | Data-permit governance lifecycle (admin) |
+| `GET` | `/v1/reports` | Durable Transformation Passports |
 | `GET` | `/health` | Liveness check |
 | `GET` | `/ready` | Readiness check (probes all upstreams) |
 
@@ -117,6 +123,8 @@ Copy `.env.example` to `.env`. Secrets stay in `.env` and are never committed.
 | `MEDANON_AI_ENABLED` | AI features | `true` to enable AI agents |
 | `MEDANON_AI_MODEL` | AI features | LLM model ID (e.g. `ollama/llama3.2`) |
 | `MEDANON_SCORING_ENABLED` | Scoring | `true` to auto-score and persist run history |
+| `MEDANON_REGULATED_MODE` | EHDS release | `true` tightens all fail-soft defaults into hard requirements (see docs/security.md) |
+| `MEDANON_OPTOUT_FILE` | Opt-out | Path to a newline-delimited opt-out register (EHDS Art 71) |
 
 ---
 
@@ -139,17 +147,44 @@ Copy `.env.example` to `.env`. Secrets stay in `.env` and are never committed.
 
 ```bash
 # Local setup (no Docker)
-make setup         # create .venv and install anonymizer deps
+make setup         # create .venv, install anonymizer deps + pinned dev tools
+make install-hooks # gate `git push` on `make ci-local`  ← do this once
+
 make lint          # ruff check
-make format        # ruff format
+make format        # ruff format (all service trees)
 
 # Run tests
 make test          # full pytest suite
 make test-cov      # with coverage report
+
+make ci-local      # everything CI would run, plus the tests CI cannot see
 ```
+
+**`make ci-local` is the real gate.** `**/tests/` is gitignored, so the suite is
+not published and the CI `test` job skips on the public repository. Run
+`make ci-local` before every push (`make install-hooks` wires it to a pre-push
+hook). It runs: `ruff check`, `ruff format --check` across every service tree,
+env drift (`scripts/check_env.py`), the env catalogue freshness check, Trust Gate
+id sync, the scoring/analytics sync comparison, and both pytest suites.
+
+**Tooling is pinned** in `requirements-dev.txt` and configured by the root
+`ruff.toml`. Both existed as neither before: CI installed `ruff` unpinned, so
+`ruff format --check` compared today's formatter against a tree formatted by an
+older one.
+
+**Tracked scripts.** `scripts/` is ignored by default (see `.gitignore`), because
+most of it is local scratch. Anything the Makefile or CI invokes must be
+re-included with a `!scripts/<name>` exception, or `make <target>` and the
+workflow break on a fresh clone. Currently tracked: `check_env.py`,
+`check_trust_ids.py`, `sync_shared_code.sh`, `batch_fetch.sh`, `batch_process.sh`,
+`init_gpas_domains.sh`, `verify_deployment.sh`, `backup_gpas.sh`,
+`import_testbase.sh`, `import_testbase100.sh`, `test_patient.sh`.
 
 **Test notes:**
 - Run the suite from `services/anonymizer/`; it works locally without Docker.
+- Run it with `MEDANON_MANIFEST_ENABLED=true` to exercise the configuration
+  docker-compose actually ships (it activates the output barrier's structural
+  check). `make ci-local` does this for you.
 - FHIRPath-dependent tests (`test_golden.py`, `test_postgres_stores.py`, `test_processing_runs.py`, `test_staging_store.py`, `test_executor_tabular.py`, `test_scoring_sparse_fp.py`) lazy-import `fhirpathpy`, which pulls in `typing.io` (removed in Python 3.13). Each self-bootstraps a shim, so they run on both 3.12 (the Docker image) and a 3.13 local venv.
 - AI tests (`test_agents.py`, `test_ai_local_guard.py`) skip when no AI provider is configured.
 

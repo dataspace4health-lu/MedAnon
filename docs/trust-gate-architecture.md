@@ -5,17 +5,44 @@ pipeline: every phase, in execution order, what each one inspects, how a single
 check turns data into a verdict, how the verdicts roll up into scores, and how the
 final PASS / CONDITIONAL_PASS / BLOCK decision is reached. It is the companion to
 `docs/trust-gate.md` (the reference) and reflects the real orchestration in
-`services/trust-gate/src/engine.py`.
+`services/trust-gate/src/engine.py` (a thin pipeline over the `verdict/` package).
+See `services/trust-gate/ARCHITECTURE.md` for the layer diagram and design patterns.
 
 ---
 
 ## 1. Module map
 
+The service is organized in layers; dependencies point downward only (nothing
+imports `engine`, and the domain model imports nothing above it). See
+`services/trust-gate/ARCHITECTURE.md` for the one-page layer diagram.
+
 ```
 services/trust-gate/src/
-  main.py            FastAPI app: endpoints, request models, persistence wiring
-  engine.py          the orchestrator: assess() and assess_omop()
-  passport.py        CheckResult + QualityPassport models, markdown report
+  main.py            composition root: builds `app`, mounts routers (uvicorn main:app)
+  api/               HTTP surface (split from the former monolithic main.py):
+    schemas.py         request/response Pydantic models
+    service.py         business logic: flatten, run_assessment, persist
+    config.py          check config loaded once (RULES, THRESHOLDS, POLICY)
+    deps.py            store/findings accessors (503 when unconfigured)
+    metrics.py         Prometheus counters/histograms
+    routers/           one module per surface:
+      assess.py          /v1/trust/assess[/omop|/batch]
+      connectors.py      /v1/trust/connectors/file | /sql | /sql/tables
+      datasets.py        provider/dataset reads + GDPR Art. 30 record
+      findings.py        remediation findings (PDSA loop)
+      catalog.py         /v1/metric-catalog, /v1/use-cases
+  engine.py          thin orchestrator: assess() and assess_omop() only
+  verdict/           the verdict layer (extracted from engine.py):
+    context.py         AssessmentContext — immutable check inputs (Parameter Object)
+    registry.py        the FHIR check suite as a list of strategies (Strategy pattern)
+    runner.py          iterates the registry + per-sector / per-phase sub-reports
+    scoring.py         category/overall roll-up, dimension scorecard, grades, advisory
+    decision.py        PASS/CONDITIONAL/BLOCK policy + per-resource-type thresholds
+    coverage.py        assessment-coverage transparency (what actually ran)
+    fitness.py         purpose-bound fitness-for-use lists + statement
+  passport.py        CheckResult + QualityPassport models (data only)
+  reporting/
+    markdown.py        renders a QualityPassport as Markdown (model stays render-free)
   phases.py          audit-phase ids + phase/dimension tagging
   dimensions.py      DAMA / ISO 25012 dimension list + grading
   constants.py       thresholds, cut-offs, env-tunable knobs, sampler seed
@@ -26,7 +53,9 @@ services/trust-gate/src/
   validator_client.py    FHIR validator adapter (fail-soft)
   terminology_client.py  terminology $validate-code adapter (fail-soft)
   checks/
-    conformance.py   structural, format, terminology, references, status, coding
+    conformance/     package: presence, validation, terminology, references, _shared;
+                     __init__.evaluate() is the orchestrator (structural, format,
+                     terminology, references, status, coding, IG)
     completeness.py  required elements, value-or-absent, element density
     plausibility.py  outliers, definitional bounds, concordance
     timeliness.py    currency, record lag, not-in-future
@@ -52,20 +81,21 @@ services/trust-gate/src/
 client (UI / SPA / anonymizer)
    |  POST /v1/trust/assess[/batch|/omop]   { resources|tables, dataset_id, provider_id, use_case, ... }
    v
-main.py
+api/routers/assess.py  ->  api/service.run_assessment
    |  resolve use_case -> (phases, thresholds, critical-to-quality ids)   [metric_catalog]
    |  normalize FHIR (flatten Bundle/list) OR normalize OMOP/tabular -> OmopData
    v
 engine.assess(...) / engine.assess_omop(...)
-   |  1. run the check pipeline -> list[CheckResult]
+   |  0. build an AssessmentContext (verdict.context) from the inputs
+   |  1. run the check pipeline (verdict.runner over verdict.registry) -> list[CheckResult]
    |  2. split deterministic vs advisory
-   |  3. elevate critical-to-quality checks
-   |  4. score: category + overall + per-dimension scorecard + per-phase verdicts
-   |  5. decide: PASS / CONDITIONAL_PASS / BLOCK
-   |  6. build: blockers, advisory report, EHDS label, fitness, data profile
+   |  3. elevate critical-to-quality checks (verdict.decision)
+   |  4. score: category + overall + scorecard + per-phase verdicts (verdict.scoring/runner)
+   |  5. decide: PASS / CONDITIONAL_PASS / BLOCK (verdict.decision)
+   |  6. build: coverage, fitness, advisory report, EHDS label, data profile
    |  -> QualityPassport
    v
-main.py
+api/service.persist
    |  persist passport + check_results + audit_log    (best-effort, fail-open)
    |  derive findings from failing deterministic checks
    v
@@ -79,11 +109,13 @@ still returned. The assessment never blocks on persistence.
 
 ## 3. The evaluation pipeline (FHIR path)
 
-`engine.assess()` calls `_run_checks()`, which runs the check families in this
-exact order. Each family returns one or more `CheckResult` objects.
+`engine.assess()` builds an `AssessmentContext` and calls
+`verdict.runner.run_checks(ctx)`, which iterates the check registry
+(`verdict.registry.CHECK_REGISTRY`). The registry runs the check families in this
+exact order; each returns one or more `CheckResult` objects.
 
 ```
-_run_checks(resources, selection):
+run_checks(ctx):   # iterates CHECK_REGISTRY
 
   Phase A  CONFORMANCE        checks/conformance.evaluate(resources, validator, terminology)
            - conformance.structural          (FHIR validator $validate, fail-soft -> NA)
@@ -104,7 +136,8 @@ _run_checks(resources, selection):
   Phase C  PLAUSIBILITY       checks/plausibility.evaluate(resources, plausibility_rules, baseline)
            - plausibility.definitional_bounds  (unit-definitional limits, e.g. % in [0,100])
            - plausibility.concordance          (cross-field clinical coherence)
-           - plausibility.value_outlier        (ADVISORY: modified z-score + Tukey IQR vs baseline)
+           - plausibility.value_outlier        (ADVISORY: robust modified z-score, computed in
+                                                 log-space for strictly-positive analytes, + Tukey IQR vs baseline)
            - the declarative plausibility_rules (config/checks.yaml):
                date_after_birth, date_before_death (exempt_codes), date_order,
                period_order, not_in_future, value_range
@@ -134,7 +167,7 @@ If a phase is deselected (the caller passed a `phases`/`use_case` subset), its
 checks are skipped, and deselecting the structural/terminology phase also skips
 those two slow external calls.
 
-After `_run_checks`, `engine.assess()` adds:
+After `run_checks`, `engine.assess()` adds:
 
 - `governance.evaluate()` for the `auditability` block (provenance present, etc.).
 - the demographic distributions and clinical-logic checks come from the OMOP path
@@ -209,7 +242,7 @@ metrics that matter for the declared purpose.
 ## 6. Determinism split
 
 ```
-checks = _run_checks(...)
+checks = run_checks(ctx)                              # verdict.runner over the registry
 det_checks = [c for c in checks if not c.advisory]   # drive the verdict
 adv_checks = [c for c in checks if c.advisory]        # reported, never decide
 ```
@@ -226,7 +259,7 @@ byte-identical passport (minus timestamps).
 
 Three roll-ups, all over `det_checks`:
 
-Category and overall (`_category_and_overall`):
+Category and overall (`verdict.scoring.category_and_overall`):
 
 ```
 for cat in (conformance, completeness, plausibility):
@@ -236,20 +269,25 @@ for cat in (conformance, completeness, plausibility):
 overall = 100 * (#PASS over all assessed det_checks) / (#assessed det_checks)
 ```
 
-Per-dimension scorecard (`_scorecard`): the same percentage and a letter grade
-(A >= 95, B >= 85, C >= 75, D >= 60, F otherwise) computed per DAMA/ISO 25012
-dimension.
+Per-dimension scorecard (`verdict.scoring.scorecard`): the same percentage and a
+letter grade computed per DAMA/ISO 25012 dimension. The grade bands are aligned to
+the decision floors so the grade and the verdict agree: A >= 95, B >= PASS_MIN_RATE
+(90), C >= CATEGORY_MIN_RATE (80), D >= 60, F otherwise. The grade is
+non-compensatory: a failed *critical* check floors its dimension's grade (and the
+overall grade) to F, so a grade can never read "A" next to a BLOCK.
 
-Per-phase verdict (`_phase_report`): for each audit phase, the pass-rate, the
-counts, and a local PASS/CONDITIONAL/BLOCK. These drive the horizontal QC pipeline
-in the UI.
+Per-phase verdict (`verdict.runner.phase_report`) and per-sector verdict
+(`verdict.runner.targets_report`): each is computed by the SAME shared decision
+policy as the headline (`verdict.decision.subset_decision`), so a phase or sector
+badge can never read more leniently than the overall verdict. These drive the
+horizontal QC pipeline in the UI.
 
 ---
 
 ## 8. Decision policy
 
 ```
-_decide(category_scores, overall, blockers, rt_below, provenance_capped):
+verdict.decision.decide(category_scores, overall, blockers, rt_below, provenance_capped):
 
   below = [cat for cat, s in category_scores if s is not None and s < CATEGORY_MIN_RATE]
 
@@ -261,7 +299,7 @@ _decide(category_scores, overall, blockers, rt_below, provenance_capped):
   else                                                  return PASS
 ```
 
-`blockers` are the failed checks marked `critical` (`_blockers`). `PASS_MIN_RATE`
+`blockers` are the failed checks marked `critical` (`verdict.decision.blockers`). `PASS_MIN_RATE`
 is 90 and `CATEGORY_MIN_RATE` is 80 by default, both env-tunable. The advisory
 checks are not in `det_checks` and so cannot move this decision.
 

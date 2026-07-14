@@ -331,6 +331,29 @@ Scoring is opt-in: `MEDANON_SCORING_ENABLED=true`. When enabled, every processed
 
 ---
 
+## Governance & EHDS compliance
+
+For regulated secondary use (EHDS Arts 45-49, 66, 71, 78-79; TEHDAS2 D7.2), the anonymizer carries a governance layer on top of the de-identification engine. Everything here is additive and inert unless configured, so ordinary de-identification is unchanged.
+
+**Data permits and permit-scoped pseudonymisation.** A `Permit` domain model (`pipeline/governance/permit.py`) enforces a lifecycle state machine (draft → submitted → approved / rejected → revoked; illegal transitions return HTTP 409) with a validity window and a path scope. Permits are managed through `/v1/permits` (admin-only) and persisted in Postgres. When a permit is active for a request, it is propagated via a contextvar (`pipeline/permit_context.py`); the keyed actions (`cryptohash`, `tokenize`, `date_shift`) derive a permit-scoped key with HKDF-SHA256 and gPAS domains are suffixed `__permit-{id}`. The result: the same source subject produces **unrelated** pseudonyms across different permits (D7.2 §4.4, which forbids reusing pseudonyms across purposes), but stable pseudonyms within one permit.
+
+**The assess → decide loop (D7.2 Fig 6).** The risk-driven export executor runs the full "process → assess → decide → release" loop on the actual de-identified output, not just the intended k/l/t of the generalisation lattice:
+
+1. **Opt-out exclusion** (`pipeline/exclusion.py`, EHDS Art 71) drops opted-out subjects and their linked resources before pseudonymisation, matching on the original identifiers a national register would supply.
+2. **Privacy-risk assessment** (`analytics/privacy_risk.py`) measures re-identification (k-anonymity), plus distance-to-closest-record / nearest-neighbour ratios and attribute-inference (SDMetrics) for synthetic data.
+3. **Disclosure decision** (`pipeline/disclosure/decision.py`) applies transparent Five-Safes output-checking rules - residual direct identifiers, re-id risk, minimum k, synthetic duplicates, unjustified variables, and permit/recipient/scope checks - and returns the most restrictive of REFUSE / REFER / RELEASE. A REFUSE deletes the written output and fails the job so nothing is ever exposed.
+4. **Transformation Passport** (`pipeline/transformation_passport.py`) records the release: identification, permit, tools + versions, privacy-model intent and achieved k/l/t, privacy-risk results, and the disclosure verdict. It is anonymous by construction and persisted with a structural PII guard (`PostgresPassportStore.assert_pii_safe`).
+
+**Advisory and release endpoints** (evaluate-only, run locally regardless of any microservice split): `/v1/minimise/assess` (minimisation report, D7.2 §3), `/v1/export/decision` (ad-hoc Five-Safes check), `/v1/exposure/assess` (cumulative-exposure / differencing risk across prior releases via a durable release ledger, §5.5.7), `/v1/export/statistical` (aggregate release protected by small-cell suppression and/or differential privacy, §5.5.4), `/v1/catalog/descriptor` (HealthDCAT-AP JSON-LD dataset descriptor, §4.3), `/v1/synthetic/passport`, `/v1/analyse/privacy-risk`, and `/v1/reports` (durable passports).
+
+**Dataspace connectors and instance settings.** Saved, encrypted input sources (FHIR servers) and S3 output destinations (`/v1/source-connections`, `/v1/output-destinations`) make wiring the engine into a dataspace a matter of configuration. Deployment-wide admin defaults live behind `/v1/settings`; the SPA reads a small non-secret slice pre-login from the open `/v1/runtime-config`.
+
+**Regulated mode** (`MEDANON_REGULATED_MODE=true`, `utils/regulated.py`) is one switch that turns fail-soft defaults into hard requirements: no plain-hash fallback for any keyed action, the output and disclosure barriers cannot be disabled, `warn` identifier modes are forced to `block`, disclosure REFER escalates to REFUSE, Trust Gate conformance NA/SKIPPED becomes FAIL, and an unresolvable opt-out source fails closed. Reversal actions (`gpas_depseudonymize`, `decrypt`) require the `admin` role. The flag is read at call time so it can be toggled without re-importing modules.
+
+Dependency note: `Anonymeter`, `SDV`, `torch`, and `opacus` are not installable in this environment, so privacy-risk uses in-house DCR/NNDR/τ-DCR plus SDMetrics, synthesis uses `copulas`, and differential privacy is a standard-library implementation (`analytics/dp.py`: Laplace, analytic Gaussian, and basic-composition budget accounting).
+
+---
+
 ## Authentication
 
 | `MEDANON_API_KEY` | Behaviour |

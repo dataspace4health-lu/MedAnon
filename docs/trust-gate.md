@@ -31,10 +31,11 @@ provider data (FHIR / OMOP / tabular)
         v
   +-----------------------------+        +---------------------------+
   |  Trust Gate service :8400   | -----> |  store (SQLite | Postgres)|
-  |  - assess (engine.py)       |        |  assessments, check_results,
-  |  - checks/ + rules.py       |        |  findings, audit_log      |
-  |  - cdm/ (OMOP normalize)    |        +---------------------------+
-  |  - scoring + label + report |
+  |  - api/ (routers, service)  |        |  assessments, check_results,
+  |  - engine + verdict/        |        |  findings, audit_log      |
+  |  - checks/ + rules.py       |        +---------------------------+
+  |  - cdm/ (OMOP normalize)    |
+  |  - reporting + label        |
   +-----------------------------+
         |  optional fail-soft calls
         +--> FHIR validator (HAPI $validate, OperationOutcome)

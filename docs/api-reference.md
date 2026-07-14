@@ -991,6 +991,61 @@ Returns empty array when Redis is not configured.
 
 ---
 
+## 11. Governance & EHDS (TEHDAS2 D7.2)
+
+Governance endpoints for regulated secondary-use release. All are additive and inert unless used; the advisory ones evaluate-only (no transformation) and run locally regardless of any microservice split. See [architecture.md § Governance & EHDS compliance](architecture.md).
+
+### `POST /v1/minimise/assess`
+
+**Role:** `analyst` - Data-minimisation report (D7.2 §3). Body: a FHIR payload; optional `?declared_paths=` for purpose-limitation flagging. Returns direct/quasi identifier classification, granularity recommendations, and special-category (Art 9) flags. No transformation is performed.
+
+### `POST /v1/export/decision`
+
+**Role:** `admin` - Ad-hoc Five-Safes disclosure decision (D7.2 §5.4).
+
+```json
+{
+  "resources":      [ /* FHIR resource dicts */ ],
+  "synthetic":      [ /* optional */ ],
+  "declared_paths": [ "Patient.birthDate" ],
+  "thresholds":     { "min_k": 5 },
+  "permit_id":      "permit-abc123",
+  "recipient":      "hospital-x"
+}
+```
+
+Returns `{ "decision": "release" | "refer" | "refuse", "reasons": [...] }` (most restrictive rule wins; REFER escalates to REFUSE in regulated mode). An inactive/revoked permit is reported as a documented REFUSE, not an HTTP error; an unknown `permit_id` returns 422.
+
+### `POST /v1/exposure/assess`
+
+**Role:** `analyst` - Cumulative-exposure / differencing risk (D7.2 §5.5.7). Compares a release's population against prior releases to the same permit/recipient. Input ids are pseudonymous; only keyed one-way fingerprints are stored (optional durable ledger).
+
+### `POST /v1/export/statistical`
+
+**Role:** `analyst` - Anonymised statistical-format release answering an EHDS *data request* (D7.2 §5.5.4). Returns group-by counts protected by small-cell suppression and/or differential privacy. Aggregate-only; no record-level data leaves the layer.
+
+### `POST /v1/catalog/descriptor`
+
+**Role:** `analyst` - Emits a HealthDCAT-AP JSON-LD `dcat:Dataset` descriptor (D7.2 §4.3, EHDS Art 55/78), optionally enriched inline or by `job_id` from the passport store. Discovery metadata only.
+
+### `POST /v1/synthetic/passport` · `POST /v1/analyse/privacy-risk`
+
+**Role:** `analyst` - Synthetic Data Passport (fidelity + privacy verdict) and privacy-risk assessment (re-id + DCR/NNDR + attribute inference). Proxy to the analytics microservice when `ANALYTICS_SERVICE_URL` is set, else in-process.
+
+### `GET /v1/permits` · `POST /v1/permits` · `POST /v1/permits/{id}/{submit|approve|reject|revoke}`
+
+**Role:** `admin` - Data-permit lifecycle (D7.2 §2 / EHDS Arts 45-49). Create always starts in `draft` (client-supplied status ignored). Lifecycle is state-machine enforced: an illegal transition returns 409; an unknown id returns 404. `GET /v1/permits/{id}` reads one permit.
+
+### `GET /v1/reports` · `GET /v1/reports/{job_id}`
+
+**Role:** `analyst` - Durable Transformation Passports from risk-driven exports (D7.2 §5.5.1 / Art 79). Anonymous by construction. Requires `MEDANON_APP_DB_URL`; without it the list is empty and per-job passports remain on `GET /v1/jobs/{id}`.
+
+### Connectors & settings
+
+**Role:** `analyst` (list/test) · `admin` (create/delete) - `/v1/source-connections` and `/v1/output-destinations` manage encrypted dataspace connectors (FHIR sources + S3 destinations; tokens never returned; mutating operations enforce `admin` in the router). `/v1/settings` (admin) reads/writes deployment-wide instance defaults. `GET /v1/runtime-config` is open and returns only the non-secret routing slice the SPA needs pre-login (active source/target ids, `builtin_fhir_enabled`).
+
+---
+
 ## Quick-Start Examples
 
 ### De-identify a single Patient resource

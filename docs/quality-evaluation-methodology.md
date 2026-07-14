@@ -218,7 +218,8 @@ one runs.
 
 ### 5.1 Conformance — *do values adhere to standards?*
 
-Implemented in `checks/conformance.py`.
+Implemented in the `checks/conformance/` package (presence / validation /
+terminology / references submodules; `__init__.evaluate()` orchestrates).
 
 #### `conformance.structural` — value / verification — **critical**
 **Every** resource with a `resourceType` is POSTed to the FHIR validator (not a
@@ -697,7 +698,7 @@ everything else is.
 
 ### 8.2 Fitness-for-use
 
-The decision drives `approved_for` / `not_approved_for` (`_fitness`). For
+The decision drives `approved_for` / `not_approved_for` (`verdict.fitness.compute_fitness`). For
 `CONDITIONAL_PASS`, the disallowed uses are **category-aware**: only the
 dimensions that actually have gaps below their floor trigger the corresponding
 restriction, so a dataset that passes conformance but has a completeness gap does
@@ -951,8 +952,13 @@ standalone Trust Gate UI (`:8401`) renders it for ad-hoc assessment.
 
 ## 13. Limitations and deferred work
 
-- **FHIR-only.** Tabular/SQL data contracts, source-concordance connectors
-  (LIS/pharmacy/MPI), and lineage (OpenLineage) are deferred to later phases.
+- **Input formats: FHIR, OMOP CDM, and SQL/tabular.** FHIR and OMOP are assessed
+  natively; CSV/Excel/NDJSON (`connectors/file_connector.py`) and SQL
+  (`connectors/sql_connector.py`) are ingested and normalised to OMOP via
+  `cdm/tabular_to_omop`. Still deferred: live **source-concordance connectors**
+  (LIS/pharmacy/MPI) that reconcile against an authoritative source system —
+  today `conformance.source_of_truth`/`checks/accuracy.py` is NA unless a
+  reference dataset is supplied — and dataset lineage (OpenLineage).
 - **Terminology membership is opt-in; well-formedness is always on.** Offline
   `conformance.code_wellformed` (format + SNOMED Verhoeff check digit, etc.) runs
   with no dependencies; authoritative ValueSet *membership* (`conformance.terminology`)
@@ -1033,6 +1039,9 @@ standalone Trust Gate UI (`:8401`) renders it for ad-hoc assessment.
 
 ---
 
-*Source of truth: `services/trust-gate/src/` (`engine.py`, `passport.py`,
-`constants.py`, `rules.py`, `checks/`) and `services/anonymizer/src/pipeline/
-intake_gate.py`. Operational quick-start: [trust-gate.md](trust-gate.md).*
+*Source of truth: `services/trust-gate/src/` (`engine.py` + the `verdict/` package,
+`passport.py`, `constants.py`, `rules.py`, `checks/`) and `services/anonymizer/src/
+pipeline/intake_gate.py`. Architecture + layer map:
+[services/trust-gate/ARCHITECTURE.md](../services/trust-gate/ARCHITECTURE.md) and
+[trust-gate-architecture.md](trust-gate-architecture.md). Operational quick-start:
+[trust-gate.md](trust-gate.md).*

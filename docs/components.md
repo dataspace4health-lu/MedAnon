@@ -318,8 +318,17 @@ Override config per-request: `?config_profile=<name>`.
 | `routers/audit.py` | `GET /v1/audit/events` |
 | `routers/agents.py` | `GET/POST /v1/ai/*` — AI agent endpoints with SSE streaming |
 | `routers/processing_runs.py` | `GET/DELETE /v1/processing-runs/*` |
+| `routers/permits.py` | `GET/POST /v1/permits`, lifecycle transitions (submit/approve/reject/revoke) - admin-only, 409 on illegal transition |
+| `routers/minimise.py` | `POST /v1/minimise/assess` - data-minimisation report (evaluate-only) |
+| `routers/disclosure.py` | `POST /v1/export/decision` - Five-Safes disclosure decision |
+| `routers/exposure.py` | `POST /v1/exposure/assess` - cumulative-exposure / differencing risk over the release ledger |
+| `routers/statistical.py` | `POST /v1/export/statistical` - aggregate release (small-cell suppression and/or DP) |
+| `routers/catalog.py` | `POST /v1/catalog/descriptor` - HealthDCAT-AP JSON-LD dataset descriptor |
+| `routers/reports.py` | `GET /v1/reports`, `/v1/reports/{job_id}` - durable Transformation Passports |
+| `routers/connectors.py` | `/v1/source-connections`, `/v1/output-destinations` - encrypted dataspace connectors |
+| `routers/settings.py` / `routers/runtime.py` | `/v1/settings` (admin instance defaults) + open `/v1/runtime-config` |
 | `schemas/` | Pydantic models: `fhir_ops.py`, `fhir_bulk.py`, `jobs.py`, `processing.py`, `scoring.py`, `agents.py`, `processing_runs.py` |
-| `services/` | Business logic: `jobs.py`, `processing.py`, `analytics.py`, `fhir_server.py`, `synthetic.py`, `health.py`, `scoring.py`, `dicom.py`, `hl7v2.py`, `subscriptions.py`, `agents.py` |
+| `services/` | Business logic: `jobs.py`, `processing.py`, `analytics.py`, `fhir_server.py`, `synthetic.py`, `health.py`, `scoring.py`, `dicom.py`, `hl7v2.py`, `subscriptions.py`, `agents.py`, `permits.py`, `reports.py`, `connectors.py`, `settings.py`, `exposure.py` |
 
 ### Pipeline (`src/pipeline/`)
 
@@ -336,6 +345,21 @@ Override config per-request: `?config_profile=<name>`.
 | `config/service.py` | Config | `get_settings(profile)` with `@lru_cache(maxsize=8)`. Single entry point; profile loaded once per process. |
 | `config/store.py` | Config | Config profile metadata index (PostgreSQL-backed). Tracks name, description, is_system. |
 | `deidentify.py` | Actions | Unified action registry. `nlp_detect_by_path` routes through `_get_nlp_adapter()` lazy singleton. `nlp_detect_act` provides entity-specific action routing. |
+| `permit_context.py` | Governance | Contextvar propagation of the active permit. Keyed actions scope their key to the permit; gPAS domains are suffixed `__permit-{id}` (D7.2 §4.4). `require_permit_if_regulated()` fails closed in regulated mode. |
+| `exclusion.py` | Governance | Opt-out register (EHDS Art 71). Drops opted-out subjects + linked resources before pseudonymisation; two-pass (identifier → resource id) so identifier-keyed opt-outs also remove linked resources. |
+| `transformation_passport.py` | Governance | Builds the anonymous release passport (identification, permit, tools, achieved k/l/t, privacy-risk, disclosure verdict). |
+| `cumulative_exposure.py` | Governance | Keyed one-way population fingerprints + differencing-risk assessment across prior releases (D7.2 §5.5.7). Pure; durable side in `release_ledger`. |
+| `field_classification.py` | Governance | Deterministic direct/quasi/non identifier labels for FHIR paths. Authoritative source the Resource Explorer consumes; reuses `identifier_gate`'s HIPAA catalog. |
+
+### Governance & EHDS (`src/pipeline/governance/`, `disclosure/`, `minimization/`)
+
+| Module | Role |
+|---|---|
+| `governance/permit.py` | `Permit` domain model + `PermitStatus` state machine (draft/submitted/approved/rejected/revoked), `is_active(at)` window, `covers_path` scope, `InMemoryPermitStore`. Pure, no I/O. |
+| `governance/healthdcat.py` | HealthDCAT-AP `dcat:Dataset` JSON-LD descriptor (D7.2 §4.3, EHDS Art 55/78), optionally enriched from a Transformation Passport. |
+| `governance/tool_registry.py` | Approved-tool registry (`ApprovedTool` + `ToolStatus`); `assess_tools()` feeds the passport's tool assessment. |
+| `disclosure/decision.py` | `assess_export_decision()` - transparent Five-Safes output-checking rules (residual identifiers, re-id risk, min-k, synthetic duplicates, unjustified vars, permit R6-R8). Returns most-restrictive REFUSE/REFER/RELEASE. Pure. |
+| `minimization/report.py` | `assess_minimisation()` - direct/quasi classification, granularity recommendations, special-category (Art 9) flags, purpose-limitation via declared paths. |
 
 ### Actions (`src/actions/`)
 
@@ -414,10 +438,11 @@ Phase 4 feature. Activated with `MEDANON_AI_ENABLED=true`. All agents degrade gr
 | `cache.py` | `CacheBackend` Protocol. `LocalLruCache` (50K entries, 10% eviction on overflow). `RedisCache` (L2, 1h TTL, errors swallowed). |
 | `circuit_breaker.py` | Reusable three-state circuit breaker (CLOSED → OPEN → HALF_OPEN). Thread-safe. Used by gPAS, NLP, and AI integrations. |
 | `fhirpath.py` | FHIRPath traversal: `find_nodes`, `error`, `not_implemented`. LRU-cached per expression. |
-| `crypto.py` | RSA encrypt/decrypt. `bounded_random` uses `secrets.randbelow()` (CSPRNG). Path-traversal guard on key file paths. |
+| `crypto.py` | RSA encrypt/decrypt. `bounded_random` uses `secrets.randbelow()` (CSPRNG). Path-traversal guard on key file paths. `derive_permit_key()` (HKDF-SHA256) scopes keyed actions to a permit; `hash_key_id()` records rotation traceability. |
 | `metrics.py` | Prometheus counters + histograms: `medanon_requests_total`, `medanon_gpas_*`, `medanon_fhir_*`. |
 | `audit.py` | Centralized audit logging. Structured JSON to file + optional Redis Stream (`medanon:audit`). `query()` reads back events. PHI is never logged. |
-| `thread_pool.py` | Process-wide bounded `ThreadPoolExecutor`. Shared by pipeline stage parallelism. Prevents thread explosion from nested pools. |
+| `thread_pool.py` | Process-wide bounded `ThreadPoolExecutor`. Shared by pipeline stage parallelism. `submit_with_context()` carries contextvars (permit + correlation id) into worker threads - raw `pool.submit` resets them. |
+| `regulated.py` | `regulated_mode()` (`MEDANON_REGULATED_MODE`, read at call time) + helpers (`gate_identifier_mode()` etc.) that turn fail-soft defaults into hard requirements across the stack. |
 
 ---
 
@@ -514,6 +539,10 @@ This decoupling means a FHIR server timeout in Phase 1 does not require re-uploa
 | `job_store.py` | `PostgresJobStore` — drop-in for `SqliteJobStore`. `FOR UPDATE SKIP LOCKED` for contention-free multi-worker job claims. `NOTIFY`/`LISTEN` for instant wake-up. |
 | `config_store.py` | `PostgresConfigStore` — drop-in for SQLite config store. |
 | `subscription_store.py` | `PostgresSubscriptionStore` — drop-in for SQLite subscription store. |
+| `permit_store.py` | `PostgresPermitStore` - durable `medanon.permits` (Art 79 audit queries). In-memory default; one-line startup swap. |
+| `passport_store.py` | `PostgresPassportStore` - durable Transformation Passports with an `assert_pii_safe()` structural guard that fails closed before writing. |
+| `connector_stores.py` / `settings_store.py` | Encrypted dataspace connectors + deployment-wide instance settings. |
+| `release_ledger.py` | Keyed release fingerprints for cumulative-exposure analysis (`cumulative_exposure`). Stores only one-way hashes, never reversible ids. |
 
 ### Inlined domain types (`src/domain/`)
 
