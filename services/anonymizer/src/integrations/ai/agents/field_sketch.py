@@ -180,7 +180,9 @@ def _jstype(value: object) -> str:
     return "string"
 
 
-def _walk(node: object, prefix: str, local: dict[str, _Leaf], depth: int, in_array: bool) -> None:
+def _walk(
+    node: object, prefix: str, local: dict[str, _Leaf], depth: int, in_array: bool
+) -> None:
     """Populate ``local`` (per-resource) with index-free leaf paths + values."""
     if depth > _MAX_DEPTH or node is None:
         return
@@ -308,9 +310,7 @@ def _shape(value: str) -> str:
     if tag == "datetime":
         return "YYYY-MM-DDThh:mm:ss"
     core = value[:_SHAPE_MAX]
-    masked = "".join(
-        "#" if c.isdigit() else "A" if c.isalpha() else c for c in core
-    )
+    masked = "".join("#" if c.isdigit() else "A" if c.isalpha() else c for c in core)
     if len(value) > _SHAPE_MAX:
         masked += "…"
     return f"{masked} [{tag}]" if tag else masked
@@ -361,7 +361,9 @@ def _header(rtype: str, n: int) -> str:
     return f"# {rtype} (n={n})"
 
 
-def _format_leaf(rtype: str, path: str, leaf: _Leaf, n: int, include_values: bool) -> str:
+def _format_leaf(
+    rtype: str, path: str, leaf: _Leaf, n: int, include_values: bool
+) -> str:
     full = f"{rtype}.{path}" if path else rtype
     jt = leaf.jstype + ("[]" if leaf.array else "")
     freq = round(100 * leaf.count / n) if n else 0
@@ -463,12 +465,20 @@ def sample_source_and_sketch(
 
     url = (base_url or os.environ.get("FHIR_SOURCE_URL", "")).strip()
     if not url:
-        return {"sketch": "", "types": [], "source": "error",
-                "detail": "no source FHIR server configured (set FHIR_SOURCE_URL)"}
+        return {
+            "sketch": "",
+            "types": [],
+            "source": "error",
+            "detail": "no source FHIR server configured (set FHIR_SOURCE_URL)",
+        }
     types = [t for t in dict.fromkeys(resource_types) if t]
     if not types:
-        return {"sketch": "", "types": [], "source": "error",
-                "detail": "no resource types requested"}
+        return {
+            "sketch": "",
+            "types": [],
+            "source": "error",
+            "detail": "no resource types requested",
+        }
 
     now = time.time()
     cache_key = (url, tuple(sorted(types)), n_per_type, char_budget)
@@ -496,8 +506,12 @@ def sample_source_and_sketch(
             by_type[rtype] = collected
 
     if not by_type:
-        return {"sketch": "", "types": [], "source": "error",
-                "detail": "no resources sampled from source server"}
+        return {
+            "sketch": "",
+            "types": [],
+            "source": "error",
+            "detail": "no resources sampled from source server",
+        }
 
     result = build_field_sketch(
         by_type, include_values=include_values, char_budget=char_budget

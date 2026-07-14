@@ -44,9 +44,7 @@ _QUALIFIER_LEAVES = frozenset({"system", "use", "url", "version"})
 # element leaf name, or a keyword anywhere in the path/URL — race and ethnicity
 # live in URL-keyed extensions (``extension.where(url='…us-core-race')``), so the
 # keyword must be sought in the full, un-stripped path.
-_DEMOGRAPHIC_QUASI_LEAVES = frozenset(
-    {"gender", "birthsex", "sex"}
-)
+_DEMOGRAPHIC_QUASI_LEAVES = frozenset({"gender", "birthsex", "sex"})
 _DEMOGRAPHIC_QUASI_KEYWORDS = (
     "race",
     "ethnic",

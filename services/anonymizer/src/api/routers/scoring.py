@@ -38,9 +38,7 @@ async def classify_fields(req: FieldClassifyRequest):
     """
     from pipeline.field_classification import classify_paths
 
-    return FieldClassifyResponse(
-        classes=classify_paths(req.resource_type, req.paths)
-    )
+    return FieldClassifyResponse(classes=classify_paths(req.resource_type, req.paths))
 
 
 @router.post("/score")

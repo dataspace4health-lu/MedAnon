@@ -165,8 +165,12 @@ class AgentService:
         if resources:
             by_type = group_by_resource_type(resources)
             if not by_type:
-                return {"sketch": "", "types": [], "source": "error",
-                        "detail": "no resources with a resourceType provided"}
+                return {
+                    "sketch": "",
+                    "types": [],
+                    "source": "error",
+                    "detail": "no resources with a resourceType provided",
+                }
             result = await asyncio.to_thread(
                 build_field_sketch, by_type, include_values=include_values
             )
