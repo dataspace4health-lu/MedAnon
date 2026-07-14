@@ -209,10 +209,12 @@ review. This is the exhaustive catalogue: every variable the code, or
 | `MEDANON_AI_PROVIDER` | `ollama/llama3.1` | `ollama/llama3.1` | yes |
 | `MEDANON_AI_PROXY_ALLOW_PRIVATE` | `true` | not set | no |
 | `MEDANON_AI_REQUIRE_LOCAL` | `false` | not set | yes |
+| `MEDANON_AI_SKETCH_BUDGET` | `16000` | not set | no |
+| `MEDANON_AI_SKETCH_TTL_SEC` | `300` | not set | no |
 | `MEDANON_AI_SOURCE_CONTEXT_MAX_TYPES` | `40` | not set | no |
 | `MEDANON_AI_SOURCE_CONTEXT_TTL_SEC` | `300` | not set | no |
 | `MEDANON_AI_TEMPERATURE` | `0.2` | not set | no |
-| `MEDANON_AI_TIMEOUT_SEC` | `60` | not set | no |
+| `MEDANON_AI_TIMEOUT_SEC` | `60` | `180` | no |
 | `MEDANON_ALLOW_SQLITE_FALLBACK` | `` | `false` | yes |
 | `MEDANON_AMQP_CB_FAILURE_THRESHOLD` | `5` | not set | no |
 | `MEDANON_AMQP_CB_RECOVERY_TIMEOUT_SEC` | `30` | not set | no |
