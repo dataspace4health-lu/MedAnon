@@ -1,0 +1,40 @@
+# Root ruff configuration.
+#
+# There was none. Ruff therefore fell back to its built-in defaults, which move
+# between releases, and CI installed ruff unpinned -- so `ruff format --check`
+# compared today's formatter against a tree formatted by whatever version last
+# ran. 69 files in services/anonymizer and 33 in services/trust-gate "drifted"
+# without anyone touching them.
+#
+# Neither service defines `[tool.ruff]` in its own pyproject.toml, so ruff walks
+# up and finds this file. One config for the whole repo.
+#
+# The ruff version is pinned in requirements-dev.txt. Keep the two in step.
+
+line-length = 88
+
+# The production images are python:3.12-slim (see services/*/Dockerfile). Local
+# venvs are often 3.13; pinning the target keeps formatting and lint identical
+# across both, rather than inferring from an absent `requires-python`.
+target-version = "py312"
+
+exclude = [
+    ".venv",
+    "__pycache__",
+    "client",
+    "website",
+]
+
+[lint]
+# Ruff's default rule set (pycodestyle errors + pyflakes). The tree is already
+# clean against it. Widening the selection is a separate change with its own
+# noise budget -- do not fold it into a formatting commit.
+select = ["E4", "E7", "E9", "F"]
+
+[format]
+# Defaults, stated explicitly so a future ruff release changing a default is a
+# visible diff here rather than a surprise 100-file reformat.
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"

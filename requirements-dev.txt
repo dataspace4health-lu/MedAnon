@@ -1,0 +1,19 @@
+# Developer and CI tooling.
+#
+# Pinned deliberately. `ruff format` output changes between minor releases, and
+# nothing here was pinned before: CI ran `pip install ruff`, resolving to
+# whichever version was current that day, so `ruff format --check` was a coin
+# flip against a tree formatted by some older one. `make ci-local` and the CI
+# workflow must agree, or the gate is worthless.
+#
+# Install:  pip install -r requirements-dev.txt   (or `make setup`)
+ruff==0.15.6
+
+# `make test` / `make ci-local` / the CI `test` job.
+pytest==9.0.2
+pytest-asyncio==1.3.0
+pytest-cov==7.1.0
+httpx==0.28.1
+
+# scripts/check_env.py parses docker-compose.yml.
+PyYAML==6.0.3

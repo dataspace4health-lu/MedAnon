@@ -92,6 +92,8 @@ pip-delete-this-directory.txt
 # Never commit real env — only .env.example is tracked
 .env
 *.env
+# Env backups (e.g. `.env.bak.<timestamp>`) — never tracked
+.env.bak*
 
 # RSA private keys — never commit production keys
 services/anonymizer/keys/id_rsa
@@ -170,8 +172,30 @@ docs/internal/
 # ── Tests ─────────────────────────────────────────────────────────────────────
 **/tests/
 
-# scripts/ — generally not tracked, but some scripts are important for local development and are tracked. If you add a new script that should be tracked, add an exception here and document it in the README.
-scripts/
+# ── scripts/ ──────────────────────────────────────────────────────────────────
+# Most scripts are local scratch and stay untracked. Anything the Makefile or CI
+# invokes MUST be tracked, or `make <target>` and the workflow break on a fresh
+# clone. Add an exception below when you add such a script.
+#
+# Note the trailing `*`: git never descends into an excluded *directory*, so a
+# bare `scripts/` makes `!scripts/foo.py` silently ineffective. `scripts/*`
+# excludes the contents instead, which negations can re-include.
+scripts/*
+
+# Invoked by CI (.github/workflows/ci.yml)
+!scripts/check_env.py
+!scripts/check_trust_ids.py
+# Invoked by the Makefile
+!scripts/sync_shared_code.sh
+!scripts/batch_fetch.sh
+!scripts/batch_process.sh
+!scripts/init_gpas_domains.sh
+!scripts/verify_deployment.sh
+# Referenced by the docs / runbook
+!scripts/backup_gpas.sh
+!scripts/import_testbase.sh
+!scripts/import_testbase100.sh
+!scripts/test_patient.sh
 
 services/anonymizer/MagicMock
 

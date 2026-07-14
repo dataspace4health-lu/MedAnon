@@ -60,7 +60,7 @@ data:
 
     CREATE TABLE IF NOT EXISTS medanon.processing_runs (
         id              TEXT PRIMARY KEY,
-        created_at      TEXT NOT NULL,
+        created_at      TIMESTAMPTZ NOT NULL,
         endpoint        TEXT NOT NULL,
         config_profile  TEXT NOT NULL DEFAULT 'auto',
         config_hash     TEXT,

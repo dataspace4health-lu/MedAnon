@@ -21,13 +21,27 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install ruff pyyaml
+      # Pinned: `pip install ruff` resolved to whatever was current that day, so
+      # `ruff format --check` compared today's formatter against a tree formatted
+      # by an older one. Settings now live in the root ruff.toml.
+      - run: pip install -r requirements-dev.txt
       - name: ruff check
         run: ruff check services/anonymizer/src
+      # All service trees, not just the anonymizer: pipeline/scoring/ is manually
+      # kept in sync with services/scoring/src/, and formatting one copy alone
+      # breaks `sync_shared_code.sh`.
       - name: ruff format --check
-        run: ruff format --check services/anonymizer/src
+        run: ruff format --check services/
+      - name: Scoring / analytics copies in sync
+        run: bash scripts/sync_shared_code.sh
       - name: Trust Gate id sync (phases + use-cases)
         run: python3 scripts/check_trust_ids.py
+      - name: Env drift (.env.example vs code + compose)
+        run: python3 scripts/check_env.py
+      - name: Env catalogue is up to date
+        run: |
+          python3 scripts/check_env.py --docs docs/reference/env-vars.md
+          git diff --exit-code -- docs/reference/env-vars.md
 
   lint-typescript:
     name: Lint TypeScript
@@ -130,41 +144,49 @@ jobs:
 
   # ── Stage 2: Build + Test (depends on lint passing) ────────────────────────
 
+  # `**/tests/` is gitignored: the suite is deliberately not published. This job
+  # therefore SKIPS on the public repository and runs only where the tests are
+  # present (a fork or clone that carries them). The gate that actually protects
+  # `main` is `make ci-local`, run before pushing -- see CONTRIBUTING / Makefile.
+  #
+  # It previously did `pip install -e packages/medanon-core` (no such package has
+  # ever existed in this repo) and named ten test files by hand, so it could not
+  # have passed even where the tests were present. It now runs the whole suite.
   test:
-    name: Unit Tests
+    name: Unit Tests (skipped when tests/ is absent)
     runs-on: ubuntu-latest
     needs: [lint-python]
     steps:
       - uses: actions/checkout@v4
+      - name: Detect test suite
+        id: detect
+        run: |
+          if [ -n "$(find services/anonymizer/tests -name 'test_*.py' -print -quit 2>/dev/null)" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::services/anonymizer/tests/ is gitignored; skipping. Run 'make ci-local' before pushing."
+          fi
       - uses: actions/setup-python@v5
+        if: steps.detect.outputs.present == 'true'
         with:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: services/anonymizer/requirements.txt
       - name: Install dependencies
+        if: steps.detect.outputs.present == 'true'
         run: |
-          pip install -e packages/medanon-core
           pip install -r services/anonymizer/requirements.txt
           pip install pytest pytest-asyncio pytest-cov httpx
-      - name: Run local tests (no Docker required)
+      - name: Run the full suite (no Docker required)
+        if: steps.detect.outputs.present == 'true'
         working-directory: services/anonymizer
         env:
           MEDANON_HASH_ALLOW_PLAIN: "true"
           MEDANON_CONFIG_DIR: config
           MEDANON_RATE_LIMIT_ENABLED: "false"
-        run: |
-          python -m pytest \
-            tests/test_action_dispatcher.py \
-            tests/test_cache.py \
-            tests/test_circuit_breaker.py \
-            tests/test_crypto.py \
-            tests/test_jobs.py \
-            tests/test_jobs_redis.py \
-            tests/test_post_processor.py \
-            tests/test_proxy_clients.py \
-            tests/test_scoring.py \
-            tests/test_where_evaluator.py \
-            -q --tb=short
+          MEDANON_MANIFEST_ENABLED: "true"
+        run: python -m pytest tests/ -q --tb=short
 
   docker-build:
     name: Docker Build

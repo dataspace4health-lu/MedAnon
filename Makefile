@@ -8,6 +8,16 @@ PIP         := $(VENV)/bin/pip
 ANONYMIZER  := services/anonymizer
 COMPOSE     := docker compose
 
+# Mirrors docker-compose.yml's `${ANONYMIZER_IMAGE:-medanon:latest}`. Used by
+# `_dirs` to discover the uid the container runs as.
+ANONYMIZER_IMAGE ?= medanon:latest
+
+# Prefer the venv when `make setup` has created one, otherwise fall back to
+# whatever is on PATH. Used by `ci-local`, which must run in CI containers and
+# on machines that install the deps system-wide.
+PYBIN       := $(if $(wildcard $(VENV)/bin/python3),$(CURDIR)/$(VENV)/bin/python3,python3)
+RUFF        := $(if $(wildcard $(VENV)/bin/ruff),$(CURDIR)/$(VENV)/bin/ruff,ruff)
+
 # Worker replica count — read from .env (default 2 if not set or .env absent).
 # gPAS and NLP always run as a single instance (scaling them does not improve
 # single-job latency; see MEDANON_BATCH_SIZE and sub-batch parallelism instead).
@@ -83,7 +93,11 @@ setup:
 	python3 -m venv $(VENV)
 	$(PIP) install --upgrade pip
 	$(PIP) install -r services/anonymizer/requirements.txt
+	# `make lint`, `make format` and `make test` all invoke $(VENV)/bin/{ruff,pytest},
+	# which nothing installed. Pinned in requirements-dev.txt so local == CI.
+	$(PIP) install -r requirements-dev.txt
 	@echo "virtualenv ready — activate with: source $(VENV)/bin/activate"
+	@echo "run 'make install-hooks' to gate pushes on 'make ci-local'"
 
 # ── Testing ───────────────────────────────────────────────────────────────────
 test:
@@ -92,12 +106,55 @@ test:
 test-cov:
 	cd $(ANONYMIZER) && $(CURDIR)/$(PY) -m pytest tests/ --cov=src --cov-report=term-missing -q
 
-# ── Code quality ──────────────────────────────────────────────────────────────
-lint:
-	$(VENV)/bin/ruff check services/anonymizer/src
+# `**/tests/` is gitignored, so CI cannot run the suite: its `test` job skips on
+# the public repository. THIS is the gate that protects main. Run it before every
+# push (`make install-hooks` wires it to a pre-push hook).
+#
+# MEDANON_MANIFEST_ENABLED=true matches the docker-compose default and is what
+# activates the output barrier's structural check, so the suite exercises the
+# configuration that actually ships.
+.PHONY: ci-local
+ci-local:
+	@echo "── ruff check ──────────────────────────────────────────────"
+	@$(RUFF) check services/anonymizer/src
+	@echo "── ruff format --check (all service trees) ─────────────────"
+	@$(RUFF) format --check services/
+	@echo "── env drift ───────────────────────────────────────────────"
+	@$(PYBIN) scripts/check_env.py
+	@echo "── env catalogue up to date ────────────────────────────────"
+	@$(PYBIN) scripts/check_env.py --docs docs/reference/env-vars.md
+	@git diff --quiet -- docs/reference/env-vars.md || \
+		{ echo "docs/reference/env-vars.md is stale; commit the regenerated file"; exit 1; }
+	@echo "── trust-gate id sync ──────────────────────────────────────"
+	@$(PYBIN) scripts/check_trust_ids.py
+	@echo "── scoring copies in sync ──────────────────────────────────"
+	@bash scripts/sync_shared_code.sh
+	@echo "── anonymizer suite ────────────────────────────────────────"
+	@cd $(ANONYMIZER) && MEDANON_MANIFEST_ENABLED=true $(PYBIN) -m pytest tests/ -q
+	@echo "── trust-gate suite ────────────────────────────────────────"
+	@cd services/trust-gate && $(PYBIN) -m pytest tests/ -q
+	@echo ""
+	@echo "ci-local: all green"
 
+# Install a pre-push hook that runs ci-local. Without it nothing gates a push,
+# because the CI test job cannot see the gitignored suite.
+.PHONY: install-hooks
+install-hooks:
+	@mkdir -p .git/hooks
+	@printf '#!/bin/sh\nexec make ci-local\n' > .git/hooks/pre-push
+	@chmod +x .git/hooks/pre-push
+	@echo "pre-push hook installed -> runs 'make ci-local'"
+
+# ── Code quality ──────────────────────────────────────────────────────────────
+# Settings live in the root ruff.toml; the version is pinned in requirements-dev.txt.
+lint:
+	$(RUFF) check services/anonymizer/src
+
+# Formats every service tree, not just the anonymizer. pipeline/scoring/ is kept
+# manually in sync with services/scoring/src/ (see sync-check), so formatting one
+# copy alone reports as logic drift.
 format:
-	$(VENV)/bin/ruff format services/anonymizer/src
+	$(RUFF) format services/
 
 sync-check:
 	bash scripts/sync_shared_code.sh
@@ -108,6 +165,21 @@ sync-check:
 # comparison so it can fail the build on its own contract drift.
 trust-id-sync:
 	python3 scripts/check_trust_ids.py
+
+# Compare .env.example against what the code and docker-compose.yml actually
+# read: duplicate keys, dead/inert entries, missing posture flags, values that
+# silently disagree with the compose default, and `$$` interpolation hazards.
+env-check:
+	python3 scripts/check_env.py
+
+# Same, plus a diff of your real .env — which keys you are missing (and so are
+# silently running on a compose/code default) and which are undocumented.
+env-diff:
+	python3 scripts/check_env.py --env .env
+
+# Regenerate the full variable catalogue from the code.
+env-docs:
+	python3 scripts/check_env.py --docs docs/reference/env-vars.md
 
 # ── Batch processing ──────────────────────────────────────────────────────────
 batch:
@@ -153,6 +225,19 @@ preflight:
 	    fi; \
 	done
 	@echo "  [OK] Port check complete"
+	@# ./output is bind-mounted over the image's /output, so the host directory's
+	@# ownership decides whether the container can write. When it cannot, the
+	@# worker cannot write its heartbeat and the anonymizer cannot write
+	@# /output/audit.log — a silent, hard-to-diagnose outage. Fail here instead.
+	@uid=$$(docker run --rm --entrypoint id $(ANONYMIZER_IMAGE) -u 2>/dev/null || echo 100); \
+	 if [ -d output ] && ! docker run --rm -u $$uid -v "$(CURDIR)/output:/out" busybox \
+	      sh -c 'touch /out/.preflight_probe && rm -f /out/.preflight_probe' 2>/dev/null; then \
+	   echo "FAIL: ./output is not writable by the container user (uid $$uid)."; \
+	   echo "      ls -ldn output  ->  $$(ls -ldn output)"; \
+	   echo "      Fix with:  make _dirs"; \
+	   exit 1; \
+	 fi
+	@echo "  [OK] ./output writable by the container user"
 	@echo "── Preflight passed ──────────────────────────────────────────"
 	@echo ""
 
@@ -190,8 +275,32 @@ up-sdv: _dirs preflight build-sdv
 	@echo "SDV stack running — /generate/synthetic will use GaussianCopula engine"
 	@echo "Worker replicas: $(WORKER_REPLICAS)"
 
+# The containers run as a non-root user baked into the image (`appuser`). The
+# Dockerfile chowns /output to it, but `./output:/output` is a BIND MOUNT, which
+# shadows the image directory: the host directory's ownership wins. Created by a
+# plain `mkdir` it belongs to the host user, the container's uid falls into
+# "other" (r-x), and every write fails with EACCES.
+#
+# That is not a cosmetic failure. The worker's heartbeat write raised inside its
+# consume loop, after a job had been claimed from the Redis stream but before it
+# was dispatched, stranding every job in the consumer group's pending list. The
+# queue looked "queued" forever. (jobs/worker.py no longer lets a heartbeat
+# failure abort the loop, but the directory must still be writable.)
+#
+# `data` is mounted read-only, so it only needs to be readable.
+# Repairs ownership only, never the mode: `jobs/executor_export._mkdir_secure`
+# deliberately chmods output directories to 0700, because they hold
+# de-identified exports. Ownership is the invariant that must hold; the mode is
+# the application's to harden.
 _dirs:
-	mkdir -p data output
+	@mkdir -p data output
+	@uid=$$(docker run --rm --entrypoint id $(ANONYMIZER_IMAGE) -u 2>/dev/null || echo 100); \
+	 if ! docker run --rm -u $$uid -v "$(CURDIR)/output:/out" busybox \
+	      sh -c 'touch /out/.dirs_probe && rm -f /out/.dirs_probe' 2>/dev/null; then \
+	   echo "  ./output is not writable by the container user (uid $$uid) — chowning"; \
+	   docker run --rm -v "$(CURDIR)/output:/out" busybox chown -R $$uid:$$(id -g) /out \
+	   || echo "  WARNING: chown failed. Run: docker run --rm -v $(CURDIR)/output:/out busybox chown -R $$uid /out"; \
+	 fi
 
 up: _dirs preflight
 	$(COMPOSE) --profile nlp --profile monitoring up -d \
@@ -206,7 +315,7 @@ up: _dirs preflight
 	@bash scripts/verify_deployment.sh || true
 
 down:
-	$(COMPOSE) --profile analytics --profile nlp --profile monitoring --profile ha --profile s3 down --remove-orphans
+	$(COMPOSE) --profile analytics --profile nlp --profile monitoring --profile ha --profile  down --remove-orphans
 
 # Wipes ALL volumes including HAPI source DB — only for a full reset.
 down-wipe:

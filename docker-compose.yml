@@ -157,9 +157,26 @@ x-worker-env: &worker-env
   MEDANON_AI_PROVIDER: ${MEDANON_AI_PROVIDER:-ollama/llama3.1}
   MEDANON_AI_API_BASE: ${MEDANON_AI_API_BASE:-http://ollama:11434}
   MEDANON_AI_API_KEY: ${MEDANON_AI_API_KEY:-}
+  # CPU inference is slow: a full config generation (~1k tokens) at ~15 tok/s on
+  # gemma3:4b takes ~75s, so the code default of 60s cuts generation off. 180s
+  # covers a full config with headroom; lower it when running against a GPU.
+  MEDANON_AI_TIMEOUT_SEC: ${MEDANON_AI_TIMEOUT_SEC:-180}
   MEDANON_AI_PII_PROVIDER: ${MEDANON_AI_PII_PROVIDER:-}
-  MEDANON_PII_GATE: ${MEDANON_PII_GATE:-false}
   AI_SERVICE_URL: ${AI_SERVICE_URL:-}
+  # Output barrier. Not an AI setting despite its former position in this block:
+  # the raw scan runs at the process_data_batch choke point and needs no model.
+  # Default ON. It was `:-false` here, which silently overrode .env.example.
+  MEDANON_PII_GATE: ${MEDANON_PII_GATE:-true}
+  MEDANON_PII_GATE_BLOCK_SEVERITY: ${MEDANON_PII_GATE_BLOCK_SEVERITY:-critical,high}
+  MEDANON_PII_GATE_NER_MODE: ${MEDANON_PII_GATE_NER_MODE:-warn}
+  MEDANON_OUTPUT_GATE_ENABLED: ${MEDANON_OUTPUT_GATE_ENABLED:-true}
+  MEDANON_GATE_IDENTIFIER_MODE: ${MEDANON_GATE_IDENTIFIER_MODE:-block}
+  MEDANON_REGULATED_MODE: ${MEDANON_REGULATED_MODE:-false}
+  MEDANON_RULE_SCHEMA_STRICT: ${MEDANON_RULE_SCHEMA_STRICT:-false}
+  MEDANON_NLP_FAIL_MODE: ${MEDANON_NLP_FAIL_MODE:-redact}
+  MEDANON_HASH_ALLOW_PLAIN: ${MEDANON_HASH_ALLOW_PLAIN:-false}
+  MEDANON_REQUIRE_DURABLE_STORE: ${MEDANON_REQUIRE_DURABLE_STORE:-false}
+  MEDANON_ALLOW_SQLITE_FALLBACK: ${MEDANON_ALLOW_SQLITE_FALLBACK:-false}
   # Trust Gate microservice — pre-privacy data-quality / trust assessment.
   # Opt-in: start the stack with `--profile trust` AND set
   # TRUST_GATE_SERVICE_URL=http://trust-gate:8400 to activate the intake
