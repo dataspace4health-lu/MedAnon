@@ -53,7 +53,6 @@ def _l2_inc(counter) -> None:
             pass
 
 
-
 class RedisDetectionCache:
     """Thin Redis wrapper for ``_detect_entities_cached`` results.
 
@@ -133,7 +132,9 @@ def init_l2_cache() -> Optional[RedisDetectionCache]:
         return None
     try:
         cache = RedisDetectionCache(url)
-        logger.info("nlp_l2_cache_enabled url=%s ttl=%ds", _redact(url), _DEFAULT_TTL_SEC)
+        logger.info(
+            "nlp_l2_cache_enabled url=%s ttl=%ds", _redact(url), _DEFAULT_TTL_SEC
+        )
         return cache
     except Exception as exc:
         logger.warning(

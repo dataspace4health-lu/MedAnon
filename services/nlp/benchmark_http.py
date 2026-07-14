@@ -197,6 +197,7 @@ def match_spans(
 # HTTP detection
 # ---------------------------------------------------------------------------
 
+
 def detect_via_http(
     url: str,
     text: str,
@@ -204,12 +205,14 @@ def detect_via_http(
     threshold: float,
 ) -> list[tuple[int, int, str]]:
     """Call POST /v1/detect and return (start, end, entity_type) spans."""
-    payload = json.dumps({
-        "text": text,
-        "entities": entities,
-        "language": "en",
-        "score_threshold": threshold,
-    }).encode()
+    payload = json.dumps(
+        {
+            "text": text,
+            "entities": entities,
+            "language": "en",
+            "score_threshold": threshold,
+        }
+    ).encode()
     req = urllib.request.Request(
         f"{url}/v1/detect",
         data=payload,
@@ -236,6 +239,7 @@ def detect_via_http(
 # ---------------------------------------------------------------------------
 # Main benchmark
 # ---------------------------------------------------------------------------
+
 
 def run_benchmark(
     url: str,
@@ -273,9 +277,16 @@ def run_benchmark(
     print()
 
     entities_to_use = entity_filter or [
-        "PERSON", "LOCATION", "DATE_TIME", "PHONE_NUMBER",
-        "EMAIL_ADDRESS", "US_SSN", "US_PASSPORT", "US_DRIVER_LICENSE",
-        "AGE", "MEDICAL_LICENSE",
+        "PERSON",
+        "LOCATION",
+        "DATE_TIME",
+        "PHONE_NUMBER",
+        "EMAIL_ADDRESS",
+        "US_SSN",
+        "US_PASSPORT",
+        "US_DRIVER_LICENSE",
+        "AGE",
+        "MEDICAL_LICENSE",
     ]
     filter_set = set(entity_filter) if entity_filter else None
 
@@ -327,7 +338,9 @@ def run_benchmark(
                     total_latency += time.monotonic() - t0
                 except Exception as exc:
                     errors += 1
-                    print(f"  [ERROR] {resource.get('id', '?')}: {exc}", file=sys.stderr)
+                    print(
+                        f"  [ERROR] {resource.get('id', '?')}: {exc}", file=sys.stderr
+                    )
                     continue
 
                 tp_pairs, fp_preds, fn_golds = match_spans(predicted, gold, filter_set)
@@ -348,28 +361,42 @@ def run_benchmark(
     # --- Results table ---
     all_types = sorted(set(list(tp_count) + list(fp_count) + list(fn_count)))
     col_w = 22
-    print(f"\n{'Entity':<{col_w}} {'TP':>6} {'FP':>6} {'FN':>6}  {'Prec':>8} {'Recall':>8} {'F1':>8} {'Acc':>8}")
+    print(
+        f"\n{'Entity':<{col_w}} {'TP':>6} {'FP':>6} {'FN':>6}  {'Prec':>8} {'Recall':>8} {'F1':>8} {'Acc':>8}"
+    )
     print("-" * (col_w + 62))
 
     total_tp = total_fp = total_fn = 0
     for et in all_types:
         tp, fp, fn = tp_count[et], fp_count[et], fn_count[et]
-        total_tp += tp; total_fp += fp; total_fn += fn
-        prec   = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+        total_tp += tp
+        total_fp += fp
+        total_fn += fn
+        prec = tp / (tp + fp) if (tp + fp) > 0 else 0.0
         recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-        f1     = 2 * prec * recall / (prec + recall) if (prec + recall) > 0 else 0.0
-        acc    = tp / (tp + fp + fn) if (tp + fp + fn) > 0 else 0.0
-        bar    = "█" * int(f1 * 20)
-        print(f"{et:<{col_w}} {tp:>6} {fp:>6} {fn:>6}  {prec:>7.1%} {recall:>7.1%} {f1:>7.1%} {acc:>7.1%}  {bar}")
+        f1 = 2 * prec * recall / (prec + recall) if (prec + recall) > 0 else 0.0
+        acc = tp / (tp + fp + fn) if (tp + fp + fn) > 0 else 0.0
+        bar = "█" * int(f1 * 20)
+        print(
+            f"{et:<{col_w}} {tp:>6} {fp:>6} {fn:>6}  {prec:>7.1%} {recall:>7.1%} {f1:>7.1%} {acc:>7.1%}  {bar}"
+        )
 
     print("-" * (col_w + 62))
-    prec_o   = total_tp / (total_tp + total_fp) if (total_tp + total_fp) > 0 else 0.0
+    prec_o = total_tp / (total_tp + total_fp) if (total_tp + total_fp) > 0 else 0.0
     recall_o = total_tp / (total_tp + total_fn) if (total_tp + total_fn) > 0 else 0.0
-    f1_o     = 2 * prec_o * recall_o / (prec_o + recall_o) if (prec_o + recall_o) > 0 else 0.0
-    acc_o    = total_tp / (total_tp + total_fp + total_fn) if (total_tp + total_fp + total_fn) > 0 else 0.0
+    f1_o = (
+        2 * prec_o * recall_o / (prec_o + recall_o) if (prec_o + recall_o) > 0 else 0.0
+    )
+    acc_o = (
+        total_tp / (total_tp + total_fp + total_fn)
+        if (total_tp + total_fp + total_fn) > 0
+        else 0.0
+    )
 
-    print(f"{'OVERALL':<{col_w}} {total_tp:>6} {total_fp:>6} {total_fn:>6}  "
-          f"{prec_o:>7.1%} {recall_o:>7.1%} {f1_o:>7.1%} {acc_o:>7.1%}")
+    print(
+        f"{'OVERALL':<{col_w}} {total_tp:>6} {total_fp:>6} {total_fn:>6}  "
+        f"{prec_o:>7.1%} {recall_o:>7.1%} {f1_o:>7.1%} {acc_o:>7.1%}"
+    )
 
     avg_latency_ms = (total_latency / docs_processed) * 1000 if docs_processed else 0
     print(f"\nSummary")
@@ -385,22 +412,26 @@ def run_benchmark(
 
 if __name__ == "__main__":
     default_dataset = str(
-        Path(__file__).parent.parent
-        / "anonymizer/tests/data/TestBase"
+        Path(__file__).parent.parent / "anonymizer/tests/data/TestBase"
     )
     parser = argparse.ArgumentParser(
         description="Benchmark Presidio NLP accuracy via HTTP API"
     )
-    parser.add_argument("--url", default="http://localhost:8200",
-                        help="NLP service base URL")
-    parser.add_argument("--dataset", default=default_dataset,
-                        help="Path to TestBase directory")
-    parser.add_argument("--limit", type=int, default=500,
-                        help="Max documents to evaluate")
-    parser.add_argument("--threshold", type=float, default=0.4,
-                        help="Presidio confidence threshold")
-    parser.add_argument("--entity", action="append",
-                        help="Entity types to evaluate (repeatable)")
+    parser.add_argument(
+        "--url", default="http://localhost:8200", help="NLP service base URL"
+    )
+    parser.add_argument(
+        "--dataset", default=default_dataset, help="Path to TestBase directory"
+    )
+    parser.add_argument(
+        "--limit", type=int, default=500, help="Max documents to evaluate"
+    )
+    parser.add_argument(
+        "--threshold", type=float, default=0.4, help="Presidio confidence threshold"
+    )
+    parser.add_argument(
+        "--entity", action="append", help="Entity types to evaluate (repeatable)"
+    )
     args = parser.parse_args()
 
     run_benchmark(

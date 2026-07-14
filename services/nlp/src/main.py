@@ -38,7 +38,12 @@ _MAX_BATCH_ITEMS: int = int(os.environ.get("NLP_MAX_BATCH_ITEMS", "1000"))
 # ---------------------------------------------------------------------------
 
 try:
-    from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
+    from prometheus_client import (
+        CONTENT_TYPE_LATEST,
+        Counter,
+        Histogram,
+        generate_latest,
+    )
 
     _REQUESTS = Counter(
         "medanon_requests_total",
@@ -58,7 +63,9 @@ except ImportError:  # pragma: no cover
 
 def _inc_request(endpoint: str, status: int) -> None:
     if _PROM_AVAILABLE:
-        _REQUESTS.labels(endpoint=endpoint, status_code=str(status), medanon_service="nlp").inc()
+        _REQUESTS.labels(
+            endpoint=endpoint, status_code=str(status), medanon_service="nlp"
+        ).inc()
 
 
 def _observe_latency(endpoint: str, duration: float) -> None:
@@ -76,6 +83,7 @@ def metrics():
 # ---------------------------------------------------------------------------
 # Schemas
 # ---------------------------------------------------------------------------
+
 
 class DetectRequest(BaseModel):
     text: str
@@ -120,6 +128,7 @@ class BatchDetectResponse(BaseModel):
 # Endpoints
 # ---------------------------------------------------------------------------
 
+
 @app.on_event("startup")
 def _verify_detector_import():
     """Warm up Presidio/spaCy at startup and verify end-to-end detection works.
@@ -143,6 +152,7 @@ def _verify_detector_import():
         # Minimal real detection — exercises the full Presidio + spaCy stack.
         _detect_entities_cached("John Smith DOB 1980-01-01", entities, 0.4, "en")
         from recognizers import _SUPPORTED_LANGS
+
         if "fr" in _SUPPORTED_LANGS:
             _detect_entities_cached("Jean Dupont né le 01/01/1980", entities, 0.4, "fr")
             logger.info("detector warm-up complete — Presidio/spaCy ready (en + fr)")
@@ -158,7 +168,9 @@ def _verify_detector_import():
 @app.get("/health")
 def health():
     if not getattr(app.state, "detector_ok", False):
-        return JSONResponse({"status": "error", "detail": "detector import failed"}, status_code=503)
+        return JSONResponse(
+            {"status": "error", "detail": "detector import failed"}, status_code=503
+        )
     return {"status": "ok"}
 
 
@@ -256,16 +268,22 @@ def detect_batch(req: BatchDetectRequest):
         def _detect_one(item: BatchDetectItem) -> list:
             entities = _resolve_entities(item.entities)
             try:
-                return list(_detect_entities(
-                    item.text, tuple(entities), item.threshold, item.language
-                ))
+                return list(
+                    _detect_entities(
+                        item.text, tuple(entities), item.threshold, item.language
+                    )
+                )
             except RuntimeError as exc:
                 logger.error("presidio_not_ready: %s", exc, exc_info=False)
                 app.state.detector_ok = False
                 raise
             except Exception as exc:
-                logger.error("detect_batch_error: %s", type(exc).__name__, exc_info=False)
-                raise HTTPException(status_code=500, detail="NLP detection error") from exc
+                logger.error(
+                    "detect_batch_error: %s", type(exc).__name__, exc_info=False
+                )
+                raise HTTPException(
+                    status_code=500, detail="NLP detection error"
+                ) from exc
 
         _workers = min(len(req.items), int(os.environ.get("NLP_BATCH_THREADS", "4")))
         with ThreadPoolExecutor(max_workers=_workers) as pool:

@@ -71,16 +71,21 @@ def _detect_entities_uncached(
     presidio_results = analyzer.analyze(
         text=text, entities=list(entities), language=language
     )
-    return tuple(sorted(
-        (
-            (r.start, r.end, r.entity_type)
-            for r in presidio_results
-            if r.score >= threshold
-            and not (r.entity_type == "DATE_TIME" and _DATE_FP_RE.match(text[r.start:r.end]))
-        ),
-        key=lambda h: h[0],
-        reverse=True,
-    ))
+    return tuple(
+        sorted(
+            (
+                (r.start, r.end, r.entity_type)
+                for r in presidio_results
+                if r.score >= threshold
+                and not (
+                    r.entity_type == "DATE_TIME"
+                    and _DATE_FP_RE.match(text[r.start : r.end])
+                )
+            ),
+            key=lambda h: h[0],
+            reverse=True,
+        )
+    )
 
 
 @functools.lru_cache(maxsize=_DETECTION_CACHE_MAX)
@@ -122,7 +127,9 @@ def reset_detection_cache() -> None:
     _detect_entities_cached.cache_clear()
 
 
-def _detect_entities(text: str, entities: tuple, threshold: float, language: str) -> tuple:
+def _detect_entities(
+    text: str, entities: tuple, threshold: float, language: str
+) -> tuple:
     """Run entity detection, bypassing the L1 LRU for very long texts.
 
     Long texts (e.g. FHIR Narrative divs) would each occupy a cache slot that
@@ -167,10 +174,12 @@ def _evict_if_needed(token_state: dict, limit: int = _TOKEN_STATE_MAX_ENTRIES) -
     if not _token_state_overflow_warned:
         _token_state_overflow_warned = True
         import logging as _logging
+
         _logging.getLogger("nlp.tokenizer").warning(
             "token_state map exceeded limit=%d entries — no mid-run eviction "
             "to preserve surrogate consistency. Call reset_global_token_state() "
-            "between jobs to reclaim memory.", limit,
+            "between jobs to reclaim memory.",
+            limit,
         )
 
 

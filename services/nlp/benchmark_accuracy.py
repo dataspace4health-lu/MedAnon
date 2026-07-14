@@ -171,6 +171,7 @@ def build_pii_registry(dataset_dir: str) -> tuple[dict, set[str]]:
 # Ground-truth extraction — FHIR-based (model-independent)
 # ---------------------------------------------------------------------------
 
+
 def extract_ground_truth(
     text: str,
     patient_pii: dict[str, list[str]] | None,
@@ -232,6 +233,7 @@ def extract_ground_truth(
 # Overlap matching
 # ---------------------------------------------------------------------------
 
+
 def _overlaps(a_start: int, a_end: int, b_start: int, b_end: int) -> bool:
     return a_start < b_end and b_start < a_end
 
@@ -276,6 +278,7 @@ def match_spans(
 # ---------------------------------------------------------------------------
 # Main benchmark
 # ---------------------------------------------------------------------------
+
 
 def run_benchmark(
     dataset_dir: str,
@@ -357,7 +360,10 @@ def run_benchmark(
                     predicted = list(raw_hits)
                 except Exception as exc:
                     errors += 1
-                    print(f"  [ERROR] doc {resource.get('id', '?')}: {exc}", file=sys.stderr)
+                    print(
+                        f"  [ERROR] doc {resource.get('id', '?')}: {exc}",
+                        file=sys.stderr,
+                    )
                     continue
 
                 tp_pairs, fp_preds, fn_golds = match_spans(predicted, gold, filter_set)
@@ -380,7 +386,9 @@ def run_benchmark(
     all_types = sorted(set(list(tp_count) + list(fp_count) + list(fn_count)))
 
     col_w = 22
-    print(f"\n{'Entity':<{col_w}} {'TP':>6} {'FP':>6} {'FN':>6}  {'Prec':>8} {'Recall':>8} {'F1':>8} {'Acc':>8}")
+    print(
+        f"\n{'Entity':<{col_w}} {'TP':>6} {'FP':>6} {'FN':>6}  {'Prec':>8} {'Recall':>8} {'F1':>8} {'Acc':>8}"
+    )
     print("-" * (col_w + 62))
 
     total_tp = total_fp = total_fn = 0
@@ -399,16 +407,26 @@ def run_benchmark(
         acc = tp / (tp + fp + fn) if (tp + fp + fn) > 0 else 0.0
 
         bar = "█" * int(f1 * 20)
-        print(f"{et:<{col_w}} {tp:>6} {fp:>6} {fn:>6}  {prec:>7.1%} {recall:>7.1%} {f1:>7.1%} {acc:>7.1%}  {bar}")
+        print(
+            f"{et:<{col_w}} {tp:>6} {fp:>6} {fn:>6}  {prec:>7.1%} {recall:>7.1%} {f1:>7.1%} {acc:>7.1%}  {bar}"
+        )
 
     print("-" * (col_w + 62))
     prec_o = total_tp / (total_tp + total_fp) if (total_tp + total_fp) > 0 else 0.0
     recall_o = total_tp / (total_tp + total_fn) if (total_tp + total_fn) > 0 else 0.0
-    f1_o = 2 * prec_o * recall_o / (prec_o + recall_o) if (prec_o + recall_o) > 0 else 0.0
-    acc_o = total_tp / (total_tp + total_fp + total_fn) if (total_tp + total_fp + total_fn) > 0 else 0.0
+    f1_o = (
+        2 * prec_o * recall_o / (prec_o + recall_o) if (prec_o + recall_o) > 0 else 0.0
+    )
+    acc_o = (
+        total_tp / (total_tp + total_fp + total_fn)
+        if (total_tp + total_fp + total_fn) > 0
+        else 0.0
+    )
 
-    print(f"{'OVERALL':<{col_w}} {total_tp:>6} {total_fp:>6} {total_fn:>6}  "
-          f"{prec_o:>7.1%} {recall_o:>7.1%} {f1_o:>7.1%} {acc_o:>7.1%}")
+    print(
+        f"{'OVERALL':<{col_w}} {total_tp:>6} {total_fp:>6} {total_fn:>6}  "
+        f"{prec_o:>7.1%} {recall_o:>7.1%} {f1_o:>7.1%} {acc_o:>7.1%}"
+    )
 
     print(f"\nSummary")
     print(f"  Documents processed : {docs_processed}")
@@ -424,14 +442,26 @@ def run_benchmark(
     # --- Example FP / FN ---
     print("False-positive examples (detected but not in FHIR ground truth):")
     _print_examples(
-        docref_path, patient_pii, practitioner_names,
-        limit, threshold, entities_to_use, filter_set, show_fp=True,
+        docref_path,
+        patient_pii,
+        practitioner_names,
+        limit,
+        threshold,
+        entities_to_use,
+        filter_set,
+        show_fp=True,
     )
     print()
     print("False-negative examples (in FHIR ground truth but not detected):")
     _print_examples(
-        docref_path, patient_pii, practitioner_names,
-        limit, threshold, entities_to_use, filter_set, show_fp=False,
+        docref_path,
+        patient_pii,
+        practitioner_names,
+        limit,
+        threshold,
+        entities_to_use,
+        filter_set,
+        show_fp=False,
     )
 
 
@@ -492,7 +522,7 @@ def _print_examples(
 
                 for span in targets[:2]:
                     s, e, et = span
-                    snippet = text[max(0, s - 20):e + 20].replace("\n", " ")
+                    snippet = text[max(0, s - 20) : e + 20].replace("\n", " ")
                     marker = text[s:e]
                     label = "FP" if show_fp else "FN"
                     print(f"  [{label}] {et:20s}  «{marker}»  context: …{snippet}…")
@@ -503,21 +533,26 @@ def _print_examples(
 
 if __name__ == "__main__":
     default_dataset = str(
-        Path(__file__).parent.parent
-        / "anonymizer/tests/data/TestBase"
+        Path(__file__).parent.parent / "anonymizer/tests/data/TestBase"
     )
 
     parser = argparse.ArgumentParser(
         description="Benchmark Presidio NLP accuracy against FHIR ground truth"
     )
-    parser.add_argument("--dataset", default=default_dataset,
-                        help="Path to TestBase directory containing NDJSON files")
-    parser.add_argument("--limit", type=int, default=500,
-                        help="Max documents to evaluate")
-    parser.add_argument("--threshold", type=float, default=0.4,
-                        help="Presidio confidence threshold")
-    parser.add_argument("--entity", action="append",
-                        help="Entity types to evaluate (repeatable)")
+    parser.add_argument(
+        "--dataset",
+        default=default_dataset,
+        help="Path to TestBase directory containing NDJSON files",
+    )
+    parser.add_argument(
+        "--limit", type=int, default=500, help="Max documents to evaluate"
+    )
+    parser.add_argument(
+        "--threshold", type=float, default=0.4, help="Presidio confidence threshold"
+    )
+    parser.add_argument(
+        "--entity", action="append", help="Entity types to evaluate (repeatable)"
+    )
     args = parser.parse_args()
 
     run_benchmark(

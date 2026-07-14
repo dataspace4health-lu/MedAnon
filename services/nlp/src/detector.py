@@ -4,7 +4,7 @@ Re-exports the symbols used by main.py so callers import from a single
 stable location.
 """
 
-from recognizers import ( 
+from recognizers import (
     HEALTHCARE_ENTITIES,
     _get_analyzer,
 )
