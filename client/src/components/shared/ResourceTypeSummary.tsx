@@ -196,11 +196,11 @@ export function ResourceTypeSummary({
                   </div>
                 </div>
 
-                <span className="w-10 text-right text-xs text-muted-foreground tabular-nums">
+                <span className="min-w-10 shrink-0 text-right text-xs text-muted-foreground tabular-nums">
                   {pct.toFixed(0)}%
                 </span>
 
-                <span className="w-6 text-right text-sm font-semibold tabular-nums">
+                <span className="min-w-6 shrink-0 text-right text-sm font-semibold tabular-nums">
                   {count}
                 </span>
               </div>

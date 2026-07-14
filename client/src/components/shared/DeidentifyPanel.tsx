@@ -647,88 +647,20 @@ export function DeidentifyPanel({
 
           {/* Output tab */}
           {activeTab === "output" && (
-            <>
-              <Collapsible>
-                <CollapsibleTrigger className="flex w-full items-center justify-start gap-2 rounded-md border bg-background px-3 py-1.5 text-sm font-medium hover:bg-accent">
-                  View FHIR Output ({state.resources.length} resources)
-                </CollapsibleTrigger>
-                <CollapsibleContent>
-                  <div className="mt-2">
-                    <FhirCodeViewer
-                      code={jsonOutput}
-                      language="json"
-                      maxHeight={fullView ? "none" : "400px"}
-                    />
-                  </div>
-                </CollapsibleContent>
-              </Collapsible>
-              <MultiFormatDownload
-                resources={cleanResources}
-                baseFilename={downloadBase}
-                defaultFormat="ndjson"
-                onXmlDownload={handleXmlDownload}
-              />
-              {destinations.length > 0 && (
-                <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-dashed p-3">
-                  <span className="text-xs text-muted-foreground">
-                    Send de-identified data + audit to S3:
-                  </span>
-                  <select
-                    className="h-8 rounded-md border bg-background px-2 text-xs"
-                    value={selectedDest}
-                    onChange={(e) => setSelectedDest(e.target.value)}
-                  >
-                    {destinations.map((d) => (
-                      <option key={d.id} value={d.id}>
-                        {d.name} ({d.bucket})
-                      </option>
-                    ))}
-                  </select>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={handleDeliverToS3}
-                    disabled={delivering || cleanResources.length === 0}
-                  >
-                    {delivering ? (
-                      <Loader2 className="size-3.5 animate-spin" />
-                    ) : (
-                      <Upload className="size-3.5" />
-                    )}
-                    Send to S3
-                  </Button>
+            <Collapsible>
+              <CollapsibleTrigger className="flex w-full items-center justify-start gap-2 rounded-md border bg-background px-3 py-1.5 text-sm font-medium hover:bg-accent">
+                View FHIR Output ({state.resources.length} resources)
+              </CollapsibleTrigger>
+              <CollapsibleContent>
+                <div className="mt-2">
+                  <FhirCodeViewer
+                    code={jsonOutput}
+                    language="json"
+                    maxHeight={fullView ? "none" : "400px"}
+                  />
                 </div>
-              )}
-              <div className="flex flex-col gap-2">
-                <div className="flex items-center gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={handleUploadToTarget}
-                    disabled={uploading}
-                  >
-                    {uploading ? (
-                      <Loader2 className="size-3.5 animate-spin" />
-                    ) : (
-                      <Upload className="size-3.5" />
-                    )}
-                    {uploading ? "Sending…" : "Send to Target"}
-                  </Button>
-                </div>
-                {uploadResult && uploadResult.errors !== -1 && (
-                  <span className="flex items-center gap-1.5 text-xs text-green-700">
-                    <CheckCircle2 className="size-3.5" />
-                    {uploadResult.uploaded} uploaded
-                    {uploadResult.errors > 0 && (
-                      <span className="text-destructive">({uploadResult.errors} error{uploadResult.errors !== 1 ? "s" : ""})</span>
-                    )}
-                  </span>
-                )}
-                {uploadResult && uploadResult.errors === -1 && (
-                  <span className="text-xs text-destructive">Upload failed, check that the target FHIR server URL is correct or that FHIR_TARGET_URL is set</span>
-                )}
-              </div>
-            </>
+              </CollapsibleContent>
+            </Collapsible>
           )}
 
           {/* Diff tab */}
@@ -763,6 +695,74 @@ export function DeidentifyPanel({
               />
             </div>
           )}
+
+          {/* Download / delivery actions - available regardless of active tab */}
+          <MultiFormatDownload
+            resources={cleanResources}
+            baseFilename={downloadBase}
+            defaultFormat="ndjson"
+            onXmlDownload={handleXmlDownload}
+          />
+          {destinations.length > 0 && (
+            <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-dashed p-3">
+              <span className="text-xs text-muted-foreground">
+                Send de-identified data + audit to S3:
+              </span>
+              <select
+                className="h-8 rounded-md border bg-background px-2 text-xs"
+                value={selectedDest}
+                onChange={(e) => setSelectedDest(e.target.value)}
+              >
+                {destinations.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.name} ({d.bucket})
+                  </option>
+                ))}
+              </select>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleDeliverToS3}
+                disabled={delivering || cleanResources.length === 0}
+              >
+                {delivering ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <Upload className="size-3.5" />
+                )}
+                Send to S3
+              </Button>
+            </div>
+          )}
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleUploadToTarget}
+                disabled={uploading}
+              >
+                {uploading ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <Upload className="size-3.5" />
+                )}
+                {uploading ? "Sending…" : "Send to Target"}
+              </Button>
+            </div>
+            {uploadResult && uploadResult.errors !== -1 && (
+              <span className="flex items-center gap-1.5 text-xs text-green-700">
+                <CheckCircle2 className="size-3.5" />
+                {uploadResult.uploaded} uploaded
+                {uploadResult.errors > 0 && (
+                  <span className="text-destructive">({uploadResult.errors} error{uploadResult.errors !== 1 ? "s" : ""})</span>
+                )}
+              </span>
+            )}
+            {uploadResult && uploadResult.errors === -1 && (
+              <span className="text-xs text-destructive">Upload failed, check that the target FHIR server URL is correct or that FHIR_TARGET_URL is set</span>
+            )}
+          </div>
         </>
       )}
     </div>

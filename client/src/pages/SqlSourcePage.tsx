@@ -298,7 +298,7 @@ export default function SqlSourcePage() {
       {/* 1. Connections */}
       <Card className="mb-5">
         <CardHeader className="flex-row items-center justify-between pb-3">
-          <CardTitle className="text-base">1. Connection</CardTitle>
+          <CardTitle className="text-base">Connection</CardTitle>
           {isAdmin && (
             <Button variant="outline" size="sm" onClick={() => setShowForm((v) => !v)}>
               <Database className="mr-1.5 h-3.5 w-3.5" />
@@ -407,7 +407,7 @@ export default function SqlSourcePage() {
       {preview && (
         <Card className="mb-5">
           <CardHeader className="flex-row items-center justify-between pb-3">
-            <CardTitle className="text-base">2. Map columns to actions</CardTitle>
+            <CardTitle className="text-base">Map columns to actions</CardTitle>
             <span className="text-xs text-muted-foreground">
               schema <code className="font-mono">{preview.schema}</code> · {includedTables.size} of {preview.tables.length} tables selected
             </span>
@@ -505,7 +505,7 @@ export default function SqlSourcePage() {
       {preview && (
         <Card>
           <CardHeader className="pb-3">
-            <CardTitle className="text-base">3. Export de-identified files</CardTitle>
+            <CardTitle className="text-base">Export de-identified files</CardTitle>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
             <div className="flex items-center gap-3">
