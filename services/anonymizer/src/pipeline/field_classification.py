@@ -31,7 +31,7 @@ from __future__ import annotations
 import re
 
 from pipeline.identifier_gate import path_severity
-from pipeline.scoring.constants import HIPAA_SENSITIVE_PATHS
+from scoring.constants import HIPAA_SENSITIVE_PATHS
 
 # "direct" | "quasi" | "non"
 IdentifierClass = str

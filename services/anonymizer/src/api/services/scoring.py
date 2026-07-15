@@ -16,7 +16,7 @@ import os
 from typing import Any
 
 from utils.json_fast import loads as _json_loads
-from pipeline.scoring.engine import score_resource
+from scoring.engine import score_resource
 from pipeline.scoring.audit import ScoreAuditCollector
 from pipeline.manifest import extract_manifest_entries as _extract_manifest_entries
 

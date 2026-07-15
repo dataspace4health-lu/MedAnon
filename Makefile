@@ -40,7 +40,7 @@ AI_MODEL    := $(lastword $(subst /, ,$(AI_PROVIDER)))
 ANONYMIZER_PORT := $(shell grep -s '^ANONYMIZER_PORT=' .env | cut -d= -f2 | tr -d '[:space:]')
 ANONYMIZER_PORT := $(if $(ANONYMIZER_PORT),$(ANONYMIZER_PORT),8000)
 
-.PHONY: help setup test test-cov lint lint-imports format batch fetch sync-check \
+.PHONY: help setup test test-cov lint lint-imports format batch fetch \
         up down down-wipe logs build build-ui build-sdv up-sdv build-healthcheck clean \
         init-domains preflight verify _dirs ai-up ai-pull ai-status \
         helm-install helm-uninstall helm-lint helm-template helm-build-gpas \
@@ -95,6 +95,9 @@ setup:
 	python3 -m venv $(VENV)
 	$(PIP) install --upgrade pip
 	$(PIP) install -r services/anonymizer/requirements.txt
+	# The shared inner package (domain, analytics, scoring) - editable so the
+	# anonymizer, its suite, ruff and import-linter resolve it as top-level pkgs.
+	$(PIP) install -e packages/medanon-core
 	# `make lint`, `make format` and `make test` all invoke $(VENV)/bin/{ruff,pytest},
 	# which nothing installed. Pinned in requirements-dev.txt so local == CI.
 	$(PIP) install -r requirements-dev.txt
@@ -118,20 +121,22 @@ test-cov:
 .PHONY: ci-local
 ci-local:
 	@echo "── ruff check ──────────────────────────────────────────────"
-	@$(RUFF) check services/anonymizer/src
-	@echo "── ruff format --check (all service trees) ─────────────────"
-	@$(RUFF) format --check services/
+	@$(RUFF) check services/anonymizer/src packages/medanon-core/src
+	@echo "── ruff format --check ─────────────────────────────────────"
+	@$(RUFF) format --check services/ packages/
 	@echo "── anonymizer layering contract ────────────────────────────"
 	@cd $(ANONYMIZER) && PYTHONPATH=src $(LINT_IMPORTS)
+	@echo "── medanon-core layering contract ──────────────────────────"
+	@cd packages/medanon-core && PYTHONPATH=src $(LINT_IMPORTS)
 	@echo "── env drift ───────────────────────────────────────────────"
 	@$(PYBIN) scripts/check_env.py
 	@echo "── env catalogue up to date ────────────────────────────────"
 	@$(PYBIN) scripts/check_env.py --docs docs/reference/env-vars.md
 	@git diff --quiet -- docs/reference/env-vars.md || \
 		{ echo "docs/reference/env-vars.md is stale; commit the regenerated file"; exit 1; }
-	@echo "── trust-gate id sync ──────────────────────────────────────"
-	@$(PYBIN) scripts/check_trust_ids.py
-	@echo "── scoring copies in sync ──────────────────────────────────"
+	@echo "── medanon-core unit tests ─────────────────────────────────"
+	@$(PYBIN) -m pytest packages/medanon-core/tests -q
+	@echo "── nlp entity catalogue in sync ────────────────────────────"
 	@bash scripts/sync_shared_code.sh
 	@echo "── anonymizer suite ────────────────────────────────────────"
 	@cd $(ANONYMIZER) && MEDANON_MANIFEST_ENABLED=true $(PYBIN) -m pytest tests/ -q
@@ -152,30 +157,17 @@ install-hooks:
 # ── Code quality ──────────────────────────────────────────────────────────────
 # Settings live in the root ruff.toml; the version is pinned in requirements-dev.txt.
 lint:
-	$(RUFF) check services/anonymizer/src
+	$(RUFF) check services/anonymizer/src packages/medanon-core/src
 
-# Architecture guardrail: enforces the anonymizer layering contract in
-# services/anonymizer/.importlinter (dependencies point downward). The baseline
-# of 22 known upward imports is ignored so CI is green today; any NEW upward
-# import fails. Delete an ignore line as the coupling refactor removes it.
+# Architecture guardrail: both layering contracts (anonymizer + medanon-core),
+# each enforced at zero (no ignore_imports). Any NEW upward import fails.
 lint-imports:
 	@cd $(ANONYMIZER) && PYTHONPATH=src $(LINT_IMPORTS)
+	@cd packages/medanon-core && PYTHONPATH=src $(LINT_IMPORTS)
 
-# Formats every service tree, not just the anonymizer. pipeline/scoring/ is kept
-# manually in sync with services/scoring/src/ (see sync-check), so formatting one
-# copy alone reports as logic drift.
+# Formats the service trees and the shared package.
 format:
-	$(RUFF) format services/
-
-sync-check:
-	bash scripts/sync_shared_code.sh
-
-# Narrow, CI-friendly gate for just the Trust Gate id vocabularies (phases +
-# use-cases) shared between the anonymizer trust-profile model and the
-# trust-gate service. Independent of the broader (manually-synced) scoring
-# comparison so it can fail the build on its own contract drift.
-trust-id-sync:
-	python3 scripts/check_trust_ids.py
+	$(RUFF) format services/ packages/
 
 # Compare .env.example against what the code and docker-compose.yml actually
 # read: duplicate keys, dead/inert entries, missing posture flags, values that

@@ -184,7 +184,6 @@ scripts/*
 
 # Invoked by CI (.github/workflows/ci.yml)
 !scripts/check_env.py
-!scripts/check_trust_ids.py
 # Invoked by the Makefile
 !scripts/sync_shared_code.sh
 !scripts/batch_fetch.sh

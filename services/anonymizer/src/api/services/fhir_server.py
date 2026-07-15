@@ -17,7 +17,7 @@ logger = logging.getLogger("medanon")
 _PREFETCH_BATCHES = int(os.environ.get("MEDANON_PREFETCH_BATCHES", "2"))
 
 try:
-    from pipeline.scoring.constants import SCORING_ENABLED as _SCORING_ON
+    from scoring.constants import SCORING_ENABLED as _SCORING_ON
 except ImportError:
     _SCORING_ON = False
 

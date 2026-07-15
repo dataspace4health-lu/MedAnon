@@ -179,6 +179,20 @@ async def _startup() -> None:
     except Exception:
         logger.warning("config_validator_wiring_failed", exc_info=True)
 
+    # Wire the scoring engine's injected providers so the shared engine
+    # (medanon-core `scoring`, a leaf package) can reach the anonymizer's remote
+    # scoring client and NLP adapter without importing integrations.* itself.
+    try:
+        from integrations.nlp.adapter import _get_nlp_adapter
+        from integrations.scoring import get_remote_scoring_client
+        from scoring.engine import set_remote_client_provider
+        from scoring.privacy import set_nlp_adapter_provider
+
+        set_remote_client_provider(get_remote_scoring_client)
+        set_nlp_adapter_provider(_get_nlp_adapter)
+    except Exception:
+        logger.warning("scoring_provider_wiring_failed", exc_info=True)
+
     # Refuse to start with plain (un-keyed) hashing outside a dev environment.
     # Plain SHA3 is reversible via rainbow tables  must never reach production.
     _allow_plain = os.environ.get("MEDANON_HASH_ALLOW_PLAIN", "").strip().lower() in (

@@ -14,26 +14,21 @@ import random
 import time
 from typing import Any
 
-from pipeline.scoring.models import Evidence, ModuleScore, PrivacyDecision, ScoreResult
-from pipeline.scoring.constants import RISK_THRESHOLD
-from pipeline.scoring.privacy import PrivacyRiskEvaluator
-from pipeline.scoring.utility import UtilityEvaluator
-from pipeline.scoring.quality import QualityEvaluator
+from scoring.models import Evidence, ModuleScore, PrivacyDecision, ScoreResult
+from scoring.constants import RISK_THRESHOLD
+from scoring.privacy import PrivacyRiskEvaluator
+from scoring.utility import UtilityEvaluator
+from scoring.quality import QualityEvaluator
+from scoring._metrics import (
+    SCORE_COMPOSITE,
+    SCORE_DECISIONS,
+    SCORE_DURATION,
+    SCORE_PRIVACY_RISK,
+    _HAS_METRICS,
+)
 
 _log = logging.getLogger(__name__)
 _audit = logging.getLogger("medanon.audit")
-
-try:
-    from utils.metrics import (
-        SCORE_COMPOSITE,
-        SCORE_PRIVACY_RISK,
-        SCORE_DECISIONS,
-        SCORE_DURATION,
-    )
-
-    _HAS_METRICS = True
-except ImportError:
-    _HAS_METRICS = False
 
 _privacy_eval = PrivacyRiskEvaluator()
 _utility_eval = UtilityEvaluator()
@@ -133,24 +128,39 @@ def score_resource(
     )
 
 
+_REMOTE_CLIENT = None
+_REMOTE_CLIENT_URL = ""
+_remote_client_provider = None
+
+
+def set_remote_client_provider(provider) -> None:
+    """Inject the remote scoring-client factory (composition root).
+
+    The anonymizer wires ``integrations.scoring.get_remote_scoring_client`` here
+    at startup so that, when ``SCORING_SERVICE_URL`` is set, scoring delegates to
+    the microservice. When no provider is injected (e.g. the scoring microservice
+    itself, which is the local engine) scoring is always in-process.
+    """
+    global _remote_client_provider
+    _remote_client_provider = provider
+
+
 def _get_remote_client():
-    """Lazy lookup of the remote scoring client (env-driven, cached)."""
+    """Return the injected remote scoring client when configured, else None."""
     global _REMOTE_CLIENT, _REMOTE_CLIENT_URL
+    # Common/local path (no provider injected, e.g. the scoring microservice or
+    # scoring-locally): bail before the per-call env read.
+    if _remote_client_provider is None:
+        return None
     url = os.environ.get("SCORING_SERVICE_URL", "").strip()
     if not url:
         _REMOTE_CLIENT = None
         _REMOTE_CLIENT_URL = ""
         return None
     if _REMOTE_CLIENT is None or _REMOTE_CLIENT_URL != url:
-        from integrations.scoring import get_remote_scoring_client
-
-        _REMOTE_CLIENT = get_remote_scoring_client()
+        _REMOTE_CLIENT = _remote_client_provider()
         _REMOTE_CLIENT_URL = url
     return _REMOTE_CLIENT
-
-
-_REMOTE_CLIENT = None
-_REMOTE_CLIENT_URL = ""
 
 
 def _score_resource_local(

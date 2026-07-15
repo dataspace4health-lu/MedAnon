@@ -1,5 +1,7 @@
-# Build context: services/scoring/
-# Stateless scoring microservice. No FHIR client, no Presidio, no NLP.
+# Build context: repo root (.) - so the shared medanon-core package can be
+# copied in. Stateless scoring microservice: it runs the shared scoring engine
+# (medanon-core `scoring`); no FHIR client, no Presidio, no NLP (the NLP adapter
+# and remote client providers are never injected here, so scoring is local).
 
 FROM python:3.12-slim AS base
 
@@ -8,10 +10,15 @@ RUN apt-get update && apt-get upgrade -y --no-install-recommends \
 
 WORKDIR /code
 
-COPY requirements.txt /code/requirements.txt
+COPY services/scoring/requirements.txt /code/requirements.txt
 RUN pip install --no-cache-dir -r /code/requirements.txt
 
-COPY src/ /code/src/
+# Shared inner package (domain + analytics + scoring): the single source of
+# truth, installed as a wheel into site-packages (importable regardless of cwd).
+COPY packages/medanon-core /code/medanon-core
+RUN pip install --no-cache-dir /code/medanon-core
+
+COPY services/scoring/src/ /code/src/
 
 RUN addgroup --system appgroup && adduser --system --ingroup appgroup appuser
 USER appuser

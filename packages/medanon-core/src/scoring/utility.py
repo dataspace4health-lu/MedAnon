@@ -22,8 +22,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from models import Evidence, ModuleScore
-from constants import (
+from scoring.models import Evidence, ModuleScore
+from scoring.constants import (
     CLINICAL_CODE_SYSTEMS,
     DATE_FIELDS,
     INFO_LOSS_WEIGHTS,

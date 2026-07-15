@@ -23,7 +23,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from models import Evidence, ModuleScore
+from scoring.models import Evidence, ModuleScore
+from scoring._rules import parsed_rules
 
 # Redaction sentinels that count as "still populated / conformant" for DQ
 # a field replaced with one of these is acceptable (not over-scrubbed).
@@ -199,9 +200,7 @@ class QualityEvaluator:
         # as applicable to every resource type  even those without a ``note``
         # field  which deflates coverage to ~50%.
         applicable: set[str] = set()
-        for rule in settings.rules:
-            name = rule.get("name", rule.get("match", ""))
-            match_expr = rule.get("match", "")
+        for name, match_expr, root_field, nseg in parsed_rules(settings).rules:
             # A rule applies if it's a wildcard (*.) or targets this resource type
             type_matches = False
             if match_expr.startswith("*.") or match_expr.startswith(f"{rtype}."):
@@ -212,21 +211,17 @@ class QualityEvaluator:
             if not type_matches:
                 continue
 
-            # Extract the root field targeted by this rule (e.g. "name" from
-            # "Patient.name" or "*.name.family") and only count the rule as
-            # applicable when the resource actually contains that field.
-            parts = match_expr.split(".")
-            root_field = parts[1] if len(parts) >= 2 else ""
+            # Only count the rule when the resource actually contains its root
+            # field (name / match_expr / root_field are pre-parsed per settings).
             if root_field and root_field not in deidentified:
                 continue
 
-            # If the rule path has ≥ 3 segments (e.g. *.name.family) the rule
-            # requires a nested field inside the root value.  When the root
-            # value is a scalar or null it cannot contain sub-fields  the rule
-            # can never fire and should not count as applicable.
-            # Concrete case: Organization.name is a plain string, not a
-            # HumanName object, so *.name.family is not applicable to it.
-            if len(parts) >= 3 and root_field:
+            # If the rule path has >= 3 segments (e.g. *.name.family) the rule
+            # requires a nested field inside the root value. When the root value
+            # is a scalar or null it cannot contain sub-fields - the rule can
+            # never fire and should not count as applicable (e.g. Organization.name
+            # is a plain string, so *.name.family is not applicable to it).
+            if nseg >= 3 and root_field:
                 root_val = deidentified.get(root_field)
                 if not isinstance(root_val, (dict, list)):
                     continue
@@ -501,7 +496,7 @@ class QualityEvaluator:
 
         Returns 1.0 when no codings are present (not applicable).
         """
-        from constants import CLINICAL_CODE_SYSTEMS
+        from scoring.constants import CLINICAL_CODE_SYSTEMS
 
         codings = self._collect_codings(r)
         if not codings:

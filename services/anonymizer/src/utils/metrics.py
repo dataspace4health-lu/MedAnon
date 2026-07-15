@@ -273,33 +273,9 @@ WORKER_ACTIVE_JOBS = Gauge(
 )
 
 # ── Scoring engine metrics ───────────────────────────────────────────────────
-
-SCORE_COMPOSITE = Histogram(
-    "medanon_score_composite",
-    "Composite de-identification score (0-100)",
-    ["resource_type", "decision"],
-    buckets=(0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100),
-)
-
-SCORE_PRIVACY_RISK = Histogram(
-    "medanon_score_privacy_risk",
-    "Privacy risk score (0.0-1.0, lower is better)",
-    ["resource_type"],
-    buckets=(0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.5, 0.75, 1.0),
-)
-
-SCORE_DECISIONS = Counter(
-    "medanon_score_decisions_total",
-    "Total scoring decisions by outcome",
-    ["decision"],
-)
-
-SCORE_DURATION = Histogram(
-    "medanon_score_duration_seconds",
-    "Time spent scoring a single resource",
-    ["resource_type"],
-    buckets=(0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0),
-)
+# The SCORE_* handles moved to medanon-core scoring._metrics (the scoring engine
+# is now a shared package and owns its own optional metrics). Imported there,
+# they still register with the default Prometheus registry and appear on /metrics.
 
 # ── Output-barrier / QC quality observability ────────────────────────────────
 # De-identification *quality* signals, distinct from latency/throughput. Before

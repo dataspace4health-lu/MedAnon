@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "medanon-core"
+version = "0.1.0"
+description = "MedAnon shared inner package: domain contracts, analytics, and the scoring engine. Single source of truth for the monolith and the scoring/analytics/trust-gate microservices."
+requires-python = ">=3.12"
+# Zero hard runtime dependencies: the core is pure stdlib so every consuming
+# service (including the slim microservices) can install it without pulling
+# heavy numeric/ML libs. Optional extras below are import-guarded in the code.
+dependencies = []
+
+[project.optional-dependencies]
+metrics = ["prometheus-client"]
+# Heavy synthesis/risk extras - only the anonymizer (SDV build) and analytics
+# service opt in. The code degrades gracefully when absent.
+synthetic = ["pandas", "sdv", "sdmetrics"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

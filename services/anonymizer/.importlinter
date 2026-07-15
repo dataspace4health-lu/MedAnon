@@ -19,6 +19,7 @@ root_packages =
     pipeline
     actions
     integrations
+    scoring
     analytics
     utils
     domain
@@ -32,4 +33,5 @@ layers =
     pipeline
     actions
     integrations
+    scoring
     analytics | utils | domain | formats

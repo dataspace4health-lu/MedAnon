@@ -3,7 +3,7 @@
 The dataclasses moved to ``domain.scoring`` (pure DTOs belong in the domain, so
 adapters like ``integrations.scoring.client`` can depend on them without reaching
 up into the pipeline). This module re-exports them so the many existing
-``from pipeline.scoring.models import ...`` call sites keep working. New code
+``from scoring.models import ...`` call sites keep working. New code
 should import from ``domain.scoring`` directly.
 """
 

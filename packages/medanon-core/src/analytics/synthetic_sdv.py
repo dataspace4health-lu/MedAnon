@@ -25,14 +25,22 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-try:
-    import pandas as pd
-    from sdv.single_table import GaussianCopulaSynthesizer
-    from sdv.metadata import Metadata
+import importlib.util
 
-    SDV_AVAILABLE = True
-except ImportError:
-    SDV_AVAILABLE = False
+# Cheap availability probe - does NOT import pandas/sdv. That ~440ms load is
+# deferred to _load_sdv() at generation time, so importing this module (which the
+# synthetic router pulls in at app startup) never eagerly loads pandas.
+SDV_AVAILABLE = importlib.util.find_spec("sdv") is not None
+
+
+def _load_sdv():
+    """Import the heavy pandas + SDV stack lazily (only when actually generating)."""
+    import pandas as pd
+    from sdv.metadata import Metadata
+    from sdv.single_table import GaussianCopulaSynthesizer
+
+    return pd, GaussianCopulaSynthesizer, Metadata
+
 
 _SYN_TAG = {
     "system": "http://terminology.hl7.org/CodeSystem/v3-ObservationValue",
@@ -245,6 +253,7 @@ def generate_synthetic_patients_sdv(
         raise RuntimeError(
             "SDV is not installed. Install with: pip install -r requirements-sdv.txt"
         )
+    pd, GaussianCopulaSynthesizer, Metadata = _load_sdv()
     if not patients:
         raise ValueError(
             "patients list must not be empty  no distribution to sample from"
@@ -304,6 +313,7 @@ def generate_synthetic_conditions_sdv(
         raise RuntimeError(
             "SDV is not installed. Install with: pip install -r requirements-sdv.txt"
         )
+    pd, GaussianCopulaSynthesizer, Metadata = _load_sdv()
     if not conditions:
         raise ValueError("conditions list must not be empty")
     if not synthetic_patients:

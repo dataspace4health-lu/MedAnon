@@ -42,6 +42,20 @@ async def _main() -> None:
     except Exception:
         pass
 
+    # Inject the scoring engine's providers (remote client + NLP adapter) so the
+    # shared medanon-core scoring engine works in the worker without importing
+    # integrations.* itself. Mirrors api/main.py startup.
+    try:
+        from integrations.nlp.adapter import _get_nlp_adapter
+        from integrations.scoring import get_remote_scoring_client
+        from scoring.engine import set_remote_client_provider
+        from scoring.privacy import set_nlp_adapter_provider
+
+        set_remote_client_provider(get_remote_scoring_client)
+        set_nlp_adapter_provider(_get_nlp_adapter)
+    except Exception:
+        logger.warning("scoring_provider_wiring_failed", exc_info=True)
+
     redis_url = os.environ.get("MEDANON_REDIS_URL", "").strip()
     app_db_url = os.environ.get("MEDANON_APP_DB_URL", "").strip()
     max_concurrent = int(os.environ.get("MEDANON_JOB_WORKERS", "3"))

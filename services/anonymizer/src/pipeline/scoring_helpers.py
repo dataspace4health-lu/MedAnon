@@ -25,7 +25,7 @@ _MANIFEST_SYSTEM = "https://medanon.local/transformation-manifest"
 def _is_scoring_enabled() -> bool:
     """Check if scoring is enabled (cached at first call)."""
     try:
-        from pipeline.scoring.constants import SCORING_ENABLED
+        from scoring.constants import SCORING_ENABLED
 
         return SCORING_ENABLED
     except ImportError:
@@ -153,7 +153,7 @@ def make_collector(config_profile: str = "auto"):
     if not _is_scoring_enabled():
         return None
     try:
-        from pipeline.scoring.engine import ScoreCollector
+        from scoring.engine import ScoreCollector
 
         return ScoreCollector(config_profile=config_profile)
     except Exception:

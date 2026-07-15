@@ -1,7 +1,8 @@
-# Build context: services/trust-gate/
-# Stateless pre-privacy trust/quality assessment microservice.
-# No FHIR client, no Presidio, no gPAS  talks to the FHIR validator and
-# terminology sidecars over HTTP.
+# Build context: repo root (.) - so the shared medanon-core package can be
+# copied in. Stateless pre-privacy trust/quality assessment microservice.
+# No FHIR client, no Presidio, no gPAS - talks to the FHIR validator and
+# terminology sidecars over HTTP. Consumes the shared trust vocabulary from
+# medanon-core domain.trust (phases.py asserts parity at import).
 
 FROM python:3.12-slim AS base
 
@@ -10,11 +11,15 @@ RUN apt-get update && apt-get upgrade -y --no-install-recommends \
 
 WORKDIR /code
 
-COPY requirements.txt /code/requirements.txt
+COPY services/trust-gate/requirements.txt /code/requirements.txt
 RUN pip install --no-cache-dir -r /code/requirements.txt
 
-COPY src/ /code/src/
-COPY config/ /code/config/
+# Shared inner package (domain.trust vocabulary), installed into site-packages.
+COPY packages/medanon-core /code/medanon-core
+RUN pip install --no-cache-dir /code/medanon-core
+
+COPY services/trust-gate/src/ /code/src/
+COPY services/trust-gate/config/ /code/config/
 
 RUN addgroup --system appgroup && adduser --system --ingroup appgroup appuser
 USER appuser

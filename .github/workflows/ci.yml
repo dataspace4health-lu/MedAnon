@@ -25,21 +25,23 @@ jobs:
       # `ruff format --check` compared today's formatter against a tree formatted
       # by an older one. Settings now live in the root ruff.toml.
       - run: pip install -r requirements-dev.txt
+      # The shared inner package (domain, analytics, scoring) - editable install
+      # so ruff, import-linter and the suites resolve it as top-level packages.
+      - run: pip install -e packages/medanon-core
       - name: ruff check
-        run: ruff check services/anonymizer/src
-      # Architecture guardrail: fails on any NEW upward import against the
-      # anonymizer layering contract (services/anonymizer/.importlinter).
-      - name: import-linter layering contract
+        run: ruff check services/anonymizer/src packages/medanon-core/src
+      # Architecture guardrail: two layering contracts, both enforced at zero
+      # (no ignore_imports) - the anonymizer, and the shared package's own leaves.
+      - name: import-linter (anonymizer)
         run: cd services/anonymizer && PYTHONPATH=src lint-imports
-      # All service trees, not just the anonymizer: pipeline/scoring/ is manually
-      # kept in sync with services/scoring/src/, and formatting one copy alone
-      # breaks `sync_shared_code.sh`.
+      - name: import-linter (medanon-core)
+        run: cd packages/medanon-core && PYTHONPATH=src lint-imports
       - name: ruff format --check
-        run: ruff format --check services/
-      - name: Scoring / analytics copies in sync
+        run: ruff format --check services/ packages/
+      # medanon-core unit tests (packages/medanon-core/tests) are gitignored like
+      # the service suites, so they run in the pre-push `make ci-local`, not here.
+      - name: NLP entity catalogue in sync
         run: bash scripts/sync_shared_code.sh
-      - name: Trust Gate id sync (phases + use-cases)
-        run: python3 scripts/check_trust_ids.py
       - name: Env drift (.env.example vs code + compose)
         run: python3 scripts/check_env.py
       - name: Env catalogue is up to date
@@ -181,6 +183,7 @@ jobs:
         if: steps.detect.outputs.present == 'true'
         run: |
           pip install -r services/anonymizer/requirements.txt
+          pip install -e packages/medanon-core
           pip install pytest pytest-asyncio pytest-cov httpx
       - name: Run the full suite (no Docker required)
         if: steps.detect.outputs.present == 'true'

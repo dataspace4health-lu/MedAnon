@@ -1,3 +1,7 @@
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+# src holds the anonymizer packages; the second entry resolves the shared
+# medanon-core packages (domain, analytics, scoring) from the monorepo inner
+# package without requiring `pip install -e` first. Production images install
+# the wheel instead (see services/anonymizer/Dockerfile).
+pythonpath = ["src", "../../packages/medanon-core/src"]
 testpaths = ["tests"]

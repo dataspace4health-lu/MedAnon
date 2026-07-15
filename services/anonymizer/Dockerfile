@@ -1,5 +1,5 @@
-# Build context: services/anonymizer/ (or repo root for SDV stage)
-# docker-compose uses: context: services/anonymizer / dockerfile: Dockerfile
+# Build context: repo root (.) - so the shared medanon-core package can be
+# copied in. docker-compose uses: context: . / dockerfile: services/anonymizer/Dockerfile
 #
 # ── Base stage ────────────────────────────────────────────────────────────────
 FROM python:3.12-slim AS base
@@ -10,11 +10,16 @@ RUN apt-get update && apt-get upgrade -y --no-install-recommends && rm -rf /var/
 WORKDIR /code
 
 # Install service deps (layer-cached unless requirements change)
-COPY requirements.txt /code/requirements.txt
+COPY services/anonymizer/requirements.txt /code/requirements.txt
 RUN pip install --no-cache-dir --upgrade -r /code/requirements.txt
 
-COPY src/ /code/src/
-COPY config/ /code/config/
+# Shared inner package (domain + analytics + scoring): the single source of
+# truth, installed as a wheel into site-packages (importable regardless of cwd).
+COPY packages/medanon-core /code/medanon-core
+RUN pip install --no-cache-dir /code/medanon-core
+
+COPY services/anonymizer/src/ /code/src/
+COPY services/anonymizer/config/ /code/config/
 # NOTE: RSA keys are NOT baked into the image.
 # Mount them at runtime via Docker volume or Kubernetes Secret:
 #   docker run -v /path/to/keys:/code/keys ...
@@ -62,7 +67,7 @@ CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload
 # Extends base before the non-root user switch so pip can write to site-packages.
 # Build: make build-sdv   Start: make up-sdv
 FROM base AS sdv
-COPY requirements-sdv.txt /code/requirements-sdv.txt
+COPY services/anonymizer/requirements-sdv.txt /code/requirements-sdv.txt
 RUN pip install --no-cache-dir -r /code/requirements-sdv.txt
 WORKDIR /code/src
 USER appuser

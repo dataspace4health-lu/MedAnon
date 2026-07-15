@@ -37,6 +37,17 @@ ALL_PHASES: tuple[str, ...] = (
     SOURCE_ACCURACY,
 )
 
+# Single source of truth for the phase vocabulary. The anonymizer builds trust
+# profiles from medanon-core domain.trust.PHASE_IDS; the two services must agree.
+# This import-time parity assert replaces the external scripts/check_trust_ids.py
+# so drift fails fast at load rather than in a separate CI script.
+from domain.trust import PHASE_IDS as _CORE_PHASE_IDS  # noqa: E402
+
+assert set(ALL_PHASES) == set(_CORE_PHASE_IDS), (
+    "trust-gate phases.ALL_PHASES drifted from medanon-core domain.trust.PHASE_IDS: "
+    f"{set(ALL_PHASES) ^ set(_CORE_PHASE_IDS)}"
+)
+
 # Built-in (non-rule) check_id → phase.
 _BUILTIN_PHASE: dict[str, str] = {
     "conformance.resource_type_present": STRUCTURAL,

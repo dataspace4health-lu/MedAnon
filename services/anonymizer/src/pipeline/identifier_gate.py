@@ -31,8 +31,8 @@ from __future__ import annotations
 import logging
 
 from pipeline.manifest import _MANIFEST_ENABLED
-from pipeline.scoring.constants import HIPAA_SENSITIVE_PATHS
-from pipeline.scoring.privacy import _is_bare_reference, _nested_path_exists
+from scoring.constants import HIPAA_SENSITIVE_PATHS
+from scoring.privacy import _is_bare_reference, _nested_path_exists
 
 _log = logging.getLogger("medanon.identifier_gate")
 

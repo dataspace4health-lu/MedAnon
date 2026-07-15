@@ -22,7 +22,7 @@ _REQUEST_TIMEOUT = float(os.environ.get("MEDANON_REQUEST_TIMEOUT_SEC", "300"))
 
 # Auto-enable manifest attachment when scoring is on
 try:
-    from pipeline.scoring.constants import SCORING_ENABLED as _SCORING_ON
+    from scoring.constants import SCORING_ENABLED as _SCORING_ON
 except ImportError:
     _SCORING_ON = False
 

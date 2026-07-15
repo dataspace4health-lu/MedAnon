@@ -242,8 +242,8 @@ services:
   # FHIR de-identification / anonymiser ──────────────────────────────────
   anonymizer:
     build:
-      context: services/anonymizer
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: services/anonymizer/Dockerfile
       target: api
     image: ${ANONYMIZER_IMAGE:-medanon:latest}
     container_name: medanon
@@ -314,8 +314,8 @@ services:
   # MEDANON_WORKER_ENABLED=false so jobs are only executed here.
   worker:
     build:
-      context: services/anonymizer
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: services/anonymizer/Dockerfile
       target: worker
     image: ${WORKER_IMAGE:-medanon-worker:latest}
     # container_name intentionally absent  allows `--scale worker=N` and
@@ -691,8 +691,8 @@ services:
   # Anonymizer/worker call this via SCORING_SERVICE_URL with local fallback.
   scoring:
     build:
-      context: services/scoring
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: services/scoring/Dockerfile
     image: medanon-scoring:latest
     container_name: medanon-scoring
     restart: unless-stopped
@@ -728,8 +728,8 @@ services:
   # requires Elasticsearch + a licensed SNOMED CT import; see docs/trust-gate.md).
   trust-gate:
     build:
-      context: services/trust-gate
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: services/trust-gate/Dockerfile
     image: medanon-trust-gate:latest
     container_name: medanon-trust-gate
     profiles: ["trust"]

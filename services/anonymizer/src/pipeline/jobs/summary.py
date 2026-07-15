@@ -54,7 +54,7 @@ class JobSummaryCollector:
         self._detail = JobDetailAccumulator()
         # Try to initialize scoring (may be disabled via env)
         try:
-            from pipeline.scoring.constants import SCORING_ENABLED
+            from scoring.constants import SCORING_ENABLED
 
             if SCORING_ENABLED:
                 from pipeline.scoring.audit import ScoreAuditCollector

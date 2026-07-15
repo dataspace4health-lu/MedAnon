@@ -24,8 +24,8 @@ import logging
 import re
 from typing import Any
 
-from models import Evidence, PrivacyDecision
-from constants import (
+from scoring.models import Evidence, PrivacyDecision
+from scoring.constants import (
     HIPAA_SENSITIVE_PATHS,
     NER_ENABLED,
     NER_THRESHOLD,
@@ -33,8 +33,21 @@ from constants import (
     RISK_THRESHOLD,
     SCORE_CONFIG_GATE,
 )
+from scoring._rules import parsed_rules
 
 _log = logging.getLogger(__name__)
+
+# The NLP detector adapter is injected by the host (composition root) so this
+# leaf engine never imports integrations.nlp. When no provider is wired (the
+# scoring microservice, or NER disabled) _ner_scan returns no detections.
+_nlp_adapter_provider = None
+
+
+def set_nlp_adapter_provider(provider) -> None:
+    """Inject the NLP-adapter factory used for the optional NER privacy scan."""
+    global _nlp_adapter_provider
+    _nlp_adapter_provider = provider
+
 
 # ---------------------------------------------------------------------------
 # PII regex patterns (lightweight  no NLP needed)
@@ -284,7 +297,7 @@ class PrivacyRiskEvaluator:
         # ── N=2..4: small cohort  informational k-anonymity ────────────────
         if n < 5:
             try:
-                from risk import compute_k_anonymity
+                from analytics.risk import compute_k_anonymity
 
                 k_result = compute_k_anonymity(patient_qis)
                 summary = k_result.get("summary", {})
@@ -355,7 +368,7 @@ class PrivacyRiskEvaluator:
 
         # Per-resource simplified QI suppression check
         try:
-            from risk import _extract_patient_qi
+            from analytics.risk import _extract_patient_qi
         except ImportError:
             evidence.append(
                 Evidence(
@@ -409,7 +422,7 @@ class PrivacyRiskEvaluator:
         evidence: list[Evidence],
     ) -> float:
         try:
-            from risk import (
+            from analytics.risk import (
                 extract_quasi_identifiers,
                 compute_k_anonymity,
             )
@@ -472,7 +485,7 @@ class PrivacyRiskEvaluator:
     ) -> float:
         """Batch-level k-anonymity from pre-extracted QI tuples."""
         try:
-            from risk import compute_k_anonymity
+            from analytics.risk import compute_k_anonymity
         except ImportError:
             evidence.append(
                 Evidence(
@@ -703,7 +716,7 @@ class PrivacyRiskEvaluator:
         dimension flags linkability for review without unilaterally failing the
         gate (k-anonymity/l-diversity remain the hard population gates).
         """
-        from constants import PHI_RESOURCE_TYPES
+        from scoring.constants import PHI_RESOURCE_TYPES
 
         # Map patient reference → set of distinct clinical resource types.
         ref_to_rtypes: dict[str, set] = {}
@@ -798,21 +811,7 @@ class PrivacyRiskEvaluator:
         # entry when they actually transform something, so a clean field
         # produces no manifest entry even though the rule ran and the field is
         # safe. Treat such paths as config-covered to avoid false positives.
-        conditional_actions = frozenset({"nlp_detect_act", "nlp_scrub", "nlp_detect"})
-        config_covered_paths: set[str] = set()
-        if settings is not None and hasattr(settings, "rules"):
-            for rule in settings.rules:
-                if rule.get("action") not in conditional_actions:
-                    continue
-                match_expr = rule.get("match", "")
-                # Normalise wildcard prefix: "*.text" → "text"
-                if match_expr.startswith("*."):
-                    config_covered_paths.add(match_expr[2:])
-                elif "." in match_expr:
-                    # "Observation.valueString" → "valueString"
-                    config_covered_paths.add(match_expr.split(".", 1)[1])
-                else:
-                    config_covered_paths.add(match_expr)
+        config_covered_paths = parsed_rules(settings).config_covered_paths
 
         unmatched = []
         present = 0  # sensitive fields actually present in this resource
@@ -904,9 +903,7 @@ class PrivacyRiskEvaluator:
         rtype = deidentified.get("resourceType", "")
 
         applicable: set[str] = set()
-        for rule in settings.rules:
-            name = rule.get("name", rule.get("match", ""))
-            match_expr = rule.get("match", "")
+        for name, match_expr, root_field, _nseg in parsed_rules(settings).rules:
             type_matches = (
                 match_expr.startswith("*.")
                 or match_expr.startswith(f"{rtype}.")
@@ -914,8 +911,6 @@ class PrivacyRiskEvaluator:
             )
             if not type_matches:
                 continue
-            parts = match_expr.split(".")
-            root_field = parts[1] if len(parts) >= 2 else ""
             if root_field and root_field not in deidentified:
                 continue
             applicable.add(name)
@@ -1027,9 +1022,9 @@ class PrivacyRiskEvaluator:
         """Run Presidio NER scan via existing NLP adapter."""
         detections: list[dict] = []
         try:
-            from pipeline.deidentify import _get_nlp_adapter
-
-            adapter = _get_nlp_adapter()
+            adapter = (
+                _nlp_adapter_provider() if _nlp_adapter_provider is not None else None
+            )
             if adapter is None:
                 return detections
             for text in texts:

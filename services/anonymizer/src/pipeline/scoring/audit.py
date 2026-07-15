@@ -17,9 +17,9 @@ import collections
 import datetime
 from typing import Any
 
-from pipeline.scoring.engine import ScoreCollector
-from pipeline.scoring.models import ScoreResult
-from pipeline.scoring.constants import INFO_LOSS_WEIGHTS, RISK_THRESHOLD
+from scoring.engine import ScoreCollector
+from scoring.models import ScoreResult
+from scoring.constants import INFO_LOSS_WEIGHTS, RISK_THRESHOLD
 
 _MAX_EXAMPLES = 15
 _MAX_DIMENSION_SAMPLES = 5000

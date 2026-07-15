@@ -1,0 +1,21 @@
+# import-linter contract for the medanon-core shared package.
+#
+# The shared code points inward only, mirroring the anonymizer contract: the
+# scoring engine may depend on domain + analytics (independent, dependency-free
+# leaves); it imports nothing else (the NLP adapter and remote scoring client are
+# injected by the host). No ignore_imports - enforced at zero.
+#
+# Run:  cd packages/medanon-core && PYTHONPATH=src lint-imports
+
+[importlinter]
+root_packages =
+    domain
+    analytics
+    scoring
+
+[importlinter:contract:core-layering]
+name = medanon-core layering (leaves inward)
+type = layers
+layers =
+    scoring
+    analytics | domain

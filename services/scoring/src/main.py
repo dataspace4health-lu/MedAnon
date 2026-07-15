@@ -24,7 +24,7 @@ from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_
 from pydantic import BaseModel, Field
 from starlette.responses import Response
 
-from engine import score_resource
+from scoring import score_resource
 
 logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
 _log = logging.getLogger("scoring")

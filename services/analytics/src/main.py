@@ -116,7 +116,7 @@ def ready():
 @app.post("/v1/analyse/risk")
 async def analyse_risk(request: Request):
     """Compute re-identification risk metrics on de-identified FHIR resources."""
-    from risk import assess_risk_resources
+    from analytics.risk import assess_risk_resources
 
     body = await request.body()
     content_type = request.headers.get("content-type", "")
@@ -155,7 +155,7 @@ async def analyse_privacy_risk(request: Request):
     when ``synthetic`` is supplied the DCR/NNDR + attribute-inference metrics
     run against it.
     """
-    from privacy_risk import assess_privacy_risk
+    from analytics.privacy_risk import assess_privacy_risk
 
     body = await request.body()
     _t0 = time.monotonic()
@@ -207,7 +207,7 @@ async def synthetic_passport(request: Request):
     Body is JSON: ``{"real": [...], "synthetic": [...], "privacy_model": {...}?,
     "dp_params": {...}?}``.
     """
-    from synthetic_passport import build_synthetic_passport
+    from analytics.synthetic_passport import build_synthetic_passport
 
     body = await request.body()
     _t0 = time.monotonic()
@@ -268,7 +268,7 @@ async def generate_synthetic(
     ``X-Privacy-Accounting`` response header.
     """
     try:
-        from synthetic_sdv import (
+        from analytics.synthetic_sdv import (
             SDV_AVAILABLE,
             generate_synthetic_patients_sdv as _gen_patients_sdv,
             generate_synthetic_conditions_sdv as _gen_conditions_sdv,
@@ -276,7 +276,10 @@ async def generate_synthetic(
     except ImportError:
         SDV_AVAILABLE = False
 
-    from synthetic import generate_synthetic_patients, generate_synthetic_conditions
+    from analytics.synthetic import (
+        generate_synthetic_patients,
+        generate_synthetic_conditions,
+    )
 
     body = await request.body()
     content_type = request.headers.get("content-type", "")
@@ -296,7 +299,7 @@ async def generate_synthetic(
 
     # DP synthesis is only defined for the stdlib marginal engine.
     if dp_epsilon is not None:
-        import dp as _dp
+        import analytics.dp as _dp
 
         _t0 = time.monotonic()
         conditions = (
