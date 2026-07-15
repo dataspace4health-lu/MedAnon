@@ -125,7 +125,9 @@ ci-local:
 	@echo "── ruff format --check ─────────────────────────────────────"
 	@$(RUFF) format --check services/ packages/
 	@echo "── anonymizer layering contract ────────────────────────────"
-	@cd $(ANONYMIZER) && PYTHONPATH=src $(LINT_IMPORTS)
+	# medanon-core src on the path so the contract resolves the shared package
+	# without an editable install (CI pip-installs it; ci-local stays self-contained).
+	@cd $(ANONYMIZER) && PYTHONPATH=src:$(CURDIR)/packages/medanon-core/src $(LINT_IMPORTS)
 	@echo "── medanon-core layering contract ──────────────────────────"
 	@cd packages/medanon-core && PYTHONPATH=src $(LINT_IMPORTS)
 	@echo "── env drift ───────────────────────────────────────────────"

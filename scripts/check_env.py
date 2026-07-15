@@ -40,6 +40,20 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
+# Directories scanned for env-var reads. The shared inner package holds the
+# scoring/analytics/domain code (moved out of services/anonymizer), so its knobs
+# (MEDANON_SCORE_*, SCORING_SERVICE_URL defaults) are only discoverable here.
+_SOURCE_ROOTS = (ROOT / "services", ROOT / "packages" / "medanon-core" / "src")
+
+
+def _source_py_files():
+    """Yield every non-cached ``*.py`` under the scanned source roots."""
+    for root in _SOURCE_ROOTS:
+        for path in root.rglob("*.py"):
+            if "__pycache__" in path.parts:
+                continue
+            yield path
+
 # Flags that change behaviour rather than tuning.  Absent from .env.example, an
 # operator has no way to discover them; several are fail-closed switches.
 POSTURE_FLAGS = frozenset(
@@ -107,9 +121,7 @@ def code_vars() -> tuple[dict[str, set[str]], set[str]]:
     """
     found: dict[str, set[str]] = {}
     literals: set[str] = set()
-    for path in (ROOT / "services").rglob("*.py"):
-        if "__pycache__" in path.parts:
-            continue
+    for path in _source_py_files():
         try:
             tree = ast.parse(path.read_text(errors="ignore"))
         except SyntaxError:
@@ -153,9 +165,7 @@ def dynamic_vars() -> set[str]:
     have a real knob.  Everything else in that family is inert.
     """
     names: set[str] = set()
-    for path in (ROOT / "services").rglob("*.py"):
-        if "__pycache__" in path.parts:
-            continue
+    for path in _source_py_files():
         text = path.read_text(errors="ignore")
         for upstream in re.findall(r"bulkhead\(\s*\"([a-z_]+)\"", text, re.S):
             names.add(f"BULKHEAD_{upstream.upper()}_MAX_CONCURRENT")
