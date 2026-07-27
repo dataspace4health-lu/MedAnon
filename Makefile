@@ -25,6 +25,17 @@ LINT_IMPORTS := $(if $(wildcard $(VENV)/bin/lint-imports),$(CURDIR)/$(VENV)/bin/
 WORKER_REPLICAS := $(shell grep -s '^WORKER_REPLICAS=' .env | cut -d= -f2 | tr -d '[:space:]')
 WORKER_REPLICAS := $(if $(WORKER_REPLICAS),$(WORKER_REPLICAS),2)
 
+# gPAS pseudonymisation is the throughput floor for large exports. A single
+# instance is hard-capped at ~550 values/sec: measured FLAT across concurrency
+# 1/2/4/8, with batching already optimal at 100. The serialisation is a
+# per-JVM (application) lock, NOT the database - under load gpas-db showed 0
+# ungranted locks, 1 active connection and 7% CPU - so instances scale ~linearly
+# (2 instances measured ~1.8x; a cold 130k export went 993s -> 648s).
+# Correctness across instances is guaranteed by psn UNIQUE(originalvalue, domain).
+# Cost: ~1.3 GB RAM per instance. Lower to 1 on memory-constrained hosts.
+GPAS_REPLICAS := $(shell grep -s '^GPAS_REPLICAS=' .env | cut -d= -f2 | tr -d '[:space:]')
+GPAS_REPLICAS := $(if $(GPAS_REPLICAS),$(GPAS_REPLICAS),2)
+
 # HAPI FHIR image  update both together when bumping the HAPI version.
 # v7.x uses Java 17 (eclipse-temurin:17-jre-jammy base).
 HAPI_IMAGE     := hapiproject/hapi:v7.6.0
@@ -44,7 +55,8 @@ ANONYMIZER_PORT := $(if $(ANONYMIZER_PORT),$(ANONYMIZER_PORT),8000)
         up down down-wipe logs build build-ui build-sdv up-sdv build-healthcheck clean \
         init-domains preflight verify _dirs ai-up ai-pull ai-status \
         helm-install helm-uninstall helm-lint helm-template helm-build-gpas \
-        trivy-fs trivy-image-anonymizer trivy-image-ui trivy cold-reset
+        trivy-fs trivy-image-anonymizer trivy-image-ui trivy cold-reset \
+        bench-services bench-sync bench-job bench-sweep bench-restore
 
 # ── Default target ────────────────────────────────────────────────────────────
 help:
@@ -275,10 +287,10 @@ build-sdv:
 
 up-sdv: _dirs preflight build-sdv
 	ANONYMIZER_IMAGE=medanon-sdv:latest $(COMPOSE) --profile nlp up -d \
-		--scale worker=$(WORKER_REPLICAS)
+		--scale worker=$(WORKER_REPLICAS) --scale gpas=$(GPAS_REPLICAS)
 	@echo ""
 	@echo "SDV stack running  /generate/synthetic will use GaussianCopula engine"
-	@echo "Worker replicas: $(WORKER_REPLICAS)"
+	@echo "Worker replicas: $(WORKER_REPLICAS)   gPAS replicas: $(GPAS_REPLICAS)"
 
 # The containers run as a non-root user baked into the image (`appuser`). The
 # Dockerfile chowns /output to it, but `./output:/output` is a BIND MOUNT, which
@@ -309,9 +321,9 @@ _dirs:
 
 up: _dirs preflight
 	$(COMPOSE) --profile nlp --profile monitoring up -d \
-		--scale worker=$(WORKER_REPLICAS)
+		--scale worker=$(WORKER_REPLICAS) --scale gpas=$(GPAS_REPLICAS)
 	@echo ""
-	@echo "Worker replicas: $(WORKER_REPLICAS)"
+	@echo "Worker replicas: $(WORKER_REPLICAS)   gPAS replicas: $(GPAS_REPLICAS)"
 	@echo ""
 	@echo "  Grafana dashboards : http://localhost:$${GRAFANA_PORT:-3000}"
 	@echo "  Prometheus metrics : http://localhost:$${PROMETHEUS_PORT:-9090}"
@@ -342,7 +354,7 @@ verify:
 # `docker compose --profile ai up` starts an empty Ollama with no model, so
 # every AI call silently falls back.  Requires MEDANON_AI_ENABLED=true in .env.
 ai-up: _dirs preflight
-	$(COMPOSE) --profile nlp --profile ai up -d --scale worker=$(WORKER_REPLICAS)
+	$(COMPOSE) --profile nlp --profile ai up -d --scale worker=$(WORKER_REPLICAS) --scale gpas=$(GPAS_REPLICAS)
 	@$(MAKE) --no-print-directory ai-pull
 	@echo ""
 	@echo "AI is enabled. Verifying agent status…"
@@ -426,6 +438,53 @@ cold-reset:
 	kept=$$(docker exec medanon-redis sh -c "redis-cli -a '$$RP' -n 0 --scan --pattern 'medanon:job*' --count 5000 2>/dev/null | wc -l"); \
 	echo "  job-queue keys preserved: $$kept"
 	@echo "cold-reset complete  next export runs fully cold (restart worker to drop L1)"
+
+# ── Live-stack benchmarks ─────────────────────────────────────────────────────
+# Measure de-identification speed against a RUNNING stack. The harness is pure
+# stdlib and runs in a throwaway python:3.12-slim container attached to the
+# processing network, so it needs no local venv and installs nothing.
+#
+# bench-sync/bench-job/bench-sweep apply docker-compose.bench.yml, which turns
+# OFF auth and rate limiting on the anonymizer (/v1/process is capped at
+# 200/minute, which would otherwise cap any throughput run at 3.3 req/sec).
+# Restore afterwards with: make bench-restore
+#
+# Always record the profile: throughput is not comparable across profiles, and
+# `auto` is not a release profile (it fails the score gate on a real cohort).
+
+BENCH_NET     ?= medanon-processing-net
+BENCH_OUT     ?= bench/results
+BENCH_PROFILE ?= value-masking
+BENCH_IMAGE   ?= python:3.12-slim
+BENCH_RUN      = docker run --rm --network $(BENCH_NET) \
+                   -v "$(CURDIR)/scripts:/bench:ro" -v "$(CURDIR)/$(BENCH_OUT):/out" \
+                   -e BENCH_GIT_SHA="$$(git rev-parse --short HEAD)" \
+                   $(BENCH_IMAGE) python /bench/bench_live.py
+
+bench-services:
+	@mkdir -p $(BENCH_OUT)
+	$(BENCH_RUN) services -n 120 -c 8 --out /out
+
+bench-sync:
+	@mkdir -p $(BENCH_OUT)
+	$(BENCH_RUN) sync -n 40 -c 4 --batch 25 --config-profile $(BENCH_PROFILE) --out /out
+
+bench-job:
+	@mkdir -p $(BENCH_OUT)
+	$(BENCH_RUN) job --level type --resource-type $(or $(TYPE),Patient) \
+		--config-profile $(BENCH_PROFILE) --job-timeout 7200 --out /out
+
+# Executor x parallelism matrix: does throughput scale with cores, or is it
+# pinned by the GIL (thread) or by NLP/gPAS upstream? Needs a workload with
+# enough batches to saturate: 1,132 Patients is only 2 batches and shows a
+# flat curve regardless of executor.
+bench-sweep:
+	./scripts/bench_sweep.sh -t $(or $(TYPE),Condition) -p $(BENCH_PROFILE) \
+		-o $(BENCH_OUT)/sweep
+
+bench-restore:
+	docker compose -f docker-compose.yml up -d --no-deps anonymizer worker
+	@echo "stack restored (auth + rate limiting re-enabled)"
 
 # ── Security scanning (Trivy) ─────────────────────────────────────────────────
 # Requires trivy in PATH. Install: curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b ~/.local/bin

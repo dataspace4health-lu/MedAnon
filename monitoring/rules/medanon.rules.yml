@@ -1,0 +1,142 @@
+# MedAnon recording + alerting rules.
+#
+# Grounded in the 2026-07-20 live benchmark (docs/internal/BENCH_RESULTS_2026_07_20.md).
+# The raw counters already existed; what was missing was the derived measures that
+# turned out to be the real story, and any alert on the three bugs it surfaced.
+#
+# Reload after editing:  curl -X POST http://localhost:9090/-/reload
+
+groups:
+  # -------------------------------------------------------------------------
+  - name: medanon_recording
+    interval: 15s
+    rules:
+      # gPAS cache hit ratio. The single highest-leverage number in the system:
+      # the benchmark saw pseudonymization drop 250x (472s -> 1.9s) purely from
+      # cache warmth. 5m window so it is stable on a dashboard stat panel.
+      - record: medanon:gpas_cache_hit_ratio:5m
+        expr: |
+          sum(rate(medanon_gpas_cache_hits_total[5m]))
+          /
+          clamp_min(sum(rate(medanon_gpas_cache_hits_total[5m])) + sum(rate(medanon_gpas_cache_misses_total[5m])), 1)
+
+      # gPAS call latency p99 by operation. This is where the cold CREATE cost
+      # hides: first-time pseudonyms are ~4.2s transactional inserts vs ~0.14s
+      # lookups. p99 (not p50) is what reveals it.
+      - record: medanon:gpas_call_latency_p99:5m
+        expr: |
+          histogram_quantile(0.99, sum(rate(medanon_gpas_duration_seconds_bucket[5m])) by (le, operation))
+
+      - record: medanon:gpas_call_latency_p50:5m
+        expr: |
+          histogram_quantile(0.50, sum(rate(medanon_gpas_duration_seconds_bucket[5m])) by (le, operation))
+
+      # NLP cache hit ratio (same warm/cold story on the phi_detection path).
+      - record: medanon:nlp_cache_hit_ratio:5m
+        expr: |
+          sum(rate(medanon_nlp_cache_hits_total[5m]))
+          /
+          clamp_min(sum(rate(medanon_nlp_cache_hits_total[5m])) + sum(rate(medanon_nlp_cache_misses_total[5m])), 1)
+
+      # Per-stage time SHARE of the pipeline. The benchmark's central diagnostic:
+      # which stage dominates (NLP 57% / gPAS 27% cold; assembly-bound warm).
+      # Ratio of one stage's summed time to all stages' summed time.
+      - record: medanon:pipeline_stage_share:5m
+        expr: |
+          sum(rate(medanon_pipeline_stage_duration_seconds_sum[5m])) by (stage)
+          /
+          scalar(sum(rate(medanon_pipeline_stage_duration_seconds_sum[5m])))
+
+      # Per-stage p95 latency (mean per observation), the other half of the split.
+      - record: medanon:pipeline_stage_latency_p95:5m
+        expr: |
+          histogram_quantile(0.95, sum(rate(medanon_pipeline_stage_duration_seconds_bucket[5m])) by (le, stage))
+
+      # Batch processing rate per stage (observations/sec). One observation per
+      # batch, so at MEDANON_BATCH_SIZE=1000 this x1000 approximates resources/sec.
+      - record: medanon:pipeline_batch_rate:1m
+        expr: sum(rate(medanon_pipeline_stage_duration_seconds_count[1m])) by (stage)
+
+      # Scoring service latency p95 (now that scoring is scraped at all).
+      - record: medanon:scoring_latency_p95:5m
+        expr: |
+          histogram_quantile(0.95, sum(rate(scoring_request_seconds_bucket[5m])) by (le))
+
+      # Container CPU cores by service, from cAdvisor. gpas-postgres pinned near
+      # its limit was the real signature of the write-bound cold path.
+      - record: medanon:container_cpu_cores:2m
+        expr: |
+          sum(rate(container_cpu_usage_seconds_total{name=~"medanon.*|privacy-toolkit.*|gpas-postgres"}[2m])) by (name)
+
+  # -------------------------------------------------------------------------
+  - name: medanon_alerts
+    rules:
+      # BUG 1 (110x): a configured-but-unreachable Trust Gate stalls every
+      # request ~8s. Its target being down is the direct signal.
+      - alert: TrustGateDown
+        expr: up{job="trust-gate"} == 0
+        for: 2m
+        labels: {severity: warning}
+        annotations:
+          summary: "Trust Gate target is down"
+          description: "TRUST_GATE_SERVICE_URL is set but the service is unreachable. Every intake pays a full DNS/timeout stall (~8s measured). Clear the URL or start the `trust` profile."
+
+      # Scoring is on the hot path; if it disappears, scoring silently degrades.
+      - alert: ScoringServiceDown
+        expr: up{job="scoring"} == 0
+        for: 2m
+        labels: {severity: warning}
+        annotations:
+          summary: "Scoring service target is down"
+          description: "medanon-scoring is not scrapeable. Score gate and processing-run persistence are affected."
+
+      # The gPAS cold-write cliff: p99 CREATE latency in seconds means the DB is
+      # insert-bound (first-time pseudonyms). Throughput will be an order of
+      # magnitude below warm. Actionable: raise JDBC pool / Postgres write
+      # concurrency, batch more per call, or pre-warm domains.
+      - alert: GpasCreateLatencyHigh
+        expr: medanon:gpas_call_latency_p99:5m{operation=~".*[Cc]reate.*"} > 2
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "gPAS create p99 latency {{ $value | humanize }}s (DB write-bound)"
+          description: "First-time pseudonym inserts are the bottleneck. Expect ~1/10th warm throughput on this dataset."
+
+      # gPAS cache cold: hit ratio low means work is hitting the slow paths.
+      - alert: GpasCacheHitRatioLow
+        expr: medanon:gpas_cache_hit_ratio:5m < 0.5 and sum(rate(medanon_gpas_calls_total[5m])) > 0.1
+        for: 10m
+        labels: {severity: info}
+        annotations:
+          summary: "gPAS cache hit ratio {{ $value | humanizePercentage }}"
+          description: "Sustained low cache hits. Cold cache is the demonstrated 250x throughput factor."
+
+      # PRIVACY SAFETY: NLP fell back to fail-closed placeholders. Output stays
+      # safe (no leak) but detection is degraded; a sustained rate means the NLP
+      # path is unhealthy.
+      - alert: NlpFallbackActive
+        expr: sum(rate(medanon_nlp_fallback_total[5m])) > 0
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "NLP fail-closed fallback firing"
+          description: "NLP detection is degrading to placeholders. Output is safe but under-scrubbed text may be over-redacted; investigate NLP health."
+
+      # A circuit breaker sitting OPEN (state==2) means an upstream is being shed.
+      - alert: CircuitBreakerOpen
+        expr: medanon_circuit_breaker_state == 2
+        for: 3m
+        labels: {severity: warning}
+        annotations:
+          summary: "Circuit breaker OPEN: {{ $labels.name }}"
+          description: "Upstream {{ $labels.name }} is being shed. Requests fail fast until it recovers."
+
+      # Bulkhead rejections mean an upstream (gPAS/NLP) is saturated and work is
+      # being turned away rather than queued unboundedly.
+      - alert: BulkheadRejecting
+        expr: sum(rate(medanon_bulkhead_rejected_total[5m])) by (upstream) > 0.1
+        for: 5m
+        labels: {severity: info}
+        annotations:
+          summary: "Bulkhead rejecting work: {{ $labels.upstream }}"
+          description: "Upstream {{ $labels.upstream }} is saturated. Scale it or reduce concurrency."

@@ -234,8 +234,15 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.3"
-          memory: 96M
+          # Every NLP and gPAS call in the stack crosses this proxy via the
+          # ``nlp-lb`` / ``gpas-lb`` aliases, so the gateway sits on the hot
+          # path of a bulk export, not beside it.  At the original 0.3 cores a
+          # 130k-resource export left Traefik CPU-throttled ~70% of its
+          # runnable time (200 throttle events / 21s throttled per 60s) while
+          # the worker idled at ~0.5 cores  the proxy, not NLP, was the
+          # ceiling.  Memory ran 63-73 MiB against the old 96M cap.
+          cpus: "${GATEWAY_CPU_LIMIT:-2.0}"
+          memory: ${GATEWAY_MEM_LIMIT:-256M}
     security_opt:
       - no-new-privileges:true
 
@@ -248,6 +255,10 @@ services:
     image: ${ANONYMIZER_IMAGE:-medanon:latest}
     container_name: medanon
     restart: unless-stopped
+    # Matches MEDANON_DRAIN_TIMEOUT_SEC (worker.py default 300s): without this,
+    # Docker's own 10s default sends SIGKILL long before the app's graceful
+    # drain (in-flight job completion) has a chance to finish or time out.
+    stop_grace_period: 305s
     ports:
       - "${ANONYMIZER_PORT:-8000}:8000"
     env_file:
@@ -322,6 +333,10 @@ services:
     # prevents port-binding conflicts when running multiple replicas.
     # Scale via: make up  (reads WORKER_REPLICAS from .env, default 2)
     restart: unless-stopped
+    # Matches MEDANON_DRAIN_TIMEOUT_SEC (worker.py default 300s): without this,
+    # Docker's own 10s default sends SIGKILL long before the app's graceful
+    # drain (in-flight job completion) has a chance to finish or time out.
+    stop_grace_period: 305s
     # ENTRYPOINT is baked into the worker stage; no override needed.
     env_file:
       - .env
@@ -559,8 +574,16 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "1.0"
-          memory: 768M
+          # gPAS pseudonym CREATION is INSERT+commit bound, and this database is
+          # the ceiling once gPAS itself is scaled out. Measured on this host:
+          # one gPAS replica sustains ~550 new pseudonyms/s, three replicas
+          # ~1,190/s, while gpas-db's own per-row-commit ceiling on 1 CPU is
+          # ~1,406 rows/s — i.e. the DB, not gPAS, becomes the constraint as
+          # soon as replicas are added. Raising this only matters alongside
+          # `--scale gpas=N`; it is env-tunable so a single-replica deployment
+          # can keep the smaller footprint.
+          cpus: "${GPAS_DB_CPU_LIMIT:-2.0}"
+          memory: ${GPAS_DB_MEMORY_LIMIT:-768M}
         reservations:
           cpus: "0.25"
           memory: 128M
@@ -1031,7 +1054,6 @@ services:
       POSTGRES_PASSWORD: ${MEDANON_APP_DB_PASSWORD:-medanon_dev}
     volumes:
       - app-pg-data:/var/lib/postgresql/data
-      - ./services/anonymizer/sql/init.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
     networks:
       - processing-net
     command: >
@@ -1168,12 +1190,24 @@ services:
     user: redis
     # AOF persistence is REQUIRED.  The gPAS pseudonym cache (and the NLP
     # detection cache) must survive Redis restarts  otherwise the second bulk
-    # run is as slow as the first because every value is a fresh L2 miss.
-    # `volatile-lru` only evicts keys with an explicit TTL, so the no-TTL
-    # pseudonym entries are pinned for the lifetime of the dataset.
+    # run is as slow as the first because every value is a fresh L2 miss
+    # (measured: a warm pseudonym cache is worth ~72x on the pseudonymisation
+    # stage of a 130k-resource export).
+    #
+    # INVARIANT: --maxmemory must stay well BELOW the container memory limit
+    # below.  It was 2gb against a 512M limit, so Redis could never reach its
+    # own eviction threshold  Docker OOM-killed it first and the entire warm
+    # cache was lost.  The gap also absorbs the copy-on-write fork during AOF
+    # rewrite, which can transiently approach a second copy of the dataset.
+    #
+    # `volatile-lru` evicts only keys with an expiry.  Both the job hashes and
+    # (since MEDANON_GPAS_CACHE_TTL_SEC) the pseudonym entries carry one, so the
+    # large cold cache is the natural victim under pressure rather than the
+    # process being killed.  Evicting a pseudonym is safe: gPAS is the vault and
+    # is deterministic, so a miss re-fetches the SAME value.
     command: >
       redis-server
-      --maxmemory ${REDIS_MAXMEMORY:-2gb}
+      --maxmemory ${REDIS_MAXMEMORY:-1gb}
       --maxmemory-policy volatile-lru
       --maxclients ${REDIS_MAXCLIENTS:-2000}
       --appendonly yes
@@ -1195,7 +1229,9 @@ services:
       resources:
         limits:
           cpus: "1.0"
-          memory: 512M
+          # Must exceed --maxmemory (default 1gb) with headroom for Redis
+          # overhead and the AOF-rewrite COW fork; see the command block above.
+          memory: ${REDIS_MEMORY_LIMIT:-2G}
         reservations:
           cpus: "0.25"
           memory: 128M
@@ -1347,6 +1383,7 @@ services:
       - --web.enable-lifecycle
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/rules:/etc/prometheus/rules:ro
       - prometheus-data:/prometheus
     networks:
       - processing-net

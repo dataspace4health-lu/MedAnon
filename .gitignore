@@ -161,9 +161,6 @@ CLAUDE.md
 # ── GitHub Agents (AI workflow definitions  local only) ──────────────────────
 .github/agents/
 
-# ── SQL schema migration files ────────────────────────────────────────────────
-services/anonymizer/sql/
-
 # ── Internal documentation ────────────────────────────────────────────────────
 # Architecture reviews, security audits, competitive analysis, planning docs.
 # Tracked locally but not published to the repository.
@@ -203,3 +200,6 @@ services/anonymizer/MagicMock
 
 # Quarantined incomplete UI auth/AI WIP (does not compile yet  kept for later).
 client/.wip-auth/
+
+# ── Superpowers session scratch (progress ledger, task briefs) ────────────────
+.superpowers/

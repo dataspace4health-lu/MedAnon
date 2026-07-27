@@ -4,6 +4,13 @@ global:
   external_labels:
     project: medanon
 
+# Recording + alerting rules. The benchmark (docs/internal/BENCH_RESULTS_2026_07_20.md)
+# showed the raw counters are there but the derived measures that actually matter
+# (gPAS cold-call latency, cache hit ratio, per-stage time share) were never
+# surfaced. These rules make them first-class and alert on the three bugs found.
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
 scrape_configs:
   - job_name: anonymizer
     static_configs:
@@ -23,6 +30,22 @@ scrape_configs:
   - job_name: analytics
     static_configs:
       - targets: ['medanon-analytics:8100']
+    metrics_path: /metrics
+
+  # Scoring is on the hot path for every scored resource and was NOT being
+  # scraped, so it was invisible in Grafana despite exposing /metrics.
+  - job_name: scoring
+    static_configs:
+      - targets: ['medanon-scoring:8300']
+    metrics_path: /metrics
+
+  # Trust Gate only runs under the opt-in `trust` profile. When it is down the
+  # target simply reports as down (which is itself useful: a dead Trust Gate is
+  # the 8s-per-request stall the benchmark found). up{job="trust-gate"} == 0
+  # drives the TrustGateDown alert below.
+  - job_name: trust-gate
+    static_configs:
+      - targets: ['trust-gate:8400']
     metrics_path: /metrics
 
   - job_name: nlp

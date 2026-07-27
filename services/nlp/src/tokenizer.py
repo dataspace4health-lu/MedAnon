@@ -183,6 +183,23 @@ def _evict_if_needed(token_state: dict, limit: int = _TOKEN_STATE_MAX_ENTRIES) -
         )
 
 
+# Delimiter for ``token_state["map"]`` keys.  The map crosses the HTTP
+# boundary, so keys MUST be JSON-safe strings.  A tuple key makes FastAPI's
+# jsonable_encoder emit a list, which is unhashable as a dict key and raises
+# ``TypeError: unhashable type: 'list'``  HTTP 500 on /v1/detect/batch.  It
+# also breaks the client, whose orjson payload encoder rejects non-str keys.
+# A plain str key round-trips, so surrogate tokens stay consistent across
+# calls that thread token_state through.  \x1f (unit separator) cannot occur
+# in an entity type and does not appear in clinical free text, so unlike a
+# comma it can never collide with a value that contains the delimiter.
+_TOKEN_KEY_SEP = "\x1f"
+
+
+def _token_map_key(entity_type: str, value: str) -> str:
+    """Return the canonical JSON-safe ``token_state['map']`` key."""
+    return f"{entity_type}{_TOKEN_KEY_SEP}{value}"
+
+
 def _tokenize(value: str, entity_type: str, token_state: dict, lock=None) -> str:
     """Return a deterministic surrogate token for *value*."""
     if lock:
@@ -193,7 +210,7 @@ def _tokenize(value: str, entity_type: str, token_state: dict, lock=None) -> str
 
 def _tokenize_unlocked(value: str, entity_type: str, token_state: dict) -> str:
     """Assign or retrieve the surrogate token  assumes lock already held if needed."""
-    key = (entity_type, value)
+    key = _token_map_key(entity_type, value)
     if key in token_state["map"]:
         return token_state["map"][key]
     _evict_if_needed(token_state)

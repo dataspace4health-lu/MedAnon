@@ -13,6 +13,7 @@ IMPORTANT  ENTITY CATALOGUE SYNC:
 from __future__ import annotations
 
 import logging
+import os
 import threading
 
 log = logging.getLogger("medanon.nlp")
@@ -1248,7 +1249,12 @@ def _get_analyzer():
             from presidio_analyzer import AnalyzerEngine
             from presidio_analyzer.nlp_engine import NlpEngineProvider
 
-            models = [{"lang_code": "en", "model_name": "en_core_web_lg"}]
+            # Model is env-overridable so operators can trade recall for speed +
+            # memory (en_core_web_lg ~800 MB/worker and slowest; _md ~40 MB and
+            # ~2-3x faster; _sm smaller/faster still). Recall must be validated
+            # per model (benchmark_accuracy.py) before switching in production.
+            _en_model = os.environ.get("NLP_SPACY_MODEL", "en_core_web_lg")
+            models = [{"lang_code": "en", "model_name": _en_model}]
             _fr_available = spacy.util.is_package("fr_core_news_lg")
             if _fr_available:
                 models.append({"lang_code": "fr", "model_name": "fr_core_news_lg"})

@@ -1,0 +1,78 @@
+{
+  "_comment": "Reference/source-of-truth for the gPAS domain hierarchy seeded by services/gpas/sqls_pg/03_init_gpas_domain.sql. This file documents the hierarchy; it is not parsed by scripts/init_gpas_domains.sh (the actual INSERTs live in the SQL file) - it exists so the shape of the domain tree has one readable place to check/update alongside the SQL.",
+  "domains": [
+    {
+      "name": "spe.direct",
+      "label": "Direct Identifiers",
+      "description": "Direct identifying values that should always be pseudonymized before downstream processing.",
+      "psnPrefix": "dir_",
+      "children": [
+        { "name": "spe.direct.resource-id", "label": "Logical Resource IDs", "psnPrefix": "rid_", "description": "FHIR Resource.id values across Bundle members and standalone resources." },
+        { "name": "spe.direct.patient-admin", "label": "Patient Administrative IDs", "psnPrefix": "pat_", "description": "MRN, SSN, national IDs, passport numbers, local patient identifiers." },
+        { "name": "spe.direct.person-name", "label": "Person Names", "psnPrefix": "nam_", "description": "Human names for Patient, Practitioner, RelatedPerson, Person, contact names and free-text extracted names." },
+        { "name": "spe.direct.contact", "label": "Contact Channels", "psnPrefix": "cnt_", "description": "Phone numbers, emails, telecom values, endpoint addresses, URLs where pseudonymization rather than hard redaction is required." },
+        { "name": "spe.direct.address", "label": "Addresses and Locations", "psnPrefix": "adr_", "description": "Street lines, city, district, postal code, free-form address text, location names and aliases." },
+        { "name": "spe.direct.document-media", "label": "Documents, Images and Media", "psnPrefix": "doc_", "description": "Attachment titles, document labels, base64 payload references, device serials, UDI values, photos." }
+      ]
+    },
+    {
+      "name": "spe.quasi",
+      "label": "Quasi Identifiers",
+      "description": "Values that are not direct identifiers alone but can enable re-identification in combination.",
+      "psnPrefix": "qsi_",
+      "children": [
+        { "name": "spe.quasi.demographic", "label": "Demographics", "psnPrefix": "dem_", "description": "Birth year/date, death dates, gender, marital status, communication language, birthplace, ethnicity, race." },
+        { "name": "spe.quasi.clinical-time", "label": "Clinical Timeline", "psnPrefix": "dtm_", "description": "onset, abatement, effectiveDateTime, issued, recordedDate, occurrence and other event timing fields." },
+        { "name": "spe.quasi.special-category", "label": "Special Category Attributes", "psnPrefix": "spc_", "description": "Nationality, religion, political affiliation/opinion and other Art. 9 style sensitive attributes." }
+      ]
+    },
+    {
+      "name": "spe.clinical",
+      "label": "Clinical Content",
+      "description": "Clinical data families where different pseudonymization policies may be needed for text, values and references.",
+      "psnPrefix": "cln_",
+      "children": [
+        { "name": "spe.clinical.observation", "label": "Observations and Measurements", "psnPrefix": "obs_", "description": "Observation value sets, reference ranges, component values and related note text." },
+        { "name": "spe.clinical.condition-procedure", "label": "Conditions and Procedures", "psnPrefix": "cdp_", "description": "Condition onset/abatement, Procedure.performed, ClinicalImpression, FamilyMemberHistory and related narrative fields." },
+        { "name": "spe.clinical.report-text", "label": "Reports and Narrative Text", "psnPrefix": "txt_", "description": "Narrative.div, notes, DiagnosticReport conclusions, care instructions, comments and other free-text clinical fields." }
+      ]
+    },
+    {
+      "name": "spe.operational",
+      "label": "Operational and Administrative Workflow",
+      "description": "Scheduling, communication, practitioner and organization related operational identifiers and text.",
+      "psnPrefix": "ops_",
+      "children": [
+        { "name": "spe.operational.org-practitioner", "label": "Organizations and Practitioners", "psnPrefix": "org_", "description": "Organization, OrganizationAffiliation, Practitioner, PractitionerRole, RelatedPerson, Person and Endpoint related identifiers." },
+        { "name": "spe.operational.scheduling", "label": "Scheduling and Requests", "psnPrefix": "sch_", "description": "Appointment, Schedule, Slot, Task, ServiceRequest, RequestGroup and Communication request payloads." }
+      ]
+    },
+    {
+      "name": "spe.financial",
+      "label": "Coverage, Claims and Billing",
+      "description": "Insurance, claims and account identifiers where separate tenant or legal controls often apply.",
+      "psnPrefix": "fin_",
+      "children": [
+        { "name": "spe.financial.coverage", "label": "Coverage and Eligibility", "psnPrefix": "cov_", "description": "Coverage.subscriberId, dependent, class values, network, eligibility request and response identifiers." },
+        { "name": "spe.financial.claims", "label": "Claims, EOB and Payments", "psnPrefix": "clm_", "description": "Claim, ClaimResponse, ExplanationOfBenefit, Invoice, PaymentReconciliation, Account and ChargeItem identifiers and notes." }
+      ]
+    },
+    {
+      "name": "spe.technical",
+      "label": "Technical Metadata and Linkage",
+      "description": "Transport and linkage metadata that should be isolated from clinical and administrative pseudonym domains.",
+      "psnPrefix": "tec_",
+      "children": [
+        { "name": "spe.technical.references", "label": "FHIR References and URLs", "psnPrefix": "ref_", "description": "Bundle fullUrl, request.url, response.location, Reference.reference and endpoint/location URLs." },
+        { "name": "spe.technical.extensions", "label": "Extensions and Custom Payloads", "psnPrefix": "ext_", "description": "Custom extensions, coded displays, expression text and implementation-specific metadata." }
+      ]
+    },
+    {
+      "name": "TESTING",
+      "label": "TESTING",
+      "description": "Default pseudonymisation domain. Change GPAS_DOMAIN in .env to use an spe.* domain instead.",
+      "psnPrefix": "rid_",
+      "children": []
+    }
+  ]
+}
