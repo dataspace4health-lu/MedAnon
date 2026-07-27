@@ -22,7 +22,7 @@
 #     --set gpas.db.secrets.rootPassword=<password> \
 #     --namespace medanon --create-namespace
 #
-# See docs/DEPLOYMENT.md § "K3s Deployment" for full step-by-step instructions.
+# See website/docs/how-to/deploy-docker.md § "K3s Deployment" for full instructions.
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ─── Global ───────────────────────────────────────────────────────────────────
