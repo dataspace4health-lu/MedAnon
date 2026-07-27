@@ -1,0 +1,39 @@
+# Benchmark override: measures the ENGINE, not the platform gating.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.bench.yml up -d anonymizer
+#
+# Turns off the two things that otherwise cap a throughput run:
+#   - rate limiting (/v1/process is 200/minute by default, so a load test
+#     measures the limiter at 3.3 req/sec and never reaches the engine ceiling)
+#   - OIDC auth (removes the Keycloak token round-trip from every sample)
+#
+# Never leave this override applied to a stack handling real data: it removes
+# authentication entirely. Restore with:
+#
+#   docker compose -f docker-compose.yml up -d anonymizer
+#
+# Results produced under this override are comparable only to other runs under
+# the same override. Record `dependency_mode` (offline/warm/cold) alongside.
+
+services:
+  anonymizer:
+    environment:
+      MEDANON_RATE_LIMIT_ENABLED: "false"
+      MEDANON_AUTH_PROVIDER: "none"
+      # TRUST_GATE_SERVICE_URL points at a service that is only up under the
+      # `trust` profile. When it is down, every /v1/process request pays a
+      # full DNS-failure stall (measured: 8.0s per request) because the client's
+      # circuit breaker is rebuilt per request and can never open. Clear it so
+      # the benchmark measures the engine rather than that stall. Run with it
+      # set to measure the platform as deployed; the delta is the finding.
+      TRUST_GATE_SERVICE_URL: ""
+
+  # The worker pays the same dead-Trust-Gate stall per batch, which would
+  # dominate any job-scenario measurement. MEDANON_STAGING_EXECUTOR and
+  # MEDANON_PARALLEL_WORKERS are read from the host env so a sweep can vary
+  # them without editing this file.
+  worker:
+    environment:
+      TRUST_GATE_SERVICE_URL: ""
+      MEDANON_STAGING_EXECUTOR: "${BENCH_EXECUTOR:-thread}"
+      MEDANON_PARALLEL_WORKERS: "${BENCH_PARALLELISM:-8}"

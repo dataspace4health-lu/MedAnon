@@ -203,3 +203,14 @@ client/.wip-auth/
 
 # ── Superpowers session scratch (progress ledger, task briefs) ────────────────
 .superpowers/
+
+# ── Benchmark results (regenerable via make bench-*) ──────────────────────────
+bench/results/
+
+# ── Local compose overrides (machine-specific) ───────────────────────────────
+docker-compose.override.yml
+
+# ── Output symlink -> /data/privacy-toolkit-output (live user data, never rm) ─
+# The `output/` patterns above match directories; this tree uses a symlink,
+# which they do not match.
+/output
