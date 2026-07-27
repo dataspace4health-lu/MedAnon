@@ -110,6 +110,47 @@ def check_counted_claims(root: pathlib.Path, docs: list[pathlib.Path]) -> list[s
     return failures
 
 
+# A backticked token is treated as a repository path when it starts with one of
+# these roots.  Anything else in backticks is code, not a path.
+PATH_ROOTS = (
+    "services/", "packages/", "client/", "scripts/", "helm/", "monitoring/",
+    "docs/", "website/", "bench/",
+)
+PATH_RE = re.compile(r"`([A-Za-z0-9_./-]+)`")
+LINK_RE = re.compile(r"\[[^\]]*\]\((?!https?:|mailto:|#)([^)#]+)(?:#[^)]*)?\)")
+
+
+def check_paths(root: pathlib.Path, docs: list[pathlib.Path]) -> list[str]:
+    failures: list[str] = []
+    for doc in docs:
+        text = doc.read_text(errors="replace")
+        for match in PATH_RE.finditer(text):
+            token = match.group(1)
+            if not token.startswith(PATH_ROOTS):
+                continue
+            # Trailing slash means a directory; strip it before resolving.
+            candidate = root / token.rstrip("/")
+            if candidate.exists():
+                continue
+            line = text[: match.start()].count("\n") + 1
+            failures.append(f"path     {doc}:{line}  references missing {token}")
+    return failures
+
+
+def check_links(root: pathlib.Path, docs: list[pathlib.Path]) -> list[str]:
+    failures: list[str] = []
+    for doc in docs:
+        text = doc.read_text(errors="replace")
+        for match in LINK_RE.finditer(text):
+            target = match.group(1).strip()
+            if not target or target.startswith("/"):
+                continue
+            if not (doc.parent / target).resolve().exists():
+                line = text[: match.start()].count("\n") + 1
+                failures.append(f"link     {doc}:{line}  unresolved {target}")
+    return failures
+
+
 def iter_docs(root: pathlib.Path) -> list[pathlib.Path]:
     out: list[pathlib.Path] = []
     for doc_root in DOC_ROOTS:
@@ -126,7 +167,11 @@ def iter_docs(root: pathlib.Path) -> list[pathlib.Path]:
 def main() -> int:
     root = pathlib.Path(__file__).resolve().parents[1]
     docs = iter_docs(root)
-    failures = check_counted_claims(root, docs)
+    failures = (
+        check_counted_claims(root, docs)
+        + check_paths(root, docs)
+        + check_links(root, docs)
+    )
     for failure in failures:
         print(failure)
     print(f"docs: {len(docs)} checked, {len(failures)} failure(s)")
