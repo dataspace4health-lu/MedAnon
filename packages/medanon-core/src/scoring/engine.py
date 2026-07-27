@@ -424,6 +424,93 @@ class ScoreCollector:
             self._error_count += 1
             self._total_count += 1
 
+    def export_state(self) -> dict:
+        """Return this collector's accumulators as JSON-safe primitives.
+
+        Scoring is batch-level: the gate's k-anonymity and identifier-coverage
+        checks are only meaningful over the WHOLE job.  When partitions are
+        processed outside the parent process  the ``process`` staging executor
+        spawns children, and the AMQP stage consumers run on other pods entirely
+         each worker owns a private collector whose state must be shipped back
+        and combined, or ``aggregate()`` reports ``computed=False`` and the gate
+        short-circuits into publishing unchecked data.
+
+        The payload is deliberately plain ``dict``/``list``/scalar so it can
+        cross a ``ProcessPoolExecutor`` boundary today and be persisted to the
+        partition ledger for a cross-pod merge later.  It carries no PHI: the QI
+        tuples are the already-generalised quasi-identifiers of the de-identified
+        output, and the paths are FHIRPath strings, not values.
+        """
+        with self._lock:
+            return {
+                "config_profile": self._config_profile,
+                "pass_count": self._pass_count,
+                "fail_count": self._fail_count,
+                "error_count": self._error_count,
+                "total_count": self._total_count,
+                "composite_sum": self._composite_sum,
+                # inf has no JSON representation; None means "no observation".
+                "min_composite": (
+                    None if self._min_composite == float("inf") else self._min_composite
+                ),
+                "utility_sum": self._utility_sum,
+                "quality_sum": self._quality_sum,
+                "patient_qis": [list(qi) for qi in self._patient_qis],
+                "patient_seen": self._patient_seen,
+                "text_risk_hits": self._text_risk_hits,
+                "identifier_risk_hits": self._identifier_risk_hits,
+                "config_risk_sum": self._config_risk_sum,
+                "config_risk_count": self._config_risk_count,
+                "uncovered_paths": dict(self._uncovered_paths),
+            }
+
+    def merge_state(self, state: dict) -> None:
+        """Fold a worker's :meth:`export_state` payload into this collector.
+
+        Counters and sums add; ``min_composite`` takes the minimum so the worst
+        resource anywhere in the job still drives the gate.  QI tuples are
+        concatenated (then re-sampled to the reservoir bound) because batch
+        k-anonymity must see the whole cohort  computing it on one partition's
+        patients would report a reassuring k that the released dataset does not
+        actually satisfy.
+
+        Idempotency is the caller's responsibility: merging the same partition's
+        state twice double-counts.  Callers merge exactly once per completed
+        partition.
+        """
+        if not state:
+            return
+        with self._lock:
+            self._pass_count += int(state.get("pass_count", 0))
+            self._fail_count += int(state.get("fail_count", 0))
+            self._error_count += int(state.get("error_count", 0))
+            self._total_count += int(state.get("total_count", 0))
+            self._composite_sum += float(state.get("composite_sum", 0.0))
+            self._utility_sum += float(state.get("utility_sum", 0.0))
+            self._quality_sum += float(state.get("quality_sum", 0.0))
+            self._text_risk_hits += int(state.get("text_risk_hits", 0))
+            self._identifier_risk_hits += int(state.get("identifier_risk_hits", 0))
+            self._config_risk_sum += float(state.get("config_risk_sum", 0.0))
+            self._config_risk_count += int(state.get("config_risk_count", 0))
+
+            incoming_min = state.get("min_composite")
+            if incoming_min is not None:
+                self._min_composite = min(self._min_composite, float(incoming_min))
+
+            for path, count in (state.get("uncovered_paths") or {}).items():
+                self._uncovered_paths[path] += int(count)
+
+            self._patient_seen += int(state.get("patient_seen", 0))
+            # JSON round-trips tuples into lists; the equivalence-class grouping
+            # in the k-anonymity evaluator needs hashable keys.
+            for qi in state.get("patient_qis") or []:
+                self._patient_qis.append(tuple(qi))
+            if len(self._patient_qis) > _MAX_PATIENTS:
+                # Keep the reservoir bound. A uniform sample of the union is a
+                # sound estimator for the same reason the per-collector
+                # reservoir is, and it keeps memory flat as partitions merge.
+                self._patient_qis = random.sample(self._patient_qis, _MAX_PATIENTS)
+
     def aggregate(self) -> dict:
         """Produce batch-level aggregate score with full k-anonymity."""
         total = self._pass_count + self._fail_count

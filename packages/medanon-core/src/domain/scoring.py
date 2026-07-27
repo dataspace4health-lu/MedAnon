@@ -110,24 +110,6 @@ class ScoreResult:
             "config_profile": self.config_profile,
         }
 
-    def to_fhir_extension(self) -> dict:
-        """Produce a FHIR-compatible extension dict (no PHI)."""
-        exts = [
-            {"url": "composite", "valueDecimal": round(self.composite, 1)},
-            {"url": "decision", "valueCode": self.decision},
-            {"url": "privacy-risk", "valueDecimal": round(self.privacy.risk_score, 4)},
-        ]
-        if self.utility is not None:
-            exts.append(
-                {"url": "utility", "valueDecimal": round(self.utility.score, 4)}
-            )
-        if self.quality is not None:
-            exts.append(
-                {"url": "quality", "valueDecimal": round(self.quality.score, 4)}
-            )
-        exts.append({"url": "scored-at", "valueDateTime": self.scored_at})
-        return {"url": SCORE_EXTENSION_URL, "extension": exts}
-
     @staticmethod
     def now_iso() -> str:
         return _dt.datetime.now(_dt.timezone.utc).isoformat().replace("+00:00", "Z")

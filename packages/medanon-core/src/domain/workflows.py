@@ -66,8 +66,8 @@ class Workflow:
     steps: list[WorkflowStep]
     status: WorkflowStatus = WorkflowStatus.PENDING
     params: dict = field(default_factory=dict)
-    backend: str = "internal"  # internal | argo
-    external_ref: str | None = None  # e.g. Argo Workflow name
+    backend: str = "internal"  # only "internal" is implemented
+    external_ref: str | None = None  # optional external orchestrator ref (unused)
     created_at: str = field(default_factory=_now)
     updated_at: str = field(default_factory=_now)
 

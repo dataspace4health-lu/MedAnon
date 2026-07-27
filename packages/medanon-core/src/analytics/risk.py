@@ -26,7 +26,6 @@ Usage
 from __future__ import annotations
 
 import datetime
-import json
 import re
 from datetime import timezone
 from collections import Counter, defaultdict
@@ -606,33 +605,3 @@ def assess_risk_rows(
             "input_kind": "tabular",
         },
     }
-
-
-def assess_risk(ndjson_text: str) -> dict[str, Any]:
-    """Parse mixed FHIR NDJSON and compute full re-identification risk report.
-
-    Thin wrapper around :func:`assess_risk_resources` for NDJSON input.
-    For JSON Bundle or XML input use :func:`assess_risk_resources` directly
-    after parsing with ``pipeline.io_formats.parse_payload_bytes``.
-
-    Args:
-        ndjson_text: Raw NDJSON text, one FHIR JSON object per line.
-
-    Returns:
-        A risk report dict with keys: summary, l_diversity, groups, warnings, meta.
-
-    Raises:
-        ValueError: If NDJSON cannot be parsed.
-    """
-    all_resources: list[dict] = []
-    for lineno, raw in enumerate(ndjson_text.splitlines(), start=1):
-        line = raw.strip()
-        if not line or line.startswith("//"):
-            continue
-        try:
-            obj = json.loads(line)
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"Invalid JSON at line {lineno}: {exc}") from exc
-        if isinstance(obj, dict):
-            all_resources.append(obj)
-    return assess_risk_resources(all_resources)

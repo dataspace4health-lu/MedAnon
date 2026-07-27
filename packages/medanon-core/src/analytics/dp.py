@@ -286,26 +286,3 @@ def dp_histogram(
             noisy = max(0.0, noisy)
         out[key] = int(round(noisy))
     return out
-
-
-def dp_count(
-    value: int,
-    epsilon: float,
-    *,
-    unbounded: bool = True,
-    non_negative: bool = True,
-    accountant: PrivacyAccountant | None = None,
-    label: str = "count",
-    rng: random.Random | None = None,
-) -> int:
-    """Release a single count under ``epsilon``-DP (a one-bin histogram)."""
-    result = dp_histogram(
-        {"_": value},
-        epsilon,
-        unbounded=unbounded,
-        non_negative=non_negative,
-        accountant=accountant,
-        label=label,
-        rng=rng,
-    )
-    return result["_"]

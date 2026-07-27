@@ -320,41 +320,6 @@ class QualityEvaluator:
         )
         return score
 
-    def evaluate_batch_refs(
-        self,
-        batch: list[dict],
-        evidence: list[Evidence],
-    ) -> float:
-        """Check cross-resource reference integrity within a batch."""
-        all_ids: set[str] = set()
-        all_refs: list[str] = []
-        for r in batch:
-            rtype = r.get("resourceType", "")
-            rid = r.get("id", "")
-            if rtype and rid:
-                all_ids.add(f"{rtype}/{rid}")
-            all_refs.extend(self._collect_references(r))
-
-        if not all_refs:
-            return 1.0
-
-        dangling = 0
-        for ref in all_refs:
-            if ref.startswith("http") or ref.startswith("#") or ref.startswith("urn:"):
-                continue
-            if ref not in all_ids:
-                dangling += 1
-
-        score = 1.0 - (dangling / len(all_refs))
-        evidence.append(
-            Evidence(
-                check="batch_reference_integrity",
-                value=max(0.0, score),
-                details={"dangling": dangling, "total": len(all_refs)},
-            )
-        )
-        return max(0.0, score)
-
     # ----- 3e: Real-world data quality (intrinsic, Kahn/OHDSI dimensions) ----
 
     def _data_quality(self, deidentified: dict, evidence: list[Evidence]) -> float:
