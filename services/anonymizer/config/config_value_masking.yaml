@@ -143,6 +143,17 @@ rules:
   action: substitute
   params: *redacted
 
+# The Patient-reference sibling of `subject`: EpisodeOfCare, Immunization,
+# AllergyIntolerance, Device, FamilyMemberHistory, Claim and ExplanationOfBenefit
+# name the patient via `.patient` rather than `.subject`. post_processor masks
+# person-reference displays during reference rewriting, but records no manifest
+# entry, so the scoring coverage check cannot attribute it and reports the path
+# as uncovered. Name it explicitly: same output, and the coverage gate can see it.
+- name: mask patient reference display
+  match: "*.patient.display"
+  action: substitute
+  params: *redacted
+
 # Performer can be Practitioner, Organization, or Device
 - name: mask performer display
   match: "*.performer.display"
@@ -262,13 +273,18 @@ rules:
   action: generalize
   params: *date_year
 
-- name: generalise encounter period start to year
-  match: Encounter.period.start
+# Top-level `period` is a HIPAA (3) date on every resource type that carries it:
+# Encounter, EpisodeOfCare, CarePlan, CareTeam, Coverage, PractitionerRole and
+# RelatedPerson. These were previously named for Encounter only, so an
+# EpisodeOfCare kept full admission timestamps (2013-07-13T13:02:28-03:00) while
+# the Encounter beside it generalised to 2013. Wildcard covers the whole class.
+- name: generalise period start to year
+  match: "*.period.start"
   action: generalize
   params: *date_year
 
-- name: generalise encounter period end to year
-  match: Encounter.period.end
+- name: generalise period end to year
+  match: "*.period.end"
   action: generalize
   params: *date_year
 
