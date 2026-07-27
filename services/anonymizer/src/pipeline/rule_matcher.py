@@ -509,9 +509,19 @@ def clear_rule_caches() -> None:
 def warm_rule_caches(settings) -> int:
     """Pre-populate FHIRPath caches for every rule in *settings*.
 
-    Iterates all match expressions, classifies them, and (for "complex" / full
-    FHIRPath expressions) compiles the ANTLR grammar eagerly so the first real
-    request does not pay the compile cost.
+    Iterates all match expressions, classifies them, and (for full FHIRPath
+    expressions) compiles the ANTLR grammar eagerly so the first real request
+    does not pay the compile cost.
+
+    Only the ``"fhirpath"`` class is compiled: ``simple`` / ``wildcard`` /
+    ``where`` expressions are served by the native traversal fast paths and
+    never reach ``fhirpathpy``.
+
+    NOTE: this compared ``kind`` against ``"complex"``  a value
+    :func:`_classify_match` never returns  so the branch was unreachable and
+    the warmup compiled nothing on every profile ever loaded. That cost is paid
+    per *process*, so it matters most under ``MEDANON_STAGING_EXECUTOR=process``
+    where every spawned child starts with cold caches.
 
     Returns the number of expressions compiled.
     """
@@ -525,7 +535,7 @@ def warm_rule_caches(settings) -> int:
         if not expr:
             continue
         kind = _classify_match(expr)
-        if kind == "complex":
+        if kind == "fhirpath":
             try:
                 _compile_fhirpath(expr)
                 compiled += 1

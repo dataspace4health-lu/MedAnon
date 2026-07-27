@@ -1,4 +1,4 @@
-"""Statistical Disclosure Control / export-decision workflow (D7.2 §5.6, Five Safes).
+"""Statistical Disclosure Control / export-decision workflow (D7.2 §5.4 Fig 6 + §5.5.7).
 
 Output checking for a Secure Processing Environment: before a de-identified or
 synthetic dataset leaves the SPE, an export decision (``approve`` / ``refer`` /

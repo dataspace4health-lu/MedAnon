@@ -120,9 +120,6 @@ class GeneralizationHierarchy:
         idx = max(0, min(level, self.max_level()))
         return self.levels[idx](value)
 
-    def is_suppression_level(self, level: int) -> bool:
-        return level >= self.max_level()
-
 
 # Registry: kind string → hierarchy
 _HIERARCHIES: dict[str, GeneralizationHierarchy] = {

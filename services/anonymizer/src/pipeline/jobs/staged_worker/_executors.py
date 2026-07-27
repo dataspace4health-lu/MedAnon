@@ -34,6 +34,93 @@ from pipeline.jobs.result_publisher import publish_result
 from pipeline.jobs.source_resolver import resolve_source_token
 
 
+# ---------------------------------------------------------------------------
+# Phase-1 resource source
+#
+# A single bulk-export job is CPU-bound (resource_assembly + rule_evaluation)
+# and GIL-bound, so it only speeds up by spreading work across PROCESSES -
+# which is what this path's Phase-2 partition + process-executor does. Phase 1
+# historically fed it via offset-paginated search, which is O(n^2) on HAPI and
+# OOMs it on large ``Binary`` pages. Pulling Phase 1 from the native Bulk Data
+# ``$export`` stream instead gives one linear server-side scan, so a single job
+# gets the good fetch AND the multi-core processing.
+#
+# Both fetchers are module-level thin wrappers (kept lazy to avoid import cost)
+# so the source can be selected and tested without a live FHIR server.
+# ---------------------------------------------------------------------------
+
+
+def fetch_resource_type(*args, **kwargs):
+    """Lazy passthrough to the paginated per-type fetcher."""
+    from integrations.fhir.client import fetch_resource_type as _impl
+
+    return _impl(*args, **kwargs)
+
+
+def _bulk_export_stream(
+    server_url, *, type_filter=None, since=None, token=None, timeout=30
+):
+    """Yield resources from the native FHIR Bulk Data ``$export`` stream."""
+    from integrations.fhir.bulk import bulk_export
+
+    yield from bulk_export(
+        server_url,
+        level="system",
+        type_filter=type_filter,
+        since=since,
+        token=token,
+        timeout=timeout,
+    )
+
+
+def _iter_phase1_resources(
+    server_url,
+    resource_types,
+    *,
+    params=None,
+    token=None,
+    timeout=30,
+    native=False,
+    skip=0,
+    type_filter=None,
+):
+    """Yield resources for Phase-1 staging.
+
+    *native* selects the ``$export`` stream (a single linear scan across all
+    requested types). ``$export`` carries no page cursor, so crash-resume works
+    by skipping the first *skip* resources already staged. When *native* is
+    False the legacy per-type offset-paginated fetch is used unchanged.
+
+    *type_filter* is the caller's EXPLICIT scope (``resource_type`` /
+    ``type_filter`` job params), forwarded as ``_type``. It must not be derived
+    from *resource_types*: that list is the full CapabilityStatement (130+
+    types when the export is unscoped), and sending it as ``_type`` makes HAPI
+    reject the kick-off with HTTP 400. ``None`` means a bare system-level
+    ``$export``, which already exports everything.
+    """
+    if native:
+        for index, resource in enumerate(
+            _bulk_export_stream(
+                server_url, type_filter=type_filter, token=token, timeout=timeout
+            )
+        ):
+            if index < skip:
+                continue
+            yield resource
+        return
+
+    for rt in resource_types:
+        for resource, _page_url, _page_offset in fetch_resource_type(
+            server_url,
+            rt,
+            params=params,
+            token=token,
+            timeout=timeout,
+            yield_cursors=True,
+        ):
+            yield resource
+
+
 def execute_bulk_export_staged(job, store, staging) -> None:
     """Staged two-phase bulk-export executor (synchronous  runs via asyncio.to_thread)."""
     from integrations.fhir.client import (
@@ -139,12 +226,69 @@ def execute_bulk_export_staged(job, store, staging) -> None:
         phase1_done = threading.Event()
         phase1_exc: list = []
 
+        # Prefer the native $export stream for Phase 1: one linear server-side
+        # scan instead of O(n^2) offset pagination (which also OOMs HAPI on big
+        # Binary pages). Phase 2 keeps its partition + process-executor
+        # parallelism, so a single job gets the fast fetch AND multiple cores.
+        # Fail-safe: any probe failure falls back to paginated search.
+        _use_native_fetch = False
+        if (
+            os.environ.get("MEDANON_STAGED_NATIVE_FETCH", "auto").strip().lower()
+            != "off"
+        ):
+            try:
+                from integrations.fhir.reader import server_supports_bulk_export
+
+                _use_native_fetch = server_supports_bulk_export(
+                    server_url, token=token, timeout=8
+                )
+            except Exception:
+                _use_native_fetch = False
+
         def _run_phase1() -> None:
             _log.info(
                 "staged_fetch_start job=%s resource_types=%s", job.id, resource_types
             )
             buffer: list[dict] = []
             try:
+                if _use_native_fetch:
+                    # $export carries no page cursor: resume by skipping the
+                    # rows already staged in a previous run.
+                    for resource in _iter_phase1_resources(
+                        server_url,
+                        resource_types,
+                        params=extra_params if extra_params else None,
+                        token=token,
+                        timeout=timeout,
+                        native=True,
+                        skip=phase1_state["staged_count"],
+                        # Explicit user scope only; None => bare system $export.
+                        type_filter=type_filter or resource_type,
+                    ):
+                        buffer.append(resource)
+                        if len(buffer) >= _BATCH_SIZE:
+                            fresh = store.get(job.id)
+                            if fresh and fresh.status == JobStatus.CANCELLED:
+                                _log.info("staged_fetch_cancelled job=%s", job.id)
+                                return
+                            inserted = staging.stage_batch(
+                                job.id, buffer, fhir_source_url=server_url
+                            )
+                            phase1_state["staged_count"] += inserted
+                            buffer.clear()
+                    if buffer:
+                        inserted = staging.stage_batch(
+                            job.id, buffer, fhir_source_url=server_url
+                        )
+                        phase1_state["staged_count"] += inserted
+                        buffer.clear()
+                    _log.info(
+                        "staged_fetch_done job=%s rows=%d (native $export)",
+                        job.id,
+                        phase1_state["staged_count"],
+                    )
+                    return
+
                 for ti, rt in enumerate(resource_types):
                     if ti < phase1_state["type_index"]:
                         continue  # already fetched in a previous run
@@ -268,19 +412,6 @@ def execute_bulk_export_staged(job, store, staging) -> None:
             "processed": processed,
             "summary": summary_dict,
         }
-        audit_report = collector.generate_audit_report()
-        if audit_report:
-            try:
-                audit_path = os.path.join(_OUTPUT_DIR, f"{job.id}_score_audit.md")
-                with open(audit_path, "w", encoding="utf-8") as _fh:
-                    _fh.write(audit_report)
-                checkpoint_data["score_audit_path"] = audit_path
-            except Exception:
-                _log.debug(
-                    "staged_bulk_export_audit_write_failed job=%s",
-                    job.id,
-                    exc_info=True,
-                )
         save_checkpoint(store, job, checkpoint_data)
         _persist_scoring_run(
             job, profile, summary_dict, "staged_bulk_export", collector
@@ -338,19 +469,6 @@ def execute_bulk_export_staged(job, store, staging) -> None:
             "processed": processed,
             "summary": summary_dict,
         }
-        audit_report = collector.generate_audit_report()
-        if audit_report:
-            try:
-                audit_path = os.path.join(_OUTPUT_DIR, f"{job.id}_score_audit.md")
-                with open(audit_path, "w", encoding="utf-8") as _fh:
-                    _fh.write(audit_report)
-                checkpoint_data["score_audit_path"] = audit_path
-            except Exception:
-                _log.debug(
-                    "staged_bulk_export_audit_write_failed job=%s",
-                    job.id,
-                    exc_info=True,
-                )
         save_checkpoint(store, job, checkpoint_data)
         _persist_scoring_run(
             job, profile, summary_dict, "staged_bulk_export", collector
@@ -492,17 +610,6 @@ def execute_cohort_staged(job, store, staging) -> None:
             "processed": processed,
             "summary": summary_dict,
         }
-        audit_report = collector.generate_audit_report()
-        if audit_report:
-            try:
-                audit_path = os.path.join(_OUTPUT_DIR, f"{job.id}_score_audit.md")
-                with open(audit_path, "w", encoding="utf-8") as _fh:
-                    _fh.write(audit_report)
-                checkpoint_data["score_audit_path"] = audit_path
-            except Exception:
-                _log.debug(
-                    "staged_cohort_audit_write_failed job=%s", job.id, exc_info=True
-                )
         save_checkpoint(store, job, checkpoint_data)
         _persist_scoring_run(job, profile, summary_dict, "staged_cohort", collector)
         _log.info("staged_cohort_done job=%s processed=%d", job.id, processed)
@@ -544,17 +651,6 @@ def execute_cohort_staged(job, store, staging) -> None:
             "processed": processed,
             "summary": summary_dict,
         }
-        audit_report = collector.generate_audit_report()
-        if audit_report:
-            try:
-                audit_path = os.path.join(_OUTPUT_DIR, f"{job.id}_score_audit.md")
-                with open(audit_path, "w", encoding="utf-8") as _fh:
-                    _fh.write(audit_report)
-                checkpoint_data["score_audit_path"] = audit_path
-            except Exception:
-                _log.debug(
-                    "staged_cohort_audit_write_failed job=%s", job.id, exc_info=True
-                )
         save_checkpoint(store, job, checkpoint_data)
         _persist_scoring_run(job, profile, summary_dict, "staged_cohort", collector)
         _log.info("staged_cohort_done job=%s processed=%d", job.id, processed)
@@ -684,17 +780,6 @@ def execute_patient_export_staged(job, store, staging) -> None:
             "processed": processed,
             "summary": summary_dict,
         }
-        audit_report = collector.generate_audit_report()
-        if audit_report:
-            try:
-                audit_path = os.path.join(_OUTPUT_DIR, f"{job.id}_score_audit.md")
-                with open(audit_path, "w", encoding="utf-8") as _fh:
-                    _fh.write(audit_report)
-                checkpoint_data["score_audit_path"] = audit_path
-            except Exception:
-                _log.debug(
-                    "staged_patient_audit_write_failed job=%s", job.id, exc_info=True
-                )
         save_checkpoint(store, job, checkpoint_data)
         _persist_scoring_run(
             job, profile, summary_dict, "staged_patient_export", collector
@@ -738,17 +823,6 @@ def execute_patient_export_staged(job, store, staging) -> None:
             "processed": processed,
             "summary": summary_dict,
         }
-        audit_report = collector.generate_audit_report()
-        if audit_report:
-            try:
-                audit_path = os.path.join(_OUTPUT_DIR, f"{job.id}_score_audit.md")
-                with open(audit_path, "w", encoding="utf-8") as _fh:
-                    _fh.write(audit_report)
-                checkpoint_data["score_audit_path"] = audit_path
-            except Exception:
-                _log.debug(
-                    "staged_patient_audit_write_failed job=%s", job.id, exc_info=True
-                )
         save_checkpoint(store, job, checkpoint_data)
         _persist_scoring_run(
             job, profile, summary_dict, "staged_patient_export", collector
@@ -940,17 +1014,6 @@ def execute_batch_patient_export_staged(job, store, staging) -> None:
         "processed": processed,
         "summary": summary_dict,
     }
-    audit_report = collector.generate_audit_report()
-    if audit_report:
-        try:
-            audit_path = os.path.join(_OUTPUT_DIR, f"{job.id}_score_audit.md")
-            with open(audit_path, "w", encoding="utf-8") as _fh:
-                _fh.write(audit_report)
-            checkpoint_data["score_audit_path"] = audit_path
-        except Exception:
-            _log.debug(
-                "staged_batch_patient_audit_write_failed job=%s", job.id, exc_info=True
-            )
     save_checkpoint(store, job, checkpoint_data)
     _persist_scoring_run(
         job, profile, summary_dict, "staged_batch_patient_export", collector
@@ -1028,17 +1091,6 @@ def execute_reprocess_staged(job, store, staging) -> None:
         "processed": processed,
         "summary": summary_dict,
     }
-    audit_report = collector.generate_audit_report()
-    if audit_report:
-        try:
-            audit_path = os.path.join(_OUTPUT_DIR, f"{job.id}_score_audit.md")
-            with open(audit_path, "w", encoding="utf-8") as _fh:
-                _fh.write(audit_report)
-            checkpoint_data["score_audit_path"] = audit_path
-        except Exception:
-            _log.debug(
-                "staged_reprocess_audit_write_failed job=%s", job.id, exc_info=True
-            )
     save_checkpoint(store, job, checkpoint_data)
     _persist_scoring_run(job, profile, summary_dict, "staged_reprocess", collector)
     _log.info("staged_reprocess_done job=%s processed=%d", job.id, processed)

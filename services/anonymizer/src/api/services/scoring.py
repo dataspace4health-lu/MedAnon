@@ -4,15 +4,15 @@ Scoring is triggered manually by the user via POST /v1/jobs/{id}/score.
 The service reads the job's NDJSON result file, extracts manifest entries
 from meta.tag, scores each resource, and returns an aggregate result.
 
-After scoring completes a Markdown audit report is written to
-``/output/{job_id}_score_audit.md`` explaining why each score is what it is
-and what rules to add or change to improve it.
+After scoring completes a Markdown audit report is stored under the job's
+``score["audit_report"]`` explaining why each score is what it is and what
+rules to add or change to improve it. It is served by
+``GET /v1/jobs/{id}/score/report`` and never written to disk.
 """
 
 from __future__ import annotations
 
 import logging
-import os
 from typing import Any
 
 from utils.json_fast import loads as _json_loads
@@ -21,8 +21,6 @@ from pipeline.scoring.audit import ScoreAuditCollector
 from pipeline.manifest import extract_manifest_entries as _extract_manifest_entries
 
 logger = logging.getLogger("medanon")
-
-_OUTPUT_DIR = os.environ.get("MEDANON_OUTPUT_DIR", "/output")
 
 
 class ScoringService:
@@ -183,30 +181,23 @@ class ScoringService:
 
         score_summary = collector.aggregate()
 
-        # Generate audit report and write to file
-        audit_path: str | None = None
-        try:
-            report_md = collector.generate_report(
-                settings=settings,
-                export_meta={
-                    "fhir_source": (job.params or {}).get("source_url", ""),
-                },
-            )
-            audit_path = os.path.join(_OUTPUT_DIR, f"{job_id}_score_audit.md")
-            os.makedirs(_OUTPUT_DIR, exist_ok=True)
-            with open(audit_path, "w", encoding="utf-8") as fh:
-                fh.write(report_md)
-            logger.info("score_audit_written job=%s path=%s", job_id, audit_path)
-        except Exception as exc:
-            logger.warning("score_audit_write_failed job=%s: %s", job_id, exc)
-            audit_path = None
+        # The report rides inside `score` so it lands in the job store next to
+        # the numbers it explains. Never written to /output: that directory is
+        # reaped on MEDANON_RESULT_TTL_SEC, which would take the audit record
+        # with the data it is supposed to outlive.
+        from pipeline.scoring_helpers import attach_audit_report
 
-        # Cache the score + audit path in the job's checkpoint data
+        score_summary = attach_audit_report(
+            score_summary,
+            collector,
+            settings=settings,
+            export_meta={"fhir_source": (job.params or {}).get("source_url", "")},
+        )
+
+        # Cache the score (report included) in the job's checkpoint data
         try:
             checkpoint = job.checkpoint_data or {}
             checkpoint["score"] = score_summary
-            if audit_path:
-                checkpoint["score_audit_path"] = audit_path
             save_checkpoint(store, job, checkpoint)
         except Exception as exc:
             logger.warning("score_cache_failed job=%s: %s", job_id, exc)
@@ -214,7 +205,6 @@ class ScoringService:
         return {
             "job_id": job_id,
             "computed": True,
-            "audit_report_path": audit_path,
             **score_summary,
         }
 
@@ -244,17 +234,14 @@ class ScoringService:
                 "reason": "scoring not yet triggered for this job  use POST /v1/jobs/{id}/score",
             }
 
-        result = {"job_id": job_id, "computed": True, **score}
-        audit_path = checkpoint.get("score_audit_path")
-        if audit_path:
-            result["audit_report_path"] = audit_path
-        return result
+        return {"job_id": job_id, "computed": True, **score}
 
     def get_audit_report(self, job_id: str) -> str:
         """Return the Markdown audit report content for a scored job.
 
-        Raises ``FileNotFoundError`` when scoring has not been run yet or the
-        audit file was lost.  Raises ``JobNotFound`` when the job is unknown.
+        Read from the job's stored ``score``, where every executor now leaves it
+        (nothing is written to ``/output``). Raises ``FileNotFoundError`` when
+        the job has no stored report, ``JobNotFound`` when the job is unknown.
         """
         import pipeline.jobs.store as _store_mod
         from domain.jobs import JobNotFound
@@ -268,23 +255,13 @@ class ScoringService:
             raise JobNotFound()
 
         checkpoint = job.checkpoint_data or {}
-        audit_path = checkpoint.get("score_audit_path")
-
-        if not audit_path:
-            # Try the default path in case the checkpoint was not flushed
-            default_path = os.path.join(_OUTPUT_DIR, f"{job_id}_score_audit.md")
-            if os.path.exists(default_path):
-                audit_path = default_path
-            else:
-                raise FileNotFoundError(
-                    f"No audit report found for job {job_id}. "
-                    "Run POST /v1/jobs/{id}/score first."
-                )
-
-        if not os.path.exists(audit_path):
+        score = checkpoint.get("score") or (checkpoint.get("summary") or {}).get(
+            "score"
+        )
+        report = (score or {}).get("audit_report")
+        if not report:
             raise FileNotFoundError(
-                f"Audit report file missing at {audit_path}. Re-run scoring."
+                f"No audit report stored for job {job_id}. "
+                "Run POST /v1/jobs/{id}/score first."
             )
-
-        with open(audit_path, encoding="utf-8") as fh:
-            return fh.read()
+        return report

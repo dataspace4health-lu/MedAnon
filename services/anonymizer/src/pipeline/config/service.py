@@ -6,12 +6,13 @@ and any other entry point that needs profile-based config selection.
 
 Caching design:
   - ``_load_settings(filename)`` is @lru_cache(maxsize=8); cache key is the
-    *resolved* filename, not the profile alias.  This prevents the classic
-    ``'auto'``-over-caching bug where the profile alias is cached before
-    ``GPAS_URL`` is set, causing the wrong config to be served for the rest
-    of the process lifetime.
-  - ``_resolve_profile(profile)`` reads the current env on every call so
-    that ``'auto'`` always reflects the live ``GPAS_URL`` value.
+    *resolved* filename, not the profile alias.  Aliases must never be cache
+    keys: ``'auto'`` is resolved per call, and ``MEDANON_CONFIG_DIR`` can be
+    repointed (tests do this), so caching by alias would serve a stale file
+    for the rest of the process lifetime.
+  - ``_resolve_profile(profile)`` reads the current env on every call so that
+    ``MEDANON_CONFIG_DIR`` / ``MEDANON_USER_CONFIG_DIR`` overrides take effect
+    after import.
   - ``MEDANON_CONFIG_CACHE_TTL`` (seconds; 0 = forever) enables hot-config-
     reload in long-lived processes without a restart.
   - ``clear_settings_cache()`` exposes manual invalidation for tests and
@@ -34,11 +35,8 @@ _USER_CONFIG_DIR = os.environ.get("MEDANON_USER_CONFIG_DIR", "/output/user-confi
 _PROFILE_MAP = {
     "auto": None,  # triggers auto-selection logic below
     "minimal": "config.yaml",
-    "gpas": "config_gpas.yaml",
     "gdpr": "config_gdpr_eu.yaml",
     "hipaa": "config_hipaa_safe_harbor.yaml",
-    "research": "config_research_pseudonymous.yaml",
-    "structural": "config_structure_preserving.yaml",
     "value-masking": "config_value_masking.yaml",
 }
 
@@ -104,9 +102,14 @@ def _resolve_profile(profile: str) -> str:
     if profile in _PROFILE_MAP:
         filename = _PROFILE_MAP[profile]
         if filename is None:  # 'auto'
-            filename = (
-                "config_gpas.yaml" if os.environ.get("GPAS_URL") else "config.yaml"
-            )
+            # 'auto' used to resolve to config_gpas.yaml whenever GPAS_URL was
+            # set. That profile is no longer bundled, so 'auto' is always the
+            # baseline config.yaml. NOTE: config.yaml carries no
+            # gpas_pseudonymize rules - it redacts identifiers instead. A
+            # deployment that wants gPAS pseudonymisation must author a config
+            # with gpas_pseudonymize rules and select it explicitly; setting
+            # GPAS_URL alone no longer changes which profile 'auto' picks.
+            filename = "config.yaml"
         return os.path.join(config_dir, filename)
 
     # User-defined profile?
@@ -179,11 +182,11 @@ def get_settings(profile: str = "auto") -> Settings:
     """Load Settings for the named config profile (results cached per resolved filename).
 
     Args:
-        profile: A built-in profile name (auto, minimal, gpas, gdpr, hipaa, research,
-                 structural, value-masking) or a user-defined profile name created via POST /v1/configs.
-                 'auto' selects config_gpas.yaml when GPAS_URL is set, else config.yaml.
-                 The 'auto' alias is resolved on every call so it always reflects the
-                 current environment  it is never cached under the key 'auto'.
+        profile: A built-in profile name (auto, minimal, gdpr, hipaa, value-masking)
+                 or a user-defined profile name created via POST /v1/configs.
+                 'auto' resolves to config.yaml. The alias is resolved on every call
+                 so it always reflects the current environment  it is never cached
+                 under the key 'auto'.
 
     Returns:
         Loaded and validated Settings instance.

@@ -68,14 +68,3 @@ def quarantine_record(
         stage=stage or "unknown", reason=error_type or "unknown"
     ).inc()
     return record
-
-
-def is_quarantined(result: Any) -> bool:
-    """True if *result* is a quarantine record produced by this module.
-
-    Falls back to the legacy ``"error" in result`` heuristic so records emitted
-    before the marker existed are still recognised.
-    """
-    if not isinstance(result, dict):
-        return False
-    return result.get(QUARANTINE_MARKER) is True or "error" in result

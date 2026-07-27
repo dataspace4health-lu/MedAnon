@@ -134,9 +134,24 @@ def _evict_if_needed(token_state: dict, limit: int = _TOKEN_STATE_MAX_ENTRIES) -
             token_state["reverse"].pop(token, None)
 
 
+# Delimiter for ``token_state["map"]`` keys.  Must match the NLP microservice
+# (services/nlp/src/tokenizer.py): token_state is threaded through
+# /v1/detect/batch requests, so both sides have to agree on the key format.
+# Keys MUST be JSON-safe strings  a tuple key makes orjson reject the request
+# payload ("Dict key must be str") and makes the service's jsonable_encoder
+# raise ``TypeError: unhashable type: 'list'`` (HTTP 500).  A plain str key
+# also round-trips, keeping surrogate tokens consistent across calls.
+_TOKEN_KEY_SEP = "\x1f"
+
+
+def _token_map_key(entity_type: str, value: str) -> str:
+    """Return the canonical JSON-safe ``token_state['map']`` key."""
+    return f"{entity_type}{_TOKEN_KEY_SEP}{value}"
+
+
 def _tokenize_unlocked(value: str, entity_type: str, token_state: dict) -> str:
     """Assign or retrieve the surrogate token  assumes any lock is already held."""
-    key = (entity_type, value)
+    key = _token_map_key(entity_type, value)
     if key in token_state["map"]:
         return token_state["map"][key]
     _evict_if_needed(token_state)

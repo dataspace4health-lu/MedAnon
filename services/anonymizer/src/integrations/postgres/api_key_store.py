@@ -27,6 +27,31 @@ logger = logging.getLogger("medanon.api_key_store")
 
 _VALID_ROLES = frozenset({"admin", "analyst", "viewer"})
 
+_DDL = """
+CREATE SCHEMA IF NOT EXISTS medanon;
+
+CREATE TABLE IF NOT EXISTS medanon.api_keys (
+    id           TEXT PRIMARY KEY,
+    key_hash     TEXT NOT NULL UNIQUE,
+    client_id    TEXT NOT NULL,
+    role         TEXT NOT NULL DEFAULT 'analyst',
+    created_at   TEXT NOT NULL,
+    expires_at   TEXT,
+    revoked      BOOLEAN NOT NULL DEFAULT FALSE,
+    last_used_at TEXT,
+    description  TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_api_keys_hash
+    ON medanon.api_keys (key_hash);
+
+CREATE INDEX IF NOT EXISTS idx_api_keys_client
+    ON medanon.api_keys (client_id);
+
+CREATE INDEX IF NOT EXISTS idx_api_keys_active
+    ON medanon.api_keys (revoked, expires_at);
+"""
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -50,6 +75,34 @@ class PostgresApiKeyStore:
 
     def __init__(self, pool: ThreadedConnectionPool) -> None:
         self._pool = pool
+
+    def ensure_schema(self) -> None:
+        """Create schema/table/indexes if missing.
+
+        ``CREATE … IF NOT EXISTS`` is not atomic against implicit composite-type
+        creation, so concurrent startup across app workers can collide on
+        ``pg_type``/``pg_class``. The objects exist either way  treat those
+        specific races as success (mirrors ``workflow_store``).
+        """
+        from psycopg2 import errors as _pg_errors
+
+        _benign = (
+            _pg_errors.DuplicateTable,
+            _pg_errors.DuplicateObject,
+            _pg_errors.UniqueViolation,
+        )
+        conn = self._get_conn()
+        try:
+            try:
+                with conn:
+                    with conn.cursor() as cur:
+                        cur.execute(_DDL)
+                logger.info("api key schema ready")
+            except _benign:
+                conn.rollback()
+                logger.debug("api key schema already created concurrently")
+        finally:
+            self._put_conn(conn)
 
     def _get_conn(self):
         from integrations.postgres.pool import get_conn

@@ -21,6 +21,88 @@ from utils.json_fast import dumps as _json_dumps, loads as _json_loads
 
 _worker_log = logging.getLogger("medanon.worker")
 _OUTPUT_DIR = os.environ.get("MEDANON_OUTPUT_DIR", "/output")
+
+
+# ---------------------------------------------------------------------------
+# Optional process-pool compute (single-job multi-core)
+#
+# The export is CPU-bound on rule_evaluation + resource_assembly, and the worker
+# is ONE GIL-bound process: threads cannot parallelise it. Running the compute
+# phase in separate PROCESSES is the only way one job uses more than one core.
+#
+# Streaming contract is preserved: chunks travel over IPC in memory only. No
+# resource is ever written to any store - the checkpoint remains the sole DB
+# write. (This is why the staged/Postgres path is not an option here.)
+#
+# OFF by default; opt in with MEDANON_STREAM_PROCESS_WORKERS=N.
+# ---------------------------------------------------------------------------
+
+_PROCESS_POOL = None
+_PROCESS_POOL_LOCK = threading.Lock()
+
+# Child-process caches: rebuilt once per process, then reused across chunks.
+_CHILD_SETTINGS: dict = {}
+_CHILD_PSEUDONYMIZER = None
+
+
+def _stream_process_workers() -> int:
+    """Number of compute processes for the streaming path (0 = disabled)."""
+    try:
+        return max(0, int(os.environ.get("MEDANON_STREAM_PROCESS_WORKERS", "0")))
+    except ValueError:
+        return 0
+
+
+def _deidentify_chunk_in_process(chunk, config_filename, want_manifest):
+    """Child-process entry point: de-identify one chunk.
+
+    Must stay importable at module level so it is picklable by reference.
+    ``settings`` and the gPAS pseudonymizer are not picklable (open pools), so
+    the child rebuilds them once from *config_filename* and caches them for the
+    life of the process.
+
+    Returns ``(results, manifests_or_None)``.
+    """
+    global _CHILD_PSEUDONYMIZER
+    from pipeline.config.service import canonical_profile_name, get_settings
+    from pipeline.processor import _get_default_pseudonymizer
+
+    settings = _CHILD_SETTINGS.get(config_filename)
+    if settings is None:
+        profile = canonical_profile_name(config_filename) or "auto"
+        settings = get_settings(profile)
+        _CHILD_SETTINGS[config_filename] = settings
+    if _CHILD_PSEUDONYMIZER is None:
+        _CHILD_PSEUDONYMIZER = _get_default_pseudonymizer()
+
+    out = process_data_batch(
+        chunk,
+        settings,
+        _CHILD_PSEUDONYMIZER,
+        attach_manifest=True,
+        _return_manifest=want_manifest,
+    )
+    if want_manifest:
+        return out[0], out[1]
+    return out, None
+
+
+def _get_process_pool():
+    """Lazily create the shared compute pool (None when the feature is off)."""
+    global _PROCESS_POOL
+    n = _stream_process_workers()
+    if n <= 0:
+        return None
+    if _PROCESS_POOL is None:
+        with _PROCESS_POOL_LOCK:
+            if _PROCESS_POOL is None:
+                from concurrent.futures import ProcessPoolExecutor
+
+                _PROCESS_POOL = ProcessPoolExecutor(max_workers=n)
+                _worker_log.info("stream_process_pool started workers=%d", n)
+    return _PROCESS_POOL
+
+
 _PROGRESS_INTERVAL: int = int(os.environ.get("MEDANON_PROGRESS_INTERVAL", "500"))
 
 _PIPELINE_QUEUE_SIZE: int = int(os.environ.get("MEDANON_PIPELINE_QUEUE_SIZE", "4"))
@@ -544,17 +626,30 @@ class DeidentificationPipeline:
         # --- Compute phase: NLP + gPAS HTTP calls (runs outside output lock) ---
         _from_bisect = False
         try:
-            batch_out = process_data_batch(
-                chunk,
-                self._settings,
-                self._pseudonymizer,
-                attach_manifest=True,
-                _return_manifest=_want_manifest,
-            )
-            if _want_manifest:
-                _results, _manifests = batch_out
+            # Process pool (opt-in): run the CPU-bound compute in a separate
+            # PROCESS so this job can use more than one core. The consumer
+            # thread blocks on the future, releasing the GIL while the child
+            # works. Chunks move over IPC in memory only - nothing persisted.
+            _pool = _get_process_pool()
+            if _pool is not None:
+                _results, _manifests = _pool.submit(
+                    _deidentify_chunk_in_process,
+                    chunk,
+                    getattr(self._settings, "filename", None),
+                    _want_manifest,
+                ).result()
             else:
-                _results, _manifests = batch_out, None
+                batch_out = process_data_batch(
+                    chunk,
+                    self._settings,
+                    self._pseudonymizer,
+                    attach_manifest=True,
+                    _return_manifest=_want_manifest,
+                )
+                if _want_manifest:
+                    _results, _manifests = batch_out
+                else:
+                    _results, _manifests = batch_out, None
         except Exception:
             # Binary-search fallback: isolates bad resources in log₂(N) depth;
             # good sub-chunks still benefit from batch gPAS de-duplication.

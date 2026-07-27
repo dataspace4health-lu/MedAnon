@@ -13,6 +13,34 @@ from psycopg2.pool import ThreadedConnectionPool
 
 logger = logging.getLogger("medanon.processing_run_store")
 
+_DDL = """
+CREATE SCHEMA IF NOT EXISTS medanon;
+
+CREATE TABLE IF NOT EXISTS medanon.processing_runs (
+    id              TEXT PRIMARY KEY,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    endpoint        TEXT NOT NULL,
+    config_profile  TEXT NOT NULL DEFAULT 'auto',
+    config_hash     TEXT,
+    resource_count  INTEGER NOT NULL DEFAULT 0,
+    error_count     INTEGER NOT NULL DEFAULT 0,
+    duration_ms     INTEGER NOT NULL DEFAULT 0,
+    input_type      TEXT NOT NULL DEFAULT '',
+    summary         JSONB,
+    score           JSONB,
+    trust_passport  JSONB
+);
+
+CREATE INDEX IF NOT EXISTS idx_processing_runs_created
+    ON medanon.processing_runs (created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_processing_runs_endpoint
+    ON medanon.processing_runs (endpoint, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_processing_runs_profile
+    ON medanon.processing_runs (config_profile, created_at DESC);
+"""
+
 
 class PostgresProcessingRunStore:
     """PostgreSQL-backed processing run persistence."""
@@ -31,21 +59,52 @@ class PostgresProcessingRunStore:
         safe_putconn(self._pool, conn)
 
     def ensure_schema(self) -> None:
-        """Idempotently reconcile an existing table with the shape this store expects.
+        """Create the table if missing, then reconcile an existing one.
 
-        The ``medanon.processing_runs`` table is created by the app-db init; this
-        backfills the Trust Gate column for deployments that predate it and
-        migrates ``created_at`` off the legacy ``TEXT`` type.  Both steps are
-        no-ops once applied.
+        This store used to assume ``medanon.processing_runs`` had been created by
+        the app-db container's ``docker-entrypoint-initdb.d`` mount, and opened
+        straight into ``ALTER TABLE``.  That init script (``sql/init.sql``) is
+        untracked and gitignored, so on a fresh checkout Docker materialises an
+        empty *directory* at the bind-mount source, Postgres skips it, and every
+        ALTER here raised ``UndefinedTable`` and aborted the startup wiring.  The
+        schema is owned here now, like every other store.
 
-        ``created_at`` was originally declared ``TEXT``  a direct port of the
-        SQLite DDL.  Every windowed aggregate in :meth:`get_stats` compares it
-        against ``NOW()``, which PostgreSQL rejects outright ("operator does not
-        exist: text >= timestamp with time zone"), so the whole stats endpoint
-        500s.  The ``USING`` cast parses the ISO-8601 strings this store has
-        always written, and restores the ``created_at DESC`` index for the
-        window scan.
+        The migrations below stay for volumes that predate those columns; both are
+        no-ops once applied.  ``created_at`` was originally declared ``TEXT``  a
+        direct port of the SQLite DDL.  Every windowed aggregate in
+        :meth:`get_stats` compares it against ``NOW()``, which PostgreSQL rejects
+        outright ("operator does not exist: text >= timestamp with time zone"), so
+        the whole stats endpoint 500s.  The ``USING`` cast parses the ISO-8601
+        strings this store has always written.
+
+        ``CREATE … IF NOT EXISTS`` is not atomic against implicit composite-type
+        creation, so concurrent startup across app workers can collide on
+        ``pg_type``/``pg_class``. The objects exist either way  treat those
+        specific races as success (mirrors ``workflow_store``).
         """
+        from psycopg2 import errors as _pg_errors
+
+        _benign = (
+            _pg_errors.DuplicateTable,
+            _pg_errors.DuplicateObject,
+            _pg_errors.UniqueViolation,
+        )
+        conn = self._get_conn()
+        try:
+            try:
+                with conn:
+                    with conn.cursor() as cur:
+                        cur.execute(_DDL)
+                logger.info("processing run schema ready")
+            except _benign:
+                conn.rollback()
+                logger.debug("processing run schema already created concurrently")
+        finally:
+            self._put_conn(conn)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """Backfill columns/types on volumes that predate the current shape."""
         conn = self._get_conn()
         try:
             with conn:

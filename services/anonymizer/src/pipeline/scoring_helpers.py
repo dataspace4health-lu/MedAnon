@@ -148,14 +148,58 @@ def score_results(
     return summary, score, audit_report
 
 
+def attach_audit_report(score: dict | None, collector, **report_kw) -> dict | None:
+    """Return a copy of *score* carrying *collector*'s Markdown audit report.
+
+    ``GET /v1/processing-runs/{id}/score/report`` serves the report straight out
+    of the ``score`` JSONB column, so a report that is not attached here is a
+    report the UI cannot show. The report is never written to ``/output``: that
+    directory is reaped on MEDANON_RESULT_TTL_SEC, which would take the audit
+    record with the data it is supposed to outlive.
+
+    Copies rather than mutating: callers pass the same ``summary["score"]`` to
+    ``publish_result``, and mutating it in place would embed the whole Markdown
+    report inside the released ``.audit.json`` artifact as well. Only the
+    persisted run should carry it.
+
+    Best-effort: report generation must never fail a job that has already
+    produced its output.
+    """
+    if score is None or collector is None:
+        return score
+    generate = getattr(collector, "generate_audit_report", None) or getattr(
+        collector, "generate_report", None
+    )
+    if generate is None:
+        return score
+    try:
+        report = generate(**report_kw)
+    except Exception:
+        logger.debug("audit_report_generate_failed", exc_info=True)
+        return score
+    return {**score, "audit_report": report} if report else score
+
+
 def make_collector(config_profile: str = "auto"):
-    """Create a ScoreCollector if scoring is enabled, else return None."""
+    """Create a score collector if scoring is enabled, else return None.
+
+    Returns a :class:`ScoreAuditCollector`, which wraps the medanon-core
+    ``ScoreCollector`` (same ``record_resource``/``record_error``/``aggregate``
+    contract) and additionally can render the Markdown audit report. The bare
+    ``ScoreCollector`` cannot, so callers that used it persisted runs with no
+    ``score["audit_report"]`` and the UI had nothing to show.
+    """
     if not _is_scoring_enabled():
         return None
     try:
-        from scoring.engine import ScoreCollector
+        import datetime as _dt
 
-        return ScoreCollector(config_profile=config_profile)
+        from pipeline.scoring.audit import ScoreAuditCollector
+
+        scored_at = (
+            _dt.datetime.now(_dt.timezone.utc).isoformat().replace("+00:00", "Z")
+        )
+        return ScoreAuditCollector(config_profile=config_profile, scored_at=scored_at)
     except Exception:
         return None
 
@@ -371,8 +415,8 @@ async def check_and_persist_with_leak(
 ) -> "dict | None":
     """Score synchronously (awaited), persist the run, and return the pii_leak block.
 
-    Unlike score_and_persist (fire-and-forget), this awaits scoring so the
-    caller can inspect the leak signal BEFORE returning the HTTP response.
+    Scoring is awaited (not fire-and-forget) so the caller can inspect the leak
+    signal BEFORE returning the HTTP response.
 
     ``trust_passport`` (the pre-privacy Trust Gate verdict, if any) is persisted
     with the run so every gated ingest path keeps its Quality Passport.
@@ -417,54 +461,3 @@ async def check_and_persist_with_leak(
     except Exception:
         logger.debug("check_and_persist_with_leak_failed", exc_info=True)
         return None
-
-
-async def score_and_persist(
-    result,
-    endpoint: str,
-    settings,
-    t0: float,
-) -> None:
-    """Score a non-streaming result and persist the run.
-
-    Called via ``asyncio.create_task()`` for fire-and-forget execution.
-    """
-    if not _is_scoring_enabled():
-        return
-    try:
-        config_profile = _get_config_profile(settings)
-
-        # Determine input type
-        if isinstance(result, list):
-            input_type = "array"
-        elif isinstance(result, dict) and result.get("resourceType") == "Bundle":
-            input_type = "Bundle"
-        elif isinstance(result, dict):
-            input_type = result.get("resourceType", "unknown")
-        else:
-            input_type = "unknown"
-
-        run_id = str(uuid.uuid4())
-
-        summary, score, audit_report = await asyncio.to_thread(
-            score_results, result, settings, config_profile
-        )
-        duration_ms = int((time.monotonic() - t0) * 1000)
-
-        if audit_report:
-            score["audit_report"] = audit_report
-
-        await persist_run(
-            run_id=run_id,
-            endpoint=endpoint,
-            config_profile=config_profile,
-            config_hash=getattr(settings, "config_hash", None),
-            resource_count=summary.get("total_resources", 0),
-            error_count=summary.get("error_count", 0),
-            duration_ms=duration_ms,
-            input_type=input_type,
-            summary=summary,
-            score=score,
-        )
-    except Exception:
-        logger.debug("score_and_persist_failed", exc_info=True)

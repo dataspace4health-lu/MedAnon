@@ -19,6 +19,7 @@ from ._transport import (
 
 __all__ = [
     "get_capability_statement",
+    "server_supports_bulk_export",
     "preflight_resource_count",
     "fetch_resource_type",
     "fetch_resources_by_ids",
@@ -56,6 +57,28 @@ def get_capability_statement(base_url, token=None, timeout=30):
             if rt:
                 resource_types.append(rt)
     return resource_types
+
+
+def server_supports_bulk_export(base_url, token=None, timeout=10):
+    """Return True if the server advertises the FHIR Bulk Data ``$export`` op.
+
+    Reads the CapabilityStatement and looks for a system-level operation named
+    ``export`` (per the Bulk Data Access IG, HAPI and most R4 servers list it
+    under ``rest[].operation[]``).  Detection is fail-safe: any error (server
+    down, malformed statement, older server) returns False so the caller falls
+    back to the legacy search-pagination path rather than erroring the job.
+    """
+    url = base_url.rstrip("/") + "/metadata"
+    try:
+        cs = _get_json(url, token=token, timeout=timeout, operation="metadata")
+    except Exception as exc:
+        log.info("bulk_export capability probe failed (%s), assuming unsupported", exc)
+        return False
+    for rest in cs.get("rest", []):
+        for op in rest.get("operation", []):
+            if str(op.get("name", "")).lower() == "export":
+                return True
+    return False
 
 
 def preflight_resource_count(base_url, resource_type=None, token=None, timeout=10):

@@ -58,7 +58,10 @@ class _TypeStats:
         # Per-type detail tracking  powers the "Score Composition" section.
         "dim_samples",  # dict[str, list[float]]  sub-dim values seen on this type
         "action_counts",  # Counter  actions actually applied to this type
-        "risk_scores",  # list[float]  per-resource privacy risk
+        # Running aggregate, NOT a per-resource list: retaining one float per
+        # resource is O(n) memory and OOMs at high volume (~400 MB at 10M).
+        "risk_sum",
+        "risk_count",
         "worst_resources",  # list[(composite, resource_id)]  N lowest-scoring
     )
 
@@ -75,7 +78,8 @@ class _TypeStats:
         self.text_detections: list[dict] = []
         self.dim_samples: dict[str, list[float]] = {dim: [] for dim, _, _ in _DIM_META}
         self.action_counts: collections.Counter = collections.Counter()
-        self.risk_scores: list[float] = []
+        self.risk_sum: float = 0.0
+        self.risk_count: int = 0
         self.worst_resources: list[tuple[float, str]] = []
 
 
@@ -206,7 +210,8 @@ class ScoreAuditCollector:
                     bucket.append(ev.value)
 
         # Per-type privacy risk distribution
-        ts.risk_scores.append(result.privacy.risk_score)
+        ts.risk_sum += result.privacy.risk_score
+        ts.risk_count += 1
 
         # Worst-N resources (lowest composite). Cheap O(N log N) maintenance
         # because the cap is small (5).
@@ -242,6 +247,23 @@ class ScoreAuditCollector:
 
     def aggregate(self) -> dict:
         return self._inner.aggregate()
+
+    def export_state(self) -> dict:
+        """Gate-critical accumulators for an out-of-process merge.
+
+        Only the wrapped :class:`ScoreCollector` state travels: that is what
+        ``aggregate()`` and therefore the score gate read.  The audit *report*
+        extras accumulated here (per-type stats, dimension samples, rule hit
+        counts) are report detail, not gate inputs, and are intentionally not
+        shipped  they are bounded-but-large and would dominate the payload.
+        Consequence to be aware of: a job whose partitions ran out-of-process
+        produces a correct gate verdict but a less granular Markdown report.
+        """
+        return self._inner.export_state()
+
+    def merge_state(self, state: dict) -> None:
+        """Fold a worker's :meth:`export_state` payload into this collector."""
+        self._inner.merge_state(state)
 
     def generate_report(
         self,
@@ -768,9 +790,7 @@ def _render_report(
             avg_u = ts.utility_sum / ts.pass_count if ts.pass_count else 0.0
             avg_q = ts.quality_sum / ts.pass_count if ts.pass_count else 0.0
             grade = _letter_grade(avg_comp)
-            avg_risk = (
-                sum(ts.risk_scores) / len(ts.risk_scores) if ts.risk_scores else 0.0
-            )
+            avg_risk = ts.risk_sum / ts.risk_count if ts.risk_count else 0.0
 
             W(f"### `{rtype}`  Grade {grade} ({avg_comp:.1f}%)")
             W("")

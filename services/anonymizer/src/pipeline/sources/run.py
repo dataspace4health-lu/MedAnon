@@ -1,6 +1,6 @@
-"""run_through_engine  drive any DataSourceAdapter through the full pipeline.
+"""run_through_engine_with_manifest  drive any DataSourceAdapter through the pipeline.
 
-One helper that ties a :class:`~pipeline.sources.protocol.DataSourceAdapter`
+Ties a :class:`~pipeline.sources.protocol.DataSourceAdapter`
 to the engine: parse the source format into the FHIR IR, run
 ``process_data_batch`` (the same rule engine + validation barrier FHIR uses),
 then serialize back to the source format.
@@ -16,35 +16,12 @@ from pipeline.processor import process_data_batch
 from pipeline.validation import enforce_output
 
 
-def run_through_engine(
-    adapter,
-    raw: bytes | str,
-    config_profile: str = "auto",
-) -> bytes:
-    """Parse *raw* with *adapter*, de-identify via the engine, serialize back.
-
-    Args:
-        adapter:        a DataSourceAdapter instance (single-use per object).
-        raw:            the source-format bytes/text.
-        config_profile: which rule profile to apply (same profiles as FHIR).
-
-    Returns:
-        De-identified bytes in the adapter's source format.
-
-    Raises:
-        NormalizationError: if *raw* is malformed for the adapter's format.
-        OutputBlocked: if the unified output validation barrier blocks the result.
-    """
-    output, _ = run_through_engine_with_manifest(adapter, raw, config_profile)
-    return output
-
-
 def run_through_engine_with_manifest(
     adapter,
     raw: bytes | str,
     config_profile: str = "auto",
 ) -> tuple[bytes, list[dict]]:
-    """Like :func:`run_through_engine` but also returns the transformation manifest.
+    """Drive an adapter through the pipeline and return the transformation manifest.
 
     The manifest is the flattened list of rule-engine manifest entries
     (``{rule, match, action, ...}``) across the mapped resources  the same

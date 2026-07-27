@@ -163,12 +163,6 @@ def get_amqp_client() -> AmqpClient | None:
     return _client
 
 
-def set_amqp_client(client) -> None:
-    """Test seam: inject a FakeBroker as the singleton."""
-    global _client
-    _client = client
-
-
 async def publish_partitions(
     broker,
     *,

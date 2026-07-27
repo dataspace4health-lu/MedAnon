@@ -256,7 +256,7 @@ async def _stale_recovery_loop() -> None:
     2. Partitions stuck in ``claimed``  a worker that crashes mid-shard
        without reaching its ``release_partition`` exception handler leaves the
        partition locked forever.  ``recover_stale_partitions`` resets those to
-       ``unclaimed`` so another worker or Argo retry pod can reclaim them.
+       ``unclaimed`` so another worker can reclaim them.
 
     Disabled when staging is not configured or the interval is ``<= 0``.
     """

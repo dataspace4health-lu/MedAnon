@@ -218,6 +218,98 @@ def _processing_errors_mode(settings) -> str:
 # ---------------------------------------------------------------------------
 
 
+# Match-stage executor: "thread" (default) or "process". Rule evaluation is
+# CPU-bound and GIL-bound, so threads give no real parallelism - a process pool
+# measured 2.6x at 4 workers / 3.6x at 8 on the match stage, with pickle costing
+# only ~7% of the rule-evaluation work. Opt-in so default behaviour is unchanged.
+_MATCH_EXECUTOR = os.environ.get("MEDANON_MATCH_EXECUTOR", "thread").strip().lower()
+_MATCH_PROCESS_WORKERS = int(
+    os.environ.get("MEDANON_MATCH_PROCESS_WORKERS", str(_PARALLEL_WORKERS or 4))
+)
+# Below this, process startup + IPC outweighs the parallel win.
+_MATCH_PROCESS_MIN = int(os.environ.get("MEDANON_MATCH_PROCESS_MIN", "200"))
+
+_match_pool = None
+_match_pool_lock = threading.Lock()
+
+
+def _get_match_pool():
+    """Lazily create the match-stage process pool (module-level singleton).
+
+    Uses the ``forkserver`` start method: this process is multi-threaded
+    (asyncio loop + pipeline thread pools) and plain ``fork`` in a threaded
+    process can deadlock when a child inherits a lock held by a thread that
+    does not exist in the child. ``forkserver`` forks from a clean single
+    threaded server process instead. Falls back to ``spawn`` if unavailable.
+    """
+    global _match_pool
+    if _match_pool is not None:
+        return _match_pool
+    with _match_pool_lock:
+        if _match_pool is None:
+            import multiprocessing as _mp
+            from concurrent.futures import ProcessPoolExecutor
+
+            try:
+                ctx = _mp.get_context("forkserver")
+            except ValueError:  # pragma: no cover - platform dependent
+                ctx = _mp.get_context("spawn")
+            _match_pool = ProcessPoolExecutor(
+                max_workers=_MATCH_PROCESS_WORKERS, mp_context=ctx
+            )
+            audit_log.info(
+                "match_process_pool started workers=%d start_method=%s",
+                _MATCH_PROCESS_WORKERS,
+                ctx.get_start_method(),
+            )
+    return _match_pool
+
+
+def _evaluate_rules_chunk(
+    chunk: list,
+    settings,
+    processing_mode: str,
+    permit_id: str,
+    collect_refs: bool = False,
+) -> list:
+    """Evaluate the match stage for a chunk of resources (process-pool worker).
+
+    Rule evaluation is CPU-bound *and* GIL-bound, so a thread pool cannot
+    parallelise it; this runs in a separate process instead. Module-level so it
+    is picklable by reference.
+
+    CRITICAL: ``contextvars`` do NOT cross a process boundary. The active
+    data-permit rides a contextvar (:mod:`utils.permit_context`), and
+    ``submit_with_context`` only copies it into *thread* workers. In a process
+    worker it would silently reset to the default, so permit-scoped keys and
+    gPAS domains would derive as **unscoped** - a D7.2 "MUST NOT reuse
+    pseudonyms across permits" violation that fails silently rather than
+    raising. The permit is therefore passed explicitly and re-established here.
+    """
+    from utils.permit_context import set_permit_id
+
+    set_permit_id(permit_id or None)
+    return [
+        _evaluate_rules(resource, settings, processing_mode, collect_refs)
+        for resource in chunk
+    ]
+
+
+def _build_text_id_map(mapping: dict | None) -> dict:
+    """Filter a pseudonym mapping down to usable text-ID replacements.
+
+    Drops empty keys/values, identity pairs, and ``{placeholder}`` keys. Callers
+    must build this ONCE PER BATCH and hand the result to ``_assemble_resource``:
+    doing it per resource rescans the whole batch-wide mapping every time, which
+    is quadratic in batch size and was ~21% of pipeline CPU.
+    """
+    if not mapping:
+        return {}
+    return {
+        k: v for k, v in mapping.items() if k and v and k != v and not k.startswith("{")
+    }
+
+
 def _assemble_resource(
     resource: dict,
     settings,
@@ -230,6 +322,7 @@ def _assemble_resource(
     precomputed_ref_mapping: dict | None = None,
     prebuilt_text_id_automaton=None,
     attach_manifest: bool = False,
+    precomputed_text_id_map: dict | None = None,
 ) -> dict:
     """finalize stage for one resource: gPAS write-back + post-processing.
 
@@ -275,15 +368,18 @@ def _assemble_resource(
 
     id_text_map = None
     if do_text_ids:
-        id_text_map = {
-            k: v
-            for k, v in batch_mapping.items()
-            if k and v and k != v and not k.startswith("{")
-        }
+        # Built ONCE per batch by the caller and passed in. Rebuilding it here
+        # rescans the whole batch-wide mapping for every resource, which made
+        # this O(resources x mapping_size) - profiled at 2.6M str.startswith
+        # calls per 1,000 resources and quadratic in MEDANON_BATCH_SIZE.
+        # Only fall back to building it when a caller invokes this directly.
+        id_text_map = (
+            precomputed_text_id_map
+            if precomputed_text_id_map is not None
+            else _build_text_id_map(batch_mapping)
+        )
         if not id_text_map:
             id_text_map = None
-        else:
-            audit_log.debug("rewriting_text_ids count=%d", len(id_text_map))
 
     # Single-walk post-processing: ref pseudonymisation + text-ID replacement
     # share one tree traversal via ``_post_process_resource`` (the legacy
@@ -386,6 +482,7 @@ def _run_finalize_stage(
     processing_mode,
     _keep_manifest,
     quarantine_info: "dict[int, dict] | None" = None,
+    _batch_id_text_map: "dict | None" = None,
 ):
     """Stage 4  finalize: gPAS write-back + post-processing per resource.
 
@@ -429,6 +526,7 @@ def _run_finalize_stage(
                     precomputed_ref_mapping=_batch_ref_mapping,
                     prebuilt_text_id_automaton=_batch_text_id_automaton,
                     attach_manifest=attach_manifest,
+                    precomputed_text_id_map=_batch_id_text_map,
                 )
                 futures[fut] = i
             except TimeoutError:
@@ -499,6 +597,7 @@ def _run_finalize_stage(
                             precomputed_ref_mapping=_batch_ref_mapping,
                             prebuilt_text_id_automaton=_batch_text_id_automaton,
                             attach_manifest=attach_manifest,
+                            precomputed_text_id_map=_batch_id_text_map,
                         )
                     except Exception as exc:
                         rtype = (
@@ -551,6 +650,7 @@ def _run_finalize_stage(
                         precomputed_ref_mapping=_batch_ref_mapping,
                         prebuilt_text_id_automaton=_batch_text_id_automaton,
                         attach_manifest=attach_manifest,
+                        precomputed_text_id_map=_batch_id_text_map,
                     )
                     results[i] = result
                 except Exception as exc:
@@ -658,7 +758,66 @@ def process_data_batch(
     _batch_span_cm.__enter__()
     try:
         with _stage_span("rule_evaluation"):
-            if _PARALLEL_WORKERS > 0:
+            _proc_done = False
+            if (
+                _MATCH_EXECUTOR == "process"
+                and _PARALLEL_WORKERS > 0
+                and len(resources) >= _MATCH_PROCESS_MIN
+            ):
+                # CPU-bound + GIL-bound: only separate PROCESSES parallelise it.
+                # The permit rides a contextvar that does not cross the process
+                # boundary, so it is passed explicitly (see _evaluate_rules_chunk).
+                from utils.permit_context import get_permit_id
+
+                _permit_id = get_permit_id()
+                _nw = max(1, _MATCH_PROCESS_WORKERS)
+                _chunks = [resources[i::_nw] for i in range(_nw)]
+                _chunks = [c for c in _chunks if c]
+                try:
+                    _pool = _get_match_pool()
+                    _futs = [
+                        _pool.submit(
+                            _evaluate_rules_chunk,
+                            c,
+                            settings,
+                            processing_mode,
+                            _permit_id,
+                            _need_refs,
+                        )
+                        for c in _chunks
+                    ]
+                    _out = [f.result() for f in _futs]
+                    # Re-interleave: chunks were strided, so results map back
+                    # to resources[i::_nw] preserving the original order.
+                    _merged: list = [None] * len(resources)
+                    for _ci, _res_list in enumerate(_out):
+                        for _j, _item in enumerate(_res_list):
+                            _merged[_ci + _j * _nw] = _item
+                    for _idx, _item in enumerate(_merged):
+                        (
+                            _r,
+                            _gw,
+                            _nw_work,
+                            _me,
+                            _rt,
+                        ) = _item
+                        parsed[_idx] = _r
+                        all_gpas_works[_idx] = _gw
+                        all_nlp_works[_idx] = _nw_work
+                        all_manifest_entries[_idx] = _me
+                        if _rt:
+                            _all_ref_type_map.update(_rt)
+                    _proc_done = True
+                except Exception as exc:
+                    # Never fail the batch on a pool problem - fall back to the
+                    # in-process path, which is always correct.
+                    audit_log.warning(
+                        "match_process_pool_failed (%s) - falling back to threads",
+                        exc,
+                    )
+            if _proc_done:
+                pass
+            elif _PARALLEL_WORKERS > 0:
                 pool = get_executor()
                 futures = []
                 _parallel_fell_back = False
@@ -925,13 +1084,11 @@ def _finalize_batch(
     # Prefer Aho-Corasick (O(N+M)) when available; fall back to regex.
     _batch_text_id_regex = None
     _batch_text_id_automaton = None
+    _batch_id_text_map: dict | None = None
     if getattr(settings, "rewrite_text_ids", False) and shared_mapping:
-        _batch_id_text_map = {
-            k: v
-            for k, v in shared_mapping.items()
-            if k and v and k != v and not k.startswith("{")
-        }
+        _batch_id_text_map = _build_text_id_map(shared_mapping)
         if _batch_id_text_map:
+            audit_log.debug("rewriting_text_ids count=%d", len(_batch_id_text_map))
             _batch_text_id_automaton, _batch_text_id_regex = _build_text_id_matcher(
                 _batch_id_text_map
             )
@@ -965,6 +1122,7 @@ def _finalize_batch(
             processing_mode,
             _keep_manifest,
             quarantine_info=quarantine_info,
+            _batch_id_text_map=_batch_id_text_map,
         )
 
     # Output barrier  runs at the single choke point that all callers share:

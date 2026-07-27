@@ -90,15 +90,6 @@ def is_ai_enabled() -> bool:
     )
 
 
-def is_provider_reachable() -> bool:
-    """Quick connectivity check (non-throwing)."""
-    try:
-        provider = get_provider()
-        return provider._cb.allow_request()
-    except (NotAvailableError, Exception):
-        return False
-
-
 class LLMProvider:
     """Thread-safe LLM provider with circuit breaker and optional caching."""
 
@@ -353,10 +344,3 @@ def get_provider() -> LLMProvider:
         if _provider is None:
             _provider = LLMProvider()
     return _provider
-
-
-def reset_provider() -> None:
-    """Reset the singleton (for tests)."""
-    global _provider
-    with _lock:
-        _provider = None

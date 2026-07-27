@@ -134,16 +134,6 @@ _nlp_cb = CircuitBreaker(
 )
 
 
-def nlp_circuit_breaker_stats() -> dict:
-    """Return NLP circuit breaker stats snapshot for health/readiness checks."""
-    return _nlp_cb.stats
-
-
-def nlp_circuit_breaker_is_open() -> bool:
-    """Return True if the NLP circuit breaker is currently OPEN."""
-    return _nlp_cb.state == CircuitBreaker.OPEN
-
-
 def _nlp_service_url(path: str) -> str:
     base = os.environ.get("NLP_SERVICE_URL", "").rstrip("/")
     return f"{base}{path}"

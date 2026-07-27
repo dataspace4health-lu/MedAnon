@@ -31,6 +31,35 @@ def get_passport_store() -> Any:
     return _store
 
 
+def init_passport_store_from_pool(pg_pool: Any) -> Any:
+    """Install the Postgres report store from *pg_pool* (None → no-op store).
+
+    The single wiring path shared by ``api.main`` and ``pipeline.jobs.worker_main``.
+    Both processes MUST install the store: the API serves ``GET /v1/reports``,
+    but the **worker** is what runs risk-driven exports and calls
+    ``save_passport`` — and that call is a silent no-op in a process where the
+    store was never installed, so a worker without it drops every passport.
+
+    Never raises: a broken report store must not take startup down.
+    """
+    global _store
+    if pg_pool is None:
+        _store = None
+        logger.info("passport_store=none (set MEDANON_APP_DB_URL for durable reports)")
+        return None
+    try:
+        from integrations.postgres.passport_store import PostgresPassportStore
+
+        store = PostgresPassportStore(pg_pool)
+        store.ensure_schema()
+        _store = store
+        logger.info("passport_store=postgres")
+    except Exception as exc:  # noqa: BLE001
+        _store = None
+        logger.warning("passport_store_start_failed: %s", exc)
+    return _store
+
+
 def save_passport(job_id: str, passport: dict) -> None:
     """Best-effort persist of a completed job's passport. Never raises.
 

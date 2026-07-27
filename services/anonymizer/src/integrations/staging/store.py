@@ -585,7 +585,7 @@ class StagingStore:
             self._put_conn(conn)
 
     # ------------------------------------------------------------------
-    # Partition-claim API (Phase 1 / Argo fan-out)
+    # Partition-claim API (Phase 1 fan-out)
     # ------------------------------------------------------------------
 
     def plan_partitions(self, job_id: str, target_rows: int | None = None) -> int:
@@ -804,7 +804,7 @@ class StagingStore:
         """Reset a ``claimed`` partition back to ``unclaimed``.
 
         Called from the ``deid`` step's exception handler so that the next
-        worker or Argo retry pod can reclaim and reprocess the partition.
+        worker can reclaim and reprocess the partition.
         """
         conn = self._get_conn()
         try:
@@ -829,7 +829,7 @@ class StagingStore:
         A worker that crashes mid-shard without reaching the ``release_partition``
         call in its exception handler leaves the partition ``claimed`` forever.
         This method resets those partitions to ``unclaimed`` so a sibling worker
-        or Argo retry pod can reclaim them.
+        can reclaim them.
 
         Returns the number of partitions recovered.
         """
@@ -1086,60 +1086,6 @@ class StagingStore:
                     (job_id,),
                 )
                 return int(cur.fetchone()[0])
-        finally:
-            self._put_conn(conn)
-
-    def list_dead_letter_partitions(self, job_id: str) -> list[dict]:
-        """Return the dead-letter ledger rows for a job (operator triage)."""
-        conn = self._get_conn()
-        try:
-            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                cur.execute(
-                    """
-                    SELECT job_id, partition_id, stage, attempt_count,
-                           error_code, error_message, config_hash, dead_lettered_at
-                      FROM medanon.dead_letter_partitions
-                     WHERE job_id = %s
-                     ORDER BY partition_id
-                    """,
-                    (job_id,),
-                )
-                return [dict(r) for r in cur.fetchall()]
-        finally:
-            self._put_conn(conn)
-
-    def retry_dead_letter_partition(self, job_id: str, partition_id: int) -> bool:
-        """Reset a dead-lettered partition to ``unclaimed`` for a fresh attempt.
-
-        Clears the attempt counter and removes the DLQ ledger row. Returns True
-        if a partition row was reset.
-        """
-        conn = self._get_conn()
-        try:
-            with conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        """
-                        UPDATE medanon.staged_partitions
-                           SET status = 'unclaimed',
-                               attempt_count = 0,
-                               claimed_at = NULL,
-                               locked_by = NULL,
-                               last_error_code = NULL,
-                               last_error_message = NULL
-                         WHERE job_id = %s AND partition_id = %s
-                        """,
-                        (job_id, partition_id),
-                    )
-                    reset = cur.rowcount > 0
-                    cur.execute(
-                        """
-                        DELETE FROM medanon.dead_letter_partitions
-                         WHERE job_id = %s AND partition_id = %s
-                        """,
-                        (job_id, partition_id),
-                    )
-            return reset
         finally:
             self._put_conn(conn)
 

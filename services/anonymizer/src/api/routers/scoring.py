@@ -118,8 +118,8 @@ async def get_job_score_report(job_id: str):
     """Return the Markdown audit report for a scored job.
 
     The report is generated automatically when you call
-    ``POST /v1/jobs/{job_id}/score`` and written to
-    ``/output/{job_id}_score_audit.md``.  It explains:
+    ``POST /v1/jobs/{job_id}/score`` and stored under the job's
+    ``score["audit_report"]``.  It explains:
 
     - Why each score (composite / utility / quality) is what it is
     - Which HIPAA-sensitive paths were not covered by rules

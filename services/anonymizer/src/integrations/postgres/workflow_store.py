@@ -5,8 +5,8 @@ consistent with "Postgres staging is the batch ledger". Workflows require
 ``MEDANON_APP_DB_URL``  there is intentionally no SQLite workflow store
 (the API returns 503 when no app-db is configured).
 
-Tables (also declared in ``sql/init.sql`` for fresh-volume bootstrap; this
-store self-creates them via :meth:`ensure_schema` for existing deployments):
+Tables, self-created via :meth:`ensure_schema` (this store owns its DDL; there
+is no static bootstrap SQL for the app-db):
 
 * ``medanon.workflows``        one row per workflow (status, backend, ref)
 * ``medanon.workflow_steps``   one row per step (status, job_id, deps)
@@ -177,12 +177,6 @@ class PostgresWorkflowStore:
         finally:
             self._put_conn(conn)
 
-    def set_workflow_status(self, workflow_id: str, status: WorkflowStatus) -> None:
-        self._exec(
-            "UPDATE medanon.workflows SET status=%s, updated_at=NOW() WHERE id=%s",
-            (status.value, workflow_id),
-        )
-
     def compare_and_set_workflow_status(
         self,
         workflow_id: str,
@@ -278,21 +272,6 @@ class PostgresWorkflowStore:
                 )
                 srows = cur.fetchall()
             return _row_to_workflow(wrow, srows)
-        finally:
-            self._put_conn(conn)
-
-    def get_by_job(self, job_id: str) -> tuple[str, str] | None:
-        """Return ``(workflow_id, step_id)`` for the step owning *job_id*."""
-        conn = self._get_conn()
-        try:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT workflow_id, step_id FROM medanon.workflow_steps "
-                    "WHERE job_id=%s",
-                    (job_id,),
-                )
-                row = cur.fetchone()
-            return (row[0], row[1]) if row else None
         finally:
             self._put_conn(conn)
 

@@ -19,6 +19,18 @@ from pipeline.jobs.checkpoint import save_checkpoint
 
 _log = logging.getLogger("medanon.staged_worker")
 
+
+class AmqpHandoffPending(RuntimeError):
+    """Partitions were published to the broker; this process must not finalise.
+
+    Signals that ownership of the job's remaining work has moved to the AMQP
+    stage consumers.  The producer raises it instead of returning so no caller
+    can proceed to merge shards and publish a result for work that has not
+    happened yet  a silent empty-export release.  Job completion for the AMQP
+    path is driven by the consumers advancing the workflow, not by this call.
+    """
+
+
 _OUTPUT_DIR = os.environ.get("MEDANON_OUTPUT_DIR", "/output")
 _BATCH_SIZE = int(os.environ.get("MEDANON_STAGING_BATCH_SIZE", "1000"))
 
@@ -737,6 +749,7 @@ def _run_staged_phase2_partition_claim(
         job.id,
         partition_count,
     )
+    _handed_off = False
 
     # ── AMQP producer path ────────────────────────────────────────────────
     # When the broker is configured, publish one work-pointer per partition
@@ -777,8 +790,7 @@ def _run_staged_phase2_partition_claim(
                     partition_count,
                     published,
                 )
-                # Work handed off to consumers  return 0 (processed by them).
-                return 0
+                _handed_off = True
     except Exception as exc:
         # AMQP path failed  fall through to in-process loop as a safety net.
         _log.warning(
@@ -786,6 +798,22 @@ def _run_staged_phase2_partition_claim(
             label,
             job.id,
             exc,
+        )
+
+    # Raised OUTSIDE the try above: the fallback handler must not swallow it and
+    # start processing partitions this process no longer owns.
+    #
+    # Work is handed off to the stage consumers, so the shards do not exist yet
+    # and this process holds no score state. Returning normally would let the
+    # caller merge an empty shard set, aggregate to ``computed=False``, sail
+    # through the score gate (which treats "not computed" as "nothing to check")
+    # and publish an empty file as a successful export while the real work is
+    # still in flight on other pods.
+    if _handed_off:
+        raise AmqpHandoffPending(
+            f"job={job.id}: {partition_count} partition(s) published to the "
+            "'deid' stage queue; completion is driven by the stage consumers, "
+            "not by this process"
         )
 
     processed = 0
@@ -855,6 +883,43 @@ def _run_staged_phase2_partition_claim(
     return processed
 
 
+def _child_bulkhead_env(parallelism: int, environ: "dict | None" = None) -> dict:
+    """Per-upstream bulkhead caps for ONE child of a *parallelism*-wide pool.
+
+    Bulkheads are per-process semaphores, so N spawned children each build their
+    own and the real fleet-wide concurrency is ``N x capacity``.  Measured on a
+    130,772-resource staged run with 4 workers: sustained
+    ``bulkhead_saturated upstream=nlp capacity=16`` (4 x 16 = 64 in flight
+    against one NLP replica) and a stream of
+    ``nlp_bulkhead_saturated  returning redacted placeholder``.
+
+    Those placeholders are fail-closed, so nothing leaks  but they are
+    over-redaction: whole clinical text fields are replaced instead of scrubbed.
+    Left unsized, the fleet traded OUTPUT QUALITY for parallelism, and it
+    degraded further with every extra worker  precisely the knob used to make
+    the job faster.
+
+    Dividing keeps the fleet-wide in-flight total equal to the single-process
+    budget, so ``MEDANON_STAGING_PROCESS_WORKERS`` can be raised for throughput
+    without pushing the shared NLP/gPAS services into saturation.  Operator
+    overrides are divided too  the env var means "budget for this job", not
+    "budget per child".
+    """
+    from utils.bulkhead import _DEFAULT_CAPACITY
+
+    src = os.environ if environ is None else environ
+    workers = max(1, int(parallelism))
+    out: dict[str, str] = {}
+    for name, default in _DEFAULT_CAPACITY.items():
+        var = f"BULKHEAD_{name.upper()}_MAX_CONCURRENT"
+        try:
+            total = int(src.get(var, default))
+        except (TypeError, ValueError):
+            total = default
+        out[var] = str(max(1, total // workers))
+    return out
+
+
 def _partition_process_worker(
     job,
     config_profile: str,
@@ -862,7 +927,8 @@ def _partition_process_worker(
     output_dir: str,
     label: str,
     staging_db_url: str,
-) -> int:
+    bulkhead_env: "dict | None" = None,
+) -> "tuple[int, dict]":
     """Top-level ProcessPoolExecutor worker: drain partitions in a child process.
 
     Runs in a freshly ``spawn``-ed process, so it rebuilds every resource that
@@ -870,14 +936,23 @@ def _partition_process_worker(
     the staging store (its own DB pool), the pseudonymizer (gPAS HTTP client),
     the loaded Settings, and a private ``JobSummaryCollector``.
 
-    Mirrors the per-partition collector pattern already used by the RabbitMQ
-    stage consumer (``stage_consumer.py``): scoring is job-granular, so a private
-    collector per child is correct  only the processed-resource COUNT needs to
-    flow back, and counts sum cleanly. Partition claims are serialised across all
-    children by ``FOR UPDATE SKIP LOCKED`` in ``claim_next_partition``.
+    Partition claims are serialised across all children by ``FOR UPDATE SKIP
+    LOCKED`` in ``claim_next_partition``.
 
-    Returns the number of resources this child processed.
+    Returns ``(resources_processed, score_state)``.  The score state MUST travel
+    back: scoring is job-granular, so a private per-child collector that is
+    discarded leaves the parent with nothing to aggregate, and the score gate
+    treats an uncomputed aggregate as "nothing to check" rather than as a
+    failure  publishing data whose k-anonymity and identifier coverage were
+    never evaluated.
     """
+    # MUST run before anything can touch a bulkhead: the semaphores are built
+    # lazily on first use and their size is frozen at that moment, so applying
+    # the per-child caps later would be a no-op. Safe to mutate os.environ here
+    # because ``spawn`` gives each child a private interpreter.
+    if bulkhead_env:
+        os.environ.update(bulkhead_env)
+
     from integrations.staging.store import StagingStore
     from pipeline.config.service import get_settings
     from pipeline.jobs.summary import JobSummaryCollector
@@ -895,7 +970,7 @@ def _partition_process_worker(
     )
     # store is unused by the partition-claim loop (it only touches staging);
     # pass None to avoid pickling a DB-backed job store into the child.
-    return _run_staged_phase2_partition_claim(
+    processed = _run_staged_phase2_partition_claim(
         job,
         None,
         staging,
@@ -906,6 +981,7 @@ def _partition_process_worker(
         label,
         collector,
     )
+    return processed, collector.export_score_state()
 
 
 def _drain_partitions_in_processes(
@@ -915,6 +991,7 @@ def _drain_partitions_in_processes(
     output_dir: str,
     label: str,
     parallelism: int,
+    collector=None,
 ) -> int:
     """Fan partition-claim workers across ``parallelism`` child processes.
 
@@ -923,6 +1000,13 @@ def _drain_partitions_in_processes(
     which rebuilds its own staging store + pseudonymizer + Settings and drains
     partitions until the shared ``FOR UPDATE SKIP LOCKED`` queue is exhausted.
     Returns the summed processed count.
+
+    Each child also returns its scoring accumulators, which are merged into
+    *collector*.  Without that merge the parent  the process that runs the
+    score gate at publish time  observes zero scored resources, ``aggregate()``
+    returns ``computed=False``, and ``check_score_gate`` short-circuits: the
+    batch k-anonymity and identifier-coverage checks never run and unchecked
+    data is published.
     """
     import multiprocessing as mp
     from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -930,7 +1014,16 @@ def _drain_partitions_in_processes(
     config_profile = (job.params or {}).get("config_profile", "auto")
     staging_db_url = getattr(staging, "_db_url", "")
     ctx = mp.get_context("spawn")
-    _log.info("%s_shards_process_pool job=%s workers=%d", label, job.id, parallelism)
+    # Split the per-upstream bulkhead budget across the children so the fleet
+    # does not oversubscribe NLP/gPAS by a factor of `parallelism`.
+    bulkhead_env = _child_bulkhead_env(parallelism)
+    _log.info(
+        "%s_shards_process_pool job=%s workers=%d bulkheads=%s",
+        label,
+        job.id,
+        parallelism,
+        bulkhead_env,
+    )
     results: list[int] = []
     with ProcessPoolExecutor(max_workers=parallelism, mp_context=ctx) as pool:
         futures = [
@@ -942,12 +1035,27 @@ def _drain_partitions_in_processes(
                 output_dir,
                 label,
                 staging_db_url,
+                bulkhead_env,
             )
             for _ in range(parallelism)
         ]
         for fut in as_completed(futures):
-            results.append(fut.result())
-    return sum(results)
+            child_processed, child_score_state = fut.result()
+            results.append(child_processed)
+            if collector is not None:
+                collector.merge_score_state(child_score_state)
+                collector.record_processed(child_processed)
+
+    total = sum(results)
+    if collector is not None and total > 0 and not collector.export_score_state():
+        # Scoring is on (a collector exists) but no child returned usable state.
+        # Publishing here would sail through the gate on computed=False, so fail
+        # the job instead: a missing verdict must never read as a pass.
+        raise RuntimeError(
+            f"score state lost from {parallelism} process worker(s) after "
+            f"{total} resources — refusing to publish an unscored export"
+        )
+    return total
 
 
 def _run_staged_phase2_shards(
@@ -1038,7 +1146,13 @@ def _run_staged_phase2_shards(
         )
         if use_processes:
             processed = _drain_partitions_in_processes(
-                job, staging, processing_mode, output_dir, label, parallelism
+                job,
+                staging,
+                processing_mode,
+                output_dir,
+                label,
+                parallelism,
+                collector=collector,
             )
         else:
             results: list[int] = []
@@ -1078,27 +1192,75 @@ def _run_staged_phase2_shards(
 
 
 def _merge_shards(job_id: str, output_dir: str, output_path: str) -> int:
-    """Concatenate ``{job_id}_p*.ndjson`` shards into *output_path*.
+    """Concatenate ``{job_id}_p*.ndjson`` shards into *output_path* atomically.
 
-    Shards are merged in ascending partition order.  Returns the total line
-    count written.  Safe to call after all ``_run_staged_phase2_partition_claim``
-    callers have finished.
+    Shards are merged in ascending partition order.  Returns the number of lines
+    written by *this* invocation.  Safe to call after all
+    ``_run_staged_phase2_partition_claim`` callers have finished.
+
+    Crash-safety contract  the shards are the durable intermediate:
+
+    - The merge writes to a temporary sibling, fsyncs it, and only then
+      ``os.replace``s it into place (atomic on POSIX).  ``output_path`` is
+      therefore never observed partially written, and a crash mid-merge leaves
+      every shard intact so the resume can re-merge from scratch.
+    - Shards are unlinked only AFTER that rename succeeds.  The previous
+      implementation truncated ``output_path`` up front and unlinked each shard
+      as it was copied, so a crash left the already-consumed shards gone while
+      their partitions were already ``done`` in the ledger  the resume
+      reclaimed nothing and re-merged only the survivors, silently publishing a
+      partial export.
+    - **No shards + an existing output is a no-op, not a truncation.**  After a
+      completed merge every partition is ``done`` and every shard is gone, so a
+      crash-resume (e.g. killed during the score gate or the S3 upload) arrives
+      here with zero inputs.  Truncating would replace a complete export with an
+      empty file and publish it as successful.
     """
     import glob
+    from contextlib import suppress
 
     pattern = os.path.join(output_dir, f"{job_id}_p*.ndjson")
     shard_files = sorted(glob.glob(pattern))
+
+    if not shard_files:
+        if os.path.exists(output_path):
+            _log.info(
+                "merge_shards_noop job=%s  no shards remain, preserving existing "
+                "output (crash-resume after a completed merge)",
+                job_id,
+            )
+            return 0
+        # Genuinely empty result: downstream (store_result, os.path.getsize,
+        # the manifest split) requires the file to exist.
+        with open(output_path, "w", encoding="utf-8"):
+            pass
+        return 0
+
+    tmp_path = f"{output_path}.merge-{os.getpid()}.tmp"
     total_lines = 0
-    with open(output_path, "w", encoding="utf-8") as out:
-        for shard in shard_files:
-            with open(shard, encoding="utf-8") as fh:
-                for line in fh:
-                    out.write(line)
-                    total_lines += 1
-            try:
-                os.unlink(shard)
-            except Exception:
-                pass
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as out:
+            for shard in shard_files:
+                with open(shard, encoding="utf-8") as fh:
+                    for line in fh:
+                        out.write(line)
+                        total_lines += 1
+            # Durability before the rename: without the fsync the rename can be
+            # ordered ahead of the data on a crash, yielding a zero-length or
+            # truncated file at the final path.
+            out.flush()
+            os.fsync(out.fileno())
+        os.replace(tmp_path, output_path)
+    except BaseException:
+        # Leave every shard in place so the merge is retryable, and never leak
+        # a partial temp file into the glob namespace of a later attempt.
+        with suppress(Exception):
+            os.unlink(tmp_path)
+        raise
+
+    for shard in shard_files:
+        with suppress(Exception):
+            os.unlink(shard)
     return total_lines
 
 
@@ -1121,6 +1283,9 @@ def _persist_scoring_run(
     Jobs UI can render counts/PII/fields without downloading the NDJSON result.
     The staged path is the one that actually runs for patient exports, so
     omitting the collector here would leave the UI with no detail to read.
+    The collector's Markdown audit report rides along inside ``score`` so it
+    lands in the DB: ``/output`` is reaped on MEDANON_RESULT_TTL_SEC, and the
+    audit record has to outlive the data it describes.
     """
     if collector is not None:
         try:
@@ -1130,7 +1295,7 @@ def _persist_scoring_run(
         except Exception:
             _log.debug("staged_job_detail_failed job=%s", job.id, exc_info=True)
     try:
-        from pipeline.scoring_helpers import persist_run_sync
+        from pipeline.scoring_helpers import attach_audit_report, persist_run_sync
 
         persist_run_sync(
             endpoint=endpoint,
@@ -1140,7 +1305,7 @@ def _persist_scoring_run(
             duration_ms=int(summary_dict.get("duration_sec", 0) * 1000),
             input_type="ndjson",
             summary=summary_dict,
-            score=summary_dict.get("score"),
+            score=attach_audit_report(summary_dict.get("score"), collector),
             run_id=job.id,
         )
     except Exception:

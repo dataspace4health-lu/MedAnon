@@ -10,7 +10,6 @@ in behind it.
 from __future__ import annotations
 
 import threading
-from typing import Iterable
 
 from domain.permit import Permit
 
@@ -38,8 +37,3 @@ class InMemoryPermitStore:
     def delete(self, permit_id: str) -> bool:
         with self._lock:
             return self._permits.pop(permit_id, None) is not None
-
-    def bulk_load(self, permits: Iterable[Permit]) -> None:
-        with self._lock:
-            for p in permits:
-                self._permits[p.id] = p

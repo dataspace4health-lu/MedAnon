@@ -108,7 +108,6 @@ def _save_detail(job: Job, collector) -> None:
 def _cleanup_blocked_output(
     job: Job,
     output_path: str,
-    audit_path: str | None = None,
     manifest_path: str | None = None,
 ) -> None:
     """Delete output files and clear job.result_path when the score gate blocks."""
@@ -119,8 +118,10 @@ def _cleanup_blocked_output(
         delete_result(job.result_path)
         job.result_path = None
 
-    # Remove the local staging files too (data, score-audit md, manifest sidecar).
-    for p in (output_path, audit_path, manifest_path):
+    # Remove the local staging files too (data + manifest sidecar). The audit
+    # report is not on disk  a blocked job never reaches persist_run_sync, so
+    # no processing_run row carries it either.
+    for p in (output_path, manifest_path):
         if not p:
             continue
         try:
@@ -141,6 +142,31 @@ def _export_mode() -> str:
               once, cursor-checkpoint resume)  best single-pod throughput.
     """
     return os.environ.get("MEDANON_EXPORT_MODE", "auto").strip().lower()
+
+
+def _bulk_export_mode() -> str:
+    """Native $export routing override: 'auto' (default) | 'native' | 'search'.
+
+    - auto:   use FHIR Bulk Data $export when the source advertises it, else
+              fall back to the search-pagination path.
+    - native: force $export (still no-ops to search if the server lacks it).
+    - search: force the legacy resource-search + pagination path.
+    """
+    return os.environ.get("MEDANON_BULK_EXPORT_MODE", "auto").strip().lower()
+
+
+def _should_use_native_bulk(supported: bool) -> bool:
+    """Decide whether a system/type-level export uses native $export.
+
+    The standards-based Bulk Data path does a single linear server-side scan
+    per type instead of HAPI's O(n^2) ``_getpagesoffset`` deep pagination, so
+    it is preferred for any server that supports it.  Falls back to search when
+    the server does not advertise ``$export`` or when explicitly forced off.
+    """
+    mode = _bulk_export_mode()
+    if mode == "search":
+        return False
+    return bool(supported)
 
 
 def _use_staged(staging, estimated_rows: int | None) -> bool:
@@ -194,8 +220,206 @@ def _mkdir_secure(path: str) -> None:
         pass  # read-only filesystem or insufficient permissions  best effort
 
 
+def _run_native_bulk_export(job: Job, store) -> None:
+    """Stream a FHIR Bulk Data ``$export`` job and de-identify the output.
+
+    Used for group-level exports (always) and for system/type-level exports
+    when the source advertises ``$export`` (best practice: a single linear
+    server-side scan per type instead of HAPI's O(n^2) ``_getpagesoffset`` deep
+    pagination).  Mirrors the streaming executor's crash-resume, pre-publish
+    score gate, compression, and result-publish flow.
+    """
+    from integrations.fhir.bulk import bulk_export as fhir_bulk_export
+    from pipeline.config.service import get_settings
+    from pipeline.jobs.summary import JobSummaryCollector
+    from pipeline.processor import _get_default_pseudonymizer
+
+    params = job.params
+    server_url = params["server_url"]
+    resource_type = params.get("resource_type")
+    group_id = params.get("group_id")
+    level = "group" if (group_id or params.get("level") == "group") else "system"
+    type_filter = params.get("type_filter")
+    since = params.get("since")
+    token = resolve_source_token(params)
+    timeout = float(params.get("timeout", 30))
+    profile = params.get("config_profile", "auto")
+
+    if level == "group" and not group_id:
+        raise ValueError("group_id is required for group-level bulk export")
+
+    settings = get_settings(profile)
+    pseudonymizer = _get_default_pseudonymizer()
+
+    output_path = os.path.join(_OUTPUT_DIR, f"{job.id}.ndjson")
+    _mkdir_secure(_OUTPUT_DIR)
+
+    checkpoint = load_checkpoint(job) or {}
+    already_written = checkpoint.get("lines_written", 0)
+    open_mode = "a" if already_written > 0 else "w"
+    if already_written:
+        _truncate_to_lines(output_path, already_written)
+        _worker_log.info(
+            "bulk_export_native_resume job=%s from_line=%d", job.id, already_written
+        )
+
+    _t0 = time.monotonic()
+    save_checkpoint(store, job, {"phase": "fetching", "lines_written": already_written})
+    _worker_log.info(
+        "bulk_export_native_start job=%s level=%s type_filter=%s",
+        job.id,
+        level,
+        type_filter or resource_type or "*",
+    )
+
+    collector = JobSummaryCollector(
+        config_profile=profile, settings=settings, job_id=job.id
+    )
+
+    raw_gen = fhir_bulk_export(
+        server_url,
+        level=level,
+        resource_type=resource_type,
+        group_id=group_id,
+        type_filter=type_filter,
+        since=since,
+        token=token,
+        timeout=timeout,
+    )
+
+    with (
+        _secure_open(output_path, open_mode, encoding="utf-8") as fh,
+        manifest_sidecar(output_path) as (manifest_path, mfh),
+    ):
+        count, cancelled = stream_and_deidentify(
+            skip_to(raw_gen, already_written),
+            settings,
+            pseudonymizer,
+            fh,
+            already_written,
+            store,
+            job,
+            "bulk_export",
+            summary=collector,
+            cursor_state={},
+            manifest_fh=mfh,
+        )
+
+    if cancelled:
+        return
+
+    # Summary from the uncompressed output so the score gate runs pre-publish:
+    # a blocked job must never reach store_result or S3.
+    summary_dict = collector.to_dict(
+        file_size_bytes=os.path.getsize(output_path),
+        compressed=False,
+    )
+
+    from pipeline.scoring.gate import ScoreGateBlocked, check_score_gate
+
+    try:
+        check_score_gate(summary_dict.get("score"), profile)
+    except ScoreGateBlocked:
+        _cleanup_blocked_output(job, output_path, manifest_path=manifest_path)
+        raise
+
+    if _COMPRESS_RESULTS:
+        output_path = compress_ndjson(output_path)
+        summary_dict = collector.to_dict(
+            file_size_bytes=os.path.getsize(output_path),
+            compressed=True,
+        )
+    from pipeline.jobs.result_publisher import publish_result
+
+    job.result_path = publish_result(
+        job, output_path, manifest_path=manifest_path, audit=summary_dict
+    )
+    save_checkpoint(
+        store,
+        job,
+        {"phase": "done", "lines_written": count, "summary": summary_dict},
+    )
+    _save_detail(job, collector)
+    try:
+        from pipeline.scoring_helpers import attach_audit_report, persist_run_sync
+
+        persist_run_sync(
+            endpoint="bulk_export",
+            config_profile=profile,
+            resource_count=summary_dict.get("total_resources", count),
+            error_count=summary_dict.get("error_count", 0),
+            duration_ms=int((time.monotonic() - _t0) * 1000),
+            input_type="ndjson",
+            summary=summary_dict,
+            score=attach_audit_report(
+                summary_dict.get("score"),
+                collector,
+                export_meta={"fhir_source": server_url},
+            ),
+        )
+    except Exception:
+        _worker_log.debug("bulk_export_native_persist_run_failed", exc_info=True)
+    _worker_log.info(
+        "bulk_export_native_done job=%s level=%s count=%d", job.id, level, count
+    )
+
+
 def _execute_bulk_export(job: Job, store, staging) -> None:
     """Run a bulk-export job synchronously, resuming from checkpoint when available."""
+    # ── Native FHIR Bulk Data $export routing (before staged/search paths) ────
+    # Group-level always uses $export.  System/type-level uses it when the
+    # source advertises the operation  a single linear server-side scan per
+    # type instead of HAPI's O(n^2) ``_getpagesoffset`` deep pagination.  Falls
+    # back to the search path when unsupported or forced off (MEDANON_BULK_EXPORT_MODE).
+    _params = job.params
+    if _params.get("group_id") or _params.get("level") == "group":
+        return _run_native_bulk_export(job, store)
+
+    # Single-job speed: the native stream path runs one process, and the export
+    # is CPU-bound on resource_assembly + rule_evaluation, both GIL-bound - so
+    # one job is capped at one core. The staged path's Phase 2 spreads that work
+    # across PROCESSES (measured 2-3 cores, ~2.5x), and its Phase 1 now pulls
+    # from native $export, so the job keeps the linear fetch too. Requires the
+    # operator to configure a staging store and ask for the process executor;
+    # inert otherwise, so default deployments are unchanged.
+    if (
+        staging is not None
+        and os.environ.get("MEDANON_STAGING_EXECUTOR", "thread").strip().lower()
+        == "process"
+    ):
+        from pipeline.jobs.staged_worker import execute_bulk_export_staged
+
+        _worker_log.info(
+            "bulk_export_route job=%s path=staged-multicore (process executor)", job.id
+        )
+        return execute_bulk_export_staged(job, store, staging)
+
+    _supported = False
+    try:
+        from integrations.fhir.reader import server_supports_bulk_export
+
+        _supported = server_supports_bulk_export(
+            _params["server_url"],
+            token=resolve_source_token(_params),
+            timeout=8,
+        )
+    except Exception:
+        _supported = False
+    if _should_use_native_bulk(_supported):
+        _worker_log.info(
+            "bulk_export_route job=%s path=native-export supported=%s mode=%s",
+            job.id,
+            _supported,
+            _bulk_export_mode(),
+        )
+        return _run_native_bulk_export(job, store)
+    _worker_log.info(
+        "bulk_export_route job=%s path=search supported=%s mode=%s",
+        job.id,
+        _supported,
+        _bulk_export_mode(),
+    )
+
     estimated_rows = job.params.get("estimated_rows")
     if staging is not None and estimated_rows is None:
         # Size preflight to route staged vs stream. Prefer a TRUE count over the
@@ -268,8 +492,6 @@ def _execute_bulk_export(job: Job, store, staging) -> None:
     params = job.params
     server_url = params["server_url"]
     resource_type = params.get("resource_type")
-    group_id = params.get("group_id")
-    level = params.get("level", "system")
     type_filter = params.get("type_filter")
     since = params.get("since")
     token = resolve_source_token(params)
@@ -297,93 +519,8 @@ def _execute_bulk_export(job: Job, store, staging) -> None:
             else "none",
         )
 
-    # ── Group-level export: use FHIR Bulk Data API (Group/{id}/$export) ────────
-    if level == "group" or group_id:
-        if not group_id:
-            raise ValueError("group_id is required for group-level bulk export")
-        from integrations.fhir.bulk import bulk_export as fhir_bulk_export
-
-        _t0 = time.monotonic()
-        save_checkpoint(
-            store, job, {"phase": "fetching", "lines_written": already_written}
-        )
-        _worker_log.info("bulk_export_group_start job=%s group_id=%s", job.id, group_id)
-
-        from pipeline.jobs.summary import JobSummaryCollector
-
-        collector = JobSummaryCollector(
-            config_profile=profile, settings=settings, job_id=job.id
-        )
-
-        raw_gen = fhir_bulk_export(
-            server_url,
-            level="group",
-            group_id=group_id,
-            type_filter=type_filter,
-            since=since,
-            token=token,
-            timeout=timeout,
-        )
-
-        with (
-            _secure_open(output_path, open_mode, encoding="utf-8") as fh,
-            manifest_sidecar(output_path) as (manifest_path, mfh),
-        ):
-            count, cancelled = stream_and_deidentify(
-                skip_to(raw_gen, already_written),
-                settings,
-                pseudonymizer,
-                fh,
-                already_written,
-                store,
-                job,
-                "bulk_export",
-                summary=collector,
-                cursor_state={},
-                manifest_fh=mfh,
-            )
-
-        if not cancelled:
-            # Summary from the uncompressed output so the score gate can run
-            # pre-publish: a blocked job must never reach store_result or S3.
-            summary_dict = collector.to_dict(
-                file_size_bytes=os.path.getsize(output_path),
-                compressed=False,
-            )
-
-            from pipeline.scoring.gate import ScoreGateBlocked, check_score_gate
-
-            try:
-                check_score_gate(summary_dict.get("score"), profile)
-            except ScoreGateBlocked:
-                _cleanup_blocked_output(job, output_path, manifest_path=manifest_path)
-                raise
-
-            if _COMPRESS_RESULTS:
-                output_path = compress_ndjson(output_path)
-                summary_dict = collector.to_dict(
-                    file_size_bytes=os.path.getsize(output_path),
-                    compressed=True,
-                )
-            from pipeline.jobs.result_publisher import publish_result
-
-            job.result_path = publish_result(
-                job, output_path, manifest_path=manifest_path, audit=summary_dict
-            )
-            save_checkpoint(
-                store,
-                job,
-                {
-                    "phase": "done",
-                    "lines_written": count,
-                    "summary": summary_dict,
-                },
-            )
-            _save_detail(job, collector)
-            _worker_log.info("bulk_export_group_done job=%s count=%d", job.id, count)
-        return
-
     # ── System/type-level export: FHIR resource-search path ─────────────────
+    # (Native $export + group-level are handled at the top of this function.)
     if resource_type:
         resource_types = [resource_type]
     elif type_filter:
@@ -516,21 +653,6 @@ def _execute_bulk_export(job: Job, store, staging) -> None:
             compressed=False,
         )
 
-        audit_report = collector.generate_audit_report(
-            export_meta={"fhir_source": params.get("server_url", "")}
-        )
-        audit_path: str | None = None
-        if audit_report:
-            try:
-                audit_path = os.path.join(_OUTPUT_DIR, f"{job.id}_score_audit.md")
-                with open(audit_path, "w", encoding="utf-8") as fh:
-                    fh.write(audit_report)
-            except Exception:
-                _worker_log.debug(
-                    "bulk_export_audit_write_failed job=%s", job.id, exc_info=True
-                )
-                audit_path = None
-
         # Score gate (pre-publish): if quality is below threshold or PII leaked,
         # fail the job with a plain-language explanation and never publish.
         from pipeline.scoring.gate import ScoreGateBlocked, check_score_gate
@@ -538,7 +660,7 @@ def _execute_bulk_export(job: Job, store, staging) -> None:
         try:
             check_score_gate(summary_dict.get("score"), profile)
         except ScoreGateBlocked:
-            _cleanup_blocked_output(job, output_path, audit_path, manifest_path)
+            _cleanup_blocked_output(job, output_path, manifest_path=manifest_path)
             raise
 
         # Gate passed  now (and only now) promote the output to the durable
@@ -561,13 +683,10 @@ def _execute_bulk_export(job: Job, store, staging) -> None:
             "lines_written": count,
             "summary": summary_dict,
         }
-        if audit_path:
-            checkpoint_data["score_audit_path"] = audit_path
-
         save_checkpoint(store, job, checkpoint_data)
         _save_detail(job, collector)
         try:
-            from pipeline.scoring_helpers import persist_run_sync
+            from pipeline.scoring_helpers import attach_audit_report, persist_run_sync
 
             persist_run_sync(
                 endpoint="bulk_export",
@@ -577,7 +696,11 @@ def _execute_bulk_export(job: Job, store, staging) -> None:
                 duration_ms=int((time.monotonic() - _t0) * 1000),
                 input_type="ndjson",
                 summary=summary_dict,
-                score=summary_dict.get("score"),
+                score=attach_audit_report(
+                    summary_dict.get("score"),
+                    collector,
+                    export_meta={"fhir_source": params.get("server_url", "")},
+                ),
             )
         except Exception:
             _worker_log.debug("bulk_export_persist_run_failed", exc_info=True)
@@ -700,29 +823,12 @@ def _execute_cohort(job: Job, store, staging) -> None:
             file_size_bytes=os.path.getsize(output_path),
             compressed=False,
         )
-        audit_report = collector.generate_audit_report(
-            export_meta={"fhir_source": server_url}
-        )
-        cohort_audit_path: str | None = None
-        if audit_report:
-            try:
-                cohort_audit_path = os.path.join(
-                    _OUTPUT_DIR, f"{job.id}_score_audit.md"
-                )
-                with open(cohort_audit_path, "w", encoding="utf-8") as fh:
-                    fh.write(audit_report)
-            except Exception:
-                _worker_log.debug(
-                    "cohort_audit_write_failed job=%s", job.id, exc_info=True
-                )
-                cohort_audit_path = None
-
         from pipeline.scoring.gate import ScoreGateBlocked, check_score_gate
 
         try:
             check_score_gate(summary_dict.get("score"), profile)
         except ScoreGateBlocked:
-            _cleanup_blocked_output(job, output_path, cohort_audit_path, manifest_path)
+            _cleanup_blocked_output(job, output_path, manifest_path=manifest_path)
             raise
 
         # Gate passed  promote to the durable store and finalise.
@@ -743,13 +849,10 @@ def _execute_cohort(job: Job, store, staging) -> None:
             "lines_written": count,
             "summary": summary_dict,
         }
-        if cohort_audit_path:
-            checkpoint_data["score_audit_path"] = cohort_audit_path
-
         save_checkpoint(store, job, checkpoint_data)
         _save_detail(job, collector)
         try:
-            from pipeline.scoring_helpers import persist_run_sync
+            from pipeline.scoring_helpers import attach_audit_report, persist_run_sync
 
             persist_run_sync(
                 endpoint="cohort",
@@ -759,7 +862,11 @@ def _execute_cohort(job: Job, store, staging) -> None:
                 duration_ms=int((time.monotonic() - _t0) * 1000),
                 input_type="ndjson",
                 summary=summary_dict,
-                score=summary_dict.get("score"),
+                score=attach_audit_report(
+                    summary_dict.get("score"),
+                    collector,
+                    export_meta={"fhir_source": server_url},
+                ),
             )
         except Exception:
             _worker_log.debug("cohort_persist_run_failed", exc_info=True)
@@ -844,21 +951,6 @@ def _execute_patient_export(job: Job, store, staging) -> None:
             compressed=False,
         )
 
-        audit_report = collector.generate_audit_report(
-            export_meta={"fhir_source": server_url, "patient_id": patient_id}
-        )
-        audit_path: str | None = None
-        if audit_report:
-            try:
-                audit_path = os.path.join(_OUTPUT_DIR, f"{job.id}_score_audit.md")
-                with open(audit_path, "w", encoding="utf-8") as afh:
-                    afh.write(audit_report)
-            except Exception:
-                _worker_log.debug(
-                    "patient_export_audit_write_failed job=%s", job.id, exc_info=True
-                )
-                audit_path = None
-
         # Score gate (pre-publish): if quality is below threshold or PII leaked,
         # fail the job with a plain-language explanation and never publish.
         from pipeline.scoring.gate import ScoreGateBlocked, check_score_gate
@@ -866,7 +958,7 @@ def _execute_patient_export(job: Job, store, staging) -> None:
         try:
             check_score_gate(summary_dict.get("score"), profile)
         except ScoreGateBlocked:
-            _cleanup_blocked_output(job, output_path, audit_path, manifest_path)
+            _cleanup_blocked_output(job, output_path, manifest_path=manifest_path)
             raise
 
         # Gate passed  now (and only now) promote the output to the durable
@@ -888,12 +980,10 @@ def _execute_patient_export(job: Job, store, staging) -> None:
             "lines_written": count,
             "summary": summary_dict,
         }
-        if audit_path:
-            checkpoint_data["score_audit_path"] = audit_path
         save_checkpoint(store, job, checkpoint_data)
         _save_detail(job, collector)
         try:
-            from pipeline.scoring_helpers import persist_run_sync
+            from pipeline.scoring_helpers import attach_audit_report, persist_run_sync
 
             persist_run_sync(
                 endpoint="patient_export",
@@ -903,7 +993,11 @@ def _execute_patient_export(job: Job, store, staging) -> None:
                 duration_ms=int((time.monotonic() - _t0) * 1000),
                 input_type="ndjson",
                 summary=summary_dict,
-                score=summary_dict.get("score"),
+                score=attach_audit_report(
+                    summary_dict.get("score"),
+                    collector,
+                    export_meta={"fhir_source": server_url, "patient_id": patient_id},
+                ),
             )
         except Exception:
             _worker_log.debug("patient_export_persist_run_failed", exc_info=True)
@@ -985,23 +1079,6 @@ def _execute_batch_patient_export(job: Job, store, staging) -> None:
             compressed=False,
         )
 
-        audit_report = collector.generate_audit_report(
-            export_meta={"fhir_source": server_url}
-        )
-        audit_path: str | None = None
-        if audit_report:
-            try:
-                audit_path = os.path.join(_OUTPUT_DIR, f"{job.id}_score_audit.md")
-                with open(audit_path, "w", encoding="utf-8") as afh:
-                    afh.write(audit_report)
-            except Exception:
-                _worker_log.debug(
-                    "batch_patient_export_audit_write_failed job=%s",
-                    job.id,
-                    exc_info=True,
-                )
-                audit_path = None
-
         # Score gate (pre-publish): if quality is below threshold or PII leaked,
         # fail the job with a plain-language explanation and never publish.
         from pipeline.scoring.gate import ScoreGateBlocked, check_score_gate
@@ -1009,7 +1086,7 @@ def _execute_batch_patient_export(job: Job, store, staging) -> None:
         try:
             check_score_gate(summary_dict.get("score"), profile)
         except ScoreGateBlocked:
-            _cleanup_blocked_output(job, output_path, audit_path, manifest_path)
+            _cleanup_blocked_output(job, output_path, manifest_path=manifest_path)
             raise
 
         # Gate passed  now (and only now) promote the output to the durable
@@ -1031,12 +1108,10 @@ def _execute_batch_patient_export(job: Job, store, staging) -> None:
             "lines_written": count,
             "summary": summary_dict,
         }
-        if audit_path:
-            checkpoint_data["score_audit_path"] = audit_path
         save_checkpoint(store, job, checkpoint_data)
         _save_detail(job, collector)
         try:
-            from pipeline.scoring_helpers import persist_run_sync
+            from pipeline.scoring_helpers import attach_audit_report, persist_run_sync
 
             persist_run_sync(
                 endpoint="batch_patient_export",
@@ -1046,7 +1121,11 @@ def _execute_batch_patient_export(job: Job, store, staging) -> None:
                 duration_ms=int((time.monotonic() - _t0) * 1000),
                 input_type="ndjson",
                 summary=summary_dict,
-                score=summary_dict.get("score"),
+                score=attach_audit_report(
+                    summary_dict.get("score"),
+                    collector,
+                    export_meta={"fhir_source": server_url},
+                ),
             )
         except Exception:
             _worker_log.debug("batch_patient_export_persist_run_failed", exc_info=True)

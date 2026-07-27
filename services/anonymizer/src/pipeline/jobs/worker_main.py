@@ -138,7 +138,9 @@ async def _main() -> None:
         if pg_pool is not None:
             from integrations.postgres.job_detail_store import PostgresJobDetailStore
 
-            init_job_detail_store(store=PostgresJobDetailStore(pg_pool))
+            jd_store = PostgresJobDetailStore(pg_pool)
+            jd_store.ensure_schema()
+            init_job_detail_store(store=jd_store)
             logger.info("job_detail_store=postgres")
         else:
             jd_db = os.environ.get("MEDANON_JOB_DETAIL_DB", "/output/job_details.db")
@@ -146,6 +148,17 @@ async def _main() -> None:
             logger.info("job_detail_store=sqlite path=%s", jd_db)
     except Exception as exc:
         logger.warning("job_detail_store_start_failed: %s", exc)
+
+    # Transformation-passport report store (D7.2 §5.5.1 / Art 79) — the worker
+    # RUNS risk-driven exports, so it is the process that calls save_passport at
+    # finalize. Without the store here that call silently no-ops and /v1/reports
+    # stays empty forever (the API's own copy only serves reads).
+    try:
+        from pipeline.reports import init_passport_store_from_pool
+
+        init_passport_store_from_pool(pg_pool)
+    except Exception as exc:
+        logger.warning("passport_store_start_failed: %s", exc)
 
     staging_url = os.environ.get("MEDANON_STAGING_DB_URL", "").strip()
     staging_store = await setup_staging(staging_url, app_db_url, pg_pool)

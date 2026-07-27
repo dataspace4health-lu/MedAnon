@@ -22,6 +22,33 @@ from ._transport import (
 )
 
 
+def _clamp_bulk_url_origin(url: str, source_base_url: str) -> str:
+    """Rewrite *url*'s origin to the source server's origin.
+
+    HAPI (and other servers) embed their own advertised hostname in the
+    ``$export`` status URL (``Content-Location``) and in the manifest
+    ``output[].url`` file links.  That advertised host is frequently a private
+    Docker IP (e.g. ``http://10.168.192.22:8081/...``) that is either
+    unreachable from the anonymizer or would be rejected outright by the
+    private-address SSRF guard.  We therefore clamp the host back to the source
+    origin the operator explicitly configured and that we are already talking
+    to  identical semantics to ``_transport._safe_next_url`` for next-links.
+
+    SSRF safety: only the path and query are taken from the server; the host is
+    always forced to the trusted source origin, so a malicious manifest cannot
+    redirect a download to an arbitrary internal address.
+    """
+    from urllib.parse import urlparse, urlunparse
+
+    u = urlparse(url)
+    if u.scheme not in ("http", "https"):
+        raise ValueError(f"Bulk export URL uses disallowed scheme: {url!r}")
+    s = urlparse(source_base_url)
+    if (u.scheme, u.netloc) == (s.scheme, s.netloc):
+        return url
+    return urlunparse((s.scheme, s.netloc, u.path, u.params, u.query, u.fragment))
+
+
 def _validate_bulk_file_url(url: str) -> None:
     """Raise ValueError if *url* targets a private or loopback address.
 
@@ -244,14 +271,22 @@ def bulk_export_kick_off(
     if not status_url:
         raise ValueError("Bulk export kick-off missing Content-Location header")
 
+    # Servers embed their own advertised host in Content-Location; clamp it back
+    # to the source origin we can actually reach (and trust) before polling.
+    status_url = _clamp_bulk_url_origin(status_url, base)
     log.info("bulk export status URL: %s", status_url)
     return status_url
 
 
-def _download_manifest_files(manifest, token=None, timeout=60):
+def _download_manifest_files(manifest, token=None, timeout=60, source_base_url=None):
     """Generator: download NDJSON files from a completed bulk export manifest.
 
     Yields individual FHIR resource dicts from each output file.
+
+    When *source_base_url* is given, every ``output[].url`` has its origin
+    clamped to that source origin (Docker-reachable + SSRF-bounded to the
+    operator-configured server, mirroring pagination next-link handling). When
+    it is omitted, the stricter private-address SSRF reject is applied instead.
     """
     # Log any errors reported in the manifest
     for err_entry in manifest.get("error", []):
@@ -262,12 +297,17 @@ def _download_manifest_files(manifest, token=None, timeout=60):
     log.info("bulk export complete: %d output file(s)", len(output_files))
     total = 0
 
-    # SSRF guard: validate every file URL before starting any downloads.
-    # A malicious FHIR server could return manifest URLs pointing to internal
-    # infrastructure (e.g. cloud metadata services, Redis, admin panels).
+    # Normalise every file URL before starting any downloads.  A malicious FHIR
+    # server could return manifest URLs pointing to internal infrastructure
+    # (e.g. cloud metadata services, Redis, admin panels); clamping the host to
+    # the trusted source origin (or rejecting private addresses) neutralises it.
     for file_entry in output_files:
         file_url = file_entry.get("url")
-        if file_url:
+        if not file_url:
+            continue
+        if source_base_url:
+            file_entry["url"] = _clamp_bulk_url_origin(file_url, source_base_url)
+        else:
             _validate_bulk_file_url(file_url)
 
     if _BULK_DOWNLOAD_PARALLEL <= 1 or len(output_files) <= 1:
@@ -373,7 +413,9 @@ def bulk_export(
     # -- Poll until complete --
     try:
         manifest = _poll_bulk_status(status_url, token=token, timeout=timeout)
-        yield from _download_manifest_files(manifest, token=token, timeout=timeout)
+        yield from _download_manifest_files(
+            manifest, token=token, timeout=timeout, source_base_url=base_url
+        )
     finally:
         # -- Cleanup: best-effort DELETE --
         delete_bulk_export(status_url, token=token, timeout=timeout)

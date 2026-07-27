@@ -26,9 +26,8 @@ logger = logging.getLogger("medanon.sql_connection_store.postgres")
 class PostgresSqlConnectionStore:
     """PostgreSQL-backed saved SQL-source connection store."""
 
-    # Self-healing DDL  keeps the store usable when the feature is added to an
-    # existing deployment whose app-db volume predates this table (sql/init.sql
-    # only runs on a fresh volume). Kept in sync with sql/init.sql.
+    # Self-healing DDL  this store owns its table on every volume, fresh or
+    # pre-existing. There is no static bootstrap SQL for the app-db.
     _SCHEMA_DDL = """
         CREATE SCHEMA IF NOT EXISTS medanon;
         CREATE TABLE IF NOT EXISTS medanon.sql_connections (

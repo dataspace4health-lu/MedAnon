@@ -5,7 +5,6 @@ existing code like ``import pipeline.subscriptions as sub_mod; sub_mod._sub_stor
 continues to read/write the authoritative reference.
 
 The ``SqliteSubscriptionStore`` class is defined in ``store.py``.
-The ``dispatch_subscriptions`` function is in ``dispatcher.py``.
 """
 
 from pipeline.subscriptions.store import SqliteSubscriptionStore  # noqa: F401

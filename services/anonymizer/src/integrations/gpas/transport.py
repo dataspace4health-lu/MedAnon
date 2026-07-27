@@ -172,7 +172,7 @@ def _blind_identifier(value: str) -> str:
     already turned caching off and this function is not reached for storage.
 
     De-pseudonymize results are **never** cached because the cache value
-    would be the original PHI value  see ``_cache_set`` usage.
+    would be the original PHI value  see ``_cache_set_many`` usage.
     """
     raw = value.encode("utf-8")
     if _HASH_KEY_BYTES:
@@ -191,19 +191,6 @@ def _is_cache_enabled(params):
     if not _HASH_KEY_BYTES and not _plain_blind_allowed():
         return False
     return True
-
-
-def _cache_get(cache_key):
-    value = _gpas_cache_mod._cache_backend.get(cache_key)
-    if value is not None:
-        GPAS_CACHE_HITS.inc()
-    else:
-        GPAS_CACHE_MISSES.inc()
-    return value
-
-
-def _cache_set(cache_key, value):
-    _gpas_cache_mod._cache_backend.set(cache_key, value)
 
 
 def _cache_get_many(cache_keys: list[tuple]) -> dict[tuple, str]:

@@ -28,7 +28,7 @@ import logging
 import os
 import threading
 from datetime import timedelta
-from typing import Any, Union
+from typing import Any
 
 from utils.crypto import bounded_random
 from utils.fhirpath import error, find_nodes, get_date
@@ -111,17 +111,6 @@ def _date_offset(subject_id: str, noise_range: list) -> int:
     # Reduce the first 8 bytes of the digest into [low, high]
     raw = int.from_bytes(digest[:8], "big")
     return low + (raw % (span + 1))
-
-
-def _perturb_numeric(real_value: Union[int, float]) -> Any:
-    """Random numeric noise  no ordering guarantee for numeric values."""
-    # bounded_random uses secrets.randbelow() (CSPRNG); this is intentionally
-    # non-deterministic because numeric values have no temporal ordering contract.
-    # Callers must pass the noise range; we use ±10% as a sensible hard-coded
-    # range for the fallback  but perturb_by_path passes the configured range.
-    raise RuntimeError(
-        "_perturb_numeric must not be called directly; use _perturb_nodes"
-    )
 
 
 def _perturb_nodes(

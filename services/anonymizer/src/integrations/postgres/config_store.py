@@ -15,6 +15,17 @@ from psycopg2.pool import ThreadedConnectionPool
 
 logger = logging.getLogger("medanon.config_store.postgres")
 
+_DDL = """
+CREATE SCHEMA IF NOT EXISTS medanon;
+
+CREATE TABLE IF NOT EXISTS medanon.configs (
+    name        TEXT PRIMARY KEY,
+    description TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL,
+    is_system   BOOLEAN NOT NULL DEFAULT FALSE
+);
+"""
+
 # The seven bundled profiles shipped with the application.
 _SYSTEM_CONFIGS: list[dict] = [
     {
@@ -53,6 +64,34 @@ class PostgresConfigStore:
 
     def __init__(self, pool: ThreadedConnectionPool) -> None:
         self._pool = pool
+
+    def ensure_schema(self) -> None:
+        """Create schema/table if missing, then seed the bundled system profiles.
+
+        ``CREATE … IF NOT EXISTS`` is not atomic against implicit composite-type
+        creation, so concurrent startup across app workers can collide on
+        ``pg_type``/``pg_class``. The objects exist either way — treat those
+        specific races as success (mirrors ``workflow_store``).
+        """
+        from psycopg2 import errors as _pg_errors
+
+        _benign = (
+            _pg_errors.DuplicateTable,
+            _pg_errors.DuplicateObject,
+            _pg_errors.UniqueViolation,
+        )
+        conn = self._get_conn()
+        try:
+            try:
+                with conn:
+                    with conn.cursor() as cur:
+                        cur.execute(_DDL)
+                logger.info("config schema ready")
+            except _benign:
+                conn.rollback()
+                logger.debug("config schema already created concurrently")
+        finally:
+            self._put_conn(conn)
         self._seed_system_configs()
 
     def _get_conn(self):

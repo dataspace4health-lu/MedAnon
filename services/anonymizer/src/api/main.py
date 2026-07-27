@@ -357,6 +357,7 @@ async def _startup() -> None:
             )
 
             sub_store = PostgresSubscriptionStore(pg_pool)
+            sub_store.ensure_schema()
             init_subscription_store(store=sub_store)
             logger.info("subscription_store=postgres")
         else:
@@ -376,6 +377,7 @@ async def _startup() -> None:
             from integrations.postgres.config_store import PostgresConfigStore
 
             cfg_store = PostgresConfigStore(pg_pool)
+            cfg_store.ensure_schema()
             init_config_store(store=cfg_store)
             logger.info("config_store=postgres")
         else:
@@ -458,20 +460,9 @@ async def _startup() -> None:
     # queryable passports in Postgres. Anonymous by construction; no-op without
     # a DB (passports still ride on the job checkpoint for the per-job view).
     try:
-        from pipeline.reports import init_passport_store
+        from pipeline.reports import init_passport_store_from_pool
 
-        if pg_pool:
-            from integrations.postgres.passport_store import PostgresPassportStore
-
-            passport_store = PostgresPassportStore(pg_pool)
-            passport_store.ensure_schema()
-            init_passport_store(store=passport_store)
-            logger.info("passport_store=postgres")
-        else:
-            init_passport_store(store=None)
-            logger.info(
-                "passport_store=none (set MEDANON_APP_DB_URL for durable reports)"
-            )
+        init_passport_store_from_pool(pg_pool or None)
     except Exception as exc:
         logger.warning("passport_store_start_failed: %s", exc)
 
@@ -576,6 +567,7 @@ async def _startup() -> None:
             from api.auth import init_api_key_store
 
             ak_store = PostgresApiKeyStore(pg_pool)
+            ak_store.ensure_schema()
             init_api_key_store(store=ak_store)
             logger.info("api_key_store=postgres")
         except Exception as exc:
@@ -602,6 +594,7 @@ async def _startup() -> None:
             from integrations.postgres.job_detail_store import PostgresJobDetailStore
 
             jd_store = PostgresJobDetailStore(pg_pool)
+            jd_store.ensure_schema()
             init_job_detail_store(store=jd_store)
             logger.info("job_detail_store=postgres")
         else:

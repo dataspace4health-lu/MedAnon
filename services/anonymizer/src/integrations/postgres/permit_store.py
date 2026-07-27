@@ -5,7 +5,7 @@ Durable home for data permits so the governance decisions made during a run
 requires the permit that authorised a release to remain queryable afterwards.
 
 Same public surface as :class:`pipeline.governance.store.InMemoryPermitStore`
-(``save``/``get``/``list``/``delete``/``bulk_load``) so the service layer is
+(``save``/``get``/``list``/``delete``) so the service layer is
 backend-agnostic. Table is self-created via :meth:`ensure_schema` (mirrors
 ``trust_profile_store``/``workflow_store``). Serialisation round-trips through
 the domain model's own :meth:`Permit.to_dict` / :meth:`Permit.from_dict`, so
@@ -177,10 +177,6 @@ class PostgresPermitStore:
                     return cur.rowcount > 0
         finally:
             self._put_conn(conn)
-
-    def bulk_load(self, permits) -> None:
-        for p in permits:
-            self.save(p)
 
 
 def _row_to_permit(row: dict) -> Permit:

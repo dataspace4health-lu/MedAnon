@@ -85,7 +85,12 @@ async def select_job_store(redis_url: str, app_db_url: str):
             from integrations.postgres.job_store import PostgresJobStore
 
             pool = get_pool(app_db_url)
-            return PostgresJobStore(pool), pool
+            store = PostgresJobStore(pool)
+            # The API and the worker both resolve their job store here, so this is
+            # the one seam that guarantees medanon.jobs exists before either uses
+            # it. A failure retries, then falls back to SQLite, as before.
+            store.ensure_schema()
+            return store, pool
 
         result = await _retry_async(
             _make_postgres,
@@ -195,6 +200,23 @@ async def setup_redis_cache(redis_url: str) -> None:
         )
         return
 
+    # Pseudonym entries carry a TTL so they are EVICTABLE under memory pressure.
+    #
+    # Redis runs `maxmemory-policy volatile-lru`, which only evicts keys that
+    # have an expiry. Job hashes already set one (integrations/redis/job_store),
+    # so without a TTL here the pseudonym cache  the one unbounded, ever-growing
+    # keyspace  was the only thing PINNED: Redis would evict recoverable job
+    # metadata and then be OOM-killed by the container limit, taking the whole
+    # warm cache with it. Giving these keys a TTL inverts that correctly: the
+    # large cold cache becomes the natural LRU victim.
+    #
+    # Eviction is safe, never wrong: this is pure memoization over gPAS, which
+    # is the vault and is deterministic for a given (value, domain). A miss
+    # costs one round-trip and returns the SAME pseudonym, so linkage is
+    # preserved. The TTL is long by default because a warm cache is worth ~72x
+    # on re-export; shorten it only to bound Redis memory further.
+    _cache_ttl = int(os.environ.get("MEDANON_GPAS_CACHE_TTL_SEC", str(30 * 24 * 3600)))
+
     def _make_cache():
         from utils.cache import (
             LocalLruCache,
@@ -203,7 +225,12 @@ async def setup_redis_cache(redis_url: str) -> None:
             configure_cache,
         )
 
-        configure_cache(TieredCache(LocalLruCache(), RedisCache(redis_url)))
+        configure_cache(
+            TieredCache(
+                LocalLruCache(),
+                RedisCache(redis_url, ttl=_cache_ttl if _cache_ttl > 0 else None),
+            )
+        )
         return True  # sentinel to distinguish success from retry exhaustion
 
     ok = await _retry_async(
@@ -262,38 +289,3 @@ async def setup_staging(
     if result is not None:
         logger.info("staging_store=postgres retention_days=%d", retention_days)
     return result
-
-
-def select_staging_store(
-    *,
-    app_db_url: str | None = None,
-    staging_db_url: str | None = None,
-    backend: str | None = None,
-):
-    """Synchronous backend selector for the staging store.
-
-    Resolution order (mirrors ``select_job_store`` conventions):
-
-      1. ``MEDANON_STAGING_BACKEND=iceberg`` → ``IcebergStagingStore`` (Phase 4).
-      2. *staging_db_url* or *app_db_url* → ``StagingStore`` (Postgres, default).
-      3. Neither configured → returns ``None``.
-
-    Does **not** call ``ensure_schema()``  callers that need DDL must do so
-    explicitly (``setup_staging()`` in ``api/main.py`` handles this for the
-    API path; the Argo ``deid`` step calls it directly).
-    """
-    resolved_backend = (
-        backend or os.environ.get("MEDANON_STAGING_BACKEND", "postgres")
-    ).lower()
-
-    if resolved_backend == "iceberg":
-        from integrations.iceberg.staging_store import IcebergStagingStore  # type: ignore[import]
-
-        return IcebergStagingStore.from_env()
-
-    url = staging_db_url or app_db_url
-    if not url:
-        return None
-    from integrations.staging.store import StagingStore
-
-    return StagingStore(url)

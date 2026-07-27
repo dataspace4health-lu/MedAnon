@@ -29,12 +29,66 @@ logger = logging.getLogger("medanon.jobs.postgres")
 
 _NOTIFY_CHANNEL = "medanon_jobs"
 
+_DDL = """
+CREATE SCHEMA IF NOT EXISTS medanon;
+
+CREATE TABLE IF NOT EXISTS medanon.jobs (
+    id              TEXT PRIMARY KEY,
+    type            TEXT NOT NULL,
+    params          JSONB NOT NULL,
+    status          TEXT NOT NULL,
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL,
+    result_path     TEXT,
+    error           TEXT,
+    checkpoint_data JSONB
+);
+
+CREATE INDEX IF NOT EXISTS idx_jobs_status_created
+    ON medanon.jobs (status, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_jobs_type_created
+    ON medanon.jobs (type, created_at);
+"""
+
 
 class PostgresJobStore:
     """PostgreSQL-backed job store using a shared connection pool."""
 
     def __init__(self, pool: ThreadedConnectionPool) -> None:
         self._pool = pool
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+
+    def ensure_schema(self) -> None:
+        """Create schema/table/indexes if missing.
+
+        ``CREATE … IF NOT EXISTS`` is not atomic against implicit composite-type
+        creation, so concurrent startup across app workers can collide on
+        ``pg_type``/``pg_class``. The objects exist either way  treat those
+        specific races as success (mirrors ``workflow_store``).
+        """
+        from psycopg2 import errors as _pg_errors
+
+        _benign = (
+            _pg_errors.DuplicateTable,
+            _pg_errors.DuplicateObject,
+            _pg_errors.UniqueViolation,
+        )
+        conn = self._get_conn()
+        try:
+            try:
+                with conn:
+                    with conn.cursor() as cur:
+                        cur.execute(_DDL)
+                logger.info("job schema ready")
+            except _benign:
+                conn.rollback()
+                logger.debug("job schema already created concurrently")
+        finally:
+            self._put_conn(conn)
 
     # ------------------------------------------------------------------
     # Connection helpers

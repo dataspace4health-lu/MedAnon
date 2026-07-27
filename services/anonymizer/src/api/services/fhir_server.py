@@ -540,8 +540,12 @@ class FhirServerService:
                     f"Bulk export poll timeout ({_t._FHIR_BULK_POLL_TIMEOUT}s) exceeded"
                 )
 
-            # Phase 3: Download and process
-            gen = _download_manifest_files(manifest, token=token, timeout=timeout)
+            # Phase 3: Download and process.  Pass the source base URL so manifest
+            # file URLs are origin-clamped to the reachable, trusted server
+            # (servers advertise their own, often private/unreachable, host).
+            gen = _download_manifest_files(
+                manifest, token=token, timeout=timeout, source_base_url=server_url
+            )
             async for line in self._stream_and_batch(
                 gen, settings, label="bulk_export"
             ):

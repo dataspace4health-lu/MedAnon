@@ -127,6 +127,45 @@ class JobSummaryCollector:
         """Job-detail payload for ``GET /v1/jobs/{id}/detail`` (Jobs UI)."""
         return self._detail.to_dict()
 
+    def export_score_state(self) -> dict:
+        """Gate-critical score accumulators, JSON-safe, for a cross-process merge.
+
+        Returns ``{}`` when scoring is disabled, so callers can merge
+        unconditionally.
+        """
+        if self._score_collector is None:
+            return {}
+        try:
+            return self._score_collector.export_state()
+        except Exception:
+            _log.debug("score_export_state_error", exc_info=True)
+            return {}
+
+    def merge_score_state(self, state: dict) -> None:
+        """Fold a worker's :meth:`export_score_state` payload into this collector.
+
+        Used by the ``process`` staging executor: children score their own
+        partitions and the parent  the process that actually runs the score
+        gate at publish time  would otherwise see zero resources and emit
+        ``computed=False``, which makes the gate short-circuit.
+        """
+        if self._score_collector is None or not state:
+            return
+        try:
+            self._score_collector.merge_state(state)
+        except Exception:
+            _log.debug("score_merge_state_error", exc_info=True)
+
+    def record_processed(self, count: int) -> None:
+        """Record resources processed by an out-of-process worker.
+
+        The type breakdown lives in the child, so only the total is recovered
+        here.  This keeps ``total_resources`` honest for the publish-time
+        consistency check that refuses to release an unscored export.
+        """
+        if count > 0:
+            self._type_counts["_remote"] += count
+
     def generate_audit_report(self, export_meta: dict | None = None) -> str | None:
         """Generate the Markdown audit report; returns None when scoring is disabled."""
         if self._score_collector is None:

@@ -67,25 +67,6 @@ def _attach_manifest(resource: dict, manifest_entries: list[dict]) -> None:
 _SUPPRESSED_SYSTEM = "https://medanon.local/privacy-suppressed"
 
 
-def attach_suppressed_tag(resource: dict, reason: str = "k-anonymity") -> None:
-    """Attach a suppression marker to *resource*'s meta.tag.
-
-    Called when a Patient (or linked resource) is omitted from the output
-    due to the risk-driven generalization plan.  In normal operation the
-    resource is simply dropped; this helper is provided for audit logging
-    or when ``emit_suppressed_stub=true`` is needed in future.
-    """
-    meta = resource.setdefault("meta", {})
-    tags = meta.setdefault("tag", [])
-    tags.append(
-        {
-            "system": _SUPPRESSED_SYSTEM,
-            "code": "patient-suppressed",
-            "display": f"Suppressed for {reason} guarantee",
-        }
-    )
-
-
 def strip_manifest_tag(resource: dict) -> dict:
     """Remove the transformation-manifest ``meta.tag`` from *resource* in place.
 

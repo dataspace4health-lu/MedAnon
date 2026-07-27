@@ -31,6 +31,7 @@ from api.services.processing import ProcessingError, ProcessingService
 from pipeline.scoring_helpers import (
     _is_scoring_enabled,
     _get_config_profile,
+    attach_audit_report,
     make_collector,
     check_and_persist_with_leak,
     apply_pii_leak_override,
@@ -751,7 +752,9 @@ async def process_batch(
                     duration_ms=int((time.monotonic() - t0) * 1000),
                     input_type="Bundle" if is_bundle else "batch",
                     summary={"total_resources": count},
-                    score=score,
+                    score=attach_audit_report(
+                        score, collector, settings=runtime_settings
+                    ),
                     trust_passport=passport or None,
                 )
             )

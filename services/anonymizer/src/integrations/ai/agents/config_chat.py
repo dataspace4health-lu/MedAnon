@@ -12,7 +12,6 @@ provider is unavailable.
 import logging
 import os
 import re
-from collections.abc import Generator
 
 _log = logging.getLogger("medanon.ai.config_chat")
 
@@ -511,7 +510,3 @@ def chat_config(
             "running and `MEDANON_AI_API_BASE` is correct, then try again."
         )
         return iter([msg]) if streaming else msg
-
-
-def _is_generator(obj) -> bool:
-    return isinstance(obj, Generator) or hasattr(obj, "__next__")

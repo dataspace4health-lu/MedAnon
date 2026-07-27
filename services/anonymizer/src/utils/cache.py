@@ -11,6 +11,7 @@ FastAPI startup event when ``MEDANON_REDIS_URL`` is set.
 
 from __future__ import annotations
 
+import hashlib as _hashlib
 from collections import OrderedDict
 import logging
 import os
@@ -185,9 +186,21 @@ class RedisCache:
         self._prefix = key_prefix
 
     def _make_key(self, key: tuple) -> str:
-        # Use ASCII Unit Separator (\\x1f) as delimiter  faster than JSON serialization
-        # and safe because FHIR values, URIs, and domain names never contain this byte.
-        return self._prefix + "\x1f".join(str(x) for x in key)
+        # Digest the composite key instead of inlining it. The literal form
+        # (prefix + operation + base_url + domain + operation + 64-hex blind)
+        # is ~176 chars, of which ~110 are IDENTICAL in every entry - repeated
+        # across millions of keys that is pure memory. Key size caps how much
+        # fits under Redis maxmemory, and a cache miss costs a gPAS call at a
+        # hard ~550 values/sec ceiling, so smaller keys directly buy throughput.
+        #
+        # blake2b-128 over the \x1f-joined tuple: 32 hex chars, deterministic,
+        # and collision-safe at this scale (10M keys vs a 2^128 space). The
+        # ``medanon:gpas:`` prefix is kept so SCAN MATCH-based purges still work.
+        raw = "\x1f".join(str(x) for x in key)
+        return (
+            self._prefix
+            + _hashlib.blake2b(raw.encode("utf-8"), digest_size=16).hexdigest()
+        )
 
     def get(self, key: tuple) -> str | None:
         try:

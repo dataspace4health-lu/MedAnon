@@ -89,6 +89,19 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 
+            # The FHIRPath caches expose *gauges*, refreshed by reading each
+            # lru_cache's cache_info() at scrape time (the same thing the API's
+            # /metrics does). Without this the medanon_fhirpath_cache_* series
+            # are missing from the worker entirely  and the worker is the
+            # process that runs every bulk export, where rule_evaluation is the
+            # dominant stage once the gPAS/NLP caches are warm.
+            try:
+                from pipeline.rule_matcher import sample_cache_metrics
+
+                sample_cache_metrics()
+            except Exception:  # noqa: BLE001  never fail a scrape on observability
+                logger.debug("fhirpath_cache_sample_failed", exc_info=True)
+
             data = generate_latest()
             self.send_response(200)
             self.send_header("Content-Type", CONTENT_TYPE_LATEST)
