@@ -254,11 +254,8 @@ def _read_yaml(name: str, is_system: bool) -> str:
         system_dir = os.environ.get("MEDANON_CONFIG_DIR", "/code/config")
         profile_map = {
             "minimal": "config.yaml",
-            "gpas": "config_gpas.yaml",
             "gdpr": "config_gdpr_eu.yaml",
             "hipaa": "config_hipaa_safe_harbor.yaml",
-            "research": "config_research_pseudonymous.yaml",
-            "structural": "config_structure_preserving.yaml",
             "value-masking": "config_value_masking.yaml",
         }
         filename = profile_map.get(name)

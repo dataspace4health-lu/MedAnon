@@ -20,11 +20,8 @@ _log = logging.getLogger("medanon.ai.config_generator")
 
 _PROFILE_FILES = [
     "config.yaml",
-    "config_gpas.yaml",
     "config_gdpr_eu.yaml",
     "config_hipaa_safe_harbor.yaml",
-    "config_research_pseudonymous.yaml",
-    "config_structure_preserving.yaml",
     "config_value_masking.yaml",
 ]
 
@@ -131,17 +128,9 @@ _FALLBACK_KEYWORD_MAP = {
     "safe harbor": "config_hipaa_safe_harbor.yaml",
     "gdpr": "config_gdpr_eu.yaml",
     "european": "config_gdpr_eu.yaml",
-    "research": "config_research_pseudonymous.yaml",
-    "irb": "config_research_pseudonymous.yaml",
-    "longitudinal": "config_research_pseudonymous.yaml",
-    "pseudonymize": "config_gpas.yaml",
-    "pseudonymise": "config_gpas.yaml",
-    "gpas": "config_gpas.yaml",
     "minimal": "config.yaml",
     "basic": "config.yaml",
     "development": "config.yaml",
-    "structure": "config_structure_preserving.yaml",
-    "preserving": "config_structure_preserving.yaml",
     "masking": "config_value_masking.yaml",
     "encrypt": "config_value_masking.yaml",
 }

@@ -220,9 +220,10 @@ class RiskDrivenExportJobRequest(BaseModel):
     token: str | None = None
     timeout: float = Field(default=30.0, ge=1.0, le=300.0)
     config_profile: str = Field(
-        default="config_k_anonymity",
-        description="Config profile name.  Must include a privacy_model block, "
-        "or supply privacy_model inline.",
+        default="config_value_masking",
+        description="Config profile name.  No bundled profile ships a "
+        "privacy_model block, so supply privacy_model inline (below) or point "
+        "this at your own profile that defines one.",
     )
     privacy_model: dict | None = Field(
         default=None,

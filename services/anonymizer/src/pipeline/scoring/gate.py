@@ -276,9 +276,9 @@ def check_score_gate(score_summary: dict | None, config_profile: str = "auto") -
             )
             fixes.append(
                 f"The '{profile}' profile uses heavy masking "
-                "(substitute / redact). Consider switching to "
-                "'config_gpas.yaml' or 'config_research_pseudonymous.yaml' "
-                "which use pseudonymisation (low information loss) instead."
+                "(substitute / redact). Consider a rule set built on "
+                "pseudonymisation (gpas_pseudonymize / cryptohash) instead, "
+                "which preserves linkage at far lower information loss."
             )
 
     # ── 3. PRIVACY GATE (aggregate fail count) ───────────────────────────────
