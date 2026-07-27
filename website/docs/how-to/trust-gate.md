@@ -102,12 +102,19 @@ Key fields:
 
 Two options:
 
-**Bundled (default, via `--profile trust`):** HAPI FHIR sidecar's `{base}/{type}/$validate` endpoint. Starts automatically with the trust profile.
-
-**Production (recommended):** the HL7/Inferno FHIR validator-wrapper. Set:
+**Bundled (default, via `--profile trust`):** the HL7/Inferno `fhir-validator-wrapper`
+sidecar (`infernocommunity/fhir-validator-service`, container `fhir-validator:4567`).
+Starts automatically with the trust profile:
 ```bash
-TRUST_GATE_VALIDATOR_URL=http://fhir-validator:4567
-TRUST_GATE_VALIDATOR_ENDPOINT=/validate
+TRUST_GATE_VALIDATOR_URL=http://fhir-validator:4567   # default
+TRUST_GATE_VALIDATOR_ENDPOINT=/validate                # default
+```
+
+**Alternative:** point at a plain FHIR server's `{base}/{type}/$validate` operation
+(e.g. a HAPI instance) instead:
+```bash
+TRUST_GATE_VALIDATOR_URL=<fhir-server-base-url>
+TRUST_GATE_VALIDATOR_ENDPOINT=/{type}/$validate
 ```
 
 If the validator is unreachable, conformance checks degrade to **NA**  never a false PASS, never a hard block on the validator's own outage.

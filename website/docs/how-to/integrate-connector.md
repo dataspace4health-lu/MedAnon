@@ -220,7 +220,7 @@ curl -X POST http://localhost:8000/process/round-trip \
     "source_url": "http://source-fhir:8080/fhir",
     "target_url": "http://target-fhir:8080/fhir",
     "resource_types": ["Patient", "Condition", "Observation"],
-    "config_profile": "structural"
+    "config_profile": "value-masking"
   }'
 ```
 

@@ -384,7 +384,7 @@ python3 -m cli.main fetch \
   --server http://hapi-fhir:8080/fhir \
   --resource-type Patient,Observation \
   --output output/all.ndjson \
-  --config config/config_gpas.yaml
+  --config config/config_value_masking.yaml
 ```
 
 **Note on NLP in the CLI:** Presidio + spaCy no longer run in the anonymizer process. NLP de-identification delegates to the NLP microservice (`nlp-lb:8200`). When using the CLI outside Docker, set `NLP_SERVICE_URL=http://localhost:8200` (or omit NLP rules if the microservice is not running, text fields will not be scrubbed).

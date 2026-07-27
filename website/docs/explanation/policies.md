@@ -10,13 +10,15 @@ description: "Profile selection and the compliance rationale behind each profile
 
 | Profile name | File | ID handling | Dates | Geographic | Text scrubbing | Requires gPAS | Legal basis |
 |---|---|---|---|---|---|---|---|
-| `minimal` | `config.yaml` | SHA3-256 hash | Year only | Zip prefix (3-digit) | Regex + NLP | No | Testing only |
-| `gpas` | `config_gpas.yaml` | gPAS pseudonym (reversible) | Year only | Zip prefix (3-digit) | Regex + NLP | Yes | Jurisdiction-specific |
+| `minimal` / `auto` | `config.yaml` | SHA3-256 hash | Year only | Zip prefix (3-digit) | Regex + NLP | No | Testing only |
 | `gdpr` | `config_gdpr_eu.yaml` | HMAC SHA3-256 | Redacted | Redacted | Regex + NLP | No | GDPR Art. 4(5), 25, 89 |
 | `hipaa` | `config_hipaa_safe_harbor.yaml` | Redacted | Year only | State + 3-digit zip | Regex + NLP | No | 45 CFR § 164.514(b) |
-| `research` | `config_research_pseudonymous.yaml` | SHA3-256 hash | Year-month | 3-digit zip prefix | Regex + NLP | No | IRB / GDPR Art. 89 |
-| `structural` | `config_structure_preserving.yaml` | gPAS pseudonym (reversible) | Year (birthDate only) | Preserved | Regex + NLP | Yes | Structure-first |
 | `value-masking` | `config_value_masking.yaml` | gPAS pseudonym (reversible) | Decade (birth), year (clinical) | Masked to `[REDACTED]` | `nlp_detect_act` (entity-specific) | Yes | Field-complete de-identification |
+
+`auto` always resolves to `config.yaml`; `GPAS_URL` no longer changes profile
+selection (`pipeline/config/service.py::_resolve_profile`). Select
+`value-masking` explicitly, or author a custom profile with
+`gpas_pseudonymize` rules, for gPAS pseudonymization.
 
 ---
 
@@ -25,12 +27,6 @@ description: "Profile selection and the compliance rationale behind each profile
 ### `config.yaml`, Default (Local dev / Testing)
 
 Use when running local tests or CI pipelines without external dependencies. Uses plain SHA3-256 hash without an HMAC key, hashes are reversible via rainbow tables. **Not suitable for real patient data or any data sharing.**
-
-### `config_gpas.yaml`, gPAS Production
-
-Use when you need **reversible pseudonymization**: the ability to re-link records to original patients under controlled conditions (e.g. adverse event investigation, follow-up studies). Requires a live gPAS server. Pseudonyms are managed by gPAS and can be decoded by authorized users through the TTP gateway.
-
-Required env: `GPAS_URL`, `GPAS_DOMAIN`, `GPAS_BASIC_USER`, `GPAS_BASIC_PASS`.
 
 ### `config_gdpr_eu.yaml`, GDPR Art. 4(5)
 
@@ -51,29 +47,6 @@ Use for US patient data under HIPAA. Removes all 18 PHI identifier categories pe
 
 **Limitation:** HIPAA Safe Harbor additionally requires that ages ≥ 90 be further de-identified (the year alone is still identifying at extreme ages). This profile generalizes all birth dates to year. Organizations with patients ≥ 90 should additionally redact `Patient.birthDate` or use the `age_bracket` strategy in a custom profile.
 
-### `config_research_pseudonymous.yaml`, Research Pseudonymous
-
-Use for internal clinical research under IRB approval where temporal analysis requires month-level precision. Key differences from HIPAA Safe Harbor:
-- Dates generalized to **year-month** (not year-only), preserves seasonal patterns for epidemiology
-- Patient IDs are **cryptohashed** (not redacted), preserves referential integrity for longitudinal linkage across multiple export runs (same patient ID → same hash)
-- City/district redacted, state and 3-digit zip retained
-
-**Not suitable for:** external data sharing, regulatory submissions, or contexts requiring HIPAA Safe Harbor compliance.
-
-### `config_structure_preserving.yaml`, Structure Preserving
-
-Use when downstream consumers require a **complete, valid FHIR structure** with no missing fields, for example, feeding de-identified data into a FHIR validator, another FHIR server, or a system that validates cardinality constraints.
-
-Key behaviour:
-- Fields are **never removed**, names, addresses, telecom replaced with `[REDACTED]` via `substitute` (field stays present and valid)
-- All IDs pseudonymized via gPAS with `rewrite_references: true`, referential integrity maintained across bundles
-- Only `birthDate` is generalized (year-only); all other dates preserved
-- All clinical data (codes, values, observations, conditions) untouched
-
-**Gender fields:** `Patient.gender` and `Practitioner.gender` use `substitute_with: "unknown"`, NOT `[REDACTED]`. This is because FHIR R4 binds these fields to the `AdministrativeGender` value set (`male | female | other | unknown`). Any other value causes HAPI to reject the resource with HAPI-1821. `unknown` is the correct FHIR-compliant substitute.
-
-**Requires gPAS.** Use `config_research_pseudonymous.yaml` if gPAS is unavailable.
-
 ### `config_value_masking.yaml`, Value Masking
 
 Use when you need **fine-grained, entity-specific de-identification**, for example, generalizing dates rather than redacting them, and selectively encrypting certain field types while keeping clinical codes intact.
@@ -84,6 +57,8 @@ Key behaviour:
 - Birth dates generalized to decade; clinical dates to year
 - Geographic data replaced with `[REDACTED]`
 - `encrypt` + `generalize` combinations on specific field groups
+
+**Gender fields:** `Patient.gender` and `Practitioner.gender` use `action: substitute` with `substitute_with: "unknown"`, NOT `[REDACTED]`. This is because FHIR R4 binds these fields to the `AdministrativeGender` value set (`male | female | other | unknown`). Any other value causes HAPI to reject the resource with HAPI-1821. `unknown` is the correct FHIR-compliant substitute.
 
 **Requires gPAS.**
 

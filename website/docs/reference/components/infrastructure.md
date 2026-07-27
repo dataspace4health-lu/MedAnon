@@ -181,7 +181,7 @@ All services read configuration from environment variables, set in `.env` (Docke
 | `NLP_REDIS_URL` | `redis://:…@redis:6379/2` (in compose) | Enables NLP L2 detection cache on Redis DB 2. |
 | `NLP_REDIS_TTL_SEC` | `604800` (7 days) | TTL for NLP L2 cache entries. |
 | `MEDANON_APP_DB_URL` |, | PostgreSQL URL for app state. |
-| `GPAS_URL` |, | gPAS server URL. When set, auto-selects `config_gpas.yaml` profile. |
+| `GPAS_URL` |, | gPAS server URL. No longer changes profile selection; select `value-masking`, or a config with `gpas_pseudonymize` rules, to use it. |
 | `NLP_SERVICE_URL` | `http://nlp-lb:8200` | NLP microservice URL. |
 | `ANALYTICS_SERVICE_URL` | `http://analytics:8100` | Analytics microservice URL. |
 | `LOG_LEVEL` | `INFO` | `DEBUG` may log resource content containing PHI, use `INFO` in production. |

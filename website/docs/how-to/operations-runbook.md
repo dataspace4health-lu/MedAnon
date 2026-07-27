@@ -70,9 +70,9 @@ docker compose exec anonymizer tail -f /output/audit.log  # structured JSON audi
 
 ## Config profile selection
 
-Auto-selection: `GPAS_URL` set → `config_gpas.yaml`; otherwise → `config.yaml`.
+Auto-selection: `auto` always resolves to `config.yaml`; `GPAS_URL` no longer affects profile selection.
 
-Override per-request: `?config_profile=<name>`, values: `auto`, `minimal`, `gpas`, `gdpr`, `hipaa`, `research`, `structural`, `value-masking`.
+Override per-request: `?config_profile=<name>`, values: `auto`, `minimal`, `gdpr`, `hipaa`, `value-masking`.
 
 See [policies.md](../explanation/policies.md) for full compliance details per profile.
 
@@ -356,7 +356,7 @@ This error means a resource was uploaded before a resource it references. The up
 
 **Symptom:** `Patient` or `Practitioner` resources rejected: "not a valid code for `http://hl7.org/fhir/ValueSet/administrative-gender`".
 
-FHIR R4 binds `Patient.gender` and `Practitioner.gender` to the `AdministrativeGender` value set (`male | female | other | unknown`). The `config_structure_preserving.yaml` profile uses `substitute_with: "unknown"` for gender fields, this is correct. If you use a custom profile that substitutes `[REDACTED]`, HAPI will reject it. Always use a valid code value.
+FHIR R4 binds `Patient.gender` and `Practitioner.gender` to the `AdministrativeGender` value set (`male | female | other | unknown`). The `config_value_masking.yaml` profile uses `action: substitute` with `substitute_with: "unknown"` for gender fields, this is correct. If you use a custom profile that redacts to `[REDACTED]`, HAPI will reject it. Always use a valid code value.
 
 ### 413 Request Too Large
 

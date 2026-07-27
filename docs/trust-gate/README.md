@@ -38,7 +38,7 @@ provider data (FHIR / OMOP / tabular)
   |  - reporting + label        |
   +-----------------------------+
         |  optional fail-soft calls
-        +--> FHIR validator (HAPI $validate, OperationOutcome)
+        +--> FHIR validator (Inferno validator-wrapper POST /validate, OperationOutcome)
         +--> terminology server ($validate-code)
 ```
 
@@ -187,7 +187,9 @@ OHDSI Data Quality Dashboard pattern over normalized OMOP tables:
 - `dqd.{table}.{col}.completeness`: recommended-field fill rate.
 
 CORE_TABLES: `person`, `observation_period`, `visit_occurrence`,
-`condition_occurrence`, `drug_exposure`, `measurement`, `observation`.
+`condition_occurrence`, `drug_exposure`, `measurement`, `observation`,
+`procedure_occurrence`, `device_exposure`, `specimen`, `visit_detail`,
+`death`, `note`.
 
 No hardcoded universal clinical ranges: OHDSI itself reversed that anti-pattern.
 Thresholds are config and env driven and cited.
@@ -417,8 +419,8 @@ Environment variables (defaults in parentheses):
 | `TRUST_GATE_MODE` | `warn` | intake-gate enforcement: `warn` / `block` / `off` |
 | `TRUST_GATE_PASS_MIN_RATE` | `90` | overall pass cut-off (percent) |
 | `TRUST_GATE_CATEGORY_MIN_RATE` | `80` | per-category pass cut-off (percent) |
-| `TRUST_GATE_VALIDATOR_URL` | HAPI sidecar | FHIR validator endpoint (OperationOutcome) |
-| `TRUST_GATE_VALIDATOR_ENDPOINT` | `/{type}/$validate` | validator path template |
+| `TRUST_GATE_VALIDATOR_URL` | `http://fhir-validator:4567` (Inferno validator-wrapper sidecar) | FHIR validator endpoint (OperationOutcome) |
+| `TRUST_GATE_VALIDATOR_ENDPOINT` | `/validate` | validator path template (`{type}` substituted with resourceType when present, e.g. `/{type}/$validate` for a plain FHIR server) |
 | `TRUST_GATE_TERMINOLOGY_URL` | unset | terminology server for `$validate-code` |
 | `TRUST_GATE_STORE_DB_URL` | unset | Postgres DSN for the durable store |
 | `TRUST_GATE_STORE_DB` | unset | SQLite path for the single-instance store |
@@ -444,10 +446,11 @@ Config files (`services/trust-gate/config/`):
 ## 15. The FHIR validator
 
 `conformance.structural` and `conformance.profile` use a real FHIR validator when
-configured. The default is the bundled HAPI sidecar exposing type-level `$validate`
-(returns an OperationOutcome). For full implementation-guide and profile
-validation, point `TRUST_GATE_VALIDATOR_URL` and `TRUST_GATE_VALIDATOR_ENDPOINT`
-at the HL7 / Inferno validator-wrapper. The call is fail-soft: a validator outage
+configured. The default is the bundled HL7/Inferno `fhir-validator-wrapper`
+sidecar (`infernocommunity/fhir-validator-service`, `POST /validate`, returns an
+OperationOutcome). To validate against a plain FHIR server's `$validate`
+operation (e.g. a HAPI instance) instead, point `TRUST_GATE_VALIDATOR_URL` at it
+and set `TRUST_GATE_VALIDATOR_ENDPOINT=/{type}/$validate`. The call is fail-soft: a validator outage
 returns NA for these checks and never blocks (and never silently passes), and per
 the determinism contract a timing-induced NA does not move the verdict.
 
@@ -461,8 +464,8 @@ The Trust Gate is opt-in via the `trust` Docker Compose profile:
 docker compose --profile trust up -d trust-gate trust-gate-ui fhir-validator
 ```
 
-Services: `trust-gate` (:8400), `trust-gate-ui` (:8401), `fhir-validator` (HAPI
-sidecar). To populate history, findings, and the audit trail set a store, for
+Services: `trust-gate` (:8400), `trust-gate-ui` (:8401), `fhir-validator` (Inferno
+validator-wrapper sidecar). To populate history, findings, and the audit trail set a store, for
 example `TRUST_GATE_STORE_DB=/tmp/trust_gate.db` (single instance) or
 `TRUST_GATE_STORE_DB_URL` to a Postgres DSN (durable, supports
 `--scale trust-gate=N`). The main UI's nginx proxies `/trust/` to `trust-gate:8400`;

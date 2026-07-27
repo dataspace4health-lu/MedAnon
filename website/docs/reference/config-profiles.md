@@ -14,22 +14,20 @@ and policy you have. Treat the list below as templates to copy and adapt.
 :::
 
 A config is a YAML list of `match → action` rules (see [Rules](./rules.md)). Pass
-`?config_profile=<name>` to any processing endpoint to select one. When none is
-specified the engine auto-selects `config.yaml` (no gPAS) or `config_gpas.yaml`
-(when `GPAS_URL` is set).
+`?config_profile=<alias>` to any processing endpoint to select one. When none is
+specified the engine uses `auto`, which always resolves to `config.yaml`
+(`pipeline/config/service.py::_resolve_profile`). `GPAS_URL` being set no longer
+changes which profile `auto` picks - select `value-masking`, or author your own
+config with `gpas_pseudonymize` rules, to get gPAS pseudonymization.
 
 ## Bundled example configs
 
-| Profile (`config/…`) | Purpose |
-|---|---|
-| `config.yaml` | Minimal: HMAC hash + regex scrubbing, no gPAS (default when `GPAS_URL` unset) |
-| `config_gpas.yaml` | Production: gPAS pseudonymization + generalization + NLP scrubbing (default when `GPAS_URL` set) |
-| `config_gdpr_eu.yaml` | GDPR Art. 4(5) HMAC pseudonymization |
-| `config_hipaa_safe_harbor.yaml` | HIPAA Safe Harbor (45 CFR §164.514(b)): 18 PHI categories, dates→year, zip→3-digit |
-| `config_research_pseudonymous.yaml` | IRB-grade: dates→year-month, IDs cryptohashed for longitudinal linkage |
-| `config_structure_preserving.yaml` | Full FHIR structure retained; IDs via gPAS, PII→`[REDACTED]`, dates→year |
-| `config_value_masking.yaml` | Fine-grained `nlp_detect_act` (entity-specific conditional NLP) + encrypt/generalize combos |
-| `config_k_anonymity.yaml` | OLA-style k-anonymity lattice solver; requires the staging layer (`MEDANON_STAGING_DB_URL`) |
+| Alias | Profile (`config/…`) | Purpose |
+|---|---|---|
+| `auto` / `minimal` | `config.yaml` | Minimal: HMAC-SHA3-256 hash + regex scrubbing, no gPAS |
+| `gdpr` | `config_gdpr_eu.yaml` | GDPR Art. 4(5) HMAC pseudonymization |
+| `hipaa` | `config_hipaa_safe_harbor.yaml` | HIPAA Safe Harbor (45 CFR §164.514(b)): 18 PHI categories, dates→year, zip→3-digit |
+| `value-masking` | `config_value_masking.yaml` | Field-complete masking via gPAS pseudonymization + fine-grained `nlp_detect_act` (entity-specific conditional NLP) |
 
 For *which* profile to choose for a given compliance scenario, see
 [De-identification Policies](../explanation/policies.md).
@@ -59,4 +57,4 @@ per-subject offset), `tokenize` (format-preserving), and the NLP actions
 Rules are validated at load time against a Pydantic schema (per-action param
 models + action-name + condition-operator checks). Set
 `MEDANON_RULE_SCHEMA_STRICT=true` to fail loading on any violation; the default
-is warn-only. All eight bundled profiles pass strict validation.
+is warn-only. All four bundled profiles pass strict validation.

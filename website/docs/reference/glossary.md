@@ -25,8 +25,10 @@ DICOM resource views), e.g. `Patient.telecom.where(system='phone')`.
 (TTP) that issues and resolves **reversible** pseudonyms.
 
 **k-anonymity**, a record is k-anonymous if its quasi-identifiers are shared by
-at least *k−1* others. The `config_k_anonymity` path uses a generalization
-lattice solver.
+at least *k−1* others. `pipeline/privacy/` is an OLA-style generalization
+lattice solver for this, invoked by adding a `privacy_model:` block to a
+config; no bundled profile ships one, so using it requires authoring a
+custom config.
 
 **Match**, the selector half of a rule; chooses which fields an action applies
 to.

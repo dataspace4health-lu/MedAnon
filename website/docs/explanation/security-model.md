@@ -425,11 +425,8 @@ The system never creates derived profiles, enriches records, or retains identifi
 | Profile | Art. 4(5) | Art. 25 | Art. 30 | Art. 32 |
 |---|---|---|---|---|
 | `config_gdpr_eu.yaml` | HMAC pseudonym | Name/contact fully redacted | Manifest | Audit + TLS |
-| `config_gpas.yaml` | gPAS TTP pseudonym | Dates generalized | Manifest | Audit + TLS |
-| `config_research_pseudonymous.yaml` | HMAC | Dates to year-month | Manifest | Audit + TLS |
 | `config_hipaa_safe_harbor.yaml` | Partial (HMAC but primary goal is HIPAA) | 18 PHI categories removed | Manifest | Audit + TLS |
-| `config_structure_preserving.yaml` | gPAS (IDs), `[REDACTED]` (PII) | Partial (structure retained by design) | Manifest | Audit + TLS |
-| `config_value_masking.yaml` | Entity-conditional NLP | Field-level masking | Manifest | Audit + TLS |
+| `config_value_masking.yaml` | gPAS TTP pseudonym (IDs) + entity-conditional NLP | Field-level masking, no fields removed | Manifest | Audit + TLS |
 | `config.yaml` (minimal) | Partial (HMAC) | Partial (regex-only scrubbing) | Manifest | Audit + TLS |
 
 ---

@@ -45,7 +45,7 @@ knobs, not the rationale.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `GPAS_URL` | _(unset)_ | gPAS server URL, when set, auto-selects `config_gpas.yaml` |
+| `GPAS_URL` | _(unset)_ | gPAS server URL. No longer changes profile selection (`auto` always resolves to `config.yaml`); select `value-masking`, or a config with `gpas_pseudonymize` rules, to use it |
 | `GPAS_DOMAIN` / `GPAS_OPERATION` |, | Pseudonymization domain and operation |
 | `GPAS_TOKEN` / `GPAS_BASIC_USER` / `GPAS_BASIC_PASS` |, | Auth (token wins) |
 | `GPAS_TIMEOUT_SEC` | `30` | Request timeout |
