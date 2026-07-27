@@ -148,6 +148,10 @@ ci-local:
 	@$(PYBIN) scripts/check_env.py --docs docs/reference/env-vars.md
 	@git diff --quiet -- docs/reference/env-vars.md || \
 		{ echo "docs/reference/env-vars.md is stale; commit the regenerated file"; exit 1; }
+	@echo "── doc drift ───────────────────────────────────────────────"
+	@$(PYBIN) scripts/check_docs.py
+	@echo "── doc check unit tests ────────────────────────────────────"
+	@$(PYBIN) -m pytest scripts/tests -q
 	@echo "── medanon-core unit tests ─────────────────────────────────"
 	@$(PYBIN) -m pytest packages/medanon-core/tests -q
 	@echo "── nlp entity catalogue in sync ────────────────────────────"
@@ -195,6 +199,9 @@ env-diff:
 	python3 scripts/check_env.py --env .env
 
 # Regenerate the full variable catalogue from the code.
+docs-check:
+	@$(PYBIN) scripts/check_docs.py
+
 env-docs:
 	python3 scripts/check_env.py --docs docs/reference/env-vars.md
 

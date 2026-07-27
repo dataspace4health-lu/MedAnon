@@ -22,12 +22,16 @@ from __future__ import annotations
 
 import pathlib
 import re
+import subprocess
 import sys
 
 # Directories that hold documentation subject to these checks.
 DOC_ROOTS = ("docs", "website/docs")
-# Never checked: gitignored internal notes and generated output.
-SKIP_PARTS = {"internal", "node_modules", "build", ".docusaurus"}
+# Never checked.  ``internal`` is gitignored notes; ``superpowers`` holds specs
+# and plans, which are records of intent rather than descriptions of the tree:
+# they legitimately name files a task is about to delete, and quote deliberate
+# wrong values as test fixtures.  Checking them reports the plan as drift.
+SKIP_PARTS = {"internal", "superpowers", "node_modules", "build", ".docusaurus"}
 
 
 def count_config_profiles(root: pathlib.Path) -> int:
@@ -120,8 +124,33 @@ PATH_RE = re.compile(r"`([A-Za-z0-9_./-]+)`")
 LINK_RE = re.compile(r"\[[^\]]*\]\((?!https?:|mailto:|#)([^)#]+)(?:#[^)]*)?\)")
 
 
+def _gitignored(root: pathlib.Path, tokens: set[str]) -> set[str]:
+    """Return the subset of ``tokens`` that git ignores.
+
+    A doc that names ``services/anonymizer/keys/id_rsa`` is telling an operator
+    where to PUT a key, not asserting the file is in the tree.  Gitignored
+    paths are expected to be absent on a clean checkout, so their absence is
+    not drift.  Falls back to "nothing is ignored" when git is unavailable,
+    which only makes the check stricter, never wrong-in-the-permissive-direction.
+    """
+    if not tokens:
+        return set()
+    try:
+        proc = subprocess.run(
+            ["git", "check-ignore", "--stdin"],
+            cwd=root,
+            input="\n".join(sorted(tokens)),
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    return {line.strip() for line in proc.stdout.splitlines() if line.strip()}
+
+
 def check_paths(root: pathlib.Path, docs: list[pathlib.Path]) -> list[str]:
-    failures: list[str] = []
+    candidates: list[tuple[pathlib.Path, int, str]] = []
     for doc in docs:
         text = doc.read_text(errors="replace")
         for match in PATH_RE.finditer(text):
@@ -129,12 +158,17 @@ def check_paths(root: pathlib.Path, docs: list[pathlib.Path]) -> list[str]:
             if not token.startswith(PATH_ROOTS):
                 continue
             # Trailing slash means a directory; strip it before resolving.
-            candidate = root / token.rstrip("/")
-            if candidate.exists():
+            if (root / token.rstrip("/")).exists():
                 continue
             line = text[: match.start()].count("\n") + 1
-            failures.append(f"path     {doc}:{line}  references missing {token}")
-    return failures
+            candidates.append((doc, line, token))
+
+    ignored = _gitignored(root, {t.rstrip("/") for _, _, t in candidates})
+    return [
+        f"path     {doc}:{line}  references missing {token}"
+        for doc, line, token in candidates
+        if token.rstrip("/") not in ignored
+    ]
 
 
 def check_links(root: pathlib.Path, docs: list[pathlib.Path]) -> list[str]:
