@@ -179,12 +179,12 @@ The process has two halves: measuring quality (steps 1 to 9) and ensuring it (st
 
 **Step 1: The dataset reaches the barrier.** De-identification never starts cold.
 The anonymiser calls the intake barrier first
-([anonymizer/src/pipeline/intake_gate.py](../services/anonymizer/src/pipeline/intake_gate.py),
+([anonymizer/src/pipeline/intake_gate.py](../../services/anonymizer/src/pipeline/intake_gate.py),
 `enforce_intake`), which forwards the records to the Trust Gate over HTTP. If no
 Trust Gate is configured, or `TRUST_GATE_MODE=off`, this is a no-op.
 
 **Step 2: Configure the assessment.**
-[api/service.py](../services/trust-gate/src/api/service.py) `run_assessment` decides
+[api/service.py](../../services/trust-gate/src/api/service.py) `run_assessment` decides
 *what* to measure before measuring anything: resolve the declared use case to a
 subset of phases and threshold tweaks (`resolve_use_case`), merge thresholds over
 the configured defaults, resolve which checks are promoted to critical-to-quality,
@@ -196,9 +196,9 @@ list into a flat record list plus the Bundle `fullUrl` values (kept so
 reference-integrity can resolve `urn:uuid:` references).
 
 **Step 4: Gather inputs and run the checks.** The engine
-([engine.py](../services/trust-gate/src/engine.py) `assess`) packs every input into
+([engine.py](../../services/trust-gate/src/engine.py) `assess`) packs every input into
 one immutable `AssessmentContext`, then runs the check suite through the registry
-([verdict/registry.py](../services/trust-gate/src/verdict/registry.py)). Each result
+([verdict/registry.py](../../services/trust-gate/src/verdict/registry.py)). Each result
 is tagged with its phase and data-quality dimension, marked deterministic or
 advisory, and filtered to the selected phases.
 
@@ -206,7 +206,7 @@ advisory, and filtered to the selected phases.
 
 **Step 6: Separate reliable checks from statistical hints.** Deterministic checks
 drive the verdict; advisory (statistical) checks become side notes. Enforced by the
-allow-list in [constants.py](../services/trust-gate/src/constants.py); anything
+allow-list in [constants.py](../../services/trust-gate/src/constants.py); anything
 unclassified defaults to advisory (fail-safe).
 
 **Step 7: Roll the results up** (see section 9).
@@ -252,7 +252,7 @@ per-sector sub-verdicts (each under the same policy as the headline).
 
 **Step 14: Keep quality under control over time.** The plausibility checks read and
 update a persisted per-`(code, unit)` baseline reservoir
-([baseline.py](../services/trust-gate/src/baseline.py)), so small batches gain power
+([baseline.py](../../services/trust-gate/src/baseline.py)), so small batches gain power
 from history and a sudden distribution shift is caught as drift. Persisted passports
 and open findings support a Plan-Do-Study-Act loop: measure, remediate, re-submit,
 confirm the fix, with the idempotency key tying re-submissions to one lineage.
@@ -261,7 +261,7 @@ confirm the fix, with the idempotency key tying re-submissions to one lineage.
 
 This is the atomic unit, identical for every check, and it is the OHDSI Data Quality
 Dashboard method (defined on `CheckResult` in
-[passport.py](../services/trust-gate/src/passport.py)):
+[passport.py](../../services/trust-gate/src/passport.py)):
 
 1. Count `applicable` = how many rows or items the check could apply to (the
    denominator).
@@ -281,7 +281,7 @@ Worked example: 100 Observations, 3 with no value and no dataAbsentReason. Then
 violating record also gets a capped, identifier-free note added for the audit
 (`add_detail`, capped at 50 per check).
 
-Thresholds live in [constants.py](../services/trust-gate/src/constants.py)
+Thresholds live in [constants.py](../../services/trust-gate/src/constants.py)
 (`DEFAULT_THRESHOLDS`), are overridable per check in config or environment, and
 default to zero tolerance for hard structural defects. A few are deliberately
 non-zero and justified in code, for example `completeness.element_density = 0.5`
@@ -296,7 +296,7 @@ must have a type, an id, a valid structure, and must not be "entered in error".
 ## 9. How the scores are rolled up
 
 Every roll-up uses one formula and no domain weights
-([verdict/scoring.py](../services/trust-gate/src/verdict/scoring.py)):
+([verdict/scoring.py](../../services/trust-gate/src/verdict/scoring.py)):
 
 > **score = 100 x (checks that PASSED) / (checks that were assessed)**
 
@@ -312,7 +312,7 @@ where "assessed" means PASS or FAIL, never NA. Three things use it:
    letter grade.
 
 Letter grades are bands aligned to the decision floors
-([dimensions.py](../services/trust-gate/src/dimensions.py)):
+([dimensions.py](../../services/trust-gate/src/dimensions.py)):
 
 | Grade | Score | Meaning |
 |---|---|---|
@@ -328,7 +328,7 @@ stops a headline reading "A" while the decision is BLOCK.
 
 ## 10. How the verdict is decided
 
-The policy layer ([verdict/decision.py](../services/trust-gate/src/verdict/decision.py)
+The policy layer ([verdict/decision.py](../../services/trust-gate/src/verdict/decision.py)
 `decide`) applies these rules in order:
 
 ```
@@ -356,7 +356,7 @@ per sector), so a sector badge can never read more leniently than the headline.
 
 Quality is fitness for a *declared* use: a dataset fit for cohort discovery may be
 unfit for outcomes research
-([verdict/fitness.py](../services/trust-gate/src/verdict/fitness.py)). Each use
+([verdict/fitness.py](../../services/trust-gate/src/verdict/fitness.py)). Each use
 profile names the floors it needs:
 
 | Use | Needs conformance | Needs completeness | Needs plausibility | Needs provenance | Needs external validation |
@@ -376,7 +376,7 @@ the data can and cannot be used for.
 
 Two mechanisms stop the verdict from over-claiming.
 
-**Coverage** ([verdict/coverage.py](../services/trust-gate/src/verdict/coverage.py))
+**Coverage** ([verdict/coverage.py](../../services/trust-gate/src/verdict/coverage.py))
 reports assessed versus total checks, which depth capabilities were not exercised (no
 validator, no terminology server, no reference dataset, no clinical rule pack), which
 phases were descoped, and the verification-versus-validation breakdown. A grade over
@@ -396,7 +396,7 @@ A standing plausibility caveat also applies: a plausibility PASS means no value 
 
 Conformance asks: does the data follow the rules of structure, format, codes, and
 references? Assembled in
-[checks/conformance/__init__.py](../services/trust-gate/src/checks/conformance/__init__.py)
+[checks/conformance/__init__.py](../../services/trust-gate/src/checks/conformance/__init__.py)
 `evaluate()`. The first three are the always-on, offline, zero-tolerance, critical
 "SAM prerequisite chain".
 
@@ -421,7 +421,7 @@ terminology outage never reads as a structural defect and is never double-counte
 
 ## 14. Per-check detail: completeness
 
-Completeness ([checks/completeness.py](../services/trust-gate/src/checks/completeness.py))
+Completeness ([checks/completeness.py](../../services/trust-gate/src/checks/completeness.py))
 asks: is what should be present actually present? Three checks, all verification.
 
 | check_id | threshold | applicable | violations | note |
@@ -438,7 +438,7 @@ choice types (for example `effectiveDateTime` counts as populated when
 
 ## 15. Per-check detail: plausibility
 
-Plausibility ([checks/plausibility.py](../services/trust-gate/src/checks/plausibility.py))
+Plausibility ([checks/plausibility.py](../../services/trust-gate/src/checks/plausibility.py))
 asks: are the values believable? It mixes deterministic checks (drive the verdict)
 with statistical ones (advisory only).
 
@@ -463,7 +463,7 @@ never move the verdict.
 
 ## 16. Per-check detail: provenance
 
-Provenance ([checks/governance.py](../services/trust-gate/src/checks/governance.py))
+Provenance ([checks/governance.py](../../services/trust-gate/src/checks/governance.py))
 is deliberately kept out of the Kahn category scores, because provenance presence is
 a sharing-readiness signal, not a data-quality measurement. It works on two levels.
 
@@ -490,7 +490,7 @@ outside authority rather than internal consistency. Two authorities are called, 
 strictly fail-soft.
 
 **The FHIR validator**
-([validator_client.py](../services/trust-gate/src/validator_client.py), driven from
+([validator_client.py](../../services/trust-gate/src/validator_client.py), driven from
 `checks/conformance/validation.py`):
 
 1. Powers `conformance.structural`, `conformance.profile`, `conformance.ig_profile`.
@@ -510,7 +510,7 @@ strictly fail-soft.
 5. An SSRF guard blocks link-local and cloud-metadata targets.
 
 **The terminology server**
-([terminology_client.py](../services/trust-gate/src/terminology_client.py), driving
+([terminology_client.py](../../services/trust-gate/src/terminology_client.py), driving
 `conformance.terminology`):
 
 1. For each coding whose system is a recognised clinical system

@@ -143,14 +143,14 @@ else:                                      result = PASS
 ```
 
 A worked example from the completeness check
-([checks/completeness.py](../services/trust-gate/src/checks/completeness.py)):
+([checks/completeness.py](../../services/trust-gate/src/checks/completeness.py)):
 say a batch has 100 Observations and 3 of them carry neither a `value[x]` nor a
 `dataAbsentReason`. Then `applicable = 100`, `violations = 3`,
 `violation_fraction = 0.03`. The threshold for `completeness.value_or_absent` is
 `0.0` (zero tolerance), so `0.03 > 0.0` and the check **FAILs**.
 
 Thresholds are not magic numbers. They live in
-[constants.py](../services/trust-gate/src/constants.py) (`DEFAULT_THRESHOLDS`),
+[constants.py](../../services/trust-gate/src/constants.py) (`DEFAULT_THRESHOLDS`),
 are overridable per check in config or by environment, and default to zero
 tolerance for hard structural defects. A few are deliberately non-zero and are
 justified in the code, for example:
@@ -190,7 +190,7 @@ as one externally validated, and the coverage report says which you got.
 
 A **phase** is a named quality concern the caller can switch on or off
 independently, so the gate measures exactly what is wanted. The eleven phases are
-in [phases.py](../services/trust-gate/src/phases.py): `structural_conformance`,
+in [phases.py](../../services/trust-gate/src/phases.py): `structural_conformance`,
 `terminology_validity`, `referential_integrity`, `completeness_core`,
 `completeness_richness`, `value_plausibility`, `temporal_plausibility`,
 `identity_integrity`, `provenance_auditability`, `timeliness`, `source_accuracy`.
@@ -206,7 +206,7 @@ The **dimension** is the recognized data-quality vocabulary a data consumer know
 (DAMA DMBOK plus ISO/IEC 25012): completeness, conformity, consistency, accuracy,
 plausibility, uniqueness, integrity, currency, provenance. This is the view used
 for the per-dimension scorecard and letter grades in the passport. The mapping is
-in [dimensions.py](../services/trust-gate/src/dimensions.py).
+in [dimensions.py](../../services/trust-gate/src/dimensions.py).
 
 ## 7. How QC is quantified (the roll-up)
 
@@ -217,7 +217,7 @@ formula and no domain weights:
 
 where "assessed" means result is PASS or FAIL, never NA. This is the "percent of
 checks passing" metric, computed in
-[verdict/scoring.py](../services/trust-gate/src/verdict/scoring.py).
+[verdict/scoring.py](../../services/trust-gate/src/verdict/scoring.py).
 
 Three things are computed with that one formula:
 
@@ -235,7 +235,7 @@ Three things are computed with that one formula:
 ### Letter grades
 
 Grades are bands aligned to the decision floors, so the grade and the verdict tell
-one story (see `grade_for` in [dimensions.py](../services/trust-gate/src/dimensions.py)):
+one story (see `grade_for` in [dimensions.py](../../services/trust-gate/src/dimensions.py)):
 
 | Grade | Score | Meaning |
 |---|---|---|
@@ -254,7 +254,7 @@ failure (DAMA DMBOK and ISO 25012 treat those as non-compensable).
 ## 8. The decision (measurement becomes a verdict)
 
 The policy layer lives in
-[verdict/decision.py](../services/trust-gate/src/verdict/decision.py). It reads the
+[verdict/decision.py](../../services/trust-gate/src/verdict/decision.py). It reads the
 scores and applies these rules in order:
 
 ```
@@ -291,7 +291,7 @@ never read more leniently than the overall verdict.
 Quality is fitness for a *declared* use: a dataset fit for cohort discovery may be
 unfit for outcomes research. So the gate does not just say "good" or "bad"; it says
 what the data is good *for*. This is in
-[verdict/fitness.py](../services/trust-gate/src/verdict/fitness.py).
+[verdict/fitness.py](../../services/trust-gate/src/verdict/fitness.py).
 
 Each use profile names the quality floors it needs. From loosest to strictest:
 
@@ -313,7 +313,7 @@ than a flat rejection.
 
 Two mechanisms stop the verdict from over-claiming.
 
-**Coverage** ([verdict/coverage.py](../services/trust-gate/src/verdict/coverage.py))
+**Coverage** ([verdict/coverage.py](../../services/trust-gate/src/verdict/coverage.py))
 reports how much of the suite actually ran: assessed vs total checks, which
 "depth" capabilities were not exercised (no validator, no terminology server, no
 reference dataset, no clinical rule pack), which phases were descoped, and the
@@ -321,7 +321,7 @@ verification-vs-validation breakdown. A grade computed over 7 of 22 checks must
 not read like one over 22 of 22. The coverage caveat is appended to the fitness
 statement, so a verification-only run is labelled as such.
 
-**Advisory** ([scoring.advisory_report](../services/trust-gate/src/verdict/scoring.py))
+**Advisory** ([scoring.advisory_report](../../services/trust-gate/src/verdict/scoring.py))
 holds the statistical, batch-relative checks: value outliers and cross-batch
 distribution drift. These use a random reservoir and a batch-relative distribution,
 so they are non-deterministic. They are reported for analysis but explicitly
@@ -363,7 +363,7 @@ passport is safe to persist and serve.
 
 Conformance answers: does the data follow the rules of structure, format, codes,
 and references? It is assembled in
-[checks/conformance/__init__.py](../services/trust-gate/src/checks/conformance/__init__.py)
+[checks/conformance/__init__.py](../../services/trust-gate/src/checks/conformance/__init__.py)
 `evaluate()`, which runs the checks below in order. The first three are the
 "SAM prerequisite chain": always-on, offline, zero-tolerance, and critical (a FAIL
 BLOCKs).
@@ -391,7 +391,7 @@ Two important calculation details from the code:
   `Patient/1/_history/3?_format=json` to the exact key `Patient/1` and requires an
   exact match, so `Patient/1` cannot false-resolve against `RelatedPerson/x1`.
 - **Structural excludes terminology.** In
-  [validator_client.py](../services/trust-gate/src/validator_client.py)
+  [validator_client.py](../../services/trust-gate/src/validator_client.py)
   `_error_issues()` drops any issue tagged `TerminologyEngine` and any transport
   error from the structural/profile axis. Code validity is measured only by
   `conformance.terminology`, so a terminology-server outage can never masquerade as
@@ -402,7 +402,7 @@ checks (whichever were not NA).
 
 ## 13. How completeness is evaluated and calculated
 
-Completeness ([checks/completeness.py](../services/trust-gate/src/checks/completeness.py))
+Completeness ([checks/completeness.py](../../services/trust-gate/src/checks/completeness.py))
 answers: is what should be present actually present? Three checks, all verification:
 
 | check_id | threshold | applicable | violations | note |
@@ -425,7 +425,7 @@ when `medicationReference` is present, etc.
 
 ## 14. How plausibility is evaluated and calculated
 
-Plausibility ([checks/plausibility.py](../services/trust-gate/src/checks/plausibility.py))
+Plausibility ([checks/plausibility.py](../../services/trust-gate/src/checks/plausibility.py))
 answers: are the values believable? This category is a mix of deterministic checks
 (which drive the verdict) and statistical checks (advisory only, see section 10).
 
@@ -454,7 +454,7 @@ The statistical machinery (advisory only, so it stays reproducible):
 
 Because these two are non-deterministic (random reservoir + batch-relative), the
 engine marks them advisory via the determinism allow-list in
-[constants.py](../services/trust-gate/src/constants.py) and reports them in the
+[constants.py](../../services/trust-gate/src/constants.py) and reports them in the
 `advisory` block, never in the category score or the decision.
 
 The standing honesty caveat applies: a plausibility PASS means "no statistical or
@@ -463,7 +463,7 @@ definitional violation for this cohort", not "clinically coherent".
 ## 15. How provenance is evaluated and calculated
 
 Provenance is handled by
-[checks/governance.py](../services/trust-gate/src/checks/governance.py) and is
+[checks/governance.py](../../services/trust-gate/src/checks/governance.py) and is
 deliberately kept out of the Kahn category scores, because provenance presence is a
 sharing-readiness signal, not a data-quality measurement. It works on two levels.
 
@@ -478,7 +478,7 @@ a dict, not a scored check:
 This feeds the decision policy directly. In the engine, `provenance_capped` is
 `True` when the provenance phase is selected and `provenance_present` is `False`;
 that alone caps the verdict at **CONDITIONAL_PASS** (see
-[verdict/decision.py](../services/trust-gate/src/verdict/decision.py) `decide`),
+[verdict/decision.py](../../services/trust-gate/src/verdict/decision.py) `decide`),
 and it is also what the fitness profiles for AI training, outcomes research, and
 regulated sharing require.
 
@@ -502,7 +502,7 @@ in `warn` mode provenance only ever caps to CONDITIONAL via level 1.
 an outside authority rather than internal consistency. Exactly two authorities are
 called, and both are strictly fail-soft.
 
-**The FHIR validator** ([validator_client.py](../services/trust-gate/src/validator_client.py),
+**The FHIR validator** ([validator_client.py](../../services/trust-gate/src/validator_client.py),
 driven from `checks/conformance/validation.py`):
 
 1. It powers `conformance.structural`, `conformance.profile`, and
@@ -525,7 +525,7 @@ driven from `checks/conformance/validation.py`):
 5. An SSRF guard (`_guard_url`) blocks link-local and cloud-metadata targets.
 
 **The terminology server**
-([terminology_client.py](../services/trust-gate/src/terminology_client.py), driving
+([terminology_client.py](../../services/trust-gate/src/terminology_client.py), driving
 `conformance.terminology`):
 
 1. For each coding whose system is a recognized clinical system
@@ -539,11 +539,11 @@ driven from `checks/conformance/validation.py`):
 and, for the validator, when `external_validation` is true:
 `run_validator = external_validation and STRUCTURAL in selection`,
 `run_terminology = TERMINOLOGY in selection` (see
-[verdict/registry.py](../services/trust-gate/src/verdict/registry.py)). The
+[verdict/registry.py](../../services/trust-gate/src/verdict/registry.py)). The
 `coverage` block then reports whether any external validation actually happened:
 `external_validation_performed` is true only when at least one validation-context
 check was assessed (not NA). That flag is what
-[verdict/fitness.py](../services/trust-gate/src/verdict/fitness.py) requires before
+[verdict/fitness.py](../../services/trust-gate/src/verdict/fitness.py) requires before
 it will approve a dataset for outcomes research or regulated sharing. So a
 verification-only run (no validator, no terminology server) is honestly labelled
 and cannot be approved for the uses that demand external validation.

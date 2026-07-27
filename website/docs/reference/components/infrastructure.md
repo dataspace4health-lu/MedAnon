@@ -116,15 +116,27 @@ Four independent PostgreSQL 16 instances, each with its own lifecycle, backup sc
 | **Source HAPI** | `hapi-db` | HAPI | Identified clinical FHIR resources |
 | **Target HAPI** | `hapi-target-db` | HAPI | De-identified FHIR resources |
 
-The `medanon` schema is initialized by `services/anonymizer/sql/init.sql`:
+The `medanon` schema has no static SQL file - each Postgres-backed store creates its own tables in code via `ensure_schema()` on first use (`services/anonymizer/src/integrations/postgres/*.py`, plus `integrations/staging/store.py`):
 
 ```
-medanon.jobs                - async job records
-medanon.staged_resources    - two-phase staging for bulk operations
-medanon.configs             - user-defined config profiles
-medanon.subscriptions       - FHIR R4 Subscriptions
-medanon.processing_runs     - scoring history
-medanon.api_keys            - per-client API keys (hashed)
+medanon.jobs                    - async job records (job_store.py)
+medanon.job_details             - per-job detail payloads (job_detail_store.py)
+medanon.configs                 - user-defined config profiles (config_store.py)
+medanon.subscriptions           - FHIR R4 Subscriptions (subscription_store.py)
+medanon.processing_runs         - scoring history (processing_run_store.py)
+medanon.api_keys                - per-client API keys, hashed (api_key_store.py)
+medanon.staged_resources        - two-phase staging for bulk operations (staging/store.py)
+medanon.staged_partitions       - staging partition tracking (staging/store.py)
+medanon.dead_letter_partitions  - failed staging partitions (staging/store.py)
+medanon.permits                 - EHDS data permits (permit_store.py)
+medanon.transformation_passports - D7.2 transformation passports (passport_store.py)
+medanon.source_connections      - saved input connectors (connector_stores.py)
+medanon.output_destinations     - saved output connectors (connector_stores.py)
+medanon.app_settings            - instance settings (settings_store.py)
+medanon.release_ledger          - cumulative-exposure release history (release_ledger.py)
+medanon.sql_connections         - SQL/tabular source connections (sql_connection_store.py)
+medanon.trust_profiles          - saved Trust Gate profiles (trust_profile_store.py)
+medanon.workflows / medanon.workflow_steps - saved workflow definitions (workflow_store.py)
 ```
 
 ---

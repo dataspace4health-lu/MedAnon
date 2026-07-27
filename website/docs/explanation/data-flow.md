@@ -323,7 +323,7 @@ Browser (:8501)
 
 ### Traefik gateway (`medanon-gateway`)
 
-gPAS and NLP routing is handled by the Traefik v3 gateway. `services/gpas/lb/nginx.conf` and `services/nlp/nginx.conf` are kept as reference only, they are not mounted by docker-compose.
+gPAS and NLP routing is handled by the Traefik v3 gateway (`traefik:v3.2`), which replaced the earlier nginx load balancers entirely - there is no `nginx.conf` for gPAS or NLP anywhere in the tree any more.
 
 ```
 anonymizer → gpas-lb:8080 (Traefik gateway alias)
@@ -490,7 +490,8 @@ POST /v1/ai/generate-config
     │          MEDANON_AI_API_BASE=https://api.openai.com  (external)
     │
     ├─ integrations/ai/agents/config_generator.py
-    │      all 8 bundled YAML profiles injected as few-shot prompt context
+    │      bundled YAML profiles injected as few-shot prompt context
+    │      (one profile by default; MEDANON_AI_FEWSHOT_PROFILES tunes how many)
     │      prompt: user description → LLM → YAML config
     │      validation: load_config() - rejects syntactically invalid YAML
     │      keyword fallback: if LLM unavailable, select closest bundled profile

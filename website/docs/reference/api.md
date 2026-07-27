@@ -86,14 +86,11 @@ All processing endpoints accept an optional query parameter:
 
 | Value | Profile used |
 |---|---|
-| `auto` (default) | `config_gpas.yaml` if `GPAS_URL` is set, else `config.yaml` |
-| `minimal` | `config.yaml`, HMAC hash + regex scrubbing |
-| `gpas` | `config_gpas.yaml`, gPAS pseudonymization |
+| `auto` (default) | `config.yaml`. `GPAS_URL` no longer changes profile selection - select `value-masking` (or a custom profile) explicitly for gPAS pseudonymization |
+| `minimal` | `config.yaml`, HMAC-SHA3-256 hash + regex scrubbing |
 | `gdpr` | `config_gdpr_eu.yaml`, GDPR Art. 4(5) |
 | `hipaa` | `config_hipaa_safe_harbor.yaml`, HIPAA Safe Harbor |
-| `research` | `config_research_pseudonymous.yaml`, IRB research |
-| `structural` | `config_structure_preserving.yaml`, Full FHIR structure |
-| `value-masking` | `config_value_masking.yaml`, Fine-grained NLP masking |
+| `value-masking` | `config_value_masking.yaml`, gPAS pseudonymization + fine-grained NLP masking |
 
 ---
 
@@ -749,7 +746,7 @@ Retrieve cached score for a completed, scored job.
 {
   "job_id": "abc123",
   "resource_count": 4821,
-  "config_profile": "config_gpas.yaml",
+  "config_profile": "config_value_masking.yaml",
   "composite_score": 0.78,
   "privacy": { ... },
   "utility": { ... },
@@ -1021,7 +1018,7 @@ Check AI agent availability.
 
 **Role:** `admin`
 
-Generate a YAML config profile from a natural-language description. All 8 bundled profiles are injected as few-shot prompt context (not vector retrieval).
+Generate a YAML config profile from a natural-language description. Bundled profiles are injected as few-shot prompt context (not vector retrieval), one by default (`MEDANON_AI_FEWSHOT_PROFILES`).
 
 **Request:**
 ```json
@@ -1034,8 +1031,8 @@ Generate a YAML config profile from a natural-language description. All 8 bundle
 ```json
 {
   "config_yaml": "rules:\n  - name: ...",
-  "rationale": "Generated based on research profile. Dates preserved to year-month for temporal analysis.",
-  "profile_basis": "config_research_pseudonymous.yaml"
+  "rationale": "Generated based on the value-masking profile. Dates preserved to year-month for temporal analysis, IDs pseudonymized via gPAS.",
+  "profile_basis": "config_value_masking.yaml"
 }
 ```
 

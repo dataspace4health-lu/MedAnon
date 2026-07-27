@@ -154,7 +154,7 @@ Two edge components handle ingress, routing, and horizontal scaling:
 | `client/nginx.conf` | `medanon-ui` | UI reverse proxy: SPA serving + `/api/*`, `/fhir/*`, `/fhir-target/*` routing |
 | Traefik labels on `gpas` / `nlp` | `medanon-gateway` | API gateway: dynamic Docker-provider discovery, round-robin LB, sticky sessions for the gPAS JSF UI |
 
-The `gateway` service joins `processing-net` under the `gpas-lb` and `nlp-lb` aliases so existing env-var values work without changes. `services/gpas/lb/nginx.conf` and `services/nlp/nginx.conf` are kept as reference only.
+The `gateway` service is Traefik v3 (`traefik:v3.2`, `docker-compose.yml`), which replaced the earlier nginx load balancers entirely - there is no `nginx.conf` for gPAS or NLP anywhere in the tree any more. Traefik joins `processing-net` under the legacy `gpas-lb` and `nlp-lb` aliases so existing env-var values (`GPAS_URL=http://gpas-lb:80/...`, `NLP_SERVICE_URL=http://nlp-lb:8200`) work unchanged.
 
 **UI nginx routes (unchanged):**
 - `/` → SPA static files (React app)
@@ -296,7 +296,7 @@ GET /v1/jobs/abc123/result  ◄── download NDJSON when done
 
 `Patient.gender` and `Practitioner.gender` are bound to the `AdministrativeGender` value set: `male | female | other | unknown`. Substituting `[REDACTED]` causes HAPI to reject the resource with HAPI-1821 ("not a valid code").
 
-**Fix in `config_structure_preserving.yaml`:** The gender rules use `substitute_with: "unknown"` instead of the `*redacted` YAML anchor (which resolves to `"[REDACTED]"`). This keeps the field valid while removing its identifying content.
+**Fix in `config_value_masking.yaml`:** The gender rules use `action: substitute` with `substitute_with: "unknown"` instead of `redact` (which would emit `"[REDACTED]"`). This keeps the field valid while removing its identifying content.
 
 This is a fundamental FHIR constraint: de-identification must produce *valid* FHIR resources, not just *transformed* ones.
 
@@ -328,20 +328,16 @@ MedAnon                          gPAS
 
 ## Config profiles
 
-Eight bundled profiles. Auto-selected based on environment; overridable per-request via `?config_profile=<name>`.
+Four bundled profiles. `?config_profile=<name>` selects one per-request by alias (`auto`, `minimal`, `gdpr`, `hipaa`, `value-masking`); `auto` always resolves to `config.yaml` (`pipeline/config/service.py::_resolve_profile`).
 
-| Profile | ID handling | Dates | Geographic | Requires gPAS | Use case |
-|---|---|---|---|---|---|
-| `config.yaml` | SHA3-256 hash | Year only | Zip prefix (3-digit) | No | Local dev / testing |
-| `config_gpas.yaml` | gPAS pseudonym (reversible) | Year only | Zip prefix | Yes | Production with re-linkage |
-| `config_gdpr_eu.yaml` | HMAC SHA3-256 | Redacted | Redacted | No | GDPR Art. 4(5) |
-| `config_hipaa_safe_harbor.yaml` | Redacted | Year only | State + 3-digit zip | No | US HIPAA Safe Harbor |
-| `config_research_pseudonymous.yaml` | SHA3-256 hash | Year-month | 3-digit zip | No | IRB research |
-| `config_structure_preserving.yaml` | gPAS pseudonym (reversible) | Year (birthDate only) | Preserved | Yes | Full FHIR structure downstream |
-| `config_value_masking.yaml` | gPAS pseudonym (reversible) | Decade (birth), year (clinical) | Masked to `[REDACTED]` | Yes | Field-complete with `nlp_detect_act` |
-| `config_k_anonymity.yaml` | gPAS pseudonym (reversible) | Year-month | 3-digit zip | Yes | OLA-style k-anon lattice solver; requires staging layer |
+| Profile | Alias | ID handling | Dates | Geographic | Requires gPAS | Use case |
+|---|---|---|---|---|---|---|
+| `config.yaml` | `minimal` / `auto` | HMAC-SHA3-256 hash | Year only | Zip prefix (3-digit) | No | Local dev / testing |
+| `config_gdpr_eu.yaml` | `gdpr` | HMAC SHA3-256 | Redacted | Redacted | No | GDPR Art. 4(5) |
+| `config_hipaa_safe_harbor.yaml` | `hipaa` | Redacted | Year only | State + 3-digit zip | No | US HIPAA Safe Harbor |
+| `config_value_masking.yaml` | `value-masking` | gPAS pseudonym (reversible) | Decade (birth), year (clinical) | Masked to `[REDACTED]` | Yes | Field-complete with `nlp_detect_act` |
 
-Auto-selection: `GPAS_URL` set → `config_gpas.yaml`; otherwise → `config.yaml`.
+Auto-selection: `auto` always resolves to `config.yaml`. `config.yaml` carries no `gpas_pseudonymize` rules - a deployment that wants gPAS pseudonymization must author (or select `value-masking`) a config with `gpas_pseudonymize` rules explicitly; setting `GPAS_URL` alone no longer changes which profile `auto` picks.
 
 ---
 
@@ -352,7 +348,7 @@ Seven AI-powered agents are exposed via `/v1/ai/*` when `MEDANON_AI_ENABLED=true
 | Agent | Endpoint | Role | Description |
 |---|---|---|---|
 | **Status** | `GET /v1/ai/status` | viewer | Check AI provider availability and active model |
-| **Config generator** | `POST /v1/ai/generate-config` | admin | YAML profile generation from natural language. All 8 bundled profiles injected as few-shot examples (prompt context, not vector retrieval). Validates output through the Settings loader before returning. |
+| **Config generator** | `POST /v1/ai/generate-config` | admin | YAML profile generation from natural language. Bundled profiles injected as few-shot prompt context (not vector retrieval), one by default (`MEDANON_AI_FEWSHOT_PROFILES`). Validates output through the Settings loader before returning. |
 | **PII detector** | `POST /v1/ai/detect-pii` | analyst | 3-layer PII scan: regex → NER → LLM. The LLM layer **must** use a local model (`MEDANON_AI_PII_PROVIDER`). |
 | **Field scanner** | `POST /v1/ai/scan-fields` | analyst | Classify FHIR field paths in a sample resource as PHI-bearing and suggest de-identification actions. |
 | **Rule explainer** | `POST /v1/ai/explain` | analyst | Plain-language explanation of config rules via SSE streaming. |

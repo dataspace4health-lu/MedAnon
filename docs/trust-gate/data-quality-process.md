@@ -21,7 +21,7 @@ A short final section lists the guarantees that make every step trustworthy.
 ### Step 1: The dataset reaches the barrier
 
 De-identification never starts cold. The anonymiser calls the intake barrier first
-([anonymizer/src/pipeline/intake_gate.py](../services/anonymizer/src/pipeline/intake_gate.py),
+([anonymizer/src/pipeline/intake_gate.py](../../services/anonymizer/src/pipeline/intake_gate.py),
 `enforce_intake`), which forwards the records to the Trust Gate microservice over
 HTTP (`POST /v1/trust/assess/batch`).
 
@@ -32,7 +32,7 @@ quality concerns to run.
 
 ### Step 2: Configure the assessment
 
-Inside the service, [api/service.py](../services/trust-gate/src/api/service.py)
+Inside the service, [api/service.py](../../services/trust-gate/src/api/service.py)
 `run_assessment` decides *what* to measure before measuring anything:
 
 1. **Resolve the use case.** The declared use case maps to a subset of quality
@@ -56,13 +56,13 @@ reference-integrity check can later resolve `urn:uuid:` references inside a Bund
 
 ### Step 4: Gather every input into one context and run the checks
 
-The engine ([engine.py](../services/trust-gate/src/engine.py) `assess`) packs every
+The engine ([engine.py](../../services/trust-gate/src/engine.py) `assess`) packs every
 input (records, selected phases, validator, terminology client, thresholds, rules,
 baseline store, reference time, and so on) into one immutable `AssessmentContext`.
 
 It then runs the check suite through the registry
-([verdict/runner.py](../services/trust-gate/src/verdict/runner.py) `run_checks`,
-[verdict/registry.py](../services/trust-gate/src/verdict/registry.py)). The registry
+([verdict/runner.py](../../services/trust-gate/src/verdict/runner.py) `run_checks`,
+[verdict/registry.py](../../services/trust-gate/src/verdict/registry.py)). The registry
 lists each check as a strategy, so the suite is defined in one place. The checks
 that run are, by concern:
 
@@ -83,7 +83,7 @@ was selected in Step 2.
 
 This is the atomic measurement, identical for every check (the OHDSI Data Quality
 Dashboard method, defined on `CheckResult` in
-[passport.py](../services/trust-gate/src/passport.py)):
+[passport.py](../../services/trust-gate/src/passport.py)):
 
 1. Count `applicable` = how many rows or items the check could apply to.
 2. Count `violations` = how many of those broke the rule.
@@ -118,13 +118,13 @@ The engine splits the results in two:
   never move the verdict, the scores, or the grades.
 
 This split is enforced by an allow-list in
-[constants.py](../services/trust-gate/src/constants.py); any check nobody has
+[constants.py](../../services/trust-gate/src/constants.py); any check nobody has
 classified defaults to advisory, so it fails safe.
 
 ### Step 7: Roll the results up into scores and grades
 
 All of this uses one formula, `100 x passed / assessed`, over the deterministic
-checks ([verdict/scoring.py](../services/trust-gate/src/verdict/scoring.py)):
+checks ([verdict/scoring.py](../../services/trust-gate/src/verdict/scoring.py)):
 
 1. **Category scores** the percent passing within each of the three Kahn
    categories (conformance, completeness, plausibility). A category with nothing
@@ -140,7 +140,7 @@ checks ([verdict/scoring.py](../services/trust-gate/src/verdict/scoring.py)):
 ### Step 8: Record what actually ran (coverage)
 
 Before deciding fitness, the engine computes coverage
-([verdict/coverage.py](../services/trust-gate/src/verdict/coverage.py)): how many
+([verdict/coverage.py](../../services/trust-gate/src/verdict/coverage.py)): how many
 checks were assessed out of the total, which "depth" capabilities did not run (no
 validator, no terminology server, no reference dataset, no clinical rule pack),
 which phases were descoped, and whether any external validation happened at all.
@@ -150,7 +150,7 @@ externally-validated certification. The coverage caveat is attached to the verdi
 
 ### Step 9: Decide the verdict and the fitness
 
-The policy layer ([verdict/decision.py](../services/trust-gate/src/verdict/decision.py)
+The policy layer ([verdict/decision.py](../../services/trust-gate/src/verdict/decision.py)
 `decide`) turns the scores into one of three decisions, in this order:
 
 ```
@@ -160,7 +160,7 @@ overall < 90, or any category < 80, or a resource type      →  CONDITIONAL_PAS
 otherwise                                                    →  PASS
 ```
 
-Then fitness-for-use ([verdict/fitness.py](../services/trust-gate/src/verdict/fitness.py))
+Then fitness-for-use ([verdict/fitness.py](../../services/trust-gate/src/verdict/fitness.py))
 matches the declared use to a requirement profile and produces the `approved_for`
 and `not_approved_for` lists, plus a graded, purpose-bound statement. A use is
 approved only when its own floors are met, so "fit for counting patients" and "fit
@@ -199,7 +199,7 @@ complete.
 
 ### Step 11: Produce the passport and a headline label
 
-The passport is serialised ([passport.py](../services/trust-gate/src/passport.py)
+The passport is serialised ([passport.py](../../services/trust-gate/src/passport.py)
 `to_dict`) and a short human label is derived (`build_label`) for dashboards and
 lists. Any identifier-bearing value that a check needs to cite (an MRN, an SSN) is
 first reduced to a stable, non-reversible token (`redact_token`), so the passport is
@@ -207,7 +207,7 @@ safe to store and share.
 
 ### Step 12: Persist the passport and open remediation findings
 
-`persist()` in [api/service.py](../services/trust-gate/src/api/service.py) saves the
+`persist()` in [api/service.py](../../services/trust-gate/src/api/service.py) saves the
 passport and then derives a set of open **findings** (the specific problems, each
 tied to the checks that raised it) into the findings store. These become the
 remediation backlog a data provider works through.
@@ -242,7 +242,7 @@ Two mechanisms make this a continuous process rather than a one-shot check:
 
 - **Cross-batch baseline and drift.** The plausibility checks read and update a
   persisted per-`(code, unit)` baseline reservoir
-  ([baseline.py](../services/trust-gate/src/baseline.py)). Small batches gain
+  ([baseline.py](../../services/trust-gate/src/baseline.py)). Small batches gain
   statistical power from history, and a sudden shift in a measurement's distribution
   (a unit change, a device recalibration, a switched feed) is caught as drift. The
   sampler is seeded, so the accumulated baseline stays reproducible.
