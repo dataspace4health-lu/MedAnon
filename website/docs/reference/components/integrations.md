@@ -35,11 +35,15 @@ A separate Docker service (~200 MB image). Proxied by the anonymizer at `/analys
 
 **Why a separate service?** SDV (Synthetic Data Vault), an optional dependency for advanced synthetic data, adds ~2 GB to the Docker image. Isolating it prevents this from bloating the anonymizer image and allows independent scaling.
 
+The service's own `src/` is just `main.py`, a thin FastAPI wrapper. The logic is the shared `analytics` package from `packages/medanon-core`, installed via `pip install medanon-core` in the Dockerfile, so the anonymizer and this service run identical code:
+
 | Module | Role |
 |---|---|
-| `src/risk.py` | k-anonymity, l-diversity, prosecutor/journalist/marketer attacker models |
-| `src/synthetic.py` | Stdlib synthetic patient generation (no SDV dependency) |
-| `src/synthetic_sdv.py` | SDV-powered synthesis (conditional, relational, time-series) |
+| `analytics/risk.py` | k-anonymity, l-diversity, prosecutor/journalist/marketer attacker models |
+| `analytics/privacy_risk.py` | DCR/NNDR/CAP re-identification risk |
+| `analytics/synthetic.py` | Stdlib synthetic patient generation (no SDV dependency) |
+| `analytics/synthetic_sdv.py` | SDV-powered synthesis (conditional, relational, time-series) |
+| `analytics/statistical.py`, `analytics/dp.py` | Aggregate release + small-cell suppression; Laplace / analytic Gaussian / budget accounting |
 
 ---
 
@@ -116,11 +120,15 @@ This decoupling means a FHIR server timeout in Phase 1 does not require re-uploa
 
 ---
 
-## Domain Types (`src/domain/`)
+## Domain Types (`domain`, from `packages/medanon-core`)
 
-Core domain types inlined into the anonymizer service:
+Core domain contracts live in the shared inner package `packages/medanon-core/src/domain/`, imported as `domain.*` by the anonymizer and the microservices that `pip install medanon-core`. Zero dependencies (pure stdlib):
 
 | Module | Contents |
 |---|---|
-| `domain/jobs.py` | `Job`, `JobStatus` dataclass and lifecycle enum (`pending → running → done / failed / cancelled`) |
-| Exceptions | `JobStoreUnavailable`, `JobNotFound`, `JobNotComplete`, `JobResultMissing` |
+| `domain/jobs.py` | `Job`, `JobStatus` dataclass and lifecycle enum (`pending → running → done / failed / cancelled`); store exceptions `JobStoreUnavailable`, `JobNotFound`, `JobNotComplete`, `JobResultMissing` |
+| `domain/actions.py` | Action contracts shared by `deidentify` and the dispatcher |
+| `domain/fhir.py` | FHIR constants (`INFRA_RESOURCE_TYPES`, etc.) |
+| `domain/permit.py` | `Permit` model + state machine (governance layer) |
+| `domain/scoring.py`, `domain/trust.py` | Scoring + Trust Gate contracts (trust-gate asserts `domain.trust.PHASE_IDS` at import) |
+| `domain/workflows.py` | Workflow contracts |

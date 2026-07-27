@@ -165,17 +165,20 @@ The dedicated `worker` container always refuses SQLite, it shares `/output` with
 
 ---
 
-## Scoring System (`src/pipeline/scoring/`)
+## Scoring System (`scoring` package, from `packages/medanon-core`)
+
+The scoring engine lives once in `packages/medanon-core/src/scoring/` and is shared by the anonymizer (imported as `scoring.*`) and the `scoring` microservice (`pip install medanon-core`). Only the anonymizer-side glue - `gate.py` (score gate) and `audit.py` (Markdown report) - stays under `src/pipeline/scoring/`.
 
 | Module | Role |
 |---|---|
-| `engine.py` | Composite scorer: `privacy_norm × utility × quality`. Hard privacy gate. |
-| `privacy.py` | k-anonymity, l-diversity, HIPAA 18-identifier check, text-risk scan. Blocks output if risk exceeds threshold. |
-| `utility.py` | Field retention rate, date precision, clinical code coverage, structural completeness. |
-| `quality.py` | FHIR structural validity, required fields, reference integrity, valid code values. |
-| `audit.py` | Markdown audit report builder. Per-resource findings formatted for human review. |
-| `models.py` | `ScoringResult`, `PrivacyScore`, `UtilityScore`, `QualityScore`, `AuditFinding`. |
-| `constants.py` | Scoring weights, thresholds, action classifications (utility-preserving vs. destructive). |
+| `scoring/engine.py` | Composite scorer: `privacy_norm × utility × quality`. Hard privacy gate. |
+| `scoring/privacy.py` | k-anonymity, l-diversity, HIPAA 18-identifier check, text-risk scan. Blocks output if risk exceeds threshold. |
+| `scoring/utility.py` | Field retention rate, date precision, clinical code coverage, structural completeness. |
+| `scoring/quality.py` | FHIR structural validity, required fields, reference integrity, valid code values. |
+| `scoring/models.py` | `ScoringResult`, `PrivacyScore`, `UtilityScore`, `QualityScore`, `AuditFinding`. |
+| `scoring/constants.py` | Scoring weights, thresholds, action classifications (utility-preserving vs. destructive). |
+| `pipeline/scoring/audit.py` | Markdown audit report builder (anonymizer-side). Per-resource findings formatted for human review. |
+| `pipeline/scoring/gate.py` | Score gate (`check_score_gate` / `ScoreGateBlocked`). |
 
 See [Scoring System](../../explanation/scoring-system.md) for the full model documentation.
 

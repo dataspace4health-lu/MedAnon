@@ -2,8 +2,8 @@
 
 Publications, standards, and frameworks that ground the **Trust Gate** (the pre-privacy
 intake data-quality barrier). Every entry below is drawn from the Trust Gate's own
-documentation (`trust-gate.md` §19, `quality-evaluation-methodology.md` §14,
-`trust-gate-architecture.md`) and confirmed against the source under
+documentation (`README.md` §19, `../quality-evaluation-methodology.md` §14,
+`architecture.md`) and confirmed against the source under
 `services/trust-gate/src/`.
 
 This list is the Trust Gate by itself. The de-identification **scoring system**
@@ -165,7 +165,7 @@ Quality Taxonomy (HDQT) v2.0.* ASTP/ONC, 2024. https://piqiframework.org/
 composable check returning pass / fail / "could not assess" -- is the direct analogue
 of the Trust Gate's PASS / FAIL / NA result (NA = Kahn's "could-not-assess"), and is
 realized by `checks/governance.evaluate_provenance_sam` and the SAM provenance phase
-(`trust-gate-architecture.md` Phase G). The related HL7 PIQI Implementation Guide
+(`architecture.md` Phase G). The related HL7 PIQI Implementation Guide
 (SAM Guide v1.1, 2025; balloted Sep 2025, https://build.fhir.org/ig/HL7/piqi/) is the
 emerging standardization of the same framework.
 

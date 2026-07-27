@@ -57,11 +57,13 @@ make build
 
 Builds `medanon:latest` (FastAPI anonymizer) and `medanon-ui:latest` (React/nginx). gPAS and HAPI FHIR use upstream images pulled automatically.
 
-The anonymizer Dockerfile uses `services/anonymizer/` as build context. Four build stages:
-- `base`, Python 3.12 + deps (no spaCy; NLP runs as the NLP microservice)
-- `prod`, production target (used by default)
+The anonymizer Dockerfile uses the **repo root** (`.`) as build context so it can `COPY packages/medanon-core` and `pip install` the shared domain/analytics/scoring package. Build stages:
+- `base`, Python 3.12 + deps + `medanon-core` (no spaCy; NLP runs as the NLP microservice)
+- `api`, the API server target (compose default: `target: api`)
+- `worker`, the dedicated async job worker target
+- `prod`, production target built on `api`
 - `dev`, adds uvicorn `--reload`
-- `sdv`, adds SDV synthetic data engine (~2 GB)
+- `sdv`, adds the SDV synthetic data engine (~2 GB)
 
 ### 3. Start the stack
 
@@ -385,7 +387,7 @@ LOG_LEVEL=INFO                   # DEBUG may log resource content containing PHI
 ### Build and push
 
 ```bash
-docker build --target prod -t registry.example.com/medanon:1.0.0 services/anonymizer/
+docker build --target prod -f services/anonymizer/Dockerfile -t registry.example.com/medanon:1.0.0 .
 docker push registry.example.com/medanon:1.0.0
 
 docker build -t registry.example.com/medanon-ui:1.0.0 client/
@@ -410,7 +412,7 @@ helm upgrade --install medanon ./helm/medanon \
 
 ```
 helm/
-├── medanon/           Umbrella chart (5 sub-charts)
+├── medanon/           Umbrella chart (9 sub-charts)
 │   ├── Chart.yaml
 │   ├── values.yaml
 │   └── templates/

@@ -4,7 +4,7 @@ This document describes the internal architecture and the exact evaluation
 pipeline: every phase, in execution order, what each one inspects, how a single
 check turns data into a verdict, how the verdicts roll up into scores, and how the
 final PASS / CONDITIONAL_PASS / BLOCK decision is reached. It is the companion to
-`docs/trust-gate.md` (the reference) and reflects the real orchestration in
+`docs/trust-gate/README.md` (the reference) and reflects the real orchestration in
 `services/trust-gate/src/engine.py` (a thin pipeline over the `verdict/` package).
 See `services/trust-gate/ARCHITECTURE.md` for the layer diagram and design patterns.
 

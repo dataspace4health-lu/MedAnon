@@ -10,6 +10,17 @@ This document describes the security architecture of SPE FHIR BlackBox: how it a
 
 ## 1. Authentication & Authorization
 
+**Provider selection.** `MEDANON_AUTH_PROVIDER` picks the authentication backend at startup ([api/auth_providers.py](../services/anonymizer/src/api/auth_providers.py)). Changing it is an env edit plus a restart, never a code change.
+
+| Value | Accepts | Use for |
+|---|---|---|
+| `auto` (default) | DB key → env key → SMART bearer → open | Legacy behaviour, preserved verbatim for existing deployments |
+| `apikey` | `X-API-Key` only (no bearer, no open access) | Service-to-service and CLI workflows |
+| `oidc` | OIDC JWT via `Authorization: Bearer`, plus `X-API-Key` when `MEDANON_AUTH_ALLOW_API_KEY=true` (default) | Human users behind Keycloak or Azure AD |
+| `none` | Everything, as `admin` | Local development only |
+
+Sections 1.1 and 1.2 describe the credentials `auto` and `apikey` accept; 1.3 covers OIDC.
+
 ### 1.1 API Key Mode
 
 When `MEDANON_API_KEY` is set, every request to a protected endpoint must carry the header:
@@ -46,7 +57,76 @@ If the introspection endpoint is unreachable, the call fails with `HTTP 503` (no
 
 Fallback: when `SMART_INTROSPECTION_URL` is not set, MedAnon accepts the configured API key as a bearer token (allows clients that send the key in the Authorization header).
 
-### 1.3 RBAC
+### 1.3 OIDC (Keycloak / Azure AD)
+
+With `MEDANON_AUTH_PROVIDER=oidc`, callers send `Authorization: Bearer <JWT>`. The token is validated against the issuer's JWKS ([integrations/oidc/validator.py](../services/anonymizer/src/integrations/oidc/validator.py)): the signature is verified against the fetched signing key, and issuer and expiry are enforced (with `OIDC_CLOCK_SKEW_SEC` leeway, default 10 s). Accepted algorithms are RS256/384/512 and ES256/384/512. The bundled provider is Keycloak, started with the `auth` profile.
+
+**Audience is not verified unless you set `OIDC_AUDIENCE`.** The validator sets `verify_aud: False` when it is empty, so any token the realm signed is accepted regardless of which client it was issued for. Set `OIDC_AUDIENCE` in production to reject tokens minted for a different client of the same realm.
+
+**Deployment shape.** Keycloak has no published host port. Its admin console and the SPA's login redirect are both PKCE public clients, which browsers only permit in an HTTPS secure context, so Keycloak is served only under `/auth/` on the UI's TLS edge. Exposing a plain-HTTP port instead fails with `crypto.subtle requires HTTPS`.
+
+**Configuration:**
+
+| Variable | Purpose |
+|---|---|
+| `OIDC_ISSUER` | Realm issuer URL. Must match the token's `iss` claim exactly. |
+| `OIDC_DISCOVERY_BASE` | Internal realm URL for backchannel discovery/JWKS fetches. Defaults to `OIDC_ISSUER`. |
+| `OIDC_JWKS_URL` | Explicit JWKS URL. Overrides discovery. |
+| `OIDC_AUDIENCE` | Expected `aud`. **Unset disables audience verification entirely.** |
+| `OIDC_CLOCK_SKEW_SEC` | Clock-skew leeway for time-based claim validation (default `10`) |
+| `OIDC_ROLE_CLAIM_PATH` | Dotted path to roles in the JWT (`realm_access.roles` for Keycloak, `roles` for Azure AD) |
+| `OIDC_ROLE_MAP` | JSON mapping provider roles onto `admin` / `analyst` / `viewer` |
+| `OIDC_USERNAME_CLAIM` | Claim used as the audit subject (default `preferred_username`) |
+| `OIDC_DEFAULT_ROLE` | Optional floor role for authenticated users with no mapped role |
+| `MEDANON_AUTH_ALLOW_API_KEY` | `true` (default) keeps `X-API-Key` working alongside OIDC during migration |
+
+**Split-horizon issuer.** The browser reaches Keycloak at its public URL; the anonymizer sits inside the Docker network, where that URL may not resolve. Keep `OIDC_ISSUER` public (it is compared against `iss`) and point `OIDC_DISCOVERY_BASE` at the internal realm URL. JWKS resolves in three steps: explicit `OIDC_JWKS_URL`, else `jwks_uri` from the discovery document, else a derived `{base}/.well-known/jwks.json`.
+
+Three deliberate failure behaviours, all fail-closed:
+
+- **Deny by default.** A validly authenticated user whose token carries no mapped role receives zero roles and is rejected with `HTTP 403`, rather than silently getting access. Assign a realm role or set `OIDC_DEFAULT_ROLE`. The default `OIDC_ROLE_MAP` maps Keycloak's `medanon-admin` / `medanon-analyst` / `medanon-viewer` realm roles.
+- **No silent downgrade.** If a Bearer token's `iss` matches `OIDC_ISSUER` but validation fails, the request is rejected with `HTTP 401` instead of falling through to the API-key path. An expired or forged token must never downgrade to a weaker credential.
+- **Unreachable JWKS is not an auth failure.** A network error fetching the signing key returns `HTTP 503`, never 401 and never a grant. This matches the SMART introspection posture in 1.2: MedAnon does not grant access when it cannot verify a credential.
+
+An Azure AD swap is env-only: repoint `OIDC_ISSUER` at the tenant, set `OIDC_ROLE_CLAIM_PATH=roles`, and remap `OIDC_ROLE_MAP`.
+
+### 1.4 Edge routes that bypass authentication
+
+> **Known gap, verified 2026-07-16.** Everything in 1.1 to 1.3 is enforced by the anonymizer, per request, in `api/auth.py`. That code only ever sees traffic nginx routes to `/api/*`. The UI's nginx is a path proxy with no `auth_request` and no credential check of its own, so every other proxied upstream answers the same TLS edge unauthenticated.
+
+`client/nginx.conf` proxies these upstreams. Only the first is gated:
+
+| Route | Upstream | Auth at the edge | Exposure |
+|---|---|---|---|
+| `/api/*` | `anonymizer:8000` | Enforced by the anonymizer | Gated |
+| `/fhir/*` | `hapi-fhir:8080` | **None** | **Identified source data.** HAPI runs with no auth; the `ui` container joins `source-net`, so the isolation of the source server does not extend to the edge in front of it. |
+| `/fhir-target/*` | `hapi-fhir-target:8080` | **None** | De-identified data, readable by anyone who reaches the host |
+| `/trust/*` | `trust-gate:8400` | **None** | Quality Passport service |
+| `/grafana/*` | `grafana` | **None** | `GF_AUTH_ANONYMOUS_ENABLED=true` grants a Viewer role without login |
+| `/prometheus/*` | `prometheus` | **None** | Raw metrics |
+
+Reproduction against a running stack, with no credential:
+
+```bash
+curl -sk -o /dev/null -w "%{http_code}\n" https://localhost:8501/api/v1/configs
+# 401  the anonymizer rejects it
+
+curl -sk -o /dev/null -w "%{http_code}\n" "https://localhost:8501/fhir/Patient?_count=1"
+# 200  returns family name, birthDate, and an http://hl7.org/fhir/sid/us-ssn identifier
+```
+
+The `/fhir/*` route exists because SPA pages (patients, target-browser) read FHIR directly from the browser rather than through the anonymizer. The route is intentional; leaving it unauthenticated is not. The SPA sits behind a login, but nothing forces a caller to use the SPA: `curl` against the same edge skips it entirely.
+
+Closing it is a deployment decision, not a doc change. The options, roughly in order of effort:
+
+1. **`auth_request` in nginx**, pointed at an anonymizer introspection endpoint, applied to every non-SPA location. Puts a real gate at the edge and matches the mental model most operators already have.
+2. **Route SPA FHIR reads through `/api/*`** so the anonymizer's existing RBAC covers them, and drop `/fhir/*` from nginx. Removes the bypass rather than guarding it, at the cost of a proxy endpoint and SPA changes.
+3. **Remove `ui` from `source-net`** so the edge physically cannot reach the identified server. Narrowest change; kills the patients page as it currently works.
+4. **Put Keycloak in the request path** (`oauth2-proxy` or Traefik forward-auth) in front of every route. The heaviest change, and the only one that makes the topology match "you cannot reach anything before auth".
+
+Until one is applied, treat the UI's published port as trusted-network-only, and do not expose `8501` beyond a network where every caller is already authorized to read identified data.
+
+### 1.5 RBAC
 
 Three roles form a strict hierarchy (`admin > analyst > viewer`):
 

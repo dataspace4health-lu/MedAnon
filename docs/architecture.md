@@ -10,31 +10,52 @@ MedAnon is a FHIR R4 de-identification engine. It accepts FHIR resources (JSON /
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  Browser                                                     │
+│  Browser                                                    │
 └──────────────────────┬──────────────────────────────────────┘
-                       │ http://host:8501
+                       │ https://host:8501  (TLS terminates here)
                        ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  nginx (medanon-ui)                                          │
-│   /api/*        → strips prefix → anonymizer:8000           │
-│   /fhir/*       → passthrough  → hapi-fhir:8080 (300 s)     │
-│   /fhir-target/*→ passthrough  → hapi-fhir-target:8080      │
-│   /             → React SPA                                  │
-└──────────────┬─────────────────────┬────────────────────────┘
-               │                     │
-               ▼                     ▼
-┌──────────────────────┐   ┌──────────────────────────────────┐
-│  anonymizer :8000    │   │  hapi-fhir (source) :8080        │
-│  (FastAPI)           │◄──┤  PostgreSQL-backed FHIR R4       │
-│  worker :9091(metrics│   │  source-net (isolated  no host  │
-│                      │   │  port; accessed only via anon.)  │
-│  reads  ──────────►  │   └──────────────────────────────────┘
-│  de-identifies       │
+│  nginx (medanon-ui)  PATH PROXY ONLY, NOT AN AUTH GATE.     │
+│  No auth_request: nginx checks no credential. Each upstream │
+│  enforces its own auth, or enforces none at all.            │
+│                                                             │
+│   /api/*        → anonymizer:8000   ◄── ONLY GATED ROUTE    │
+│   /auth/*       → keycloak:8080     [auth] token issuer     │
+│   /auth/callback→ React SPA (exact match beats /auth/)      │
+│   /fhir/*       → hapi-fhir         !! NO AUTH: IDENTIFIED  │
+│   /fhir-target/*→ hapi-fhir-target  !! NO AUTH (de-ident.)  │
+│   /trust/*      → trust-gate:8400   !! NO AUTH  [trust]     │
+│   /grafana/*    → grafana           !! NO AUTH (anon Viewer)│
+│   /prometheus/* → prometheus        !! NO AUTH  [monitoring]│
+│   /             → React SPA                                 │
+└──────────┬───────────────────────────┬──────────────────────┘
+           │ Bearer JWT                │ 1. login  2. issue JWT
+           ▼                           ▼
+┌──────────────────────┐   ┌───────────────────────┐
+│  anonymizer :8000    │   │  keycloak      [auth] │
+│  ══ AUTH BOUNDARY ══ │   │  OIDC IdP + its own DB│
+│  validates key/JWT   │   │  TOKEN ISSUER, not an │
+│  per request, in     │   │  inline gate: no proxy│
+│  FastAPI (api/auth)  │   │  traffic flows via it │
+│  (FastAPI)           │   │  NO host port: served │
+│  worker :9091(metrics│   │  only through the UI  │
+│  reads  ──────────►  │   │  TLS edge at /auth/   │
+│  de-identifies       │   └───────────────────────┘
 │  writes ──────────►  │   ┌──────────────────────────────────┐
+│                      │◄──┤  hapi-fhir (source) :8080        │
+│                      │   │  PostgreSQL-backed FHIR R4       │
+│                      │   │  source-net: no host port, BUT   │
+│                      │   │  ui joins it too (see /fhir/*)   │
+│                      │   └──────────────────────────────────┘
+│                      │   ┌──────────────────────────────────┐
 │                      │──►│  hapi-fhir-target :8082          │
 └──────┬───────────────┘   │  PostgreSQL-backed FHIR R4       │
        │                   │  Stores DE-IDENTIFIED data only  │
        │                   └──────────────────────────────────┘
+       │
+       ├──► keycloak [auth]  realm JWKS, fetched backchannel to validate
+       │     every Bearer JWT (OIDC_ISSUER; OIDC_DISCOVERY_BASE when the
+       │     public issuer URL is not reachable from inside the network)
        │
        ├──► gateway (Traefik v3) ──► gpas replicas (sticky for /gpas-web)
        │     │                  └──► gpas-postgres:5432
@@ -46,17 +67,31 @@ MedAnon is a FHIR R4 de-identification engine. It accepts FHIR resources (JSON /
        │
        ├──► analytics:8100 (risk analysis + synthetic data)
        │
+       ├──► scoring:8300 (privacy × utility × quality)
+       │
        ├──► app-db:5432 (jobs, configs, subscriptions, staging)
        │
-       └──► redis:6379 (password-protected)
-             ├── job queue  (Redis Streams, event-driven)
-             └── gPAS cache (L2, cross-replica)
+       ├──► redis:6379 (password-protected)
+       │     ├── job queue  (Redis Streams, event-driven)
+       │     └── gPAS cache (L2, cross-replica)
+       │
+       ├──► minio:9000   [s3]  job results + saved output destinations
+       │     console :9001     active when MEDANON_RESULT_STORAGE=s3
+       │
+       └──► ollama:11434 [ai]  local LLM behind the AI agents
+             active when MEDANON_AI_ENABLED=true; PHI-bearing prompts
+             are pinned to a local/self-hosted endpoint, never a hosted API
 
-Opt-in profiles:
-  --profile ha  → gpas-db-replica (PostgreSQL streaming replica)
-  --profile s3  → minio:9000 (S3-compatible object storage)
-  --profile ai  → ollama (local LLM for AI agents)
+Situational profiles (not drawn):
+  --profile ha         → gpas-db-replica (PostgreSQL streaming replica)
+  --profile sqltest    → sql-source-test-db (SQL/tabular source fixture)
+  --profile trust      → trust-gate + trust-gate-ui + fhir-validator
+  --profile monitoring → prometheus + grafana + cadvisor + jaeger
 ```
+
+**`[auth]`, `[s3]`, and `[ai]` are drawn because a real deployment runs them,** even though compose still gates them behind profiles. `make up` on its own starts the 15 always-on services only; the reference deployment adds `--profile auth --profile s3 --profile ai`. Each of the three needs its profile **and** the env flag that points the anonymizer at it (`MEDANON_AUTH_PROVIDER=oidc`, `MEDANON_RESULT_STORAGE=s3`, `MEDANON_AI_ENABLED=true`) - starting the container alone changes nothing.
+
+**Where authentication actually happens.** Auth is **not** a gate in front of the stack. nginx uses no `auth_request` and validates no credential; Keycloak is a token issuer that no proxied traffic passes through. The single enforcement point is inside the anonymizer, applied per request by `api/auth.py`, and it therefore protects **only** what nginx routes to `/api/*`. The other proxied upstreams answer the same TLS edge with no credential at all, including `/fhir/*`, which reaches the identified source server. See [security.md § 1.4](security.md#14-edge-routes-that-bypass-authentication) for the exposure and the options for closing it. A deployment that assumes "the login screen protects the data" is mistaken: the SPA is behind a login, but the routes underneath it are not.
 
 **Two separate FHIR servers**  identified and de-identified data never share a database. This is a deliberate design: it prevents accidental joins, satisfies physical separation requirements under GDPR Art. 25 (data minimization by design), and allows different access controls per server.
 
@@ -68,7 +103,7 @@ Opt-in profiles:
 
 ## Services
 
-**Always-on (14 services):**
+**Always-on (15 services):**
 
 | Container | Image | Host Port | Role |
 |---|---|---|---|
@@ -85,15 +120,32 @@ Opt-in profiles:
 | `app-db` | `postgres:16-alpine` | internal | Jobs, configs, subscriptions, staging |
 | `redis` | `redis:7-alpine` | internal | Shared job queue + gPAS L2 cache (password-protected) |
 | `analytics` | `medanon-analytics:latest` | 8100 | Risk analysis + synthetic data |
+| `scoring` | `medanon-scoring:latest` | internal (8300) | Privacy × utility × quality scoring microservice |
 | `nlp` | `medanon-nlp:latest` | via gateway | Presidio NLP microservice (~800 MB image); scaled with `--scale nlp=N` |
 
-**Opt-in profiles (started with `--profile <name>`):**
+**Reference deployment (profile-gated, but running in any real install):**
+
+These three carry compose `profiles:` and so do not start with a bare `make up`, but a deployment that authenticates users, stores results off-box, or exposes the AI agents runs all of them. Starting the container is only half the wiring: each also needs the env flag that points the anonymizer at it.
+
+| Container | Profile | Host Port | Wired in by | Role |
+|---|---|---|---|---|
+| `keycloak` + `keycloak-db` | `auth` | none (via UI TLS edge) | `MEDANON_AUTH_PROVIDER=oidc` + `OIDC_ISSUER` | OIDC identity provider + its PostgreSQL. Deliberately has no published port: the admin console is a PKCE public client and needs an HTTPS secure context, so it is served only under `/auth/` on the UI's TLS edge. |
+| `minio` | `s3` | 9000 (API), 9001 (console) | `MEDANON_RESULT_STORAGE=s3` + `MINIO_*` | S3-compatible object storage for job results and saved output destinations. `MINIO_ENDPOINT` defaults to `minio:9000`, bucket `medanon-results`. |
+| `ollama` | `ai` | 11434 | `MEDANON_AI_ENABLED=true` + `MEDANON_AI_API_BASE` | Local LLM inference behind the AI agents. `MEDANON_AI_API_BASE` defaults to `http://ollama:11434`. Any prompt that can carry PHI is pinned to a local endpoint (see [AI agents](#ai-agents-phase-4)). |
+
+**Situational profiles:**
 
 | Container | Profile | Host Port | Role |
 |---|---|---|---|
 | `gpas-db-replica` | `ha` | internal | PostgreSQL streaming replica for gPAS HA |
-| `minio` | `s3` | 9000, 9001 | S3-compatible object storage for job results |
-| `ollama` | `ai` | internal | Local LLM inference for AI agents |
+| `sql-source-test-db` | `sqltest` | 55432 | PostgreSQL fixture for the SQL/tabular source connector |
+| `trust-gate` + `trust-gate-ui` | `trust` | 8400, 8401 | Pre-privacy Quality Passport service + its UI |
+| `fhir-validator` | `trust` | internal | Inferno HL7 FHIR validator (backs Trust Gate conformance) |
+| `prometheus` / `grafana` / `cadvisor` / `jaeger` | `monitoring` | 9090 / 3000 / 8888 / 16686 | Metrics, dashboards, container metrics, traces |
+
+RabbitMQ macro-stage streaming has no bundled compose service; set `MEDANON_AMQP_URL` to an external broker to enable it.
+
+**Shared code (`packages/medanon-core`).** The domain contracts (`domain`), the analytics engine (`analytics`), and the scoring engine (`scoring`) are a single zero-dependency inner package rather than per-service copies. The anonymizer puts it on its path directly; the `scoring` and `analytics` microservices (and trust-gate, for the `domain.trust` phase vocabulary) `pip install` it in their Dockerfiles, so every service runs identical shared logic. See [components.md](components.md).
 
 ### Edge & routing
 
@@ -181,7 +233,7 @@ manifest.py            Tag meta.tag with a per-rule transformation summary if
 io_formats.py          Serialize. Output format matches input or as requested.
 ```
 
-**Why staged + concurrent?** Both NLP and gPAS have non-trivial per-call overhead. Processing 300 resources with individual calls would be ~300 HTTP round-trips for each. The **match** stage collects deferred work (NlpWork for NLP, BatchWork for gPAS) without making any external calls. The **phi_detection** and **pseudonymize** stages then run **concurrently**: NLP deduplicates texts across all resources and sends a single batch, while gPAS does the same for pseudonymization  they touch disjoint resource paths, so overlapping them hides one upstream's latency behind the other. This reduces hundreds of HTTP calls to 2-3 regardless of resource count, and the two batch calls overlap rather than running back-to-back. Per-stage latency is exported as `medanon_pipeline_stage_latency{stage=...}`.
+**Why staged + concurrent?** Both NLP and gPAS have non-trivial per-call overhead. Processing 300 resources with individual calls would be ~300 HTTP round-trips for each. The **match** stage collects deferred work (NlpWork for NLP, BatchWork for gPAS) without making any external calls. The **phi_detection** and **pseudonymize** stages then run **concurrently**: NLP deduplicates texts across all resources and sends a single batch, while gPAS does the same for pseudonymization  they touch disjoint resource paths, so overlapping them hides one upstream's latency behind the other. This reduces hundreds of HTTP calls to 2-3 regardless of resource count, and the two batch calls overlap rather than running back-to-back. Per-stage latency is exported as `medanon_pipeline_stage_duration_seconds{stage=...}`.
 
 ---
 
@@ -306,12 +358,17 @@ Four AI-powered agents are exposed via `/v1/ai/*` when `MEDANON_AI_ENABLED=true`
 | **Rule explainer** | `POST /v1/ai/explain` | Plain-language explanation of config rules via SSE streaming. Falls back to static descriptions when AI is unavailable. |
 | **Compliance advisor** | `POST /v1/ai/compliance` | Regulatory gap analysis vs HIPAA, GDPR, and other frameworks. Static HIPAA fallback when AI is unavailable. |
 
-**LLM provider:** `integrations/ai/provider.py` wraps `litellm`, which supports OpenAI-compatible APIs (OpenAI, Azure OpenAI, Anthropic) and Ollama for local inference. The `--profile ai` Docker profile starts an Ollama container.
+**LLM provider:** `integrations/ai/provider.py` wraps `litellm`, which supports OpenAI-compatible APIs (OpenAI, Azure OpenAI, Anthropic) and Ollama for local inference. The `ai` profile starts an Ollama container on `processing-net`; `MEDANON_AI_API_BASE` (default `http://ollama:11434`) can equally point at an Ollama host outside the stack, which is how a GPU box is attached. Nothing in the AI path activates until `MEDANON_AI_ENABLED=true`.
+
+**PHI safety boundary.** `LLMProvider` calls take a `phi_payload` flag that defaults to `True` (fail-closed). When set, `integrations/ai/local_guard.py::require_local` rejects the call unless the endpoint is provably self-hosted, so a PHI-bearing prompt cannot reach a hosted provider even if one is configured. Requests that carry no PHI (explaining a rule, generating YAML) opt out with `phi_payload=False`. The PII detector re-checks this early, before any resource content is assembled into a prompt.
+
+"Self-hosted" means a litellm provider prefix that routes locally by default (`ollama/`, `vllm/`, `lm_studio/`, `local/`), a known local hostname (`ollama`, `localhost`, `host.docker.internal`), or an endpoint resolving to loopback, RFC1918, or link-local space. This is a **private-network** boundary, not a single-host one: an Ollama VM at `10.x.x.x` is accepted, so treat that host as in-scope for PHI handling. Two flags control enforcement: `MEDANON_AI_PII_REQUIRE_LOCAL` (default `true`) covers PHI payloads, and `MEDANON_AI_REQUIRE_LOCAL` (default `false`) is a site-wide lock that forces **every** LLM call local regardless of `phi_payload`.
+
+**Other guards:** `prompt_guard.py` sanitizes and tag-wraps user input before it reaches `config_generator.py` (prompt injection); `provider.py` wraps calls in a `CircuitBreaker` and caches responses in a `_BoundedTtlCache` (bounded, TTL-evicted); `api/services/agents.py::_validate_proxy_url` blocks SSRF on the proxy path.
 
 **Known limitations (tracked):**
-- PHI must not be sent to external LLM providers. Code-level enforcement for the PII detector's AI layer is pending.
-- Prompt injection: user input is interpolated into LLM messages in `config_generator.py`.
-- AI response cache (`LLMProvider._cache`) has no eviction  grows unbounded.
+- No dedicated regression test covers the local, prompt, and SSRF guards.
+- `/explain` awaits its SSE producer to completion before draining, so it buffers rather than streaming incrementally. `/chat` streams correctly.
 
 ---
 
@@ -341,7 +398,7 @@ For regulated secondary use (EHDS Arts 45-49, 66, 71, 78-79; TEHDAS2 D7.2), the 
 
 1. **Opt-out exclusion** (`pipeline/exclusion.py`, EHDS Art 71) drops opted-out subjects and their linked resources before pseudonymisation, matching on the original identifiers a national register would supply.
 2. **Privacy-risk assessment** (`analytics/privacy_risk.py`) measures re-identification (k-anonymity), plus distance-to-closest-record / nearest-neighbour ratios and attribute-inference (SDMetrics) for synthetic data.
-3. **Disclosure decision** (`pipeline/disclosure/decision.py`) applies transparent Five-Safes output-checking rules - residual direct identifiers, re-id risk, minimum k, synthetic duplicates, unjustified variables, and permit/recipient/scope checks - and returns the most restrictive of REFUSE / REFER / RELEASE. A REFUSE deletes the written output and fails the job so nothing is ever exposed.
+3. **Disclosure decision** (`pipeline/disclosure/decision.py`) applies transparent Five-Safes output-checking rules - residual direct identifiers, re-id risk, minimum k, synthetic duplicates, unjustified variables, and permit/recipient/scope checks - and returns the most restrictive of APPROVE / REFER / REFUSE (in regulated mode a REFER escalates to REFUSE). A REFUSE deletes the written output and fails the job so nothing is ever exposed.
 4. **Transformation Passport** (`pipeline/transformation_passport.py`) records the release: identification, permit, tools + versions, privacy-model intent and achieved k/l/t, privacy-risk results, and the disclosure verdict. It is anonymous by construction and persisted with a structural PII guard (`PostgresPassportStore.assert_pii_safe`).
 
 **Advisory and release endpoints** (evaluate-only, run locally regardless of any microservice split): `/v1/minimise/assess` (minimisation report, D7.2 §3), `/v1/export/decision` (ad-hoc Five-Safes check), `/v1/exposure/assess` (cumulative-exposure / differencing risk across prior releases via a durable release ledger, §5.5.7), `/v1/export/statistical` (aggregate release protected by small-cell suppression and/or differential privacy, §5.5.4), `/v1/catalog/descriptor` (HealthDCAT-AP JSON-LD dataset descriptor, §4.3), `/v1/synthetic/passport`, `/v1/analyse/privacy-risk`, and `/v1/reports` (durable passports).
@@ -356,12 +413,44 @@ Dependency note: `Anonymeter`, `SDV`, `torch`, and `opacus` are not installable 
 
 ## Authentication
 
-| `MEDANON_API_KEY` | Behaviour |
-|---|---|
-| Unset | All endpoints open (dev only) |
-| Set | All endpoints except `/health`, `/ready`, `/metrics`, `/docs` require `X-API-Key: <key>` |
+Authentication is pluggable. `MEDANON_AUTH_PROVIDER` selects the provider at startup (`api/auth_providers.py`); switching it is an env change plus a restart, no code change.
 
-RBAC roles: `admin` (all), `analyst` (processing + jobs + scoring + AI), `viewer` (read-only).
+| `MEDANON_AUTH_PROVIDER` | Accepts | Use for |
+|---|---|---|
+| `auto` (default) | DB key → env key → SMART bearer → open | Legacy behaviour, preserved verbatim for existing deployments |
+| `apikey` | `X-API-Key` only (no bearer, no open access) | Service-to-service and CLI workflows |
+| `oidc` | OIDC JWT via `Authorization: Bearer`, plus `X-API-Key` when `MEDANON_AUTH_ALLOW_API_KEY=true` (the default) | Human users behind Keycloak or Azure AD |
+| `none` | Everything, as `admin` | Local development only |
+
+In `auto` and `apikey` modes, `MEDANON_API_KEY` is the switch: unset leaves all endpoints open (dev only), set requires `X-API-Key` on everything except `/health`, `/ready`, `/metrics`, and `/docs`.
+
+RBAC roles: `admin` (all), `analyst` (processing + jobs + scoring + AI), `viewer` (read-only). Parameterized paths resolve through `ENDPOINT_ROLE_PREFIXES` in `api/auth.py`.
+
+### OIDC login flow (Keycloak)
+
+Keycloak runs under the `auth` profile with no published host port. Both the SPA's login redirect and Keycloak's own admin console are PKCE public clients, which browsers only allow in an HTTPS secure context, so everything is served through the UI's TLS edge at `/auth/`. A plain-HTTP host port would fail on `crypto.subtle requires HTTPS`. One URL, no split-brain.
+
+```
+1. Browser  → https://host:8501/auth/realms/<realm>/protocol/openid-connect/auth
+              (nginx /auth/* → keycloak:8080)
+2. Keycloak → redirects back to https://host:8501/auth/callback?code=...
+              nginx matches `= /auth/callback` EXACTLY, which beats the /auth/
+              prefix, so the SPA (not Keycloak) serves the redirect target
+3. SPA      → exchanges code for tokens, then sends Authorization: Bearer <JWT>
+              on every /api/* call
+4. anonymizer → validates the JWT against the realm JWKS, fetched backchannel
+```
+
+**JWKS discovery** (`integrations/oidc/validator.py`) resolves in three steps: an explicit `OIDC_JWKS_URL`, else the `jwks_uri` from the discovery document, else a derived `{base}/.well-known/jwks.json`.
+
+**Split-horizon issuer.** The browser reaches Keycloak at its public URL, but the anonymizer sits inside the Docker network where that URL may not resolve. `OIDC_ISSUER` stays the public value (it must match the token's `iss` claim exactly), while `OIDC_DISCOVERY_BASE` points at the internal realm URL for backchannel fetches. `OIDC_DISCOVERY_BASE` falls back to `OIDC_ISSUER` when unset. Keycloak itself needs `KEYCLOAK_PUBLIC_URL` (`KC_HOSTNAME`) set to the same public base so it builds correct `https://` URLs behind the proxy.
+
+**Role mapping.** `OIDC_ROLE_CLAIM_PATH` is a dotted path into the JWT claims (`realm_access.roles` for Keycloak, `roles` for Azure AD) and `OIDC_ROLE_MAP` maps provider roles onto MedAnon's three. An Azure AD swap is env-only.
+
+Two deliberate failure behaviours:
+
+- **Deny by default.** A validly authenticated user whose token carries no mapped role gets zero roles and is rejected with 403, rather than silently receiving access. Assign a realm role or set `OIDC_DEFAULT_ROLE` to grant a floor.
+- **No silent downgrade.** If a Bearer token's `iss` matches `OIDC_ISSUER` but validation fails, the request is rejected with 401 instead of falling through to the API-key path. An expired or forged token must not quietly downgrade to a weaker credential.
 
 **Health check strategy:** Docker's `healthcheck` targets `/health` (lightweight  returns `{"status":"ok"}` immediately). The `depends_on: condition: service_healthy` chain requires this. `/ready` is more expensive  it probes FHIR and gPAS connectivity with a 5 s timeout each  and is used for readiness gates only, not for Docker's healthcheck polling.
 

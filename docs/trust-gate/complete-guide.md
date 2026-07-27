@@ -5,8 +5,8 @@ language for any reader and goes all the way down to the exact calculation each
 check performs. Read only the parts you need.
 
 The deeper background references still exist and are cited where relevant:
-[quality-evaluation-methodology.md](quality-evaluation-methodology.md) (methods and
-citations) and [services/trust-gate/ARCHITECTURE.md](../services/trust-gate/ARCHITECTURE.md)
+[quality-evaluation-methodology.md](../quality-evaluation-methodology.md) (methods and
+citations) and [services/trust-gate/ARCHITECTURE.md](../../services/trust-gate/ARCHITECTURE.md)
 (code layering).
 
 ## Contents

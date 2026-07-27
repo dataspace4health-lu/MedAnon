@@ -51,11 +51,13 @@ make build
 
 Builds `medanon:latest` (FastAPI anonymizer) and `medanon-ui:latest` (React/nginx). gPAS and HAPI FHIR use upstream images pulled automatically.
 
-The anonymizer Dockerfile uses `services/anonymizer/` as build context. Four build stages:
-- `base`  Python 3.12 + deps (no spaCy; NLP runs as the NLP microservice)
-- `prod`  production target (used by default)
+The anonymizer Dockerfile uses the **repo root** (`.`) as build context so it can `COPY packages/medanon-core` and `pip install` the shared domain/analytics/scoring package. Build stages:
+- `base`  Python 3.12 + deps + `medanon-core` (no spaCy; NLP runs as the NLP microservice)
+- `api`  the API server target (the compose default: `target: api`)
+- `worker`  the dedicated async job worker target
+- `prod`  production target built on `api`
 - `dev`  adds uvicorn `--reload`
-- `sdv`  adds SDV synthetic data engine (~2 GB)
+- `sdv`  adds the SDV synthetic data engine (~2 GB)
 
 ### 3. Start the stack
 
@@ -63,7 +65,7 @@ The anonymizer Dockerfile uses `services/anonymizer/` as build context. Four bui
 make up
 ```
 
-Starts all 14 always-on services in dependency order. **gPAS (WildFly) takes ~90 seconds on first boot**  it deploys the TTP-FHIR WAR file and initializes the PostgreSQL schema.
+Starts all 15 always-on services in dependency order. **gPAS (WildFly) takes ~90 seconds on first boot**  it deploys the TTP-FHIR WAR file and initializes the PostgreSQL schema.
 
 ```bash
 docker compose ps    # wait until all show "healthy"
@@ -128,9 +130,11 @@ make up
 # 4. Initialize gPAS domain
 make init-domains
 
-# 5. Optionally enable opt-in profiles
-docker compose --profile s3 up -d    # MinIO for job result storage
-docker compose --profile ai up -d    # Ollama if testing AI agents
+# 5. Add the reference-deployment profiles (see "Service profiles" below)
+docker compose --profile auth --profile s3 --profile ai up -d
+#   auth → Keycloak OIDC   s3 → MinIO result storage   ai → Ollama LLM
+# Each also needs its env flag set (MEDANON_AUTH_PROVIDER / MEDANON_RESULT_STORAGE /
+# MEDANON_AI_ENABLED), or the container starts but is never called.
 ```
 
 **Staging-specific settings to verify before release:**
@@ -221,13 +225,38 @@ Note: K3s ships with Flannel which does not enforce `NetworkPolicy`. Use Cilium 
 
 ---
 
-## Opt-in service profiles
+## Service profiles
+
+Seven profiles. `make up` starts the 15 always-on services only; anything below needs its profile appended.
 
 ```bash
-docker compose --profile ha up    # gPAS PostgreSQL read replica (HA setup)
+# Reference deployment  a real install runs these three
+docker compose --profile auth up  # Keycloak OIDC provider + its PostgreSQL
 docker compose --profile s3 up    # MinIO S3 object storage for job results
 docker compose --profile ai up    # Ollama local LLM for AI agent endpoints
+
+# Situational
+docker compose --profile ha up          # gPAS PostgreSQL read replica (HA setup)
+docker compose --profile sqltest up     # PostgreSQL fixture for the SQL/tabular source
+docker compose --profile trust up       # Trust Gate + its UI + HL7 FHIR validator
+docker compose --profile monitoring up  # Prometheus + Grafana + cAdvisor + Jaeger
 ```
+
+Profiles compose, so the reference stack is one command:
+
+```bash
+docker compose --profile auth --profile s3 --profile ai up -d
+```
+
+**Starting the container is only half the wiring.** Each of the three reference services also needs the env flag that points the anonymizer at it, or the container runs and is simply never called:
+
+| Profile | Also set | Default endpoint |
+|---|---|---|
+| `auth` | `MEDANON_AUTH_PROVIDER=oidc`, `OIDC_ISSUER`, `KEYCLOAK_PUBLIC_URL` | served at `/auth/` on the UI TLS edge (no host port) |
+| `s3` | `MEDANON_RESULT_STORAGE=s3` (default `local`), `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD` | `MINIO_ENDPOINT=minio:9000`, bucket `medanon-results` |
+| `ai` | `MEDANON_AI_ENABLED=true` (default `false`), `MEDANON_AI_PROVIDER` | `MEDANON_AI_API_BASE=http://ollama:11434` |
+
+`MEDANON_AI_API_BASE` and `MINIO_ENDPOINT` both accept external hosts, so the LLM or object store can live outside the stack (a GPU box, a real S3 bucket) without the `ai` / `s3` profile at all. See [architecture.md § Authentication](architecture.md#authentication) for the OIDC flow and the split-horizon issuer trap.
 
 The NLP and analytics microservices are now always-on  they start with the main `make up` command. `NLP_SERVICE_URL` is hardcoded to `http://nlp-lb:8200` in docker-compose.yml (the `nlp-lb` host name is a Traefik gateway alias). Override only to point at an external NLP deployment.
 
@@ -342,7 +371,7 @@ LOG_LEVEL=INFO                   # DEBUG may log resource content containing PHI
 ### Build and push
 
 ```bash
-docker build --target prod -t registry.example.com/medanon:1.0.0 services/anonymizer/
+docker build --target prod -f services/anonymizer/Dockerfile -t registry.example.com/medanon:1.0.0 .
 docker push registry.example.com/medanon:1.0.0
 
 docker build -t registry.example.com/medanon-ui:1.0.0 client/
@@ -367,7 +396,7 @@ helm upgrade --install medanon ./helm/medanon \
 
 ```
 helm/
-├── medanon/           Umbrella chart (5 sub-charts)
+├── medanon/           Umbrella chart (9 sub-charts)
 │   ├── Chart.yaml
 │   ├── values.yaml
 │   └── templates/

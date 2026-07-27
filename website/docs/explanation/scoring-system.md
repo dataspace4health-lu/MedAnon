@@ -8,7 +8,7 @@ description: "The privacy x utility x quality scoring model and the output gate.
 
 ## What it is
 
-The scoring system evaluates the *output* of a de-identification run, not the input config, but the actual transformed FHIR resources. It answers three questions:
+The scoring system evaluates the *output* of a de-identification run, not the input config, but the actual transformed FHIR resources. Its engine (`engine`, `privacy`, `utility`, `quality`, `models`, `constants`) lives once in the shared inner package `packages/medanon-core/src/scoring/`, so the anonymizer and the standalone `scoring` microservice run identical code; the score gate (`pipeline/scoring/gate.py`) and the Markdown audit report (`pipeline/scoring/audit.py`) are the anonymizer-side glue. It answers three questions:
 
 1. **Privacy**, Could a motivated attacker re-identify this patient? (hard gate: PASS/FAIL)
 2. **Utility**, How much analytical value survived the de-identification?
@@ -44,7 +44,7 @@ The multiplicative model with a hard privacy gate mirrors how real compliance de
 
 ## Module 1, Privacy Risk (Hard Gate)
 
-**File:** `pipeline/scoring/privacy.py`  
+**File:** `scoring/privacy.py` (in `packages/medanon-core`)  
 **Threshold:** `MEDANON_SCORE_RISK_THRESHOLD` (default 0.3)  
 **Formula:** `risk_score = max(attacker_risk, identifier_risk, text_risk)`
 
@@ -105,7 +105,7 @@ Scans all string fields longer than 20 characters for residual PII patterns:
 
 ## Module 2, Utility (Continuous 0-1)
 
-**File:** `pipeline/scoring/utility.py`  
+**File:** `scoring/utility.py` (in `packages/medanon-core`)  
 **Formula:** `0.25×retention + 0.30×semantic + 0.15×temporal + 0.30×info_loss`
 
 ### 2a. Field Retention (weight 0.25)
@@ -157,7 +157,7 @@ Aggregates information loss across all fired actions using calibrated weights fr
 
 ## Module 3, Quality (Continuous 0-1)
 
-**File:** `pipeline/scoring/quality.py`  
+**File:** `scoring/quality.py` (in `packages/medanon-core`)  
 **Formula:** `0.40×success_rate + 0.30×rule_coverage + 0.15×schema_validation + 0.15×reference_integrity`  
 **Non-compensatory gates:** error rate > 5% caps at 0.60; error rate > 20% caps at 0.20
 

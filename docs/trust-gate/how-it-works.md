@@ -3,8 +3,8 @@
 This is the plain-language guide to the Trust Gate. It explains what the pieces
 are, how data flows through them, how each quality check is measured, and how
 those measurements roll up into a single graded verdict. Read this first; the
-deeper references are [quality-evaluation-methodology.md](quality-evaluation-methodology.md)
-(the methods and citations) and [services/trust-gate/ARCHITECTURE.md](../services/trust-gate/ARCHITECTURE.md)
+deeper references are [quality-evaluation-methodology.md](../quality-evaluation-methodology.md)
+(the methods and citations) and [services/trust-gate/ARCHITECTURE.md](../../services/trust-gate/ARCHITECTURE.md)
 (the code layering).
 
 ## 1. What the Trust Gate is

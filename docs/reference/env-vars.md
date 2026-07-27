@@ -104,6 +104,13 @@ review. This is the exhaustive catalogue: every variable the code, or
 | `FHIRPATH_CLASSIFY_CACHE_SIZE` | `256` | not set | no |
 | `FHIRPATH_WHERE_CACHE_SIZE` | `128` | not set | no |
 
+## `GATEWAY_*`
+
+| variable | code default | compose default | in .env.example |
+|---|---|---|---|
+| `GATEWAY_CPU_LIMIT` | required | `2.0` | no |
+| `GATEWAY_MEM_LIMIT` | required | `256M` | no |
+
 ## `GIT_*`
 
 | variable | code default | compose default | in .env.example |
@@ -122,6 +129,8 @@ review. This is the exhaustive catalogue: every variable the code, or
 | `GPAS_CB_HALF_OPEN_PROBES` | `3` | not set | no |
 | `GPAS_CB_RECOVERY_TIMEOUT_SEC` | `30` | not set | no |
 | `GPAS_CB_WINDOW_SEC` | `60` | not set | no |
+| `GPAS_DB_CPU_LIMIT` | required | `2.0` | no |
+| `GPAS_DB_MEMORY_LIMIT` | required | `768M` | no |
 | `GPAS_DB_PASSWORD` | required | `gpas_password` | yes |
 | `GPAS_DB_USER` | required | `gpas_user` | no |
 | `GPAS_DOMAIN` | varies | **must be set** | yes |
@@ -244,6 +253,7 @@ review. This is the exhaustive catalogue: every variable the code, or
 | `MEDANON_BATCH_SIZE` | `1000` | `1000` | yes |
 | `MEDANON_BUILTIN_FHIR` | `true` | not set | no |
 | `MEDANON_BULK_DOWNLOAD_PARALLEL` | `4` | not set | no |
+| `MEDANON_BULK_EXPORT_MODE` | `auto` | not set | no |
 | `MEDANON_CACHE_MAX_ENTRIES` | `300000` | not set | no |
 | `MEDANON_CHECKPOINT_INTERVAL` | `100` | not set | no |
 | `MEDANON_CLAIM_HEARTBEAT_SEC` | `30` | `30` | no |
@@ -265,6 +275,7 @@ review. This is the exhaustive catalogue: every variable the code, or
 | `MEDANON_GIT_SHA` | `unknown` | not set | no |
 | `MEDANON_GLOBAL_MAX_CONNECTIONS` | `10000` | not set | no |
 | `MEDANON_GLOBAL_MAX_THREADS` | `64` | `128` | yes |
+| `MEDANON_GPAS_CACHE_TTL_SEC` | required | not set | no |
 | `MEDANON_GPAS_CANARY_ENABLED` | `true` | not set | no |
 | `MEDANON_HASH_ALLOW_PLAIN` | `` | `false` | yes |
 | `MEDANON_HASH_KEY` | `` | not set | yes |
@@ -278,6 +289,9 @@ review. This is the exhaustive catalogue: every variable the code, or
 | `MEDANON_KEY_ALLOWED_DIRS` | `` | not set | no |
 | `MEDANON_MANIFEST_ARTIFACT_ENABLED` | `true` | not set | no |
 | `MEDANON_MANIFEST_ENABLED` | `false` | `true` | yes |
+| `MEDANON_MATCH_EXECUTOR` | `thread` | not set | no |
+| `MEDANON_MATCH_PROCESS_MIN` | `200` | not set | no |
+| `MEDANON_MATCH_PROCESS_WORKERS` | required | not set | no |
 | `MEDANON_MAX_BODY_BYTES` | required | **must be set** | yes |
 | `MEDANON_MAX_BUNDLE_ENTRIES` | `50000` | not set | no |
 | `MEDANON_MAX_PENDING_JOBS` | `200` | not set | no |
@@ -353,10 +367,10 @@ review. This is the exhaustive catalogue: every variable the code, or
 | `MEDANON_SQL_SOURCE_ALLOWED_HOSTS` | required | not set | no |
 | `MEDANON_SQL_SOURCE_CONNECT_TIMEOUT_SEC` | `10` | not set | no |
 | `MEDANON_SQL_SOURCE_STATEMENT_TIMEOUT_MS` | `60000` | not set | no |
+| `MEDANON_STAGED_NATIVE_FETCH` | `auto` | not set | no |
 | `MEDANON_STAGED_THRESHOLD_ROWS` | `500000` | `500000` | no |
 | `MEDANON_STAGE_BLOB_KEY` | required | not set | no |
 | `MEDANON_STAGE_BODIES` | required | not set | no |
-| `MEDANON_STAGING_BACKEND` | `postgres` | not set | no |
 | `MEDANON_STAGING_BATCH_SIZE` | `1000` | `5000` | yes |
 | `MEDANON_STAGING_CLEANUP_INTERVAL_SEC` | `3600` | not set | no |
 | `MEDANON_STAGING_DB_URL` | `` | not set | no |
@@ -367,12 +381,12 @@ review. This is the exhaustive catalogue: every variable the code, or
 | `MEDANON_STALE_RECOVERY_INTERVAL_SEC` | `300` | not set | no |
 | `MEDANON_STALE_RECOVERY_TIMEOUT_MIN` | `10` | not set | no |
 | `MEDANON_STREAM_MAX_BYTES` | `0` | not set | no |
+| `MEDANON_STREAM_PROCESS_WORKERS` | `0` | not set | no |
 | `MEDANON_STRUCTURAL_PHI_ENABLED` | `false` | not set | no |
 | `MEDANON_SUBSCRIPTION_DB` | `/output/subscriptions.db` | not set | no |
 | `MEDANON_TABULAR_BATCH_MAX_BYTES` | required | not set | no |
 | `MEDANON_TABULAR_BATCH_MAX_FILES` | `500` | not set | no |
 | `MEDANON_TARGET_CONFIG_PROFILE` | `structural` | `structural` | no |
-| `MEDANON_TRACE_RECORDS_ENABLED` | `false` | not set | no |
 | `MEDANON_TRUST_PROFILE_DB` | `/output/trust_profiles.db` | not set | no |
 | `MEDANON_TTP_PROVIDER` | `local` | not set | no |
 | `MEDANON_TTP_URL` | `` | not set | no |
@@ -422,6 +436,7 @@ review. This is the exhaustive catalogue: every variable the code, or
 | `NLP_REDIS_TTL_SEC` | `604800` | `604800` | no |
 | `NLP_REDIS_URL` | required | computed | no |
 | `NLP_SERVICE_URL` | `` | not set | no |
+| `NLP_SPACY_MODEL` | `en_core_web_lg` | not set | no |
 
 ## `OIDC_*`
 
@@ -490,7 +505,8 @@ review. This is the exhaustive catalogue: every variable the code, or
 | variable | code default | compose default | in .env.example |
 |---|---|---|---|
 | `REDIS_MAXCLIENTS` | required | `2000` | no |
-| `REDIS_MAXMEMORY` | required | `2gb` | no |
+| `REDIS_MAXMEMORY` | required | `1gb` | no |
+| `REDIS_MEMORY_LIMIT` | required | `2G` | no |
 
 ## `SCORING_*`
 
@@ -517,12 +533,6 @@ review. This is the exhaustive catalogue: every variable the code, or
 |---|---|---|---|
 | `SQL_TEST_DB_PASSWORD` | required | `clinic_dev` | no |
 | `SQL_TEST_PORT` | required | `55432` | no |
-
-## `SUBSCRIPTION_*`
-
-| variable | code default | compose default | in .env.example |
-|---|---|---|---|
-| `SUBSCRIPTION_WEBHOOK_TIMEOUT` | `10` | not set | no |
 
 ## `TLS_*`
 

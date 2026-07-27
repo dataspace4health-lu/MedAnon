@@ -17,6 +17,15 @@ This index is the single entry point for all project documentation. Each section
 - Audience and scope
 - Technology stack summary
 
+### 0.1 Platform Overview
+
+**File:** [overview.md](overview.md)
+
+- Full feature set by area (engine, actions, formats, pseudonymization, NLP, scoring, governance, Trust Gate, AI, jobs, auth, connectors, analytics, observability, UI)
+- General end-to-end workflow and the four-stage pipeline
+- How the platform is put together (services, shared core package, layering, persistence)
+- What we added since 2 June 2026 (workflow orchestration, Trust Gate, EHDS/D7.2 governance, medanon-core, hardening)
+
 ---
 
 ## 1. Architecture
@@ -67,7 +76,7 @@ FHIR client (reader, writer, bulk), analytics microservice, FHIR subscriptions, 
 
 - Prerequisites and environment setup
 - Docker Compose: step-by-step startup, gPAS domain initialization
-- Opt-in profiles (HA, S3, AI/Ollama)
+- Service profiles: reference deployment (auth/Keycloak, S3/MinIO, AI/Ollama) + situational (HA, sqltest, trust, monitoring)
 - Kubernetes / Helm chart structure and installation
 - Resource limits, TLS, production hardening
 
@@ -91,7 +100,7 @@ How to connect SPE FHIR BlackBox to IDSA / FIWARE dataspace connectors and EDC.
 
 **File:** [security.md](security.md)
 
-- Authentication: API key (HMAC constant-time), SMART on FHIR bearer tokens
+- Authentication: pluggable providers (`auto` / `apikey` / `oidc` / `none`), API key (HMAC constant-time), SMART on FHIR bearer tokens, OIDC/Keycloak JWT
 - RBAC: viewer / analyst / admin role hierarchy and per-endpoint mapping
 - Encryption in transit: Docker network segmentation, TLS at the perimeter, Redis password
 - Encryption at rest: HMAC-SHA3-256 pseudonyms, RSA field encryption, gPAS TTP mappings
@@ -144,7 +153,7 @@ Problem statement, solution summary, and capability overview.
 
 **File:** [user-manual.md](user-manual.md)
 
-- Web UI walkthrough (all 16 pages)
+- Web UI walkthrough (all 24 pages)
 - REST API quick-start: de-identify a patient, run a bulk export, check risk score
 - CLI batch processing
 - Troubleshooting common errors
@@ -154,6 +163,30 @@ Problem statement, solution summary, and capability overview.
 **File:** [result-example.md](result-example.md)
 
 Side-by-side examples of identified FHIR input vs de-identified output for each config profile. Annotated to explain every transformation applied.
+
+---
+
+## 4. Trust Gate (separate service)
+
+Trust Gate is a **standalone service** (`services/trust-gate/`, its own FastAPI app and
+test suite, no shared package with the de-identification engine). It evaluates clinical
+data quality and issues a Quality Passport; the anonymizer is only one of its consumers.
+Its documentation lives in its own folder, [trust-gate/](trust-gate/):
+
+| Document | Description |
+|---|---|
+| [trust-gate/README.md](trust-gate/README.md) | Overview: the Quality Passport, verdicts, dimensions, EHDS label; the service and its API |
+| [trust-gate/explained-simply.md](trust-gate/explained-simply.md) | Plain-language introduction for non-specialists |
+| [trust-gate/how-it-works.md](trust-gate/how-it-works.md) | End-to-end walkthrough of an assessment |
+| [trust-gate/data-quality-process.md](trust-gate/data-quality-process.md) | The data-quality process, step by step |
+| [trust-gate/architecture.md](trust-gate/architecture.md) | Internal architecture: `verdict/` → `checks/` → domain model layering |
+| [trust-gate/complete-guide.md](trust-gate/complete-guide.md) | Consolidated end-to-end guide |
+| [trust-gate/references.md](trust-gate/references.md) | Research references (Kahn 2016, DAMA/ISO 25012, HL7 PIQI) |
+
+Methodology (measurement definitions, grading) is in
+[quality-evaluation-methodology.md](quality-evaluation-methodology.md). The internal design
+decisions and "adding a new check" checklist live with the service in
+`services/trust-gate/ARCHITECTURE.md`.
 
 ---
 
@@ -174,4 +207,4 @@ These files exist locally but are excluded from the repository via `.gitignore`.
 | [internal/BACKEND_FILE_MAP_2026_06_04.md](internal/BACKEND_FILE_MAP_2026_06_04.md) | Authoritative file-by-file module map + 4-stage pipeline |
 | [internal/REVIEW_STATUS.md](internal/REVIEW_STATUS.md) | Single-source-of-truth ledger for every review finding |
 | [internal/MASTER_TASK_PLAN_2026_06_08.md](internal/MASTER_TASK_PLAN_2026_06_08.md) | Consolidated forward roadmap (platform + engine-quality tracks) |
-| [internal/keycloak-auth-plan.md](internal/keycloak-auth-plan.md) | Keycloak/OIDC integration design (auth  NOT STARTED) |
+| [internal/keycloak-auth-plan.md](internal/keycloak-auth-plan.md) | Keycloak/OIDC integration design (shipped; `auth` profile + `MEDANON_AUTH_PROVIDER=oidc`) |

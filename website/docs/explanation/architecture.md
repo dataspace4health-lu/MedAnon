@@ -112,6 +112,8 @@ Opt-in profiles:
 | `sql-source-test-db` | `sqltest` | internal | PostgreSQL fixture for SQL/tabular source connector testing |
 | `prometheus` / `grafana` / `cadvisor` / `jaeger` | `monitoring` | 9090 / 3000 / 8888 / 16686 | Prometheus, Grafana dashboards, container metrics, Jaeger traces |
 
+**Shared code (`packages/medanon-core`).** The domain contracts (`domain`), the analytics engine (`analytics`), and the scoring engine (`scoring`) are a single zero-dependency inner package rather than per-service copies. The anonymizer puts it on its path directly; the `scoring` and `analytics` microservices (and trust-gate, for the `domain.trust` phase vocabulary) `pip install` it in their Dockerfiles, so every service runs identical shared logic.
+
 ### Edge & routing
 
 Two edge components handle ingress, routing, and horizontal scaling:
@@ -198,7 +200,7 @@ manifest.py            Tag meta.tag with a per-rule transformation summary if
 io_formats.py          Serialize. Output format matches input or as requested.
 ```
 
-**Why staged + concurrent?** Both NLP and gPAS have non-trivial per-call overhead. Processing 300 resources with individual calls would be ~300 HTTP round-trips for each. The **match** stage collects deferred work (NlpWork for NLP, BatchWork for gPAS) without making any external calls. The **phi_detection** and **pseudonymize** stages then run **concurrently**: NLP deduplicates texts across all resources and sends a single batch, while gPAS does the same for pseudonymization, they touch disjoint resource paths, so overlapping them hides one upstream's latency behind the other. This reduces hundreds of HTTP calls to 2-3 regardless of resource count, and the two batch calls overlap rather than running back-to-back. Per-stage latency is exported as `medanon_pipeline_stage_latency{stage=...}`.
+**Why staged + concurrent?** Both NLP and gPAS have non-trivial per-call overhead. Processing 300 resources with individual calls would be ~300 HTTP round-trips for each. The **match** stage collects deferred work (NlpWork for NLP, BatchWork for gPAS) without making any external calls. The **phi_detection** and **pseudonymize** stages then run **concurrently**: NLP deduplicates texts across all resources and sends a single batch, while gPAS does the same for pseudonymization, they touch disjoint resource paths, so overlapping them hides one upstream's latency behind the other. This reduces hundreds of HTTP calls to 2-3 regardless of resource count, and the two batch calls overlap rather than running back-to-back. Per-stage latency is exported as `medanon_pipeline_stage_duration_seconds{stage=...}`.
 
 ---
 

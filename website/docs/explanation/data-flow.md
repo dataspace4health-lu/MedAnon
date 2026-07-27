@@ -401,10 +401,10 @@ POST /process  → de-identified result returned to caller (synchronous)
     │
     └── asyncio.create_task(score_and_persist(...))
               │
-              ├─ pipeline/scoring/engine.py  compute composite score
-              │      ├─ privacy.py    attacker model + HIPAA identifier check + text risk
-              │      ├─ utility.py    field retention + semantic preservation + info loss
-              │      └─ quality.py    success rate + rule coverage + schema + reference integrity
+              ├─ scoring/engine.py (medanon-core)  compute composite score
+              │      ├─ scoring/privacy.py    attacker model + HIPAA identifier check + text risk
+              │      ├─ scoring/utility.py    field retention + semantic preservation + info loss
+              │      └─ scoring/quality.py    success rate + rule coverage + schema + reference integrity
               │
               └─ integrations/postgres/processing_run_store.py
                      INSERT INTO medanon.processing_runs

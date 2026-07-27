@@ -28,14 +28,14 @@ methodology it is grounded in, the formal measurement model, every check
 algorithm, the score roll-up, the decision policy, and the resilience semantics
 that keep the gate from ever producing a false "PASS." It is written to be read
 on its own; the operational quick-start lives in
-[trust-gate.md](trust-gate.md).
+[trust-gate/README.md](trust-gate/README.md).
 
 ---
 
 ## 1. Motivation: quality *before* privacy, not after
 
 MedAnon already gates what *leaves* the pipeline. The scoring engine
-(`pipeline/scoring/`) and the output barrier (`pipeline/validation.py`) ensure
+(`scoring/`, from `packages/medanon-core`) and the output barrier (`pipeline/validation.py`) ensure
 de-identified output meets privacy and utility thresholds. But nothing assessed
 the data *entering* the pipeline.
 
@@ -1043,5 +1043,5 @@ standalone Trust Gate UI (`:8401`) renders it for ad-hoc assessment.
 `passport.py`, `constants.py`, `rules.py`, `checks/`) and `services/anonymizer/src/
 pipeline/intake_gate.py`. Architecture + layer map:
 [services/trust-gate/ARCHITECTURE.md](../services/trust-gate/ARCHITECTURE.md) and
-[trust-gate-architecture.md](trust-gate-architecture.md). Operational quick-start:
-[trust-gate.md](trust-gate.md).*
+[trust-gate/architecture.md](trust-gate/architecture.md). Operational quick-start:
+[trust-gate/README.md](trust-gate/README.md).*

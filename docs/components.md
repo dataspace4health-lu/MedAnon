@@ -8,7 +8,7 @@ Technical reference for all services and modules. For architecture diagrams and 
 
 ### Docker services
 
-**Always-on (14 services):**
+**Always-on (15 services):**
 
 | Container | Image | Host Port | Role |
 |---|---|---|---|
@@ -25,15 +25,28 @@ Technical reference for all services and modules. For architecture diagrams and 
 | `app-db` | `postgres:16-alpine` | internal | Jobs, configs, subscriptions, staging |
 | `redis` | `redis:7-alpine` | internal | Job queue (Redis Streams) + gPAS L2 cache |
 | `analytics` | `medanon-analytics:latest` | `8100` | Risk analysis + synthetic data |
+| `scoring` | `medanon-scoring:latest` | internal (`8300`) | Privacy × utility × quality scoring microservice |
 | `nlp` | `medanon-nlp:latest` | via gateway | Presidio NLP microservice (~800 MB image); scaled with `--scale nlp=N` |
 
-**Opt-in profiles (started with `--profile <name>`):**
+**Reference deployment (profile-gated, but running in any real install):** these carry compose `profiles:` and so do not start with a bare `make up`, but a deployment that authenticates users, stores results off-box, or exposes the AI agents runs all three. Each needs its profile **and** the env flag that wires the anonymizer to it.
+
+| Container | Profile | Host Port | Wired in by | Role |
+|---|---|---|---|---|
+| `keycloak` + `keycloak-db` | `auth` | none (via UI TLS edge) | `MEDANON_AUTH_PROVIDER=oidc` + `OIDC_ISSUER` | Keycloak OIDC provider + its PostgreSQL. No published port by design: served only under `/auth/` on the UI's TLS edge (PKCE needs an HTTPS secure context). |
+| `minio` | `s3` | `9000` (API), `9001` (console) | `MEDANON_RESULT_STORAGE=s3` + `MINIO_*` | S3-compatible object storage for job results and saved output destinations (`MINIO_ENDPOINT`, default `minio:9000`). |
+| `ollama` | `ai` | `11434` | `MEDANON_AI_ENABLED=true` + `MEDANON_AI_API_BASE` | Local LLM inference for AI agents (`MEDANON_AI_API_BASE`, default `http://ollama:11434`). |
+
+**Situational profiles (started with `--profile <name>`):**
 
 | Container | Profile | Host Port | Role |
 |---|---|---|---|
 | `gpas-db-replica` | `ha` | internal | PostgreSQL streaming replica for gPAS HA |
-| `minio` | `s3` | `9000`, `9001` | S3-compatible object storage for job results |
-| `ollama` | `ai` | internal | Local LLM inference for AI agents |
+| `sql-source-test-db` | `sqltest` | `55432` | PostgreSQL fixture for the SQL/tabular source connector |
+| `trust-gate` + `trust-gate-ui` | `trust` | `8400`, `8401` | Pre-privacy Quality Passport service + its UI |
+| `fhir-validator` | `trust` | internal | Inferno HL7 FHIR validator (backs Trust Gate conformance checks) |
+| `prometheus` / `grafana` / `cadvisor` / `jaeger` | `monitoring` | `9090` / `3000` / `8888` / `16686` | Metrics, dashboards, container metrics, traces |
+
+RabbitMQ macro-stage streaming has no bundled compose service; set `MEDANON_AMQP_URL` to an external broker to enable it.
 
 **Scaling (Traefik discovers replicas via Docker labels  no config reload):**
 ```bash
@@ -48,7 +61,7 @@ Two Docker bridge networks enforce physical isolation between identified and de-
 | Network | Members | Purpose |
 |---|---|---|
 | `processing-net` | All services (anonymizer, worker, ui, target FHIR, gPAS, NLP, analytics, Redis, PostgreSQL) | Main application network |
-| `source-net` | `fhir-server`, `hapi-db`, `anonymizer`, `worker` | Isolated network for identified data. Only anonymizer and worker bridge both networks. |
+| `source-net` | `fhir-server`, `hapi-db`, `anonymizer`, `worker`, **`ui`** | Network for identified data, no host port. The `ui` container joins it too, and nginx proxies `/fhir/*` to `fhir-server` with no auth check, so this network is not an authentication boundary. See [security.md § 1.4](security.md#14-edge-routes-that-bypass-authentication). |
 
 The source FHIR server has no published host port  it is accessible only through anonymizer proxy endpoints. This prevents accidental direct access to identified patient data from the UI, analytics, or any other service.
 
@@ -328,7 +341,7 @@ Override config per-request: `?config_profile=<name>`.
 | `routers/connectors.py` | `/v1/source-connections`, `/v1/output-destinations` - encrypted dataspace connectors |
 | `routers/settings.py` / `routers/runtime.py` | `/v1/settings` (admin instance defaults) + open `/v1/runtime-config` |
 | `schemas/` | Pydantic models: `fhir_ops.py`, `fhir_bulk.py`, `jobs.py`, `processing.py`, `scoring.py`, `agents.py`, `processing_runs.py` |
-| `services/` | Business logic: `jobs.py`, `processing.py`, `analytics.py`, `fhir_server.py`, `synthetic.py`, `health.py`, `scoring.py`, `dicom.py`, `hl7v2.py`, `subscriptions.py`, `agents.py`, `permits.py`, `reports.py`, `connectors.py`, `settings.py`, `exposure.py` |
+| `services/` | Business logic: `jobs.py`, `processing.py`, `analytics.py`, `fhir_server.py`, `synthetic.py`, `scoring.py`, `dicom.py`, `cda.py`, `hl7v2.py`, `tabular.py`, `sql_source.py`, `subscriptions.py`, `agents.py`, `api_keys.py`, `connectors.py`, `settings.py`, `exposure.py`, `workflows.py`. (Pure application logic the worker also needs - `health.py`, `permits.py`, `reports.py`, `scoring_helpers.py` - lives under `pipeline/`, not here.) |
 
 ### Pipeline (`src/pipeline/`)
 
@@ -358,7 +371,7 @@ Override config per-request: `?config_profile=<name>`.
 | `governance/permit.py` | `Permit` domain model + `PermitStatus` state machine (draft/submitted/approved/rejected/revoked), `is_active(at)` window, `covers_path` scope, `InMemoryPermitStore`. Pure, no I/O. |
 | `governance/healthdcat.py` | HealthDCAT-AP `dcat:Dataset` JSON-LD descriptor (D7.2 §4.3, EHDS Art 55/78), optionally enriched from a Transformation Passport. |
 | `governance/tool_registry.py` | Approved-tool registry (`ApprovedTool` + `ToolStatus`); `assess_tools()` feeds the passport's tool assessment. |
-| `disclosure/decision.py` | `assess_export_decision()` - transparent Five-Safes output-checking rules (residual identifiers, re-id risk, min-k, synthetic duplicates, unjustified vars, permit R6-R8). Returns most-restrictive REFUSE/REFER/RELEASE. Pure. |
+| `disclosure/decision.py` | `assess_export_decision()` - transparent Five-Safes output-checking rules (residual identifiers, re-id risk, min-k, synthetic duplicates, unjustified vars, permit R6-R8). Returns the most-restrictive of APPROVE/REFER/REFUSE (REFER escalates to REFUSE in regulated mode). Pure. |
 | `minimization/report.py` | `assess_minimisation()` - direct/quasi classification, granularity recommendations, special-category (Art 9) flags, purpose-limitation via declared paths. |
 
 ### Actions (`src/actions/`)
@@ -397,17 +410,23 @@ MEDANON_APP_DB_URL set   → PostgresJobStore (LISTEN/NOTIFY, single-instance or
 Neither                  → SqliteJobStore   (polling, local dev only)
 ```
 
-### Scoring system (`src/pipeline/scoring/`)
+### Scoring system (`scoring` package, from `packages/medanon-core`)
+
+The scoring engine lives once in `packages/medanon-core/src/scoring/` and is shared by the
+anonymizer (imported as `scoring.*`) and the `scoring` microservice (`pip install medanon-core`).
+The anonymizer-side glue in `src/pipeline/scoring/` is thin: `gate.py` (the composite score gate,
+`check_score_gate`) and `audit.py` (Markdown audit report over `scoring.engine`).
 
 | Module | Role |
 |---|---|
-| `engine.py` | Composite scorer: `privacy_norm × utility × quality`. Runs all three sub-scorers. |
-| `privacy.py` | Privacy risk: k-anonymity, l-diversity, HIPAA 18-identifier check, text risk. Hard gate  fails the composite if risk exceeds threshold. |
-| `utility.py` | Utility: field retention rate, date precision, clinical code coverage, structural completeness. |
-| `quality.py` | Quality: FHIR structural validity, required fields, reference integrity, valid code values. |
-| `audit.py` | Markdown audit report builder. Formats per-resource findings into human-readable compliance report. |
-| `models.py` | Dataclasses: `ScoringResult`, `PrivacyScore`, `UtilityScore`, `QualityScore`, `AuditFinding`. |
-| `constants.py` | Scoring weights, thresholds, action classifications (utility-preserving vs. destructive). |
+| `scoring/engine.py` | Composite scorer: `privacy_norm × utility × quality`. Runs all three sub-scorers. |
+| `scoring/privacy.py` | Privacy risk: k-anonymity, l-diversity, HIPAA 18-identifier check, text risk. Hard gate fails the composite if risk exceeds threshold. |
+| `scoring/utility.py` | Utility: field retention rate, date precision, clinical code coverage, structural completeness. |
+| `scoring/quality.py` | Quality: FHIR structural validity, required fields, reference integrity, valid code values. |
+| `scoring/models.py` | Dataclasses: `ScoringResult`, `PrivacyScore`, `UtilityScore`, `QualityScore`, `AuditFinding`. |
+| `scoring/constants.py` | Scoring weights, thresholds, action classifications (utility-preserving vs. destructive). |
+| `pipeline/scoring/audit.py` | Markdown audit report builder (anonymizer-side). Formats per-resource findings into a human-readable compliance report. |
+| `pipeline/scoring/gate.py` | Score gate (`check_score_gate`, `ScoreGateBlocked`) enforced at `_finalize_batch`. |
 
 See [scoring-system.md](scoring-system.md) for the full scoring model documentation.
 
@@ -473,10 +492,12 @@ A separate Docker service (~200 MB image). Proxied by the anonymizer at `/analys
 
 **Why a separate service?** SDV (Synthetic Data Vault), an optional dependency for advanced synthetic data, adds ~2 GB to the Docker image. Isolating it prevents this from bloating the anonymizer image. The analytics service is independently scalable and can be disabled entirely.
 
-**Analytics modules:**
-- `src/risk.py`  k-anonymity, l-diversity, prosecutor/journalist/marketer attacker models
-- `src/synthetic.py`  stdlib synthetic patient generation (no SDV dependency)
-- `src/synthetic_sdv.py`  SDV-powered synthesis (conditional, relational, time-series)
+**Analytics modules** (the service's `src/` is just `main.py`, a thin FastAPI wrapper; the logic is the shared `analytics` package from `packages/medanon-core`, installed via `pip install medanon-core` in the Dockerfile - so the anonymizer and this service run identical code):
+- `analytics/risk.py` - k-anonymity, l-diversity, prosecutor/journalist/marketer attacker models
+- `analytics/privacy_risk.py` - DCR/NNDR/CAP re-identification risk
+- `analytics/synthetic.py` - stdlib synthetic patient generation (no SDV dependency)
+- `analytics/synthetic_sdv.py` - SDV-powered synthesis (conditional, relational, time-series)
+- `analytics/statistical.py` - aggregate release + small-cell suppression; `analytics/dp.py` - Laplace / analytic Gaussian / budget accounting
 
 ### NLP microservice (`services/nlp/`)
 
@@ -544,12 +565,19 @@ This decoupling means a FHIR server timeout in Phase 1 does not require re-uploa
 | `connector_stores.py` / `settings_store.py` | Encrypted dataspace connectors + deployment-wide instance settings. |
 | `release_ledger.py` | Keyed release fingerprints for cumulative-exposure analysis (`cumulative_exposure`). Stores only one-way hashes, never reversible ids. |
 
-### Inlined domain types (`src/domain/`)
+### Shared domain contracts (`domain`, from `packages/medanon-core`)
 
-Core domain types inlined into the anonymizer service (previously a shared `packages/medanon-core/` library  removed to simplify the Docker build context):
+Core domain contracts live in the shared inner package `packages/medanon-core/src/domain/` and are
+imported as `domain.*` by the anonymizer (its `src/` and medanon-core's `src/` are both on the path)
+and by the microservices that `pip install medanon-core`. Zero hard runtime dependencies (pure stdlib),
+so even the slim scoring/analytics/trust-gate services install it cheaply. The modules:
 
-- `domain/jobs.py`  `Job`, `JobStatus` dataclass and lifecycle enum (`pending → running → done / failed / cancelled`)
-- Exception types: `JobStoreUnavailable`, `JobNotFound`, `JobNotComplete`, `JobResultMissing`
+- `domain/jobs.py` - `Job`, `JobStatus` dataclass and lifecycle enum (`pending → running → done / failed / cancelled`), plus store exceptions `JobStoreUnavailable`, `JobNotFound`, `JobNotComplete`, `JobResultMissing`
+- `domain/actions.py` - action contracts shared by `deidentify` and the action dispatcher
+- `domain/fhir.py` - FHIR constants (e.g. `INFRA_RESOURCE_TYPES`)
+- `domain/permit.py` - the `Permit` model + state machine (governance layer)
+- `domain/scoring.py`, `domain/trust.py` - scoring and Trust Gate contracts (trust-gate asserts its phase vocab against `domain.trust.PHASE_IDS` at import)
+- `domain/workflows.py` - workflow contracts
 
 ---
 

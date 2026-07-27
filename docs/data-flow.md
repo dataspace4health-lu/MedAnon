@@ -7,7 +7,7 @@
 │                                                                        │
 │  Browser ──► :8501 (UI)  :8000 (API)  :8082 (FHIR-target)  :8080 (gateway → gPAS)
 │                                                                        │
-│  (source FHIR: no host port  isolated to source-net)                 │
+│  (source FHIR: no host port, but the UI proxies /fhir/* to it, unauth) │
 │  (gateway → NLP: :8200  host-published for direct access if needed)  │
 └────────────────────────────────────────────────────────────────────────┘
                  │             │
@@ -57,7 +57,9 @@
         └────────────────────────────────────────────────┘
 ```
 
-Two networks: `processing-net` (all services) + `source-net` (isolated: source FHIR + `hapi-postgres`). Only anonymizer and worker bridge both networks. The source FHIR server has **no host port**  it is only reachable via anonymizer proxy endpoints.
+Two networks: `processing-net` (all services) + `source-net` (source FHIR + `hapi-postgres`). The source FHIR server publishes **no host port**.
+
+**It is not, however, reachable only via the anonymizer.** The `ui` container joins `processing-net`, `source-net`, and `target-net`, and its nginx proxies `/fhir/*` straight to `hapi-fhir:8080` with no credential check. Having no host port keeps the source server off the host's network, but it does not put it behind authentication: `https://host:8501/fhir/Patient` returns identified data unauthenticated. See [security.md § 1.4](security.md#14-edge-routes-that-bypass-authentication).
 
 ---
 
@@ -409,10 +411,10 @@ POST /process  → de-identified result returned to caller (synchronous)
     │
     └── asyncio.create_task(score_and_persist(...))
               │
-              ├─ pipeline/scoring/engine.py  compute composite score
-              │      ├─ privacy.py    attacker model + HIPAA identifier check + text risk
-              │      ├─ utility.py    field retention + semantic preservation + info loss
-              │      └─ quality.py    success rate + rule coverage + schema + reference integrity
+              ├─ scoring/engine.py (medanon-core)  compute composite score
+              │      ├─ scoring/privacy.py    attacker model + HIPAA identifier check + text risk
+              │      ├─ scoring/utility.py    field retention + semantic preservation + info loss
+              │      └─ scoring/quality.py    success rate + rule coverage + schema + reference integrity
               │
               └─ integrations/postgres/processing_run_store.py
                      INSERT INTO medanon.processing_runs
@@ -456,7 +458,7 @@ POST /v1/jobs/risk-driven-export   { permit_id, recipient, declared_paths, optou
         │                             matched on ORIGINAL identifiers, before gPAS
         ├─ 2. lattice solve           k / l / t generalisation  (keys + gPAS domains permit-scoped)
         ├─ 3. analytics/privacy_risk  re-id (k-anon) + DCR/NNDR + attribute-inference on the OUTPUT
-        ├─ 4. disclosure/decision.py  Five-Safes rules → REFUSE / REFER / RELEASE
+        ├─ 4. disclosure/decision.py  R1-R8 output-check rules → APPROVE / REFER / REFUSE
         │        REFUSE  → delete the written NDJSON, raise → job fails (nothing exposed)
         │        REFER   → escalated to REFUSE in regulated mode
         ├─ 5. transformation_passport.py   anonymous passport (intent + achieved k/l/t + risk + verdict)
@@ -490,7 +492,7 @@ POST /v1/ai/generate-config
     │      ├─ cache hit? → return cached response (MEDANON_AI_CACHE_TTL_SEC)
     │      └─ cache miss → litellm.completion(model, messages)
     │              ↓
-    │          MEDANON_AI_MODEL=ollama/llama3.2
+    │          MEDANON_AI_PROVIDER=ollama/llama3.1  (model id)
     │          MEDANON_AI_API_BASE=http://ollama:11434  (--profile ai)
     │                        OR
     │          MEDANON_AI_API_BASE=https://api.openai.com  (external)

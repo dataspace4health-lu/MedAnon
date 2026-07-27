@@ -117,14 +117,14 @@ description: "Every library, framework, and runtime used in MedAnon and why it w
 
 | Technology | Version | Role |
 |---|---|---|
-| **Docker Compose** | v2 | Local development stack, 26 services, 7 optional profiles |
+| **Docker Compose** | v2 | Local development stack, 28 services, 7 optional profiles |
 | **Traefik** | v3 | API gateway, Docker-provider service discovery, round-robin LB, sticky sessions for gPAS |
 | **nginx** | 1.27 | UI reverse proxy, serves SPA, proxies `/api/`, `/fhir/`, `/fhir-target/` |
 | **Helm** | 3.x | Kubernetes deployment, umbrella chart + 9 sub-charts |
 | **K3s** |, | Lightweight Kubernetes target (override values in `helm/k3s-values.yaml`) |
-| **Keycloak** | 24 | OIDC identity provider (`--profile auth`), realm `medanon`, Keycloak-to-Azure swap is env-only |
+| **Keycloak** | 26.1 | OIDC identity provider (`--profile auth`), realm `medanon`, Keycloak-to-Azure swap is env-only |
 | **MinIO** | latest | S3-compatible object storage for job results (`--profile s3`) |
-| **RabbitMQ** | 3.13 | Macro-stage work streaming for DAG workflows (`--profile mq`) |
+| **RabbitMQ** | 3.x | Macro-stage work streaming for DAG workflows; opt-in via `MEDANON_AMQP_URL` (external broker, no bundled compose service) |
 | **Prometheus + Grafana + cAdvisor + Jaeger** | latest | Metrics, dashboards, container metrics, distributed tracing (`--profile monitoring`) |
 | **HAPI FHIR** | 7.6.0 | Source and target FHIR R4 servers |
 

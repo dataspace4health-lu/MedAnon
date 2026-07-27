@@ -103,7 +103,7 @@ violating record also gets a capped, identifier-free note added for the audit
 (`add_detail`).
 
 The exact `applicable` and `violations` definition for every check is in the
-companion doc [trust-gate-how-it-works.md](trust-gate-how-it-works.md), sections 12
+companion doc [how-it-works.md](how-it-works.md), sections 12
 to 16.
 
 ### Step 6: Separate the reliable checks from the statistical hints

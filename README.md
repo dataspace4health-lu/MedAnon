@@ -94,7 +94,7 @@ Target FHIR server (:8082): de-identified output
 | `GET` | `/v1/configs` | List config profiles |
 | `POST` | `/v1/ai/generate-config` | Generate config from description (AI) |
 | `POST` | `/v1/minimise/assess` | Data-minimisation report (identifier classification) |
-| `POST` | `/v1/export/decision` | Five-Safes disclosure decision (REFUSE / REFER / RELEASE) |
+| `POST` | `/v1/export/decision` | Five-Safes disclosure decision (APPROVE / REFER / REFUSE) |
 | `POST` | `/v1/export/statistical` | Aggregate release with small-cell suppression and/or DP |
 | `GET`/`POST` | `/v1/permits` | Data-permit governance lifecycle (admin) |
 | `GET` | `/v1/reports` | Durable Transformation Passports |
@@ -121,7 +121,10 @@ Copy `.env.example` to `.env`. Secrets stay in `.env` and are never committed.
 | `MEDANON_REDIS_PASSWORD` | Production | Redis auth password |
 | `MEDANON_APP_DB_PASSWORD` | Production | PostgreSQL app database password |
 | `MEDANON_AI_ENABLED` | AI features | `true` to enable AI agents |
-| `MEDANON_AI_MODEL` | AI features | LLM model ID (e.g. `ollama/llama3.2`) |
+| `MEDANON_AI_PROVIDER` | AI features | LLM model ID (default `ollama/llama3.1`) |
+| `MEDANON_AI_API_BASE` | AI features | LLM endpoint (default `http://ollama:11434`) |
+| `MEDANON_AUTH_PROVIDER` | Auth | `auto` (default) / `apikey` / `oidc` / `none` |
+| `OIDC_ISSUER` | OIDC auth | Realm issuer URL, must match the token `iss` exactly |
 | `MEDANON_SCORING_ENABLED` | Scoring | `true` to auto-score and persist run history |
 | `MEDANON_REGULATED_MODE` | EHDS release | `true` tightens all fail-soft defaults into hard requirements (see docs/security.md) |
 | `MEDANON_OPTOUT_FILE` | Opt-out | Path to a newline-delimited opt-out register (EHDS Art 71) |
@@ -176,9 +179,11 @@ older one.
 most of it is local scratch. Anything the Makefile or CI invokes must be
 re-included with a `!scripts/<name>` exception, or `make <target>` and the
 workflow break on a fresh clone. Currently tracked: `check_env.py`,
-`check_trust_ids.py`, `sync_shared_code.sh`, `batch_fetch.sh`, `batch_process.sh`,
-`init_gpas_domains.sh`, `verify_deployment.sh`, `backup_gpas.sh`,
-`import_testbase.sh`, `import_testbase100.sh`, `test_patient.sh`.
+`sync_shared_code.sh` (checks the NLP `HEALTHCARE_ENTITIES` catalogue, the one
+copy shared between the anonymizer and the NLP microservice),
+`batch_fetch.sh`, `batch_process.sh`, `init_gpas_domains.sh`,
+`verify_deployment.sh`, `backup_gpas.sh`, `import_testbase.sh`,
+`import_testbase100.sh`, `test_patient.sh`.
 
 **Test notes:**
 - Run the suite from `services/anonymizer/`; it works locally without Docker.
