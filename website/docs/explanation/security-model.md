@@ -82,11 +82,47 @@ When `MEDANON_AUTH_PROVIDER=oidc`, callers authenticate with an OIDC JWT in the 
 
 The bundled identity provider is Keycloak (realm `medanon`, client `medanon-ui`, started with `--profile auth`). Swapping to **Azure AD** is env-only: point `OIDC_ISSUER`/`OIDC_AUDIENCE` at the tenant and set `OIDC_ROLE_CLAIM_PATH=roles`.
 
-### 1.4 Per-client API keys
+### 1.4 Edge routes that bypass authentication
 
-Beyond the single env `MEDANON_API_KEY`, individual keys can be issued per client via `/v1/api-keys/*` (`PostgresApiKeyStore`, table `medanon.api_keys`). Keys are stored as **SHA-256 hashes**  the plaintext is shown once at creation and never recoverable. Each key carries its own role and a `last_used` timestamp.
+> **Known gap, verified 2026-07-16.** Everything in 1.1 to 1.3 is enforced by the anonymizer, per request, in `api/auth.py`. That code only ever sees traffic nginx routes to `/api/*`. The UI's nginx is a path proxy with no `auth_request` and no credential check of its own, so every other proxied upstream answers the same TLS edge unauthenticated.
 
-### 1.5 RBAC
+`client/nginx.conf` proxies these upstreams. Only the first is gated:
+
+| Route | Upstream | Auth at the edge | Exposure |
+|---|---|---|---|
+| `/api/*` | `anonymizer:8000` | Enforced by the anonymizer | Gated |
+| `/fhir/*` | `hapi-fhir:8080` | **None** | **Identified source data.** HAPI runs with no auth; the `ui` container joins `source-net`, so the isolation of the source server does not extend to the edge in front of it. |
+| `/fhir-target/*` | `hapi-fhir-target:8080` | **None** | De-identified data, readable by anyone who reaches the host |
+| `/trust/*` | `trust-gate:8400` | **None** | Quality Passport service |
+| `/grafana/*` | `grafana` | **None** | `GF_AUTH_ANONYMOUS_ENABLED=true` grants a Viewer role without login |
+| `/prometheus/*` | `prometheus` | **None** | Raw metrics |
+
+Reproduction against a running stack, with no credential:
+
+```bash
+curl -sk -o /dev/null -w "%{http_code}\n" https://localhost:8501/api/v1/configs
+# 401, the anonymizer rejects it
+
+curl -sk -o /dev/null -w "%{http_code}\n" "https://localhost:8501/fhir/Patient?_count=1"
+# 200, returns family name, birthDate, and an http://hl7.org/fhir/sid/us-ssn identifier
+```
+
+The `/fhir/*` route exists because SPA pages (patients, target-browser) read FHIR directly from the browser rather than through the anonymizer. The route is intentional; leaving it unauthenticated is not. The SPA sits behind a login, but nothing forces a caller to use the SPA: `curl` against the same edge skips it entirely.
+
+Closing it is a deployment decision, not a doc change. The options, roughly in order of effort:
+
+1. **`auth_request` in nginx**, pointed at an anonymizer introspection endpoint, applied to every non-SPA location. Puts a real gate at the edge and matches the mental model most operators already have.
+2. **Route SPA FHIR reads through `/api/*`** so the anonymizer's existing RBAC covers them, and drop `/fhir/*` from nginx. Removes the bypass rather than guarding it, at the cost of a proxy endpoint and SPA changes.
+3. **Remove `ui` from `source-net`** so the edge physically cannot reach the identified server. Narrowest change; kills the patients page as it currently works.
+4. **Put Keycloak in the request path** (`oauth2-proxy` or Traefik forward-auth) in front of every route. The heaviest change, and the only one that makes the topology match "you cannot reach anything before auth".
+
+Until one is applied, treat the UI's published port as trusted-network-only, and do not expose `8501` beyond a network where every caller is already authorized to read identified data.
+
+### 1.5 Per-client API keys
+
+Beyond the single env `MEDANON_API_KEY`, individual keys can be issued per client via `/v1/api-keys/*` (`PostgresApiKeyStore`, table `medanon.api_keys`). Keys are stored as **SHA-256 hashes**, the plaintext is shown once at creation and never recoverable. Each key carries its own role and a `last_used` timestamp.
+
+### 1.6 RBAC
 
 Three roles form a strict hierarchy (`admin > analyst > viewer`):
 

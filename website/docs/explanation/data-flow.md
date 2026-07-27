@@ -63,7 +63,9 @@ description: "Network layout, single-resource trace, bulk export, NLP and gPAS d
         └────────────────────────────────────────────────┘
 ```
 
-Two networks: `processing-net` (all services) + `source-net` (isolated: source FHIR + `hapi-postgres`). Only anonymizer and worker bridge both networks. The source FHIR server has **no host port**, it is only reachable via anonymizer proxy endpoints.
+Two networks: `processing-net` (all services) + `source-net` (source FHIR + `hapi-postgres`). The source FHIR server publishes **no host port**.
+
+**It is not, however, reachable only via the anonymizer.** The `ui` container joins `processing-net`, `source-net`, and `target-net`, and its nginx proxies `/fhir/*` straight to `hapi-fhir:8080` with no credential check. Having no host port keeps the source server off the host's network, but it does not put it behind authentication: `https://host:8501/fhir/Patient` returns identified data unauthenticated. See [Security Model § 1.4](./security-model.md#14-edge-routes-that-bypass-authentication).
 
 ---
 
@@ -427,6 +429,47 @@ POST /v1/jobs/{id}/score
 
 GET /v1/jobs/{id}/score/report  → stream audit.md as text/markdown
 ```
+
+---
+
+## Governance & EHDS release flow (risk-driven export)
+
+The risk-driven export closes the D7.2 Fig-6 loop: it does not just de-identify, it assesses the de-identified output and decides whether it may be released. A `permit_id` (and optional `recipient`, `declared_paths`, `optout_ids`) submitted with the job scopes every pseudonym to that permit and drives the disclosure gate.
+
+```
+POST /v1/jobs/risk-driven-export   { permit_id, recipient, declared_paths, optout_ids, ... }
+    │
+    ├─ api/deps.py::resolve_active_permit()   422 if the permit is unknown/inactive
+    ├─ require_admin_for_reversal()           admin-only if the profile reverses pseudonyms
+    │
+    └── worker → pipeline/jobs/staged_worker/_risk.py   (MEDANON_OUTPUT_MODE=stream;
+        │                                                 shards/AMQP fail closed if permit set)
+        │   with permit_scope(permit_id):        ← contextvar; submit_with_context into pool workers
+        │
+        ├─ 1. exclusion.py            drop opt-out subjects + linked resources (Art 71)
+        │                             matched on ORIGINAL identifiers, before gPAS
+        ├─ 2. lattice solve           k / l / t generalisation  (keys + gPAS domains permit-scoped)
+        ├─ 3. analytics/privacy_risk  re-id (k-anon) + DCR/NNDR + attribute-inference on the OUTPUT
+        ├─ 4. disclosure/decision.py  R1-R8 output-check rules → APPROVE / REFER / REFUSE
+        │        REFUSE  → delete the written NDJSON, raise → job fails (nothing exposed)
+        │        REFER   → escalated to REFUSE in regulated mode
+        ├─ 5. transformation_passport.py   anonymous passport (intent + achieved k/l/t + risk + verdict)
+        │        └─ PostgresPassportStore.save()  after assert_pii_safe() structural guard
+        └─ 6. save_result + checkpoint
+
+GET /v1/reports            list durable passports
+GET /v1/reports/{job_id}   full passport
+```
+
+Permit-scoped pseudonymisation (D7.2 §4.4): the same source subject yields **unrelated** pseudonyms across permits, stable within one permit.
+
+```
+cryptohash / tokenize / date_shift        gPAS
+    │                                        │
+    └─ derive_permit_key(HKDF, permit_id)    └─ domain suffixed  __permit-{id}
+```
+
+Advisory endpoints (`/v1/minimise/assess`, `/v1/export/decision`, `/v1/exposure/assess`, `/v1/export/statistical`, `/v1/catalog/descriptor`) run the same pure functions synchronously, evaluate-only, with no transformation and no dependency on the analytics/gPAS microservices.
 
 ---
 

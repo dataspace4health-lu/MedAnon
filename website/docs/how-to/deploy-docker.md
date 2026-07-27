@@ -270,6 +270,30 @@ OIDC_CLIENT_ID=medanon-ui
 
 The UI nginx proxies `/auth/` → Keycloak so the OIDC issuer is the same origin as the SPA. See [Configure Authentication](./configure-authentication.md).
 
+### S3 profile
+
+The `s3` profile starts MinIO (S3-compatible object storage) for job results. Starting the container is only half the wiring, also set the env flag that points the anonymizer at it:
+
+```bash
+MEDANON_RESULT_STORAGE=s3   # default: local
+MINIO_ROOT_USER=<user>
+MINIO_ROOT_PASSWORD=<strong password>
+```
+
+Defaults: `MINIO_ENDPOINT=minio:9000`, bucket `medanon-results`. `MINIO_ENDPOINT` accepts an external host too, so job results can land in a real S3 bucket without running the `s3` profile at all.
+
+### AI profile
+
+The `ai` profile starts Ollama for local LLM inference behind the AI agent endpoints. Enable the feature flag alongside it:
+
+```bash
+MEDANON_AI_ENABLED=true   # default: false
+MEDANON_AI_PROVIDER=ollama/llama3.1
+MEDANON_AI_API_BASE=http://ollama:11434
+```
+
+`MEDANON_AI_API_BASE` accepts an external host too (a GPU box running its own Ollama instance), so the `ai` profile is not required to use the AI agents. PHI-bearing prompts must stay pinned to a local/self-hosted endpoint, never a hosted API, see [Security Model](../explanation/security-model.md) for the enforcement details.
+
 ### Monitoring profile
 
 Starts Prometheus (port 9090), Grafana (port 3000), cAdvisor (port 8888), and Jaeger (port 16686). The anonymizer exposes metrics on `/metrics` (Prometheus format).

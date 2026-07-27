@@ -165,6 +165,21 @@ The dedicated `worker` container always refuses SQLite, it shares `/output` with
 
 ---
 
+## Governance & EHDS (`src/pipeline/governance/`, `disclosure/`, `minimization/`)
+
+| Module | Role |
+|---|---|
+| `domain/permit.py` (from `packages/medanon-core`) | `Permit` domain model + `PermitStatus` state machine (draft/submitted/approved/rejected/revoked), `is_active(at)` window, `covers_path` scope. Pure, no I/O. |
+| `pipeline/governance/store.py` | Permit persistence (`InMemoryPermitStore` / `PostgresPermitStore`). |
+| `pipeline/governance/healthdcat.py` | HealthDCAT-AP `dcat:Dataset` JSON-LD descriptor (D7.2 §4.3, EHDS Art 55/78), optionally enriched from a Transformation Passport. |
+| `pipeline/governance/tool_registry.py` | Approved-tool registry (`ApprovedTool` + `ToolStatus`); `assess_tools()` feeds the passport's tool assessment. |
+| `disclosure/decision.py` | `assess_export_decision()`, transparent Five-Safes output-checking rules (residual identifiers, re-id risk, min-k, synthetic duplicates, unjustified vars, permit R6-R8). Returns the most-restrictive of APPROVE/REFER/REFUSE (REFER escalates to REFUSE in regulated mode). Pure. |
+| `minimization/report.py` | `assess_minimisation()`, direct/quasi classification, granularity recommendations, special-category (Art 9) flags, purpose-limitation via declared paths. |
+
+See [Architecture § Governance & EHDS compliance](../../explanation/architecture.md#governance--ehds-compliance) for the full assess-decide loop and [REST API Reference § 15](../api.md#15-governance--ehds-tehdas2-d72) for the endpoint list.
+
+---
+
 ## Scoring System (`scoring` package, from `packages/medanon-core`)
 
 The scoring engine lives once in `packages/medanon-core/src/scoring/` and is shared by the anonymizer (imported as `scoring.*`) and the `scoring` microservice (`pip install medanon-core`). Only the anonymizer-side glue - `gate.py` (score gate) and `audit.py` (Markdown report) - stays under `src/pipeline/scoring/`.

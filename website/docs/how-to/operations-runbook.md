@@ -224,7 +224,8 @@ cp services/anonymizer/keys/id_rsa* backup/keys-$(date +%Y%m%d)/
 
 | Secret | How to rotate | Impact |
 |---|---|---|
-| `MEDANON_HASH_KEY` | Update `.env`, restart anonymizer | All existing cryptohash pseudonyms change, old output cannot be re-linked to new |
+| `MEDANON_HASH_KEY` | Update `.env`, restart anonymizer | All existing cryptohash/tokenize/date_shift pseudonyms change, old output cannot be re-linked to new. **Bump `MEDANON_HASH_KEY_ID` too** (see below). |
+| `MEDANON_HASH_KEY_ID` | Set alongside a `MEDANON_HASH_KEY` change (e.g. `v1`→`v2`) | Recorded in each Transformation Passport's `identification.hash_key_id`, so post-rotation output is attributable to the new key generation and a mixed-key dataset is detectable (D7.2 §4.2). Purely documentary, does not itself change pseudonyms. |
 | RSA private key | Generate new keypair, update `.env` paths | Old encrypted values become unreadable; keep old key for historical data |
 | `GPAS_BASIC_PASS` | Update `.env` + `CALL changePassword('user@ths','new');` in gRAS | Existing gPAS sessions invalidated |
 | `GPAS_DB_PASSWORD` | `docker compose down -v` to recreate PostgreSQL volume | **Destroys all pseudonym mappings**, back up first |

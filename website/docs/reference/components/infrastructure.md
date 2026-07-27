@@ -62,9 +62,9 @@ Two Docker bridge networks enforce physical isolation between identified and de-
 | Network | Members | Purpose |
 |---|---|---|
 | `processing-net` | All services | Main application network |
-| `source-net` | `fhir-server`, `hapi-db`, `anonymizer`, `worker` | Isolated network for identified data, only anonymizer and worker bridge both networks |
+| `source-net` | `fhir-server`, `hapi-db`, `anonymizer`, `worker`, **`ui`** | Network for identified data, no host port. The `ui` container joins it too, and nginx proxies `/fhir/*` to `fhir-server` with no auth check, so this network is not an authentication boundary. See [Security Model § 1.4](../../explanation/security-model.md#14-edge-routes-that-bypass-authentication). |
 
-The source FHIR server has **no published host port**. It is accessible only through anonymizer proxy endpoints, preventing direct access from the UI, analytics, or any other service.
+The source FHIR server has **no published host port**, which keeps it off the host's network. It is not, however, reachable only through the anonymizer: the `ui` container also bridges `source-net`, and its nginx proxies `/fhir/*` straight to `fhir-server` unauthenticated.
 
 ---
 

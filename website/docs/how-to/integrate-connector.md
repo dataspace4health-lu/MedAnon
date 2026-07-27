@@ -21,6 +21,78 @@ How to connect MedAnon to a dataspace connector, Eclipse Dataspace Components (E
 
 ---
 
+## Built-in connectors: configurable input, always-S3 output
+
+The lowest-friction way to wire MedAnon into a dataspace is the built-in connector
+configuration. You save two things once, then reference them by id on any export
+job:
+
+- **Input source**: where data comes from (a FHIR server URL plus an optional
+  bearer token). The token is encrypted at rest and resolved inside the worker at
+  fetch time; it is never stored in the job record.
+- **S3 output destination**: the bucket the de-identified file is delivered to
+  (endpoint, region, bucket, key-prefix template, access key, and an encrypted
+  secret key). The de-identified file is always delivered to S3.
+
+Manage them under Configure -> Dataspace Connectors (admin) in the UI, or via the
+API. Both stores require `MEDANON_APP_DB_URL` (PostgreSQL) and encrypt secrets
+with `MEDANON_SQL_CRED_KEY`.
+
+### 1. Save an input source and an S3 destination
+
+```bash
+# Input source (FHIR server). Returns {"id": "<source_id>", ...}
+curl -s -X POST http://localhost:8000/v1/source-connections \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"Provider HAPI","server_url":"https://fhir.example.org/fhir","token":"eyJ..."}'
+
+# S3 output destination. Returns {"id": "<destination_id>", ...}
+curl -s -X POST http://localhost:8000/v1/output-destinations \
+  -H 'Content-Type: application/json' \
+  -d '{
+        "name":"Dataspace bucket",
+        "endpoint":"s3.eu-central-1.amazonaws.com",
+        "region":"eu-central-1",
+        "bucket":"dataspace-deidentified",
+        "access_key":"AKIA...",
+        "secret_key":"...",
+        "key_prefix":"{permit_id}/{ts}/"
+      }'
+
+# Optional pre-flight checks (probe the FHIR server / ensure the bucket exists):
+curl -s -X POST http://localhost:8000/v1/source-connections/<source_id>/test
+curl -s -X POST http://localhost:8000/v1/output-destinations/<destination_id>/test
+```
+
+The `key_prefix` is an object-key template. Supported tokens: `{job_id}`,
+`{permit_id}`, `{ts}`, `{resource_type}`. A trailing `/` (or an empty prefix)
+appends `{job_id}.ndjson`.
+
+### 2. Reference them on an export job
+
+```bash
+curl -s -X POST http://localhost:8000/v1/jobs/bulk-export \
+  -H 'Content-Type: application/json' \
+  -d '{"source_id":"<source_id>","destination_id":"<destination_id>"}'
+```
+
+When the job finishes and passes the score/PII gate, the NDJSON is delivered to
+`s3://dataspace-deidentified/<rendered-key>`. `source_id` and `destination_id` are
+supported on `bulk-export`, `cohort`, `patient-export`, `batch-patient-export`,
+and `risk-driven-export`.
+
+### 3. Guarantee the file always lands in S3
+
+Set `MEDANON_REQUIRE_S3_DELIVERY=true` in the dataspace deployment. A job with no
+resolvable destination then fails closed instead of leaving the output only in the
+internal result store. To pin every job to one destination without passing
+`destination_id` each time, set `MEDANON_DEFAULT_DESTINATION_ID=<destination_id>`.
+
+Delivery runs only after the output barrier passes, so a blocked or leaky job is
+never delivered to the dataspace bucket.
+
+---
+
 ## Pattern A, Pre-built NDJSON Asset
 
 ```

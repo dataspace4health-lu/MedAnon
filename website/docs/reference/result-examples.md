@@ -343,6 +343,38 @@ MedAnon never silently transforms a field. Every transformation requires an expl
 
 ---
 
+## NLP Scrubbing Example
+
+The following shows how the NLP microservice processes a clinical narrative:
+
+**Input:**
+```
+Patient Hans Müller complained of palpitations. Seen by Dr. Anna Schmidt at
+Charité Berlin. Phone follow-up scheduled: +49 30 98765432.
+Previous MRN at Vivantes: MRN-112233.
+```
+
+**phi_detection stage, NLP batch detection result:**
+
+| Entity type | Detected text | Start | End | Replacement |
+|---|---|---|---|---|
+| `PERSON` | `Hans Müller` | 8 | 20 | `[[PERSON_1]]` |
+| `PERSON` | `Dr. Anna Schmidt` | 42 | 59 | `[[PERSON_2]]` |
+| `LOCATION` | `Charité Berlin` | 63 | 78 | `[[LOCATION_1]]` |
+| `PHONE_NUMBER` | `+49 30 98765432` | 118 | 134 | `[[PHONE_NUMBER_1]]` |
+| `MEDICAL_LICENSE` | `MRN-112233` | 161 | 172 | `[[MEDICAL_LICENSE_1]]` |
+
+**Output:**
+```
+Patient [[PERSON_1]] complained of palpitations. Seen by [[PERSON_2]] at
+[[LOCATION_1]]. Phone follow-up scheduled: [[PHONE_NUMBER_1]].
+Previous MRN at Vivantes: [[MEDICAL_LICENSE_1]].
+```
+
+Token naming (`[[TYPE_N]]`) is deterministic within a resource: the same entity text always maps to the same token. Across resources, token numbering resets, so `[[PERSON_1]]` in one resource is not the same person as `[[PERSON_1]]` in another.
+
+---
+
 ## Composite Score
 
 After the batch completes, request a score via `POST /v1/jobs/{id}/score`:
@@ -407,4 +439,4 @@ When `MEDANON_MANIFEST_ENABLED=true`, each output resource carries an auditable 
 }
 ```
 
-This satisfies GDPR Art. 30 accountability requirements.
+This satisfies GDPR Art. 30 accountability requirements. The manifest tag is stripped before uploading to the target FHIR server, it would exceed HAPI's `tag_display varchar(200)` column.

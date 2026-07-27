@@ -18,29 +18,50 @@ MedAnon is a FHIR R4 de-identification engine. It accepts FHIR resources (JSON /
 ┌─────────────────────────────────────────────────────────────┐
 │  Browser                                                     │
 └──────────────────────┬──────────────────────────────────────┘
-                       │ http://host:8501
+                       │ https://host:8501  (TLS terminates here)
                        ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  nginx (medanon-ui)                                          │
-│   /api/*        → strips prefix → anonymizer:8000           │
-│   /fhir/*       → passthrough  → hapi-fhir:8080 (300 s)     │
-│   /fhir-target/*→ passthrough  → hapi-fhir-target:8080      │
-│   /             → React SPA                                  │
-└──────────────┬─────────────────────┬────────────────────────┘
-               │                     │
-               ▼                     ▼
-┌──────────────────────┐   ┌──────────────────────────────────┐
-│  anonymizer :8000    │   │  hapi-fhir (source) :8080        │
-│  (FastAPI)           │◄──┤  PostgreSQL-backed FHIR R4       │
-│  worker :9091(metrics│   │  source-net (isolated - no host  │
-│                      │   │  port; accessed only via anon.)  │
-│  reads  ──────────►  │   └──────────────────────────────────┘
-│  de-identifies       │
+│  nginx (medanon-ui)  PATH PROXY ONLY, NOT AN AUTH GATE.     │
+│  No auth_request: nginx checks no credential. Each upstream │
+│  enforces its own auth, or enforces none at all.            │
+│                                                             │
+│   /api/*        → anonymizer:8000   ◄── ONLY GATED ROUTE    │
+│   /auth/*       → keycloak:8080     [auth] token issuer     │
+│   /auth/callback→ React SPA (exact match beats /auth/)      │
+│   /fhir/*       → hapi-fhir         !! NO AUTH: IDENTIFIED  │
+│   /fhir-target/*→ hapi-fhir-target  !! NO AUTH (de-ident.)  │
+│   /trust/*      → trust-gate:8400   !! NO AUTH  [trust]     │
+│   /grafana/*    → grafana           !! NO AUTH (anon Viewer)│
+│   /prometheus/* → prometheus        !! NO AUTH  [monitoring]│
+│   /             → React SPA                                 │
+└──────────┬───────────────────────────┬──────────────────────┘
+           │ Bearer JWT                │ 1. login  2. issue JWT
+           ▼                           ▼
+┌──────────────────────┐   ┌───────────────────────┐
+│  anonymizer :8000    │   │  keycloak      [auth] │
+│  ══ AUTH BOUNDARY ══ │   │  OIDC IdP + its own DB│
+│  validates key/JWT   │   │  TOKEN ISSUER, not an │
+│  per request, in     │   │  inline gate: no proxy│
+│  FastAPI (api/auth)  │   │  traffic flows via it │
+│  (FastAPI)           │   │  NO host port: served │
+│  worker :9091(metrics│   │  only through the UI  │
+│  reads  ──────────►  │   │  TLS edge at /auth/   │
+│  de-identifies       │   └───────────────────────┘
 │  writes ──────────►  │   ┌──────────────────────────────────┐
+│                      │◄──┤  hapi-fhir (source) :8080        │
+│                      │   │  PostgreSQL-backed FHIR R4       │
+│                      │   │  source-net: no host port, BUT   │
+│                      │   │  ui joins it too (see /fhir/*)   │
+│                      │   └──────────────────────────────────┘
+│                      │   ┌──────────────────────────────────┐
 │                      │──►│  hapi-fhir-target :8082          │
 └──────┬───────────────┘   │  PostgreSQL-backed FHIR R4       │
        │                   │  Stores DE-IDENTIFIED data only  │
        │                   └──────────────────────────────────┘
+       │
+       ├──► keycloak [auth]  realm JWKS, fetched backchannel to validate
+       │     every Bearer JWT (OIDC_ISSUER; OIDC_DISCOVERY_BASE when the
+       │     public issuer URL is not reachable from inside the network)
        │
        ├──► gateway (Traefik v3) ──► gpas replicas (sticky for /gpas-web)
        │     │                  └──► gpas-postgres:5432
@@ -52,21 +73,31 @@ MedAnon is a FHIR R4 de-identification engine. It accepts FHIR resources (JSON /
        │
        ├──► analytics:8100 (risk analysis + synthetic data)
        │
+       ├──► scoring:8300 (privacy × utility × quality)
+       │
        ├──► app-db:5432 (jobs, configs, subscriptions, staging)
        │
-       └──► redis:6379 (password-protected)
-             ├── job queue  (Redis Streams, event-driven)
-             └── gPAS cache (L2, cross-replica)
+       ├──► redis:6379 (password-protected)
+       │     ├── job queue  (Redis Streams, event-driven)
+       │     └── gPAS cache (L2, cross-replica)
+       │
+       ├──► minio:9000   [s3]  job results + saved output destinations
+       │     console :9001     active when MEDANON_RESULT_STORAGE=s3
+       │
+       └──► ollama:11434 [ai]  local LLM behind the AI agents
+             active when MEDANON_AI_ENABLED=true; PHI-bearing prompts
+             are pinned to a local/self-hosted endpoint, never a hosted API
 
-Opt-in profiles:
+Situational profiles (not drawn):
   --profile ha          → gpas-db-replica (PostgreSQL streaming replica)
-  --profile trust       → trust-gate:8400 + trust-gate-ui:8401 + fhir-validator
-  --profile auth        → keycloak:8180 + keycloak-db (OIDC identity provider)
-  --profile s3          → minio:9000 (S3-compatible object storage)
-  --profile ai          → ollama (local LLM for AI agents)
-  --profile sqltest     → sql-source-test-db (SQL source connector test fixture)
-  --profile monitoring  → prometheus:9090 + grafana:3000 + cadvisor + jaeger
+  --profile sqltest     → sql-source-test-db (SQL/tabular source fixture)
+  --profile trust       → trust-gate + trust-gate-ui + fhir-validator
+  --profile monitoring  → prometheus + grafana + cadvisor + jaeger
 ```
+
+**`[auth]`, `[s3]`, and `[ai]` are drawn because a real deployment runs them,** even though compose still gates them behind profiles. `make up` on its own starts the 15 always-on services only; the reference deployment adds `--profile auth --profile s3 --profile ai`. Each of the three needs its profile **and** the env flag that points the anonymizer at it (`MEDANON_AUTH_PROVIDER=oidc`, `MEDANON_RESULT_STORAGE=s3`, `MEDANON_AI_ENABLED=true`), starting the container alone changes nothing.
+
+**Where authentication actually happens.** Auth is **not** a gate in front of the stack. nginx uses no `auth_request` and validates no credential; Keycloak is a token issuer that no proxied traffic passes through. The single enforcement point is inside the anonymizer, applied per request by `api/auth.py`, and it therefore protects **only** what nginx routes to `/api/*`. The other proxied upstreams answer the same TLS edge with no credential at all, including `/fhir/*`, which reaches the identified source server. See [Security Model § 1.4](./security-model.md#14-edge-routes-that-bypass-authentication) for the exposure and the options for closing it. A deployment that assumes "the login screen protects the data" is mistaken: the SPA is behind a login, but the routes underneath it are not.
 
 **Two separate FHIR servers**, identified and de-identified data never share a database. This is a deliberate design: it prevents accidental joins, satisfies physical separation requirements under GDPR Art. 25 (data minimization by design), and allows different access controls per server.
 
@@ -352,6 +383,29 @@ Every de-identification operation can be scored against three dimensions:
 The composite score is `privacy × utility × quality` (0.0-1.0). Scores are stored in `medanon.processing_runs` and exposed via `/v1/jobs/{id}/score` and `/v1/processing-runs`.
 
 Scoring is opt-in: `MEDANON_SCORING_ENABLED=true`. When enabled, every processed batch is scored and persisted. The `/v1/jobs/{id}/score/report` endpoint returns a Markdown audit report.
+
+---
+
+## Governance & EHDS compliance
+
+For regulated secondary use (EHDS Arts 45-49, 66, 71, 78-79; TEHDAS2 D7.2), the anonymizer carries a governance layer on top of the de-identification engine. Everything here is additive and inert unless configured, so ordinary de-identification is unchanged.
+
+**Data permits and permit-scoped pseudonymisation.** A `Permit` domain model (`packages/medanon-core/src/domain/permit.py`) enforces a lifecycle state machine (draft → submitted → approved / rejected → revoked; illegal transitions return HTTP 409) with a validity window and a path scope. Permits are managed through `/v1/permits` (admin-only) and persisted in Postgres. When a permit is active for a request, it is propagated via a contextvar (`utils/permit_context.py`); the keyed actions (`cryptohash`, `tokenize`, `date_shift`) derive a permit-scoped key with HKDF-SHA256 and gPAS domains are suffixed `__permit-{id}`. The result: the same source subject produces **unrelated** pseudonyms across different permits (D7.2 §4.4, which forbids reusing pseudonyms across purposes), but stable pseudonyms within one permit.
+
+**The assess → decide loop (D7.2 Fig 6).** The risk-driven export executor runs the full "process → assess → decide → release" loop on the actual de-identified output, not just the intended k/l/t of the generalisation lattice:
+
+1. **Opt-out exclusion** (`pipeline/exclusion.py`, EHDS Art 71) drops opted-out subjects and their linked resources before pseudonymisation, matching on the original identifiers a national register would supply.
+2. **Privacy-risk assessment** (`analytics/privacy_risk.py`) measures re-identification (k-anonymity), plus distance-to-closest-record / nearest-neighbour ratios and attribute-inference (SDMetrics) for synthetic data.
+3. **Disclosure decision** (`pipeline/disclosure/decision.py`) applies transparent Five-Safes output-checking rules, residual direct identifiers, re-id risk, minimum k, synthetic duplicates, unjustified variables, and permit/recipient/scope checks, and returns the most restrictive of APPROVE / REFER / REFUSE (in regulated mode a REFER escalates to REFUSE). A REFUSE deletes the written output and fails the job so nothing is ever exposed.
+4. **Transformation Passport** (`pipeline/transformation_passport.py`) records the release: identification, permit, tools + versions, privacy-model intent and achieved k/l/t, privacy-risk results, and the disclosure verdict. It is anonymous by construction and persisted with a structural PII guard (`PostgresPassportStore.assert_pii_safe`).
+
+**Advisory and release endpoints** (evaluate-only, run locally regardless of any microservice split): `/v1/minimise/assess` (minimisation report, D7.2 §3), `/v1/export/decision` (ad-hoc Five-Safes check), `/v1/exposure/assess` (cumulative-exposure / differencing risk across prior releases via a durable release ledger, §5.5.7), `/v1/export/statistical` (aggregate release protected by small-cell suppression and/or differential privacy, §5.5.4), `/v1/catalog/descriptor` (HealthDCAT-AP JSON-LD dataset descriptor, §4.3), `/v1/synthetic/passport`, `/v1/analyse/privacy-risk`, and `/v1/reports` (durable passports). See [REST API Reference § 15](../reference/api.md#15-governance--ehds-tehdas2-d72) for the full endpoint list.
+
+**Dataspace connectors and instance settings.** Saved, encrypted input sources (FHIR servers) and S3 output destinations (`/v1/source-connections`, `/v1/output-destinations`) make wiring the engine into a dataspace a matter of configuration. Deployment-wide admin defaults live behind `/v1/settings`; the SPA reads a small non-secret slice pre-login from the open `/v1/runtime-config`. See [Integrate a connector](../how-to/integrate-connector.md#built-in-connectors-configurable-input-always-s3-output) for the request/response walkthrough.
+
+**Regulated mode** (`MEDANON_REGULATED_MODE=true`, `utils/regulated.py`) is one switch that turns fail-soft defaults into hard requirements: no plain-hash fallback for any keyed action, the output and disclosure barriers cannot be disabled, `warn` identifier modes are forced to `block`, disclosure REFER escalates to REFUSE, Trust Gate conformance NA/SKIPPED becomes FAIL, and an unresolvable opt-out source fails closed. Reversal actions (`gpas_depseudonymize`, `decrypt`) require the `admin` role. The flag is read at call time so it can be toggled without re-importing modules.
+
+Dependency note: `Anonymeter`, `SDV`, `torch`, and `opacus` are not installable in this environment, so privacy-risk uses in-house DCR/NNDR/τ-DCR plus SDMetrics, synthesis uses `copulas`, and differential privacy is a standard-library implementation (`analytics/dp.py`: Laplace, analytic Gaussian, and basic-composition budget accounting).
 
 ---
 
