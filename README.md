@@ -103,7 +103,7 @@ Target FHIR server (:8082): de-identified output
 
 Select a built-in profile per request with `?config_profile=<name>`: `gdpr`, `hipaa`, `gpas`, `research`, `structural`, `value-masking`, `minimal` (or `auto`). User-defined profiles created via `POST /v1/configs` are selected by their own name.
 
-Full reference: [docs/api-reference.md](docs/api-reference.md)
+Full reference: [website/docs/reference/api.md](website/docs/reference/api.md)
 
 ---
 
@@ -126,7 +126,7 @@ Copy `.env.example` to `.env`. Secrets stay in `.env` and are never committed.
 | `MEDANON_AUTH_PROVIDER` | Auth | `auto` (default) / `apikey` / `oidc` / `none` |
 | `OIDC_ISSUER` | OIDC auth | Realm issuer URL, must match the token `iss` exactly |
 | `MEDANON_SCORING_ENABLED` | Scoring | `true` to auto-score and persist run history |
-| `MEDANON_REGULATED_MODE` | EHDS release | `true` tightens all fail-soft defaults into hard requirements (see docs/security.md) |
+| `MEDANON_REGULATED_MODE` | EHDS release | `true` tightens all fail-soft defaults into hard requirements (see website/docs/explanation/security-model.md) |
 | `MEDANON_OPTOUT_FILE` | Opt-out | Path to a newline-delimited opt-out register (EHDS Art 71) |
 
 ---
@@ -214,7 +214,7 @@ make helm-install     # install/upgrade on active cluster
 
 Use `helm/k3s-values.yaml` for single-node K3s deployments.
 
-Full guide: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
+Full guide: [website/docs/how-to/deploy-docker.md](website/docs/how-to/deploy-docker.md)
 
 ---
 
@@ -229,24 +229,23 @@ Full guide: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
 | `gPAS circuit breaker OPEN` | gPAS failed 5+ times | `docker compose restart gpas`; circuit self-recovers after 30 s |
 | `413 Request Too Large` | Body exceeds limit | Increase `MEDANON_MAX_BODY_BYTES` in `.env` |
 
-More: [docs/RUNBOOK.md](docs/RUNBOOK.md)
+More: [website/docs/how-to/operations-runbook.md](website/docs/how-to/operations-runbook.md)
 
 ---
 
 ## Documentation
 
+The [Docusaurus site](website/) (`cd website && npm start`) under `website/docs/`
+is the canonical documentation: tutorials, how-to guides, reference, and
+explanation (architecture, data flow, security model, scoring). `docs/` in the
+repo root keeps only what has no site equivalent, for contributors:
+
 | Document | Description |
 |---|---|
-| [docs/INDEX.md](docs/INDEX.md) | Full documentation index; start here |
-| [docs/architecture.md](docs/architecture.md) | System design, pipeline, config profiles |
-| [docs/data-flow.md](docs/data-flow.md) | Request traces, network layout, NLP/gPAS/AI flows |
-| [docs/api-reference.md](docs/api-reference.md) | All REST endpoints with request/response examples |
-| [docs/security.md](docs/security.md) | Auth, encryption, GDPR/HIPAA compliance mapping |
-| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Dev / staging / production deployment guide |
-| [docs/user-manual.md](docs/user-manual.md) | UI walkthrough, CLI, config file format |
-| [docs/RUNBOOK.md](docs/RUNBOOK.md) | Monitoring, backup, secret rotation, troubleshooting |
-| [docs/scoring-system.md](docs/scoring-system.md) | Privacy × utility × quality scoring model |
-| [docs/policies.md](docs/policies.md) | Profile selection and compliance mapping |
+| [docs/INDEX.md](docs/INDEX.md) | Contributor index; start here |
+| [docs/reference/env-vars.md](docs/reference/env-vars.md) | Generated environment-variable catalogue, CI-gated against drift |
+| [docs/trust-gate/](docs/trust-gate/) | Trust Gate deep-dive guides (architecture, data-quality process, references) |
+| [docs/quality-evaluation-methodology.md](docs/quality-evaluation-methodology.md) | Trust Gate measurement methodology |
 
 ---
 
