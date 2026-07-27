@@ -33,16 +33,6 @@ interface DeidentifyPanelProps {
 }
 
 /**
- * Max resources the inline preview sends to /process/batch.
- *
- * $everything is fetched with _count=5000; a dense patient can serialize to far
- * more than the server's 10 MB body cap (MEDANON_MAX_BODY_BYTES), which rejects
- * on Content-Length and drops the connection. The preview is a preview, the
- * full record is released through the async export job.
- */
-const PREVIEW_RESOURCE_LIMIT = 500;
-
-/**
  * PHI-safe download base name. The source `patientId` is a real identifier and
  * must never appear in a filename, even on de-identified content. Prefer the
  * de-identified output Patient's (pseudonymized) id when the profile changed it;
@@ -148,9 +138,6 @@ export function DeidentifyPanel({
   });
   const [activeTab, setActiveTab] = useState<"output" | "diff" | "table">("output");
   const [fullView, setFullView] = useState(false);
-  // > 0 when the preview was capped: holds the TRUE resource count so the UI can
-  // say how much of the record it is not showing.
-  const [previewTruncated, setPreviewTruncated] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
 
   // Saved S3 destinations for the optional "send to S3" delivery (admin only;
@@ -158,13 +145,20 @@ export function DeidentifyPanel({
   const [destinations, setDestinations] = useState<OutputDestination[]>([]);
   const [selectedDest, setSelectedDest] = useState<string>("");
   const [delivering, setDelivering] = useState(false);
+  // Distinguishes "listed fine, none saved yet" (prompt the operator to add one)
+  // from "not permitted / unreachable" (stay silent - the control is admin-only).
+  const [destsReadable, setDestsReadable] = useState(false);
   useEffect(() => {
     listDestinations()
       .then((d) => {
         setDestinations(d);
+        setDestsReadable(true);
         if (d.length > 0) setSelectedDest(d[0].id);
       })
-      .catch(() => setDestinations([]));
+      .catch(() => {
+        setDestinations([]);
+        setDestsReadable(false);
+      });
   }, []);
 
   const handleRun = useCallback(async () => {
@@ -180,7 +174,6 @@ export function DeidentifyPanel({
       error: null,
       score: null,
     });
-    setPreviewTruncated(0);
     setActiveTab("output");
 
     try {
@@ -207,19 +200,14 @@ export function DeidentifyPanel({
         .map((e) => e.resource)
         .filter((r): r is Record<string, unknown> => !!r);
 
-      // This panel is a PREVIEW. Posting an unbounded $everything bundle (up to
-      // _count=5000 resources) routinely exceeds the server's 10 MB body cap
-      // (MEDANON_MAX_BODY_BYTES), which rejects on Content-Length and closes the
-      // connection, surfacing in the browser as "Failed to fetch" rather than a
-      // readable 413. Cap what we send; the full dataset is released through the
-      // async export job (Deliver to S3), which never round-trips the browser.
-      const truncated = allResources.length > PREVIEW_RESOURCE_LIMIT;
-      const originalResources = truncated
-        ? allResources.slice(0, PREVIEW_RESOURCE_LIMIT)
-        : allResources;
+      // The whole record is de-identified: batch scoring (k-anonymity, the
+      // authoritative privacy gate) is computed across the posted set, so
+      // truncating here would score a subset and mis-report the verdict.
+      // Oversized records are caught by the server's MEDANON_MAX_BODY_BYTES
+      // middleware, which returns a clean 413 handled below.
+      const originalResources = allResources;
 
       setState((prev) => ({ ...prev, originalResources }));
-      setPreviewTruncated(truncated ? allResources.length : 0);
 
       // Step 2: Stream the bundle through /process/batch for de-identification.
       const params = new URLSearchParams({ config_profile: configProfile });
@@ -241,7 +229,8 @@ export function DeidentifyPanel({
         let detail = `Processing failed (${response.status})`;
         if (response.status === 413) {
           detail =
-            "This patient's record is too large to preview inline. Use \"Deliver to S3\" to run it as an export job.";
+            "This patient's record exceeds the server body limit (MEDANON_MAX_BODY_BYTES). " +
+            "Release it as an async export job instead, or raise the limit.";
         } else {
           try {
             const body = await response.json();
@@ -638,13 +627,6 @@ export function DeidentifyPanel({
             </Button>
           </div>
 
-          {previewTruncated > 0 && (
-            <p className="rounded-md border bg-amber-50 px-3 py-2 text-xs text-amber-800">
-              Preview limited to the first {PREVIEW_RESOURCE_LIMIT} of {previewTruncated} resources.
-              Use &quot;Deliver to S3&quot; to de-identify and release the complete record as an export job.
-            </p>
-          )}
-
           {/* Output tab */}
           {activeTab === "output" && (
             <Collapsible>
@@ -703,6 +685,12 @@ export function DeidentifyPanel({
             defaultFormat="ndjson"
             onXmlDownload={handleXmlDownload}
           />
+          {destsReadable && destinations.length === 0 && (
+            <p className="mt-3 rounded-lg border border-dashed p-3 text-xs text-muted-foreground">
+              No S3 destination saved yet. Add one under Connectors to enable
+              &quot;Send to S3&quot; from this panel.
+            </p>
+          )}
           {destinations.length > 0 && (
             <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-dashed p-3">
               <span className="text-xs text-muted-foreground">

@@ -185,7 +185,7 @@ function RunAuditRow({ run }: { run: ProcessingRun }) {
             {reportError ? (
               <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
                 {reportError.includes('404') || reportError.includes('unavailable')
-                  ? 'No audit report stored for this run. Re-process with MEDANON_SCORING_ENABLED=true to generate one.'
+                  ? 'No audit report stored for this run. Runs processed before the report was persisted to the database have none; re-process the job to generate one.'
                   : reportError}
               </div>
             ) : report ? (

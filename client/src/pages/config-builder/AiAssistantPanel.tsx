@@ -640,7 +640,8 @@ export function AiAssistantPanel({
   const toggleType = (t: string) =>
     setSelectedTypes((prev) => {
       const next = new Set(prev);
-      next.has(t) ? next.delete(t) : next.add(t);
+      if (next.has(t)) next.delete(t);
+      else next.add(t);
       return next;
     });
 
@@ -774,7 +775,7 @@ export function AiAssistantPanel({
         AI Assistant
       </DialogTrigger>
 
-      <DialogContent className="max-w-[95vw]! w-[95vw] overflow-hidden p-0 gap-0 sm:max-w-[95vw]!">
+      <DialogContent className="w-[96vw]! max-w-[1600px]! sm:max-w-[1600px]! h-[88vh] grid-rows-[auto_1fr_auto] overflow-hidden p-0 gap-0">
         {/* ── Header ─────────────────────────────────────────────── */}
         <DialogHeader className="border-b bg-gradient-to-r from-[#0072bc]/[0.06] to-transparent px-6 py-4">
           <div className="flex items-center justify-between gap-2">
@@ -792,7 +793,7 @@ export function AiAssistantPanel({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex h-[82vh] min-h-[560px] px-6 py-3">
+        <div className="flex min-h-0 min-w-0 px-6 py-3">
           {/* ── Left sidebar ───────────────────────────────────────── */}
           <aside className="flex w-64 shrink-0 flex-col overflow-hidden rounded-l-md border-y border-l border-r bg-muted/20">
             {/* Tab switcher */}

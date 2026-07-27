@@ -43,7 +43,7 @@ import {
 } from './configConstants';
 import { extractFieldPaths } from './fieldTree';
 import { scanFieldsForPii, detectPii, type PiiScanResult } from '@/api/agents';
-import { classifyFields, type IdentifierClass } from '@/api/classification';
+import { classifyFields, type IdentifierClass, type ResolvedClass } from '@/api/classification';
 import { FHIR_EXAMPLES } from './fhirExamples';
 import { fetchFhir } from '@/api/client';
 import { listResourceTypes } from '@/api/fhir';
@@ -474,7 +474,13 @@ function fieldFlags(fhirPath: string): FieldFlag[] {
 // actually found here" evidence on top of the class.
 // ---------------------------------------------------------------------------
 
-const CLASS_META: Record<'direct' | 'quasi', { label: string; title: string; cls: string }> = {
+const CLASS_META: Record<'direct' | 'quasi' | 'unknown', { label: string; title: string; cls: string }> = {
+  unknown: {
+    label: 'unknown',
+    title:
+      'Classification unavailable: the backend classifier (/v1/classify-fields) did not answer for this path. This is NOT a statement that the field is safe. Review it manually.',
+    cls: 'bg-slate-100 text-slate-600 ring-1 ring-slate-300/60 dark:bg-slate-800/60 dark:text-slate-300 dark:ring-slate-600/50',
+  },
   direct: {
     label: 'direct',
     title:
@@ -488,56 +494,6 @@ const CLASS_META: Record<'direct' | 'quasi', { label: string; title: string; cls
     cls: 'bg-amber-100 text-amber-700 ring-1 ring-amber-300/60 dark:bg-amber-900/40 dark:text-amber-200 dark:ring-amber-700/50',
   },
 };
-
-/** Client-side FALLBACK classifier - used only when the authoritative backend
- * classification (/v1/classify-fields, which reuses the engine's HIPAA catalog)
- * is unreachable or has no entry for a path. Order matters: direct wins over
- * quasi when both could match. */
-function classifyFieldFallback(fhirPath: string): IdentifierClass {
-  const p = normalizePath(fhirPath);
-
-  // Structural qualifiers (system/use/url/version) are codes that describe an
-  // element, never identifiers themselves - telecom.system='phone',
-  // name.use='official', identifier.system=<oid>. Exclude them up front so the
-  // class lands on the value leaf, not its qualifiers.
-  if (p.endsWith('.system') || p.endsWith('.use') || p.endsWith('.url') || p.endsWith('.version'))
-    return 'non';
-
-  // Direct identifiers (Safe Harbor direct list) - matched on the value leaf.
-  if (/\.id$/.test(p)) return 'direct';
-  if (p.endsWith('identifier.value')) return 'direct';
-  if (
-    p.endsWith('.family') || p.endsWith('.given') || p.endsWith('.prefix') ||
-    p.endsWith('.suffix') || p.endsWith('name.text')
-  ) return 'direct';
-  if (p.endsWith('telecom.value') || p.endsWith('.email') || p.endsWith('.phone') || p.endsWith('.fax'))
-    return 'direct';
-  if (p.endsWith('.line')) return 'direct'; // street address line
-  if (p.endsWith('.photo') || p.endsWith('.data') || p.includes('attachment.data'))
-    return 'direct';
-  if (p.endsWith('.reference')) return 'direct'; // literal cross-resource ref
-  if (p.endsWith('.latitude') || p.endsWith('.longitude') || p.includes('geolocation'))
-    return 'direct'; // precise geo is a Safe Harbor direct identifier
-
-  // Quasi-identifiers (generalize). Note: state/country are intentionally NOT
-  // quasi - Safe Harbor permits geographic units at or above state level.
-  if (
-    p.endsWith('birthdate') || p.includes('deceased') || p.includes('authoredon') ||
-    p.endsWith('.issued') || p.endsWith('.recorded') || p.endsWith('.period') ||
-    p.endsWith('.start') || p.endsWith('.end') || p.includes('datetime') ||
-    (p.includes('date') && !p.includes('update') && !p.includes('candidate'))
-  ) return 'quasi';
-  if (p.endsWith('.postalcode') || p.endsWith('.city') || p.endsWith('.district'))
-    return 'quasi';
-  if (p.endsWith('.gender') || p.endsWith('.sex') || p.includes('birthsex')) return 'quasi';
-  if (
-    p.includes('race') || p.includes('ethnic') || p.includes('religion') ||
-    p.includes('maritalstatus') || p.includes('.language')
-  ) return 'quasi';
-  if (p.includes('multiplebirth') || p.endsWith('.age')) return 'quasi';
-
-  return 'non';
-}
 
 // ---------------------------------------------------------------------------
 // Value-scan detections (regex + NLP/NER + optional local LLM over real sample
@@ -749,7 +705,7 @@ function TreeNode({
   /** Value-scan hit (regex/NLP/LLM found PII inside this field), or undefined. */
   nlpHitFor: (path: string) => NlpHit | undefined;
   /** Authoritative identifier class (backend, with client fallback). */
-  classForPath: (path: string) => IdentifierClass;
+  classForPath: (path: string) => ResolvedClass;
   /** True when this path is flagged by any signal (heuristic / AI / value scan). */
   isFlagged: (path: string) => boolean;
   /** When true, hide leaves that already have a configured rule. */
@@ -1140,6 +1096,8 @@ export function ResourceExplorerPanel({
   // loads or when the backend is unreachable - `classForPath` then falls back to
   // the client heuristic so labels still appear.
   const [classMap, setClassMap] = useState<Map<string, IdentifierClass>>(new Map());
+  // True when the authoritative classifier could not be reached for this type.
+  const [classError, setClassError] = useState(false);
 
   const runDiscovery = useCallback(async () => {
     setDiscoveryState('discovering');
@@ -1229,12 +1187,13 @@ export function ResourceExplorerPanel({
   const topEntries = schema ? Object.entries(schema).filter(([k]) => k !== 'resourceType') : [];
 
   // Fetch the authoritative identifier classification for the loaded schema.
-  // One request per type; falls back silently to the client heuristic on error.
+  // One request per type. The backend is the only source (see api/classification).
   useEffect(() => {
     if (!selectedType || !schema) return;
     let cancelled = false;
     const paths = enumerateLeafPaths(schema, selectedType);
     if (paths.length === 0) return;
+    setClassError(false);
     classifyFields(selectedType, paths)
       .then((res) => {
         if (!cancelled) {
@@ -1242,7 +1201,13 @@ export function ResourceExplorerPanel({
         }
       })
       .catch(() => {
-        /* backend unreachable - classForPath falls back to the heuristic */
+        // Fail closed and visibly: without the authoritative classifier every
+        // path resolves to "unknown" rather than to a guessed (possibly "safe")
+        // class, and the banner tells the operator the labels are missing.
+        if (!cancelled) {
+          setClassMap(new Map());
+          setClassError(true);
+        }
       });
     return () => {
       cancelled = true;
@@ -1250,8 +1215,11 @@ export function ResourceExplorerPanel({
   }, [selectedType, schema]);
 
   // Resolve a path's class: exact backend hit first, then the collapsed
-  // (predicate-stripped) index for reviewStats/flagged lookups, then the client
-  // heuristic. The normalized index prefers the strongest class on a collision.
+  // (predicate-stripped) index for reviewStats/flagged lookups. The normalized
+  // index prefers the strongest class on a collision. There is deliberately no
+  // client-side fallback: the backend owns the HIPAA catalog, and a second local
+  // heuristic could label a field "non" while the engine's gate blocks it. An
+  // unanswered path resolves to "unknown", never to a safe-looking class.
   const classForPath = useMemo(() => {
     const rank: Record<IdentifierClass, number> = { direct: 2, quasi: 1, non: 0 };
     const norm = new Map<string, IdentifierClass>();
@@ -1260,8 +1228,8 @@ export function ResourceExplorerPanel({
       const cur = norm.get(n);
       if (!cur || rank[c] > rank[cur]) norm.set(n, c);
     }
-    return (path: string): IdentifierClass =>
-      classMap.get(path) ?? norm.get(normalizePath(path)) ?? classifyFieldFallback(path);
+    return (path: string): ResolvedClass =>
+      classMap.get(path) ?? norm.get(normalizePath(path)) ?? 'unknown';
   }, [classMap]);
 
   // Configured-rule lookup. Matches a node's path exactly first, then by
@@ -1577,7 +1545,7 @@ export function ResourceExplorerPanel({
         Resource Explorer
       </DialogTrigger>
 
-      <DialogContent className="max-w-5xl! w-full p-0 gap-0 sm:max-w-5xl!">
+      <DialogContent className="w-[96vw]! max-w-[1600px]! sm:max-w-[1600px]! h-[88vh] grid-rows-[auto_1fr_auto] p-0 gap-0">
         <DialogHeader className="border-b p-4">
           <DialogTitle className="flex items-center gap-2 text-base">
             <Layers className="size-4" />
@@ -1590,7 +1558,7 @@ export function ResourceExplorerPanel({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex h-[60vh] min-h-[420px] min-w-0 overflow-hidden px-4 py-3">
+        <div className="flex min-h-0 min-w-0 overflow-hidden px-4 py-3">
           {/* Left: resource type list */}
           <div className="w-52 shrink-0 border-r overflow-y-auto bg-muted/20 rounded-l-md border-y border-l">
             {discoveryState === 'discovering' ? (
@@ -1828,6 +1796,16 @@ export function ResourceExplorerPanel({
             </div>
 
             <div className="flex-1 overflow-y-auto p-2">
+              {classError && (
+                <p
+                  role="alert"
+                  className="mb-2 flex items-start gap-1.5 rounded-md border border-amber-300/60 bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-800 dark:border-amber-700/50 dark:bg-amber-900/30 dark:text-amber-200"
+                >
+                  <AlertCircle className="mt-px size-3 shrink-0" />
+                  Identifier classification is unavailable, so fields show as
+                  &quot;unknown&quot; rather than a guess. Review them manually.
+                </p>
+              )}
               {!loadState || loadState === 'loading' ? (
                 <div className="flex flex-col items-center justify-center gap-2 py-12 text-xs text-muted-foreground">
                   <Loader2 className="size-5 animate-spin" />
