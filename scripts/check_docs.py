@@ -186,7 +186,10 @@ def check_links(root: pathlib.Path, docs: list[pathlib.Path]) -> list[str]:
 
 
 def iter_docs(root: pathlib.Path) -> list[pathlib.Path]:
-    out: list[pathlib.Path] = []
+    # CLAUDE.md is the agent orientation layer and the single file most prone to
+    # drift: it summarises counts and paths from every corner of the tree.  It is
+    # gitignored, so it is checked when present and skipped when absent.
+    out: list[pathlib.Path] = [p for p in [root / "CLAUDE.md"] if p.is_file()]
     for doc_root in DOC_ROOTS:
         base = root / doc_root
         if not base.is_dir():
